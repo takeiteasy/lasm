@@ -58,9 +58,30 @@ operator is named `set-flags!` instead of `flags`. The draft is left
 unedited as a rough plan; this document reflects what's actually
 implemented.
 
-## How M1 will use this
+## `with-machine-bindings`
 
-M1's `definstruction` is expected to wrap its `(semantics ...)` body in
-`with-machine` (reusing this same expander) rather than growing a separate
-one, so instruction semantics and these standalone examples share one
-vocabulary.
+`with-machine` both creates a fresh machine instance and binds the
+vocabulary against it. `with-machine-bindings` is the binding half split
+out on its own, for callers that already have a machine instance to bind
+against rather than wanting a fresh one:
+
+```lisp
+(with-machine-bindings (m existing-machine-instance)
+  (set! a 42))
+```
+
+`(with-machine-bindings (machine-var machine-name) &body body)` binds the
+same symbol-macros and operators as `with-machine`, but expects
+`machine-var` to already be bound by the caller. `with-machine` is defined
+in terms of it:
+
+```lisp
+(defmacro with-machine ((var name) &body body)
+  `(let ((,var (make-machine ',name)))
+     (with-machine-bindings (,var ,name) ,@body)))
+```
+
+`definstruction`'s `(semantics ...)` clause (see
+[Instructions](instructions.md)) expands its body through
+`with-machine-bindings` rather than a separate evaluator, so instruction
+semantics and these standalone examples share one vocabulary.

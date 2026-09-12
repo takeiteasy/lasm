@@ -78,7 +78,13 @@
 (defstruct machine-descriptor
   (name nil :type symbol)
   (elements nil :type list)               ; ordered list of storage-element
-  (table (make-hash-table :test 'eq)))    ; name -> storage-element
+  (table (make-hash-table :test 'eq))     ; name -> storage-element
+  ;; Instruction registration (#6, instruction.lisp). Keyed by upcased
+  ;; mnemonic string and by opcode, so both the assembler (#10, mnemonic ->
+  ;; encoding) and the emulator (#11, opcode -> decode) share one table pair
+  ;; rather than each keeping its own index.
+  (instructions (make-hash-table :test 'equal))  ; mnemonic string -> instruction-descriptor
+  (opcodes (make-hash-table :test 'eql)))         ; opcode -> instruction-descriptor
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))
@@ -188,6 +194,11 @@
     (aref slot 0)))
 
 (defun (setf flag) (value machine name)
+  ;; BUG (#22): VALUE is treated as a Lisp boolean here, not as an integer
+  ;; 0/1 -- (setf (flag m 'z) 0) sets the flag to 1, since 0 is non-NIL.
+  ;; Callers setting a flag from an integer (e.g. semantics reusing a
+  ;; comparison result that happens to be 0 or 1) must pass an actual
+  ;; boolean, e.g. (plusp n) rather than n itself.
   (multiple-value-bind (slot element) (%slot machine name :flag)
     (declare (ignore element))
     (setf (aref slot 0) (if value 1 0))))

@@ -56,6 +56,7 @@
 
    ;; Semantics vocabulary
    #:with-machine
+   #:with-machine-bindings
    #:set!
    #:push
    #:pop
@@ -103,4 +104,28 @@
    #:expr-binary-p
    #:expr-binary-op
    #:expr-binary-left
-   #:expr-binary-right))
+   #:expr-binary-right
+
+   ;; Instructions
+   #:definstruction
+   #:find-instruction
+   #:find-instruction-by-opcode
+   #:match-operand-mode
+   #:eval-expr-constant
+   #:encode-instruction
+   #:execute-instruction
+   #:unresolved-label
+   #:unresolved-label-name
+   #:unknown-instruction
+   #:unknown-instruction-machine
+   #:unknown-instruction-mnemonic
+   #:unknown-instruction-opcode
+   #:instruction-descriptor
+   #:instruction-descriptor-p
+   #:instruction-descriptor-name
+   #:instruction-descriptor-machine
+   #:instruction-descriptor-mode
+   #:instruction-descriptor-opcode
+   #:instruction-descriptor-operand-width
+   #:instruction-descriptor-semantics-fn
+   #:instruction-descriptor-cycles))

@@ -14,10 +14,14 @@ precedence-climbing (Pratt) expression parser reusable at every operand
 
 This stops at the AST. Label references stay symbolic (`expr-label`,
 unresolved — no symbol table) and operand token runs are handed back
-unparsed as raw tokens rather than expressions. Addressing-mode matching and
-operand encoding belong to `defmode` (M2); expression evaluation and label
-resolution belong to the assembler pass. `parse-expression` is the piece
-those later stages call directly.
+unparsed as raw tokens rather than expressions. `parse-expression` is the
+piece later stages call directly: M1's two built-in addressing modes
+(`immediate`, `absolute`) match against it via `match-operand-mode` — see
+[Instructions](instructions.md); a user-declarative `defmode` for
+additional modes and multi-mode resolution is M2. Full expression
+evaluation against a resolved symbol table (label resolution) belongs to
+the assembler pass — `eval-expr-constant` (also in
+[Instructions](instructions.md)) folds constant expressions only.
 
 ## Statement grammar
 

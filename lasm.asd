@@ -12,7 +12,8 @@
                (:file "machine")
                (:file "semantics")
                (:file "lexer")
-               (:file "parser")))
+               (:file "parser")
+               (:file "instruction")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -25,4 +26,5 @@
                (:file "storage")
                (:file "semantics")
                (:file "lexer")
-               (:file "parser")))
+               (:file "parser")
+               (:file "instruction")))

@@ -35,8 +35,14 @@ sbcl --script examples/counter.lisp
 
 This defines a syntax with `deflexer`, then tokenizes and parses a
 hand-written counter-loop program, printing the resulting tokens and
-statement AST. No addressing modes or assembler are involved yet — see
-[Lexer](lexer.md) and [Statement grammar & expression parser](parser.md).
+statement AST. It then defines a small instruction set with `definstruction`,
+matches each parsed statement's operand against its addressing mode, encodes
+it to bytes, and executes a short instruction sequence against a live
+machine — see [Lexer](lexer.md), [Statement grammar & expression
+parser](parser.md), and [Instructions](instructions.md). There is still no
+full assembler pass or emulator loop: the branch instruction's label operand
+is printed as unresolved rather than encoded, since label resolution belongs
+to the assembler pass.
 
 ## Run the tests
 
@@ -63,3 +69,4 @@ does not define a `test-op` method, so it does not actually invoke
 - [Semantics vocabulary](semantics.md) for what you can write inside `with-machine`.
 - [Lexer](lexer.md) for the full `deflexer` clause reference.
 - [Statement grammar & expression parser](parser.md) for `parse` and `parse-expression`.
+- [Instructions](instructions.md) for `definstruction`, addressing modes, and encoding.
