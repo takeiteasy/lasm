@@ -29,11 +29,21 @@ memory, and flags through `with-machine`, printing the resulting state. No
 instruction set or assembler is involved yet — see
 [Semantics vocabulary](semantics.md) for why.
 
+```sh
+sbcl --script examples/counter.lisp
+```
+
+This defines a syntax with `deflexer`, then tokenizes and parses a
+hand-written counter-loop program, printing the resulting tokens and
+statement AST. No addressing modes or assembler are involved yet — see
+[Lexer](lexer.md) and [Statement grammar & expression parser](parser.md).
+
 ## Run the tests
 
 ```sh
 sbcl --non-interactive \
-     --eval '(asdf:test-system :lasm/test)'
+     --eval '(asdf:load-system :lasm/test)' \
+     --eval '(fiveam:run! (quote lasm:lasm))'
 ```
 
 or, from a REPL:
@@ -43,7 +53,13 @@ or, from a REPL:
 (fiveam:run! 'lasm:lasm)
 ```
 
+Note: `(asdf:test-system :lasm/test)` only loads the system — `lasm.asd`
+does not define a `test-op` method, so it does not actually invoke
+`fiveam:run!`. Use one of the forms above.
+
 ## Next
 
 - [Machine model](machine-model.md) for the full `defmachine` clause reference.
 - [Semantics vocabulary](semantics.md) for what you can write inside `with-machine`.
+- [Lexer](lexer.md) for the full `deflexer` clause reference.
+- [Statement grammar & expression parser](parser.md) for `parse` and `parse-expression`.

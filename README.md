@@ -10,6 +10,8 @@ architectures, not real silicon.
 
 - [Machine model](docs/machine-model.md) — storage elements, `defmachine`
 - [Semantics vocabulary](docs/semantics.md) — `with-machine`, `set!`, `push`/`pop`
+- [Lexer](docs/lexer.md) — `deflexer`, `tokenize`
+- [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`
 - [Getting started](docs/getting-started.md) — install, run, test
 - [Design & roadmap draft](LASM-plan.md)
 

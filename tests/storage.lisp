@@ -1,22 +1,10 @@
-;;;; tests.lisp
-;;;; fiveam test suite for lasm (M0: storage model + semantics vocabulary).
+;;;; tests/storage.lisp
+;;;; fiveam tests for the M0 storage model (storage.lisp, machine.lisp).
 
 (in-package #:lasm)
 
-(fiveam:def-suite lasm)
-(fiveam:in-suite lasm)
-
-;; A test machine defined here, then used by tests below and by a
-;; WITH-MACHINE form later in this same file -- this is the compile-time
-;; check that DEFMACHINE's descriptor is available at macroexpansion time,
-;; not only after loading (see the EVAL-WHEN in machine.lisp).
-(defmachine test-machine
-  (register a :width 8)
-  (register wide :width 16)
-  (stack s :width 8 :depth 4)
-  (memory ram :width 8 :addr-width 8)
-  (memory wram :width 8 :addr-width 4 :cell-width 16)
-  (flags z n c v))
+(fiveam:def-suite storage :in lasm)
+(fiveam:in-suite storage)
 
 (fiveam:test register-read-write
   (let ((m (make-machine 'test-machine)))
@@ -110,20 +98,3 @@
     (fiveam:is (= 0 (stack-depth m 's)))
     (fiveam:is (= 0 (mref m 'ram 0)))
     (fiveam:is (= 0 (flag m 'z)))))
-
-(fiveam:test with-machine-symbol-resolution-and-vocabulary
-  (with-machine (m test-machine)
-    (set! a 10)
-    (fiveam:is (= 10 a))
-    (set! a (+ a 5))
-    (fiveam:is (= 15 a))
-    (push a s)
-    (fiveam:is (= 15 (pop s)))
-    (set-flags! (z (zero? a)) (n (bit-set? a 3)))
-    (fiveam:is (= 0 (flag m 'z)))
-    (fiveam:is (= 1 (flag m 'n)))))
-
-(fiveam:test trap-signals-lasm-trap
-  (with-machine (m test-machine)
-    (fiveam:is (eq 'test-machine (machine-descriptor-name (machine-descriptor m))))
-    (fiveam:signals lasm-trap (trap :illegal-opcode))))

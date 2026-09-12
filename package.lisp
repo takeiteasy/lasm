@@ -20,6 +20,12 @@
    #:stack-overflow
    #:stack-underflow
    #:lasm-trap
+   #:lasm-syntax-error
+   #:lasm-syntax-error-message
+   #:lasm-syntax-error-line
+   #:lasm-syntax-error-column
+   #:lex-error
+   #:parse-failure
 
    ;; Machine definition
    #:defmachine
@@ -56,4 +62,45 @@
    #:set-flags!
    #:trap
    #:zero?
-   #:bit-set?))
+   #:bit-set?
+
+   ;; Lexer (#7)
+   #:deflexer
+   #:find-lexer-descriptor
+   #:tokenize
+   #:token
+   #:token-p
+   #:token-type
+   #:token-value
+   #:token-text
+   #:token-line
+   #:token-column
+
+   ;; Parser / expression AST (#8)
+   #:parse
+   #:parse-expression
+   #:statement
+   #:statement-p
+   #:statement-label
+   #:statement-mnemonic
+   #:statement-operands
+   #:statement-line
+   #:operand
+   #:operand-p
+   #:operand-tokens
+   #:expr-number
+   #:expr-number-p
+   #:expr-number-value
+   #:expr-label
+   #:expr-label-p
+   #:expr-label-name
+   #:expr-label-localp
+   #:expr-unary
+   #:expr-unary-p
+   #:expr-unary-op
+   #:expr-unary-operand
+   #:expr-binary
+   #:expr-binary-p
+   #:expr-binary-op
+   #:expr-binary-left
+   #:expr-binary-right))

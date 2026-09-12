@@ -41,6 +41,25 @@
    (data :initarg :data :initform nil :reader lasm-trap-data))
   (:report (lambda (c s) (format s "Trap: ~S ~S" (lasm-trap-tag c) (lasm-trap-data c)))))
 
+;; Lexer/parser (M1, see lexer.lisp and parser.lisp). Named LASM-SYNTAX-ERROR
+;; rather than PARSE-ERROR because CL:PARSE-ERROR is a standard condition
+;; type and this package :USEs #:CL.
+(define-condition lasm-syntax-error (lasm-error)
+  ((message :initarg :message :initform nil :reader lasm-syntax-error-message)
+   (line :initarg :line :initform nil :reader lasm-syntax-error-line)
+   (column :initarg :column :initform nil :reader lasm-syntax-error-column))
+  (:report (lambda (c s)
+             (format s "~A~@[ (line ~D~@[, column ~D~])~]"
+                     (lasm-syntax-error-message c)
+                     (lasm-syntax-error-line c)
+                     (lasm-syntax-error-column c)))))
+
+(define-condition lex-error (lasm-syntax-error) ()
+  (:documentation "Signalled by TOKENIZE on malformed source text."))
+
+(define-condition parse-failure (lasm-syntax-error) ()
+  (:documentation "Signalled by PARSE/PARSE-EXPRESSION on a malformed token stream."))
+
 ;;; Storage element descriptors
 
 (defstruct storage-element

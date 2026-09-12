@@ -10,12 +10,19 @@
   :components ((:file "package")
                (:file "storage")
                (:file "machine")
-               (:file "semantics")))
+               (:file "semantics")
+               (:file "lexer")
+               (:file "parser")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
   :depends-on (#:lasm #:fiveam)
+  :pathname "tests/"
   :serial t
-  :components ((:file "tests")))
+  :components ((:file "suites")
+               (:file "storage")
+               (:file "semantics")
+               (:file "lexer")
+               (:file "parser")))
