@@ -28,6 +28,13 @@ looks like."
 (fiveam:test defmode-width-option
   (fiveam:is (= 1 (mode-descriptor-width (find-mode-descriptor 'immediate)))))
 
+(fiveam:test defmode-relative-option
+  (fiveam:is (mode-descriptor-relativep (find-mode-descriptor 'relative)))
+  (fiveam:is (= 1 (mode-descriptor-width (find-mode-descriptor 'relative)))))
+
+(fiveam:test defmode-relativep-defaults-nil
+  (fiveam:is (null (mode-descriptor-relativep (find-mode-descriptor 'absolute)))))
+
 (fiveam:test defmode-no-expr-hole-signals-error
   (fiveam:signals error
     (eval '(defmode bogus-mode "#"))))
@@ -56,6 +63,12 @@ looks like."
   ;; not syntax; that's the assembler's job (assembler.lisp), not mode.lisp's.
   (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "10") 'zero-page))))
   (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "10") 'absolute)))))
+
+(fiveam:test relative-matches-bare-expr-like-absolute
+  ;; Same pattern shape as ABSOLUTE -- RELATIVE (#23) is distinguished by
+  ;; MODE-DESCRIPTOR-RELATIVEP, not by syntax; the assembler computes the
+  ;; actual offset (assembler.lisp), this file only covers pattern matching.
+  (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "10") 'relative)))))
 
 (fiveam:test indexed-x-matches-expr-comma-x
   (let ((ast (match-operand-mode (%tokens-for "$10,X") 'indexed-x)))

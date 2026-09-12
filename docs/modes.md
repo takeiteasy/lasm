@@ -13,11 +13,13 @@ own.
 (defmode absolute    expr)
 (defmode indexed-x   expr "," "X")
 (defmode indirect-y  "(" expr ")" "," "Y")
+(defmode relative    expr            :width 1 :relative t)
 ```
 
-`immediate` and `absolute` above are exactly the two modes LASM ships built
-in (in `mode.lisp`) — there is no special-cased "M1 mode" table any more;
-every mode, built-in or user-declared, goes through the same `defmode`.
+`immediate`, `absolute`, and `relative` above are exactly the modes LASM
+ships built in (in `mode.lisp`) — there is no special-cased "M1 mode" table
+any more; every mode, built-in or user-declared, goes through the same
+`defmode`.
 
 ## `defmode`
 
@@ -31,7 +33,9 @@ verbatim text, case-insensitively — so `"X"` matches `x` too) or the symbol
 `expr` (parses one expression with the shared Pratt parser, `parse.lisp`).
 At least one `expr` is required. `:width`, if given, is this mode's default
 operand byte width — see [`(encoding ...)`](instructions.md#encoding-opcode-n-operand)
-and the width-resolution note below.
+and the width-resolution note below. `:relative t`, if given, marks this
+mode's operand as a PC-relative offset rather than an absolute value — see
+[PC-relative modes](#pc-relative-modes) below.
 
 Registration happens inside an `eval-when`, like `defmachine` — a mode
 must be resolvable by `definstruction` at macroexpansion time, not only
@@ -71,6 +75,34 @@ declared, but no instruction can currently *use* one — `definstruction` only
 wires up a single operand encoding field, and signals an error naming this
 if a mode with more than one hole is used. Multi-operand instructions are a
 separate, larger feature.
+
+## PC-relative modes
+
+`relative` matches the *same* bare-`expr` syntax as `absolute` — the two are
+disambiguated only by `mode-descriptor-relativep`, not by pattern. What
+differs is what the parsed value means and when it's computed:
+
+- An `absolute` operand's value **is** the address encoded, evaluated once
+  the symbol table is complete ([Assembler](assembler.md)).
+- A `relative` operand's value is a *target address*, but what gets encoded
+  is the signed offset from the address of the instruction **after** the
+  branch: `offset = target - (branch-address + 1 + operand-width)`. The
+  assembler computes this once both the branch and its target have an
+  address ([Assembler](assembler.md#pc-relative-offsets)), and signals
+  `assembly-error` if the offset doesn't fit the operand's width rather than
+  silently wrapping to a branch at the wrong address.
+- The emulator sign-extends the fetched operand back to a signed integer
+  before running an instruction's `semantics` ([Emulator](emulator.md)), so
+  a relative-mode instruction body writes a plain `(set! pc (+ pc
+  operand))` rather than tracking its own operand width.
+
+Because a `relative` candidate's value isn't the quantity that gets
+range-checked against its width until encode time, `%choose-variant`
+(the assembler's mode selector) treats it the same as an unresolved label —
+always taking the widest syntax-matching variant. This only matters once a
+mnemonic declares `relative` alongside another mode on the same syntax; see
+the tracker for the follow-up on giving that case its own value-based
+narrowing.
 
 ## Matching
 

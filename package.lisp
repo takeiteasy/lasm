@@ -114,6 +114,7 @@
    #:mode-descriptor-name
    #:mode-descriptor-pattern
    #:mode-descriptor-width
+   #:mode-descriptor-relativep
    #:match-operand-mode
    #:try-match-operand-mode
 

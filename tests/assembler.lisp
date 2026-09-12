@@ -104,3 +104,50 @@ target: nop" :machine 'instr-test-machine)))
   ;; of its variants.
   (fiveam:signals assembly-error
     (assemble "adc #10" :machine 'instr-test-machine)))
+
+;;; RELATIVE mode (#23) -- BRA (tests/instruction.lisp), kept separate from
+;;; the existing ABSOLUTE-mode BNE tests above.
+
+(fiveam:test relative-branch-forward-offset
+  ;; 0: bra end (2 bytes) / 2: nop (1 byte) / 3: end: nop -- next-pc after
+  ;; BRA is 2, target is 3, offset is +1.
+  (let ((a (assemble "bra end
+nop
+end: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x90 1 #xEA #xEA) (assembly-bytes a)))))
+
+(fiveam:test relative-branch-backward-offset
+  ;; 0: loop: nop (1 byte) / 1: bra loop (2 bytes) -- next-pc after BRA is 3,
+  ;; target is 0, offset is -3 (#xFD).
+  (let ((a (assemble "loop: nop
+bra loop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA #x90 #xFD) (assembly-bytes a)))))
+
+(fiveam:test relative-branch-to-itself-is-minus-two
+  ;; next-pc is this instruction's own address + 2; branching to its own
+  ;; address is therefore offset -2.
+  (let ((a (assemble "here: bra here" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x90 #xFE) (assembly-bytes a)))))
+
+(fiveam:test relative-branch-offset-is-independent-of-origin
+  ;; The offset is relative to the branch's own address, so it must not
+  ;; change when the whole program is shifted by an origin.
+  (let ((a0 (assemble "loop: nop
+bra loop" :machine 'instr-test-machine))
+        (a1 (assemble "loop: nop
+bra loop" :machine 'instr-test-machine :origin #x200)))
+    (fiveam:is (equalp (assembly-bytes a0) (assembly-bytes a1)))))
+
+(fiveam:test relative-branch-forward-out-of-range-signals-assembly-error
+  ;; 200 filler NOPs put "end" 200 bytes past BRA -- out of a signed 1-byte
+  ;; offset's [-128, 127) range.
+  (fiveam:signals assembly-error
+    (assemble (format nil "bra end~%~{~A~%~}end: nop"
+                       (make-list 200 :initial-element "nop"))
+              :machine 'instr-test-machine)))
+
+(fiveam:test relative-branch-backward-out-of-range-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble (format nil "loop: nop~%~{~A~%~}bra loop"
+                       (make-list 200 :initial-element "nop"))
+              :machine 'instr-test-machine)))

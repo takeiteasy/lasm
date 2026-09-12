@@ -58,6 +58,18 @@ reads its declared `operand-width` bytes little-endian, **advances `pc` past
 the whole instruction, then executes its semantics** — in that order.
 This ordering is what lets a branch instruction's own `(set! pc operand)`
 override the increment rather than being clobbered by it running afterward.
+It's also the base the assembler computes a `relative`-mode offset from
+(see below) — `pc` is already the *next* instruction's address by the time
+semantics runs.
+
+If the decoded instruction's mode is `relative`
+([Addressing modes](modes.md#pc-relative-modes)), the fetched operand is
+reinterpreted as a signed integer (`signed-value`) before being passed to
+`execute-instruction` — the assembler encoded it as a two's-complement
+offset ([Assembler](assembler.md#pc-relative-offsets)), and fetching treats
+every operand as unsigned like any other mode, so this is undone here
+rather than in every relative instruction's own `semantics`. A `relative`
+instruction's body therefore just writes `(set! pc (+ pc operand))`.
 
 Returns the executed `instruction-descriptor`, or the keyword
 `:decode-failure` (without advancing `pc` or executing anything) if the byte

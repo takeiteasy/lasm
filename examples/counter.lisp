@@ -73,9 +73,9 @@
   (semantics (set! x (wrap-value (1- x) 8)) (set-flags! (z (zero? x)))))
 
 (definstruction sixtyfoo bne
-  (modes absolute)
+  (modes relative)
   (encoding (opcode #xD0) (operand :mode))
-  (semantics (when (zerop z) (set! pc operand))))
+  (semantics (when (zerop z) (set! pc (+ pc operand)))))
 
 (definstruction sixtyfoo sta
   (modes absolute)

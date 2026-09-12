@@ -30,6 +30,15 @@
   (encoding (opcode #xD0) (operand :mode))
   (semantics (when (zerop z) (set! pc operand))))
 
+;; RELATIVE mode (#23): same "branch if Z clear" condition as BNE above, just
+;; RELATIVE instead of ABSOLUTE -- kept as a separate mnemonic so BNE's
+;; existing ABSOLUTE-mode tests/byte expectations elsewhere in this file are
+;; undisturbed.
+(definstruction emu-test-machine bra
+  (modes relative)
+  (encoding (opcode #x90) (operand :mode))
+  (semantics (when (zerop z) (set! pc (+ pc operand)))))
+
 (definstruction emu-test-machine sta
   (modes absolute)
   (encoding (opcode #x8D) (operand :mode))
@@ -102,6 +111,65 @@ skip: hlt" :machine 'emu-test-machine)))
     (step-machine m)      ; sta, address 0 -> 3
     (step-machine m)      ; bne, not taken -> falls through to address 6
     (fiveam:is (= 6 (sref m 'pc)))))
+
+;;; RELATIVE mode (#23) -- BRA, kept separate from the existing ABSOLUTE-mode
+;;; BNE tests above.
+
+(fiveam:test step-machine-relative-branch-taken-forward
+  ;; bra target (address 0, 2 bytes) / sta $2000 (address 2, 3 bytes) /
+  ;; target: hlt (address 5) -- BRA is narrower than BNE's ABSOLUTE encoding,
+  ;; so target lands at 5, not 6 as in the BNE test above.
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "bra target
+sta $2000
+target: hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (step-machine m)
+    (fiveam:is (= 5 (sref m 'pc)))))
+
+(fiveam:test step-machine-relative-branch-taken-backward-sign-extends
+  ;; target: dex (address 0, 1 byte) / bra target (address 1, 2 bytes) --
+  ;; next-pc after BRA is 3, target is 0, so the encoded offset is -3 (#xFD);
+  ;; taking the branch must land back on pc=0, proving STEP-MACHINE
+  ;; sign-extends the fetched operand rather than adding it as unsigned 253.
+  ;; (No NOP on this fixture -- DEX stands in as the no-operand filler.)
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "target: dex
+bra target" :machine 'emu-test-machine)))
+    (load-program m a)
+    (step-machine m)  ; dex, address 0 -> 1, x wraps to 255 so z clears
+    (step-machine m)  ; bra, taken (z=0) -> back to 0
+    (fiveam:is (= 0 (sref m 'pc)))))
+
+(fiveam:test step-machine-relative-branch-not-taken-falls-through
+  ;; sta $2000 (address 0, 3 bytes) / bra skip (address 3, 2 bytes) / hlt
+  ;; (address 5) / skip: hlt (address 6) -- not taken falls through to the
+  ;; plain HLT at 5, one byte earlier than the BNE test above since BRA
+  ;; encodes narrower.
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "sta $2000
+bra skip
+hlt
+skip: hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (setf (flag m 'z) t)  ; z set -> bra's branch condition (zerop z) is false
+    (step-machine m)      ; sta, address 0 -> 3
+    (step-machine m)      ; bra, not taken -> falls through to address 5
+    (fiveam:is (= 5 (sref m 'pc)))))
+
+(fiveam:test counter-loop-end-to-end-with-relative-branch
+  (let* ((m (make-machine 'emu-test-machine))
+         (a (assemble "        ldx #10
+loop:   dex
+        bra loop
+        sta $1000
+        hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 23 steps))
+      (fiveam:is (= 0 (sref m 'x)))
+      (fiveam:is (= 0 (mref m 'ram #x1000))))))
 
 (fiveam:test step-machine-decode-failure-on-unknown-opcode
   (let ((m (make-machine 'emu-test-machine)))

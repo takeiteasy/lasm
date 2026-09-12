@@ -78,6 +78,13 @@ mnemonic's variants in the order they were declared in `(modes ...)`:
    - If any hole references a **label**, its value isn't known yet — pick
      the **widest** matching variant instead. This choice never has to
      shrink once the label resolves later, so one layout pass suffices.
+   - A **`relative`** mode candidate ([Addressing modes](modes.md#pc-relative-modes))
+     is treated the same way, even when its hole folds to a constant: its
+     parsed value is an absolute target, not the offset that actually gets
+     encoded, so checking it against an operand width here would compare
+     the wrong quantity — pick the widest matching variant and let `%encode`
+     (below) do the real range check once it has an address to compute the
+     offset from.
    - Ties in either case keep declaration order — which is why [Addressing
      modes](modes.md#declare-narrower-modes-before-wider-ones) says to
      declare narrower/cheaper modes first.
@@ -99,6 +106,30 @@ label-bearing operand sidesteps that loop entirely, at the cost of never
 choosing zero-page for a label operand even when its resolved address would
 have fit. A follow-up ticket tracks narrowing a label-bearing operand's mode
 once layout has converged.
+
+## PC-relative offsets
+
+A `relative`-mode operand ([Addressing modes](modes.md#pc-relative-modes))
+folds to an absolute target address like `absolute` does, but that's not
+what gets encoded. Once pass 2 evaluates the target against the completed
+symbol table, `%encode` computes the signed offset from the address of the
+*next* instruction:
+
+```lisp
+offset = target-address - (branch-address + 1 + operand-width)
+```
+
+`branch-address + 1 + operand-width` is deliberately the same arithmetic
+`step-machine` ([Emulator](emulator.md#step-machine)) uses to advance `pc`
+past the branch *before* running its semantics — so an instruction's own
+`(set! pc (+ pc operand))` adds the offset to exactly the base it was
+computed from, at any `:origin`. `encode-instruction` itself needs no
+special case: `wrap-value` already renders a negative offset as its
+two's-complement byte (e.g. `-3` as `#xFD`).
+
+If the offset doesn't fit the operand's width, this signals `assembly-error`
+naming the mnemonic, the offset, and the legal range, rather than silently
+wrapping to a branch at the wrong address.
 
 ## `eval-expr`
 
@@ -139,8 +170,9 @@ label is a separate ticket (#16).
 ## Conditions
 
 - `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate label,
-  or an operand whose syntax matches none of the mnemonic's declared
-  addressing-mode variants.
+  an operand whose syntax matches none of the mnemonic's declared
+  addressing-mode variants, or a `relative`-mode offset that doesn't fit its
+  operand's width (see "PC-relative offsets" above).
 - `unknown-instruction` — an unregistered mnemonic (from
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in

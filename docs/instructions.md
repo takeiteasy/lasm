@@ -154,14 +154,23 @@ meaning.
 
 There is no special program-counter storage element or `branch-if` operator.
 A machine that wants one declares `(register pc :width 16)` like any other
-register, and semantics writes it with plain `set!`:
+register, and semantics writes it with plain `set!`. A real branch is
+[`relative`](modes.md), not `absolute` — its operand is a signed offset from
+the *next* instruction's address, not an absolute target, so semantics adds
+it to `pc` rather than assigning it directly:
 
 ```lisp
 (definstruction sixtyfoo bne
-  (modes absolute)
+  (modes relative)
   (encoding (opcode #xD0) (operand :mode))
-  (semantics (when (zerop z) (set! pc operand))))
+  (semantics (when (zerop z) (set! pc (+ pc operand)))))
 ```
+
+By the time this runs, `pc` already points past `bne` and its operand — see
+[`step-machine`](emulator.md#step-machine) — so `(+ pc operand)` lands
+exactly where the assembler computed the offset from. An instruction that
+really does want an absolute jump target (e.g. a 6502-style `jmp`) still
+uses `absolute` and plain `(set! pc operand)`, as before.
 
 Advancing `pc` past the current instruction on every step (rather than only
 on a taken branch) is the [emulator loop](emulator.md)'s job, not

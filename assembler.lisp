@@ -56,10 +56,20 @@ names exactly this failure."))
 (defun %fits-width-p (value width)
   "T if VALUE (a folded constant) fits in WIDTH bytes, either as an unsigned
 or a two's-complement signed value -- e.g. both 255 and -1 fit one byte, so a
-signed operand like a lo/hi-masked or future relative-branch value isn't
-rejected just because it folds negative."
+signed operand like a lo/hi-masked value isn't rejected just because it folds
+negative. Accepts the full unsigned range too, so this is NOT the right
+predicate for a RELATIVE branch offset (#23) -- see %FITS-SIGNED-WIDTH-P."
   (and (>= value (- (ash 1 (1- (* 8 width)))))
        (< value (ash 1 (* 8 width)))))
+
+(defun %fits-signed-width-p (value width)
+  "T if VALUE fits as a two's-complement signed WIDTH-byte integer, i.e.
+-(2^(8*width-1)) <= VALUE < 2^(8*width-1). Unlike %FITS-WIDTH-P, this
+rejects the unsigned-only range (e.g. +200 does not fit one byte) -- used to
+range-check a RELATIVE mode's offset (#23), where wrapping silently instead
+of erroring would branch to the wrong address."
+  (let ((bound (ash 1 (1- (* 8 width)))))
+    (and (>= value (- bound)) (< value bound))))
 
 (defun %choose-variant (statement variants)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
@@ -100,13 +110,24 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                                           (first c))
                                                          0))))
            (widest (first by-width))
-           (resolvedp (handler-case (progn (mapcar #'eval-expr-constant (second (first candidates)))
+           (first-mode (instruction-descriptor-mode (first (first candidates))))
+           (resolvedp (and
+                       ;; A RELATIVE candidate's value is an absolute target,
+                       ;; not the encoded offset (that's computed later, in
+                       ;; %ENCODE, once every address is known) -- checking it
+                       ;; against an operand width here would compare the
+                       ;; wrong quantity. Treat it as unresolved so the widest
+                       ;; candidate is always chosen, same as a label
+                       ;; reference (#23; only matters once a mnemonic
+                       ;; declares RELATIVE alongside another mode, see #27).
+                       (not (and first-mode (mode-descriptor-relativep first-mode)))
+                       (handler-case (progn (mapcar #'eval-expr-constant (second (first candidates)))
                                             t)
                         ;; All candidates share the same operand syntax (just
                         ;; different widths/modes), so whether the value
                         ;; resolves is the same for every candidate -- check
                         ;; once against the first.
-                        (unresolved-label () nil))))
+                        (unresolved-label () nil)))))
       (if (not resolvedp)
           (values-list widest)
           (let ((fitting (find-if (lambda (c)
@@ -119,8 +140,9 @@ Returns (VALUES chosen-descriptor hole-asts)."
 (defun %layout (statements machine origin)
   "Returns (VALUES symbols sized-statements) where SYMBOLS is a string ->
 address hash table and SIZED-STATEMENTS pairs each mnemonic-bearing
-statement with its address, chosen INSTRUCTION-DESCRIPTOR, and parsed
-operand hole ASTs, in order."
+statement with its address, chosen INSTRUCTION-DESCRIPTOR, parsed operand
+hole ASTs, and source line (the line is carried through for %ENCODE's
+RELATIVE-mode range-check error, #23), in order."
   (let ((symbols (make-hash-table :test 'equal))
         (address origin)
         sized)
@@ -133,19 +155,40 @@ operand hole ASTs, in order."
       (when (statement-mnemonic statement)
         (let ((variants (find-instruction-variants machine (statement-mnemonic statement))))
           (multiple-value-bind (descriptor asts) (%choose-variant statement variants)
-            (cl:push (list address descriptor asts) sized)
+            (cl:push (list address descriptor asts (statement-line statement)) sized)
             (incf address (1+ (or (instruction-descriptor-operand-width descriptor) 0)))))))
     (values symbols (nreverse sized))))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
+(defun %relative-offset (address descriptor value line)
+  "VALUE is the absolute target address a RELATIVE-mode operand (mode.lisp)
+folded to; ADDRESS is this instruction's own address and DESCRIPTOR its
+chosen INSTRUCTION-DESCRIPTOR. Returns the signed offset to encode, computed
+from the address of the *next* instruction -- STEP-MACHINE (emulator.lisp)
+advances PC past the whole instruction before running its semantics, so that
+is the base a branch's own (set! pc (+ pc operand)) actually adds to.
+Signals ASSEMBLY-ERROR if the offset doesn't fit the operand's width, rather
+than silently wrapping to a branch at the wrong address (#23)."
+  (let* ((width (or (instruction-descriptor-operand-width descriptor) 1))
+         (next-address (+ address 1 width))
+         (offset (- value next-address)))
+    (unless (%fits-signed-width-p offset width)
+      (%assembly-error line
+                        "~A: relative branch offset ~D out of range for ~D-byte operand ~
+(must be between ~D and ~D)"
+                        (instruction-descriptor-name descriptor) offset width
+                        (- (ash 1 (1- (* 8 width)))) (1- (ash 1 (1- (* 8 width))))))
+    offset))
+
 (defun %encode (sized-statements symbols)
   (let (bytes)
     (dolist (entry sized-statements)
-      (destructuring-bind (address descriptor asts) entry
-        (declare (ignore address))
-        (let ((value (when (instruction-descriptor-mode descriptor)
-                       (eval-expr (first asts) :symbols symbols))))
+      (destructuring-bind (address descriptor asts line) entry
+        (let* ((mode (instruction-descriptor-mode descriptor))
+               (value (when mode (eval-expr (first asts) :symbols symbols))))
+          (when (and mode (mode-descriptor-relativep mode))
+            (setf value (%relative-offset address descriptor value line)))
           (dolist (byte (encode-instruction descriptor value))
             (cl:push byte bytes)))))
     (coerce (nreverse bytes) '(vector (unsigned-byte 8)))))

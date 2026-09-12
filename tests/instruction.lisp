@@ -37,6 +37,14 @@
     (when (zerop z)
       (set! pc operand))))
 
+;; RELATIVE mode (#23): kept separate from BNE (which stays ABSOLUTE) so the
+;; existing ABSOLUTE-mode BNE tests/byte expectations elsewhere in this file
+;; and tests/assembler.lisp are undisturbed.
+(definstruction instr-test-machine bra
+  (modes relative)
+  (encoding (opcode #x90) (operand :mode))
+  (semantics (set! pc (+ pc operand))))
+
 (definstruction instr-test-machine nop
   (encoding (opcode #xEA))
   (semantics nil))
