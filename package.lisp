@@ -106,6 +106,16 @@
    #:expr-binary-left
    #:expr-binary-right
 
+   ;; Directives
+   #:defdirective
+   #:find-directive-descriptor
+   #:directive-descriptor
+   #:directive-descriptor-p
+   #:directive-descriptor-name
+   #:directive-descriptor-arity
+   #:directive-descriptor-action
+   #:directive-descriptor-width
+
    ;; Addressing modes
    #:defmode
    #:find-mode-descriptor

@@ -60,6 +60,14 @@ instruction — one operand encoding field per hole, named `dst`/`val` so
 `(semantics ...)` reads them directly — see [Instructions, "Repeated
 `(operand ...)` subclauses"](instructions.md).
 
+```sh
+sbcl --script examples/directives.lisp
+```
+
+A leading `.org` places the program at a fixed address, `.byte` lays down a
+small data table read back through `lda`/`adc`'s `absolute` mode, and `.res`
+reserves a zero-filled scratch run — see [Directives](directives.md).
+
 ## Run the tests
 
 ```sh
@@ -87,5 +95,6 @@ does not define a `test-op` method, so it does not actually invoke
 - [Statement grammar & expression parser](parser.md) for `parse` and `parse-expression`.
 - [Addressing modes](modes.md) for `defmode` and pattern matching.
 - [Instructions](instructions.md) for `definstruction`, encoding, and semantics.
+- [Directives](directives.md) for `defdirective`, `.org`, `.byte`/`.word`, `.res`.
 - [Assembler](assembler.md) for `assemble`, label resolution, and mode selection.
 - [Emulator](emulator.md) for `load-program`, `step-machine`, and `run`.

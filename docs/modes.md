@@ -146,7 +146,7 @@ the whole run of tokens after the mnemonic, uncommitted to any comma split.
 - Wiring a mode to an opcode, operand width, and semantics —
   [Instructions](instructions.md).
 - Directives (`.org`, `.byte`/`.word`, `defdirective`) — a separate,
-  unrelated grammar extension.
+  unrelated grammar; see [Directives](directives.md).
 
 ## Deviation from the design draft
 

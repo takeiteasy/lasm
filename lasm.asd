@@ -15,6 +15,7 @@
                (:file "parser")
                (:file "mode")
                (:file "instruction")
+               (:file "directive")
                (:file "assembler")
                (:file "emulator")))
 
@@ -32,5 +33,6 @@
                (:file "parser")
                (:file "mode")
                (:file "instruction")
+               (:file "directive")
                (:file "assembler")
                (:file "emulator")))

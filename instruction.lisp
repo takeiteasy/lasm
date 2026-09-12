@@ -510,6 +510,15 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
 
 ;;; Encoding / execution
 
+(defun %encode-value-bytes (value width)
+  "Split (already-evaluated integer) VALUE into WIDTH little-endian
+(unsigned-byte 8) bytes, wrapping each with WRAP-VALUE (storage.lisp) like
+every other encoded quantity in this codebase. Shared by ENCODE-INSTRUCTION
+below and the assembler's .BYTE/.WORD directive encoding (assembler.lisp,
+#14), so instruction operands and directive data can't drift apart in how
+they lay bytes down."
+  (loop for i below width collect (wrap-value (ash value (* -8 i)) 8)))
+
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
 already-evaluated integers, one per DESCRIPTOR's OPERAND-WIDTHS entry, in
@@ -523,8 +532,7 @@ exported function on its own should supply the same."
   (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
         (loop for value in values
               for width in (instruction-descriptor-operand-widths descriptor)
-              append (loop for i below width
-                           collect (wrap-value (ash value (* -8 i)) 8)))))
+              append (%encode-value-bytes value width))))
 
 (defun execute-instruction (descriptor machine values)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing

@@ -14,6 +14,7 @@ architectures, not real silicon.
 - [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`
 - [Addressing modes](docs/modes.md) — `defmode`, pattern matching
 - [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
+- [Directives](docs/directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Getting started](docs/getting-started.md) — install, run, test

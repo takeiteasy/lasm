@@ -29,9 +29,9 @@
                    ; a multi-hole addressing-mode pattern (mode.lisp), whose
                    ; own literal commas would be unmatchable if this split
                    ; were applied first, so the assembler doesn't read this
-                   ; field to match an addressing mode (below). The likely
-                   ; consumer is a future comma-separated directive
-                   ; (e.g. .byte 1, 2, 3)
+                   ; field to match an addressing mode (below). A directive
+                   ; statement (directive.lisp, #14) reads this field instead
+                   ; -- e.g. .byte 1, 2, 3's three comma-separated operands.
   (operand-tokens #() :type simple-vector)  ; every token after the mnemonic,
                    ; commas included -- addressing-mode matching (mode.lisp)
                    ; needs the whole run uncommitted to any comma split,

@@ -14,7 +14,9 @@ along the way.
 
 See [`examples/counter.lisp`](../examples/counter.lisp) for a runnable
 single-mode version, [`examples/modes.lisp`](../examples/modes.lisp) for a
-multi-mode one, and [Emulator](emulator.md) for running the result.
+multi-mode one, [`examples/directives.lisp`](../examples/directives.lisp) for
+one using `.org`/`.byte`/`.res` (see [Directives](directives.md)), and
+[Emulator](emulator.md) for running the result.
 
 ## `assemble` / `assemble-statements`
 
@@ -32,8 +34,11 @@ latter directly. Both return an `assembly`:
 (defstruct assembly bytes origin symbols)
 ```
 
-- `bytes` — a `(vector (unsigned-byte 8))` of the encoded program.
-- `origin` — the address the first byte was placed at (see `:origin` below).
+- `bytes` — a `(vector (unsigned-byte 8))` of the encoded program. A gap left
+  by a forward `.org` or a `.res` run (see [Directives](directives.md)) is
+  zero-filled.
+- `origin` — the address the first byte was placed at: the `:origin` key
+  below, unless a leading `.org` moved it first (see "`:origin`" below).
 - `symbols` — a hash table (label name string → address) of every label
   bound while assembling, forward or backward.
 
@@ -41,20 +46,24 @@ latter directly. Both return an `assembly`:
 
 1. **Layout.** Walk the statements with an address counter starting at
    `:origin`. Each `statement-label` binds to the current address; each
-   `statement-mnemonic` looks up its mnemonic's addressing-mode variants
-   (`find-instruction-variants`, [Instructions](instructions.md)), **chooses
-   one** (see "Choosing a mode" below), and advances the counter by `1 +`
-   the sum of that variant's operand field widths (its
-   `instruction-descriptor-total-operand-width` — a variant may wire up
-   more than one field, one per hole of its mode; see "Multi-operand
-   instructions" below). This is what resolves *forward* references (`jmp
-   end` before `end:` appears) — a caller doesn't have to write labels
-   before their uses.
+   `statement-mnemonic` is looked up first as a directive (`directive.lisp`,
+   see [Directives](directives.md)) and, if it isn't one, as its mnemonic's
+   addressing-mode variants (`find-instruction-variants`,
+   [Instructions](instructions.md)), which **chooses one** (see "Choosing a
+   mode" below) and advances the counter by `1 +` the sum of that variant's
+   operand field widths (its `instruction-descriptor-total-operand-width` —
+   a variant may wire up more than one field, one per hole of its mode; see
+   "Multi-operand instructions" below). Directive lookup has to come first:
+   `find-instruction-variants` signals on an unregistered name, so it can't
+   be tried first and fallen back from. This is what resolves *forward*
+   references (`jmp end` before `end:` appears) — a caller doesn't have to
+   write labels before their uses.
 2. **Encode.** Walk again, now with the complete symbol table: evaluate each
    statement's already-chosen variant's operand AST (`eval-expr`, below)
-   against the symbol table, and encode (`encode-instruction`). No re-parsing
-   or re-matching happens here — pass 1 already committed to a mode and its
-   parsed hole ASTs.
+   against the symbol table, and encode (`encode-instruction`, or a
+   directive's own byte-laying — [Directives](directives.md)). No re-parsing
+   or re-matching happens here — pass 1 already committed to a mode (or
+   directive) and its parsed operand ASTs.
 
 ### Choosing a mode
 
@@ -186,6 +195,12 @@ were computed against; passing mismatched origins to `assemble` and
 `load-program` defaults to the assembly's own origin rather than requiring
 it be repeated.
 
+A leading `.org` (before any statement has occupied an address) moves this
+same `origin` — see [Directives](directives.md#org) — so `(assemble
+".org $8000 ...")` needs no `:origin` key at all; the two ways of setting it
+compose in the obvious way (`:origin` picks the starting point layout begins
+at, `.org` can still move it further before the first byte).
+
 ## Local labels are flat
 
 A local label (lexer convention: a name starting with a non-alphanumeric
@@ -199,8 +214,10 @@ label is a separate ticket (#16).
 
 - `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate label,
   an operand whose syntax matches none of the mnemonic's declared
-  addressing-mode variants, or a `relative`-mode offset that doesn't fit its
-  operand's width (see "PC-relative offsets" above).
+  addressing-mode variants, a `relative`-mode offset that doesn't fit its
+  operand's width (see "PC-relative offsets" above), or a malformed
+  directive use (wrong operand count, a non-constant `.org`/`.res` operand,
+  or a backward-moving `.org` — see [Directives](directives.md)).
 - `unknown-instruction` — an unregistered mnemonic (from
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in
@@ -209,7 +226,9 @@ label is a separate ticket (#16).
 
 ## Scope
 
-This produces bytes and a symbol table from a statement list. It does not
-cover directives (`.org`, `.byte`/`.word`), macros, or a listing /
-source-map output tying addresses back to source lines (all separate,
-follow-up tickets).
+This produces bytes and a symbol table from a statement list, including
+directives (`.org`, `.byte`/`.word`, `.res` — see [Directives](directives.md)).
+It does not cover `.macro` (a statement-expansion pass, not a per-statement
+directive — see [Directives](directives.md#scope-macro-is-not-a-directive))
+or a listing / source-map output tying addresses back to source lines (both
+separate, follow-up tickets).

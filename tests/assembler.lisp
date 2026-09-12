@@ -171,3 +171,77 @@ target: nop" :machine 'instr-test-machine)))
         (two (assemble "flex $1, $2" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x20 5) (assembly-bytes imm)))
     (fiveam:is (equalp #(#x21 1 2) (assembly-bytes two)))))
+
+;;; Directives (directive.lisp, #14) -- .ORG / .BYTE / .WORD / .RES dispatch
+;;; in %LAYOUT/%ENCODE, reusing INSTR-TEST-MACHINE.
+
+(fiveam:test byte-directive-emits-one-byte-per-value
+  (let ((a (assemble ".byte 1, 2, 3" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(1 2 3) (assembly-bytes a)))))
+
+(fiveam:test word-directive-emits-little-endian-words
+  (let ((a (assemble ".word $1234" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x34 #x12) (assembly-bytes a)))))
+
+(fiveam:test byte-directive-with-label-argument-resolves-in-pass-2
+  ;; nop (1 byte, address 0), target: nop (address 1) -- .byte target should
+  ;; fold to 1 once pass 2 has the symbol table, even though pass 1 (where
+  ;; .byte's own size is just its argument count) never evaluates it.
+  (let ((a (assemble "nop
+target: nop
+.byte target" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA #xEA 1) (assembly-bytes a)))))
+
+(fiveam:test leading-org-sets-assembly-origin
+  (let ((a (assemble ".org $8000
+start: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= #x8000 (assembly-origin a)))
+    (fiveam:is (= #x8000 (gethash "start" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA) (assembly-bytes a)))))
+
+(fiveam:test label-on-org-line-binds-to-new-address
+  (let ((a (assemble "here: .org $8000" :machine 'instr-test-machine)))
+    (fiveam:is (= #x8000 (gethash "here" (assembly-symbols a))))))
+
+(fiveam:test mid-program-forward-org-zero-fills-the-gap
+  (let ((a (assemble "nop
+.org 4
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA 0 0 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test mid-program-backward-org-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "nop
+nop
+nop
+.org 1
+nop" :machine 'instr-test-machine)))
+
+(fiveam:test org-with-label-operand-signals-assembly-error
+  ;; .org's operand must fold label-free in pass 1 -- there is no symbol
+  ;; table yet to resolve TARGET against.
+  (fiveam:signals assembly-error
+    (assemble ".org target
+target: nop" :machine 'instr-test-machine)))
+
+(fiveam:test res-directive-reserves-zero-filled-bytes
+  (let ((a (assemble "nop
+.res 4
+next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 5 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA 0 0 0 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test res-directive-with-negative-count-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".res -1" :machine 'instr-test-machine)))
+
+(fiveam:test org-directive-with-wrong-arity-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".org $10, $20" :machine 'instr-test-machine)))
+
+(fiveam:test directive-mnemonic-is-not-confused-with-an-instruction
+  ;; ".byte" is not a registered mnemonic on INSTR-TEST-MACHINE -- confirms
+  ;; directive dispatch in %LAYOUT doesn't fall through to
+  ;; FIND-INSTRUCTION-VARIANTS (which would signal UNKNOWN-INSTRUCTION).
+  (let ((a (assemble ".byte 1" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(1) (assembly-bytes a)))))
