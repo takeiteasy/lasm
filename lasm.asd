@@ -13,7 +13,9 @@
                (:file "semantics")
                (:file "lexer")
                (:file "parser")
-               (:file "instruction")))
+               (:file "instruction")
+               (:file "assembler")
+               (:file "emulator")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -27,4 +29,6 @@
                (:file "semantics")
                (:file "lexer")
                (:file "parser")
-               (:file "instruction")))
+               (:file "instruction")
+               (:file "assembler")
+               (:file "emulator")))

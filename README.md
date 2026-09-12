@@ -13,6 +13,8 @@ architectures, not real silicon.
 - [Lexer](docs/lexer.md) — `deflexer`, `tokenize`
 - [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`
 - [Instructions](docs/instructions.md) — `definstruction`, addressing modes, encoding
+- [Assembler](docs/assembler.md) — `assemble`, label resolution, encoded bytes
+- [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Getting started](docs/getting-started.md) — install, run, test
 - [Design & roadmap draft](LASM-plan.md)
 

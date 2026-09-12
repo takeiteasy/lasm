@@ -79,10 +79,10 @@
   (name nil :type symbol)
   (elements nil :type list)               ; ordered list of storage-element
   (table (make-hash-table :test 'eq))     ; name -> storage-element
-  ;; Instruction registration (#6, instruction.lisp). Keyed by upcased
-  ;; mnemonic string and by opcode, so both the assembler (#10, mnemonic ->
-  ;; encoding) and the emulator (#11, opcode -> decode) share one table pair
-  ;; rather than each keeping its own index.
+  ;; Instruction registration (instruction.lisp). Keyed by upcased mnemonic
+  ;; string and by opcode, so both the assembler (assembler.lisp, mnemonic ->
+  ;; encoding) and the emulator (emulator.lisp, opcode -> decode) share one
+  ;; table pair rather than each keeping its own index.
   (instructions (make-hash-table :test 'equal))  ; mnemonic string -> instruction-descriptor
   (opcodes (make-hash-table :test 'eql)))         ; opcode -> instruction-descriptor
 

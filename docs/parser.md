@@ -12,16 +12,15 @@ precedence-climbing (Pratt) expression parser reusable at every operand
 
 ## Scope
 
-This stops at the AST. Label references stay symbolic (`expr-label`,
-unresolved — no symbol table) and operand token runs are handed back
-unparsed as raw tokens rather than expressions. `parse-expression` is the
-piece later stages call directly: M1's two built-in addressing modes
-(`immediate`, `absolute`) match against it via `match-operand-mode` — see
-[Instructions](instructions.md); a user-declarative `defmode` for
-additional modes and multi-mode resolution is M2. Full expression
-evaluation against a resolved symbol table (label resolution) belongs to
-the assembler pass — `eval-expr-constant` (also in
-[Instructions](instructions.md)) folds constant expressions only.
+This stops at the AST. Label references stay symbolic (`expr-label`) and
+operand token runs are handed back unparsed as raw tokens rather than
+expressions. `parse-expression` is the piece later stages call directly:
+M1's two built-in addressing modes (`immediate`, `absolute`) match against
+it via `match-operand-mode` — see [Instructions](instructions.md); a
+user-declarative `defmode` for additional modes and multi-mode resolution
+is M2. Resolving a label reference against a symbol table is the
+[Assembler](assembler.md)'s job (`eval-expr`); `eval-expr-constant` folds
+constant expressions with no label support at all.
 
 ## Statement grammar
 
@@ -82,8 +81,9 @@ has no comparisons.
 
 `expr-label-localp` is a heuristic (the name's first character is not
 alphabetic — true for the default lexer's `.`-prefixed local labels), not a
-descriptor-aware scoping check; real local-label scoping is resolution work
-left to the assembler pass.
+descriptor-aware scoping check. The [Assembler](assembler.md) does not act
+on it in M1 either — every label, local or not, shares one flat symbol
+table; scoping a local label to its enclosing global label is M2 (#16).
 
 ## Conditions
 
@@ -99,4 +99,4 @@ doesn't expect.
   needs a syntax decision, since both candidate spellings collide with
   existing tokens.
 - Local-label scoping (binding a `.loop` reference to its enclosing global
-  label) — belongs with the assembler pass's symbol resolution.
+  label) — M2 (#16); see [Assembler](assembler.md).

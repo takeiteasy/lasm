@@ -83,8 +83,8 @@ sta b"))))
       (fiveam:is (= 1 (lasm-syntax-error-line c))))))
 
 (fiveam:test two-lexers-tokenize-same-source-differently
-  ;; The point of #7: a machine's own DEFLEXER changes how identical source
-  ;; text tokenizes -- this is what "parameterized" actually buys.
+  ;; The point of DEFLEXER: a machine's own lexer changes how identical
+  ;; source text tokenizes -- this is what "parameterized" actually buys.
   (deflexer percent-comment-syntax
     (comment-styles ("%" :line))
     (number-formats (:hex "$") (:dec :default))

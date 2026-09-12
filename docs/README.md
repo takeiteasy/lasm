@@ -6,6 +6,8 @@
 - [Lexer](lexer.md) — `deflexer` and `tokenize`
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`
 - [Instructions](instructions.md) — `definstruction`, addressing modes, encoding
+- [Assembler](assembler.md) — `assemble`, label resolution, encoded bytes
+- [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 
 This directory covers what exists today. For the design rationale and the
 milestone roadmap, see [`LASM-plan.md`](../LASM-plan.md) at the repo root —

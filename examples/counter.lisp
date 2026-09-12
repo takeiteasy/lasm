@@ -1,21 +1,12 @@
 ;;;; examples/counter.lisp
 ;;;;
-;;;; Exercises M1's front end and instruction pipeline (lexer.lisp,
-;;;; parser.lisp, instruction.lisp): defines a syntax with DEFLEXER and a
-;;;; small register machine with DEFINSTRUCTION, then tokenizes and parses a
-;;;; hand-written counter-loop program -- the same kind of source the M1
-;;;; milestone target (a counter loop assembled and run end to end,
-;;;; LASM-plan.md sec. 2) will eventually feed through the full pipeline --
-;;;; and, per statement, matches its operand against the instruction's
-;;;; addressing mode, encodes it to bytes, and executes it against a live
-;;;; machine.
-;;;;
-;;;; This still stops short of a full assembler pass: labels are not
-;;;; resolved (the "bne .loop" branch target is printed as UNRESOLVED-LABEL
-;;;; rather than encoded), and there is no statement-list -> byte-vector
-;;;; driver or fetch/execute loop over encoded bytes -- that's the assembler
-;;;; pass and the emulator loop, respectively. See docs/lexer.md,
-;;;; docs/parser.md, and docs/instructions.md.
+;;;; The M1 milestone target (LASM-plan.md sec. 2): a counter-loop program
+;;;; assembled and run end to end through the whole pipeline -- DEFLEXER's
+;;;; syntax, the statement/expression parser, DEFINSTRUCTION's addressing
+;;;; modes and encoding, the assembler pass (assembler.lisp), and the
+;;;; emulator loop (emulator.lisp) -- ending in a correct final register
+;;;; state. See docs/lexer.md, docs/parser.md, docs/instructions.md,
+;;;; docs/assembler.md, and docs/emulator.md.
 ;;;;
 ;;;; Run with:  sbcl --script examples/counter.lisp
 
@@ -39,7 +30,13 @@
   "        ldx #10        ; x = 10
 .loop:  dex             ; x -= 1
         bne .loop       ; loop while x != 0
-        sta $1000")
+        sta $1000
+        hlt             ; stop the emulator loop (see docs/emulator.md)")
+
+;; NOTE: ".loop" is a local label by lexer convention (LOCAL-LABEL-PREFIX
+;; "."), but M1 does not scope it to an enclosing global label -- it is
+;; just an ordinary global name in a single flat symbol table. Scoping a
+;; local label to the nearest preceding global label is M2 (#16).
 
 (format t "~&Source:~%~A~2%" *source*)
 
@@ -57,10 +54,8 @@
           (statement-line s) (statement-label s) (statement-mnemonic s)
           (length (statement-operands s))))
 
-;;; Instruction set: just enough of SIXTYFOO to encode and execute the
-;;; program above, given its operand values (the "bne .loop" branch target
-;;; is a label -- resolving it belongs to the assembler pass, so it prints
-;;; as unresolved below rather than being encoded).
+;;; Instruction set: enough of SIXTYFOO to assemble and run the program
+;;; above end to end.
 
 (defmachine sixtyfoo
   (register x :width 8)
@@ -87,29 +82,25 @@
   (encoding (opcode #x8D) (operand :mode))
   (semantics (setf (mref machine 'ram operand) x)))
 
-(format t "~%Encoded instructions:~%")
-(dolist (s (parse *source* :lexer 'sixtyfoo-syntax))
-  (when (statement-mnemonic s)
-    (let* ((descriptor (find-instruction 'sixtyfoo (statement-mnemonic s)))
-           (mode (instruction-descriptor-mode descriptor)))
-      (if (null mode)
-          (format t "  line ~D: ~A -> bytes ~S~%"
-                  (statement-line s) (statement-mnemonic s)
-                  (encode-instruction descriptor nil))
-          (let ((ast (match-operand-mode (first (statement-operands s)) mode)))
-            (handler-case
-                (format t "  line ~D: ~A -> bytes ~S~%"
-                        (statement-line s) (statement-mnemonic s)
-                        (encode-instruction descriptor (eval-expr-constant ast)))
-              (unresolved-label (c)
-                (format t "  line ~D: ~A -> operand references unresolved label ~S (label resolution belongs to the assembler pass)~%"
-                        (statement-line s) (statement-mnemonic s) (unresolved-label-name c)))))))))
+;; No addressing mode, no operand -- HLT signals LASM-TRAP via the existing
+;; TRAP semantics primitive rather than needing a dedicated halt mechanism;
+;; RUN below catches it and reports :TRAP as the stop reason.
+(definstruction sixtyfoo hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
 
-(format t "~%Executing ldx #10 / dex / dex / sta $1000 directly against a machine:~%")
-(let ((m (make-machine 'sixtyfoo)))
-  (execute-instruction (find-instruction 'sixtyfoo 'ldx) m 10)
-  (execute-instruction (find-instruction 'sixtyfoo 'dex) m nil)
-  (execute-instruction (find-instruction 'sixtyfoo 'dex) m nil)
-  (execute-instruction (find-instruction 'sixtyfoo 'sta) m #x1000)
-  (format t "  X = ~D, Z flag = ~D, RAM[$1000] = ~D~%"
-          (sref m 'x) (flag m 'z) (mref m 'ram #x1000)))
+(format t "~%Assembling:~%")
+(let ((assembly (assemble *source* :lexer 'sixtyfoo-syntax :machine 'sixtyfoo)))
+  (format t "  bytes:   ~S~%" (coerce (assembly-bytes assembly) 'list))
+  (format t "  symbols: ~{~A=$~4,'0X~^, ~}~%"
+          (loop for k being the hash-keys of (assembly-symbols assembly)
+                  using (hash-value v)
+                collect k collect v))
+
+  (format t "~%Running:~%")
+  (let ((m (make-machine 'sixtyfoo)))
+    (load-program m assembly)
+    (multiple-value-bind (reason steps) (run m)
+      (format t "  stopped: ~A after ~D step~:P~%" reason steps)
+      (format t "  X = ~D, Z flag = ~D, RAM[$1000] = ~D~%"
+              (sref m 'x) (flag m 'z) (mref m 'ram #x1000)))))

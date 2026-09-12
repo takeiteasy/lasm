@@ -65,7 +65,7 @@
    #:zero?
    #:bit-set?
 
-   ;; Lexer (#7)
+   ;; Lexer
    #:deflexer
    #:find-lexer-descriptor
    #:tokenize
@@ -77,7 +77,7 @@
    #:token-line
    #:token-column
 
-   ;; Parser / expression AST (#8)
+   ;; Parser / expression AST
    #:parse
    #:parse-expression
    #:statement
@@ -128,4 +128,20 @@
    #:instruction-descriptor-opcode
    #:instruction-descriptor-operand-width
    #:instruction-descriptor-semantics-fn
-   #:instruction-descriptor-cycles))
+   #:instruction-descriptor-cycles
+   #:eval-expr
+
+   ;; Assembler
+   #:assemble
+   #:assemble-statements
+   #:assembly
+   #:assembly-p
+   #:assembly-bytes
+   #:assembly-origin
+   #:assembly-symbols
+   #:assembly-error
+
+   ;; Emulator
+   #:load-program
+   #:step-machine
+   #:run))

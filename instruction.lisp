@@ -14,11 +14,11 @@
 ;;;; later without touching MATCH-OPERAND-MODE's callers.
 ;;;;
 ;;;; Scope: this stops at "one instruction + one already-evaluated operand ->
-;;;; bytes / executed effect". There is no statement-list driver, no symbol
-;;;; table, and no label resolution here -- EVAL-EXPR-CONSTANT folds constant
-;;;; expressions only and signals UNRESOLVED-LABEL on an EXPR-LABEL; full
-;;;; expression evaluation against a resolved symbol table belongs to the
-;;;; assembler pass.
+;;;; bytes / executed effect". There is no statement-list driver or label
+;;;; resolution here -- that is assembler.lisp, which calls EVAL-EXPR (below)
+;;;; with its completed label table. EVAL-EXPR-CONSTANT is the same folder
+;;;; with no label support at all, for callers with no symbol table to give
+;;;; it.
 
 (in-package #:lasm)
 
@@ -101,16 +101,21 @@ don't match MODE or leave an unconsumed trailing token."
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
-(defun eval-expr-constant (ast)
-  "Fold the EXPR-* AST node AST (parser.lisp) to an integer. Signals
-UNRESOLVED-LABEL on an EXPR-LABEL -- full evaluation against a resolved
-symbol table belongs to the assembler pass; this is the constant-only
-piece the assembler pass will call once labels are bound."
+(defun eval-expr (ast &key symbols)
+  "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when
+given, is a hash table (string -> address) resolving EXPR-LABEL nodes --
+the assembler pass (assembler.lisp) calls this with its completed layout
+symbol table. Signals UNRESOLVED-LABEL on an EXPR-LABEL whose name is not
+in SYMBOLS (or when SYMBOLS is NIL)."
   (etypecase ast
     (expr-number (expr-number-value ast))
-    (expr-label (error 'unresolved-label :name (expr-label-name ast)))
+    (expr-label
+     (multiple-value-bind (value foundp)
+         (and symbols (gethash (expr-label-name ast) symbols))
+       (unless foundp (error 'unresolved-label :name (expr-label-name ast)))
+       value))
     (expr-unary
-     (let ((v (eval-expr-constant (expr-unary-operand ast))))
+     (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols)))
        (ecase (expr-unary-op ast)
          (:neg (- v))
          (:pos v)
@@ -118,8 +123,8 @@ piece the assembler pass will call once labels are bound."
          (:lo (logand v #xff))
          (:hi (logand (ash v -8) #xff)))))
     (expr-binary
-     (let ((l (eval-expr-constant (expr-binary-left ast)))
-           (r (eval-expr-constant (expr-binary-right ast))))
+     (let ((l (eval-expr (expr-binary-left ast) :symbols symbols))
+           (r (eval-expr (expr-binary-right ast) :symbols symbols)))
        (ecase (expr-binary-op ast)
          (:pipe (logior l r))
          (:caret (logxor l r))
@@ -130,6 +135,12 @@ piece the assembler pass will call once labels are bound."
          (:minus (- l r))
          (:star (* l r))
          (:slash (truncate l r)))))))
+
+(defun eval-expr-constant (ast)
+  "Fold AST to an integer with no symbol table -- the constant-only case of
+EVAL-EXPR, kept as its own name since callers throughout the codebase (and
+this docstring's own examples) use it to mean \"no labels allowed here\"."
+  (eval-expr ast :symbols nil))
 
 ;;; DEFINSTRUCTION registration
 

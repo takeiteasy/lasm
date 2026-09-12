@@ -28,7 +28,7 @@ evaluator. That single mode is wired to operand parsing and byte encoding.
 ```
 
 See [`examples/counter.lisp`](../examples/counter.lisp) for a runnable
-version that parses, encodes, and executes a small counter-loop program.
+version that assembles and runs a small counter-loop program end to end.
 
 ## `definstruction`
 
@@ -114,7 +114,8 @@ operator in M1. A machine that wants one declares `(register pc :width
 ```
 
 Advancing `pc` past the current instruction on every step (rather than only
-on a taken branch) is the emulator loop's job, not `definstruction`'s.
+on a taken branch) is the [emulator loop](emulator.md)'s job, not
+`definstruction`'s.
 
 ## `with-machine-bindings`
 
@@ -149,10 +150,10 @@ grammar & expression parser](parser.md)) and encoded bytes or execution:
   trailing token unconsumed.
 - `(eval-expr-constant ast)` — folds a constant expression AST (numbers,
   unary/binary operators) to an integer. Signals `unresolved-label` on an
-  `expr-label` — this is a *constant* folder, not the assembler's
-  expression evaluator; resolving labels against a symbol table belongs to
-  the assembler pass, and `eval-expr-constant` is the piece that pass calls
-  once a label is bound to a value.
+  `expr-label` — this is a *constant* folder with no label support.
+  `(eval-expr ast :symbols table)` is the general form the
+  [Assembler](assembler.md) calls with its completed label table;
+  `eval-expr-constant` is just `eval-expr` with `symbols` omitted.
 
 Given an evaluated integer, `(encode-instruction descriptor value)` returns
 a list of `(unsigned-byte 8)` bytes (opcode then operand, little-endian),
@@ -161,18 +162,19 @@ semantics against a live `machine`.
 
 `(find-instruction machine-name mnemonic)` and `(find-instruction-by-opcode
 machine-name opcode)` look up a registered `instruction-descriptor` by
-mnemonic or by opcode (the decode direction an emulator loop needs); both
-signal `unknown-instruction` rather than an unrelated error if nothing is
-registered under that key.
+mnemonic or by opcode (the decode direction the [emulator loop](emulator.md)
+uses); both signal `unknown-instruction` rather than an unrelated error if
+nothing is registered under that key.
 
 ## Scope
 
 This covers one instruction and one already-evaluated operand. It does not
 cover:
 
-- A statement-list → byte-vector assembler driver, or a symbol table for
-  label resolution — the assembler pass.
-- A fetch/execute loop advancing `pc` over encoded bytes — the emulator loop.
+- A statement-list → byte-vector driver, or a symbol table for label
+  resolution — see [Assembler](assembler.md).
+- A fetch/execute loop advancing `pc` over encoded bytes — see
+  [Emulator](emulator.md).
 - Multiple addressing modes per instruction, or declaring new modes with
   `defmode` — M2.
 - Indexed access for banked (`:count > 1`) registers in semantics — the

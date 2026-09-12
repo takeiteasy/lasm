@@ -1,12 +1,14 @@
 ;;;; parser.lisp
 ;;;; A fixed line/statement grammar shared across all target machines, and a
 ;;;; precedence-climbing (Pratt) expression parser reusable at every operand
-;;;; `expr` hole an addressing mode declares (M2's DEFMODE / M1's #9 ticket).
+;;;; `expr` hole an addressing mode declares (M2's DEFMODE / M1's built-in
+;;;; IMMEDIATE and ABSOLUTE modes, instruction.lisp).
 ;;;;
 ;;;; Scope: this stops at the AST. Label references stay symbolic
 ;;;; (EXPR-LABEL, unresolved) and operands are handed back as raw token runs
-;;;; -- no symbol table, no expression evaluation (#10), no addressing-mode
-;;;; matching or operand encoding (#9).
+;;;; -- no symbol table and no expression evaluation here; those belong to
+;;;; instruction.lisp (EVAL-EXPR) and assembler.lisp (label resolution), and
+;;;; addressing-mode matching / operand encoding belong to instruction.lisp.
 ;;;;
 ;;;; Grammar (one STATEMENT per source line):
 ;;;;   line      := [label-def] [mnemonic [operands]]
@@ -25,16 +27,16 @@
   line)       ; source line number, for diagnostics
 
 (defstruct operand
-  tokens)     ; simple-vector of raw tokens for this operand -- #9 matches an
-              ; addressing-mode pattern against this and calls PARSE-EXPRESSION
-              ; on the pattern's `expr` hole(s)
+  tokens)     ; simple-vector of raw tokens for this operand -- MATCH-OPERAND-MODE
+              ; (instruction.lisp) matches an addressing-mode pattern against
+              ; this and calls PARSE-EXPRESSION on the pattern's `expr` hole(s)
 
 (defstruct expr-number value)
 (defstruct expr-label name localp)          ; NAME unresolved; LOCALP a heuristic
                                              ; (name starts with a non-alphanumeric
                                              ; prefix char, e.g. "."), not a real
                                              ; descriptor-aware scoping check --
-                                             ; that belongs with resolution (#10).
+                                             ; local-label scoping is M2 (#16).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash
@@ -104,9 +106,10 @@
 
 (defun parse-expression (tokens &key (start 0) (end (length tokens)))
   "Parse a single expression from the SIMPLE-VECTOR TOKENS between START and
-END. Returns (VALUES ast next-index) so a caller (e.g. #9 matching an
-addressing-mode pattern) can parse one `expr` hole out of a longer token run
-and continue from NEXT-INDEX. Signals PARSE-FAILURE on malformed input."
+END. Returns (VALUES ast next-index) so a caller (e.g. MATCH-OPERAND-MODE,
+matching an addressing-mode pattern) can parse one `expr` hole out of a
+longer token run and continue from NEXT-INDEX. Signals PARSE-FAILURE on
+malformed input."
   (%parse-binary tokens start end 0))
 
 ;;; Statement grammar
