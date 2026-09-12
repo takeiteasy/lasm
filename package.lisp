@@ -138,7 +138,9 @@
    #:instruction-descriptor-machine
    #:instruction-descriptor-mode
    #:instruction-descriptor-opcode
-   #:instruction-descriptor-operand-width
+   #:instruction-descriptor-operand-widths
+   #:instruction-descriptor-operand-names
+   #:instruction-descriptor-total-operand-width
    #:instruction-descriptor-semantics-fn
    #:instruction-descriptor-cycles
    #:eval-expr

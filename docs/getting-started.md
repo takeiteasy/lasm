@@ -51,6 +51,15 @@ The same pipeline, but `lda`/`adc` each declare several addressing modes
 assembler picks which one each operand actually uses — see [Addressing
 modes](modes.md) and [Assembler](assembler.md#choosing-a-mode).
 
+```sh
+sbcl --script examples/mov.lisp
+```
+
+A two-hole addressing mode (`expr "," expr`) wired to a two-field `mov`
+instruction — one operand encoding field per hole, named `dst`/`val` so
+`(semantics ...)` reads them directly — see [Instructions, "Repeated
+`(operand ...)` subclauses"](instructions.md).
+
 ## Run the tests
 
 ```sh

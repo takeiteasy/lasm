@@ -43,8 +43,11 @@ latter directly. Both return an `assembly`:
    `:origin`. Each `statement-label` binds to the current address; each
    `statement-mnemonic` looks up its mnemonic's addressing-mode variants
    (`find-instruction-variants`, [Instructions](instructions.md)), **chooses
-   one** (see "Choosing a mode" below), and advances the counter by
-   `1 + operand-width`. This is what resolves *forward* references (`jmp
+   one** (see "Choosing a mode" below), and advances the counter by `1 +`
+   the sum of that variant's operand field widths (its
+   `instruction-descriptor-total-operand-width` — a variant may wire up
+   more than one field, one per hole of its mode; see "Multi-operand
+   instructions" below). This is what resolves *forward* references (`jmp
    end` before `end:` appears) — a caller doesn't have to write labels
    before their uses.
 2. **Encode.** Walk again, now with the complete symbol table: evaluate each
@@ -67,30 +70,39 @@ mnemonic's variants in the order they were declared in `(modes ...)`:
    statement's operand tokens (`try-match-operand-mode`,
    [Addressing modes](modes.md)) — a no-operand variant's "pattern" is
    simply an empty token run. No match at all is an `assembly-error`.
-2. **Value.**
-   - If every hole folds to a **constant** (no label reference), keep the
-     narrowest matching variant the value actually fits (`%fits-width-p`
-     accepts both the unsigned and the two's-complement signed range, e.g.
-     both `255` and `-1` fit one byte). If the value fits *none* of them —
-     `ldx #300` on a one-byte `immediate` — fall back to the widest matching
-     variant and let `encode-instruction`'s existing `wrap-value` mask it,
-     exactly as a single-mode instruction has always done.
-   - If any hole references a **label**, its value isn't known yet — pick
-     the **widest** matching variant instead. This choice never has to
-     shrink once the label resolves later, so one layout pass suffices.
-   - A **`relative`** mode candidate ([Addressing modes](modes.md#pc-relative-modes))
-     is treated the same way, even when its hole folds to a constant: its
-     parsed value is an absolute target, not the offset that actually gets
-     encoded, so checking it against an operand width here would compare
-     the wrong quantity — pick the widest matching variant and let `%encode`
-     (below) do the real range check once it has an address to compute the
-     offset from.
-   - Ties in either case keep declaration order — which is why [Addressing
+2. **Value**, checked independently for each syntax-matching candidate —
+   candidates of one mnemonic can have different hole counts (e.g. a
+   two-register mode alongside a one-immediate mode), so whether a
+   candidate's values are even known yet is not one shared question:
+   - If **every** hole folds to a **constant** (no label reference) and each
+     one fits its own field's width (`%fits-width-p`, checked value-by-value
+     against the candidate's own `operand-widths` — it accepts both the
+     unsigned and the two's-complement signed range, e.g. both `255` and
+     `-1` fit one byte), the candidate is a **fit**. The **first** fit in
+     declaration order is kept — which is why [Addressing
      modes](modes.md#declare-narrower-modes-before-wider-ones) says to
-     declare narrower/cheaper modes first.
+     declare narrower/cheaper modes before wider ones that also match their
+     syntax: declaring them in the other order still "works", it just always
+     picks the wider one.
+   - If **no** candidate fits — `ldx #300` on a one-byte `immediate`, or any
+     hole is a **label** reference whose value isn't known yet — fall back
+     to the **widest** syntax-matching candidate (by total operand width)
+     and let `encode-instruction`'s existing `wrap-value` mask each value,
+     exactly as a single-mode instruction has always done. A label-bearing
+     candidate never has to shrink once the label resolves later, so one
+     layout pass suffices.
+   - A **`relative`** mode candidate ([Addressing modes](modes.md#pc-relative-modes))
+     is excluded from the fit check even when its hole folds to a constant:
+     its parsed value is an absolute target, not the offset that actually
+     gets encoded, so checking it against an operand width here would
+     compare the wrong quantity — it only ever wins as the widest fallback,
+     and `%encode` (below) does the real range check once it has an address
+     to compute the offset from.
+   - The widest-fallback case also keeps declaration order on a tie (equal
+     total width).
 
 ```lisp
-lda $10       ; constant, fits zero-page -> zero-page (narrowest fit)
+lda $10       ; constant, fits zero-page -> zero-page (first declared fit)
 lda $1000     ; constant, doesn't fit zero-page -> absolute
 lda target    ; label -> absolute, even if target turns out to be $0010
 ```
@@ -106,6 +118,22 @@ label-bearing operand sidesteps that loop entirely, at the cost of never
 choosing zero-page for a label operand even when its resolved address would
 have fit. A follow-up ticket tracks narrowing a label-bearing operand's mode
 once layout has converged.
+
+## Multi-operand instructions
+
+An instruction whose mode declares more than one `expr` hole
+([Addressing modes](modes.md)) wires up one operand encoding field per hole
+([Instructions](instructions.md)), evaluated and encoded in hole order. Pass
+1 sizes the statement by the sum of those fields' widths
+(`instruction-descriptor-total-operand-width`); pass 2 evaluates *every*
+hole's AST against the completed symbol table — including a label bound in
+a later hole, not just the first — and hands the whole list of values to
+`encode-instruction`:
+
+```lisp
+mov $20, target   ; DST ($20) and SRC (target's resolved address) both
+target: nop       ; encode, little-endian, one after the other
+```
 
 ## PC-relative offsets
 
@@ -182,6 +210,6 @@ label is a separate ticket (#16).
 ## Scope
 
 This produces bytes and a symbol table from a statement list. It does not
-cover directives (`.org`, `.byte`/`.word`), macros, more than one operand
-per instruction, or a listing / source-map output tying addresses back to
-source lines (all separate, follow-up tickets).
+cover directives (`.org`, `.byte`/`.word`), macros, or a listing /
+source-map output tying addresses back to source lines (all separate,
+follow-up tickets).

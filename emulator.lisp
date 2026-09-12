@@ -88,21 +88,27 @@ it."
     (handler-case
         (let* ((descriptor (find-instruction-by-opcode machine-name opcode))
                (mode (instruction-descriptor-mode descriptor))
-               (width (or (instruction-descriptor-operand-width descriptor) 0))
-               (value (when (plusp width)
-                        (loop with v = 0
-                              for i below width
-                              do (setf v (logior v (ash (mref machine memory (+ address 1 i)) (* 8 i))))
-                              finally (return v)))))
+               (widths (instruction-descriptor-operand-widths descriptor))
+               (total-width (instruction-descriptor-total-operand-width descriptor))
+               (values (loop with offset = 1
+                             for width in widths
+                             collect (loop with v = 0
+                                           for i below width
+                                           do (setf v (logior v (ash (mref machine memory (+ address offset i))
+                                                                      (* 8 i))))
+                                           finally (return v))
+                             do (incf offset width))))
           ;; A RELATIVE operand (mode.lisp, #23) was assembled as a signed
           ;; offset (assembler.lisp's %RELATIVE-OFFSET) but is fetched above
           ;; as an unsigned WIDTH-byte quantity, like every other operand --
           ;; reinterpret it here so semantics can write a plain
-          ;; (set! pc (+ pc operand)) with no width of its own to track.
+          ;; (set! pc (+ pc operand)) with no width of its own to track. A
+          ;; RELATIVE mode always has exactly one hole (%CHECK-RELATIVE-
+          ;; MODE-HOLES, instruction.lisp), so VALUES here is one element.
           (when (and mode (mode-descriptor-relativep mode))
-            (setf value (signed-value value (* 8 width))))
-          (setf (sref machine pc) (+ address 1 width))
-          (execute-instruction descriptor machine value)
+            (setf values (list (signed-value (first values) (* 8 (first widths))))))
+          (setf (sref machine pc) (+ address 1 total-width))
+          (execute-instruction descriptor machine values)
           descriptor)
       (unknown-instruction () :decode-failure))))
 

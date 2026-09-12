@@ -151,3 +151,23 @@ bra loop" :machine 'instr-test-machine :origin #x200)))
     (assemble (format nil "loop: nop~%~{~A~%~}bra loop"
                        (make-list 200 :initial-element "nop"))
               :machine 'instr-test-machine)))
+
+;;; Multi-operand instructions -- MOVI/FLEX (tests/instruction.lisp).
+
+(fiveam:test multi-operand-statement-sizes-as-sum-of-field-widths
+  ;; MOVI: opcode + 1-byte dst + 2-byte src = 4 bytes total.
+  (let ((a (assemble "movi $10, $2200
+next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xF8 #x10 #x00 #x22 #xEA) (assembly-bytes a)))))
+
+(fiveam:test multi-operand-label-in-second-hole-resolves
+  (let ((a (assemble "movi $1, target
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xF8 1 4 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test multi-operand-variant-selected-by-syntax-among-differing-arities
+  (let ((imm (assemble "flex #5" :machine 'instr-test-machine))
+        (two (assemble "flex $1, $2" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x20 5) (assembly-bytes imm)))
+    (fiveam:is (equalp #(#x21 1 2) (assembly-bytes two)))))

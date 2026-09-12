@@ -28,9 +28,10 @@ per mode, and a semantics body expanded through the same vocabulary as
 ```
 
 See [`examples/counter.lisp`](../examples/counter.lisp) for a runnable
-version of the single-mode shape above assembled and run end to end, and
+version of the single-mode shape above assembled and run end to end,
 [`examples/modes.lisp`](../examples/modes.lisp) for a multi-mode 6502-shaped
-program (below).
+program (below), and [`examples/mov.lisp`](../examples/mov.lisp) for a
+multi-operand instruction ("Repeated `(operand ...)` subclauses" below).
 
 ## `definstruction`
 
@@ -43,13 +44,15 @@ semantics) in a list instead:
 ```lisp
 (definstruction MACHINE NAME
   (modes MODE)                                    ; sugar: 0 or 1 mode
-  (encoding (opcode n) [(operand :mode) | (operand :width n)])
+  (encoding (opcode n)
+            [(operand [NAME] :mode)
+             | (operand [NAME] :width n)]*)       ; one per MODE's hole
   (semantics form...)
   (cycles n))                                     ; optional
 
 (definstruction MACHINE NAME
   (modes (MODE (opcode n)
-               [(operand :width n)]
+               [(operand [NAME] :width n)]*       ; one per MODE's hole
                [(semantics form...)])
          ...)                                     ; 2+ modes, one per line
   (semantics form...)                             ; shared default; required
@@ -107,14 +110,15 @@ has to be dereferenced first (see "Deviation from the design draft" below).
 Which of a mnemonic's modes a given operand actually uses is decided at
 assembly time, not here — see [Assembler](assembler.md#choosing-a-mode).
 
-### `(encoding (opcode n) [(operand ...)])`
+### `(encoding (opcode n) [(operand ...)]*)`
 
 Only valid with the single-mode sugar form. `(opcode n)` is required and
-gives the instruction's one-byte opcode. `(operand ...)` is required exactly
-when `(modes ...)` declares a mode, and absent exactly when it doesn't —
-mismatching the two is an error.
+gives the instruction's one-byte opcode. An `(operand ...)` subclause is
+required exactly once per `EXPR` hole in `(modes MODE)`'s mode (zero when
+`(modes ...)` is omitted) — mismatching the count in either direction is an
+error.
 
-- `(operand :mode)` — take the operand width from the mode's own `:width`
+- `(operand :mode)` — take this field's width from the mode's own `:width`
   (see [Addressing modes](modes.md#width)), falling back to the machine's
   address width when the mode declares none: the machine's sole `memory`
   element's `:addr-width` rounded up to whole bytes (so a 16-bit-addressed
@@ -122,10 +126,55 @@ mismatching the two is an error.
   than one memory element, this fallback is ambiguous and signals an error
   asking for an explicit width instead.
 - `(operand :width n)` — override with an explicit byte count.
+- `(operand NAME :mode)` / `(operand NAME :width n)` — as above, and also
+  bind `NAME` to this field's value in `(semantics ...)` (see "Named operand
+  fields" below).
 
-Encoded bytes are little-endian and each byte is masked with the existing
-`wrap-value` (see [Machine model](machine-model.md)), so an over-wide
-operand value wraps rather than erroring.
+A single-hole mode needs exactly one `(operand ...)` subclause here; a mode
+with more holes (see "Repeated `(operand ...)` subclauses" below) needs one
+per hole, in hole order.
+
+Encoded bytes are little-endian and each field's bytes are masked with the
+existing `wrap-value` (see [Machine model](machine-model.md)), so an
+over-wide value wraps rather than erroring.
+
+### Repeated `(operand ...)` subclauses — multi-operand instructions
+
+A mode's pattern (`defmode`, [Addressing modes](modes.md)) may declare more
+than one `EXPR` hole — a two-register `mov`'s `expr "," expr`, say. Each
+hole gets its own operand encoding field: one `(operand ...)` subclause per
+hole, in the same order the holes appear in the pattern, each independently
+`:mode`- or `:width`-sized:
+
+```lisp
+(defmode reg-reg expr "," expr)
+
+(definstruction sixtyfoo mov
+  (modes reg-reg)
+  (encoding (opcode #x40)
+            (operand dst :width 1)
+            (operand src :width 1))
+  (semantics (setf (mref machine 'regs dst) (mref machine 'regs src))))
+```
+
+Assembling `mov 2, 3` matches `reg-reg`'s two holes against `2` and `3`,
+encodes as `#x40 #x02 #x03` (each field little-endian at its own width, in
+hole order), and `(semantics ...)` sees `dst` bound to `2` and `src` to `3`.
+A multi-mode variant (the `(modes (MODE ...) ...)` form) works the same
+way, with one exception: a **single**-hole mode there may still omit
+`(operand ...)` entirely and take its default width, exactly as before —
+only a mode with more than one hole *requires* explicit subclauses, since
+there's no single width left to default to.
+
+Declaring the wrong number of `(operand ...)` subclauses for a mode's hole
+count — too few or too many — is an error at `definstruction`'s
+macroexpansion time, not a runtime surprise.
+
+A `:relative` mode ([Addressing modes](modes.md#pc-relative-modes)) may not
+have more than one hole: its offset applies to the operand as a whole, and
+there is currently no way to mark just one hole of a multi-hole mode as the
+relative one (see [Addressing modes](modes.md#width) and the tracker for
+this follow-up).
 
 ### `(semantics form...)`
 
@@ -135,8 +184,12 @@ scope for the duration of `form...`:
 - `machine` — the runtime `machine` instance, for explicit memory/stack
   access, e.g. `(mref machine 'ram operand)`. There is no `with-machine`
   form here to let the instruction author pick this name, so it's fixed.
-- `operand` — the already-evaluated operand integer (see "Scope" below), or
-  `nil` for a no-operand instruction.
+- `operand` — the first (or only) operand field's already-evaluated value,
+  or `nil` for a no-operand instruction.
+- any `NAME` given to an `(operand NAME ...)` subclause ("Repeated
+  `(operand ...)` subclauses" above) — bound to that field's own value, so a
+  multi-operand instruction can write `dst`/`src` directly instead of
+  picking values apart itself.
 
 Every scalar register and flag of `MACHINE` is bound as in `with-machine`
 (`x`, `z`, etc. above), and `set!`/`push`/`pop`/`set-flags!`/`trap` are
@@ -231,25 +284,29 @@ and turning it into bytes or an executed effect:
   `(eval-expr ast :symbols table)` is the general form the
   [Assembler](assembler.md) calls with its completed label table;
   `eval-expr-constant` is just `eval-expr` with `symbols` omitted.
-- `(encode-instruction descriptor value)` returns a list of
-  `(unsigned-byte 8)` bytes (opcode then operand, little-endian) for one use
-  of instruction `descriptor` with operand value `value`.
-- `(execute-instruction descriptor machine value)` runs `descriptor`'s
-  semantics against a live `machine`.
+- `(encode-instruction descriptor values)` returns a list of
+  `(unsigned-byte 8)` bytes (opcode, then each operand field's bytes
+  little-endian in turn) for one use of instruction `descriptor` with
+  operand field values `values` — a list, one per `descriptor`'s
+  `operand-widths` entry, or `nil` for a no-operand instruction.
+- `(execute-instruction descriptor machine values)` runs `descriptor`'s
+  semantics against a live `machine`, the same list `values` bound as
+  `operand` (and any named fields) in the semantics body.
 
 ## Scope
 
-This covers one instruction variant and one already-evaluated operand. It
-does not cover:
+This covers one instruction variant and its already-evaluated operand
+field(s). It does not cover:
 
 - A statement-list → byte-vector driver, a symbol table for label
   resolution, or *choosing* which variant an operand's syntax and value
   select — see [Assembler](assembler.md).
 - A fetch/execute loop advancing `pc` over encoded bytes — see
   [Emulator](emulator.md).
-- More than one operand per instruction (a mode's pattern may declare
-  several `expr` holes, but `definstruction` only wires up one operand
-  encoding field per instruction) — a separate feature.
+- Marking just one hole of a multi-hole mode as PC-relative — a `:relative`
+  mode may only have one hole (see "Repeated `(operand ...)` subclauses"
+  above and [Addressing modes](modes.md#pc-relative-modes)) — a separate,
+  follow-up feature.
 - Indexed access for banked (`:count > 1`) registers in semantics — the
   `:count > 1` skip in `with-machine-bindings` (see
   [Semantics vocabulary](semantics.md)) applies here too.

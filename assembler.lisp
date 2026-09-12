@@ -81,14 +81,19 @@ wider ones that also match their syntax (e.g. zero-page before absolute):
 1. Syntax -- keep variants whose mode's pattern matches the operand tokens
    (a no-operand variant's \"pattern\" is simply an empty token run). No
    match at all is an ASSEMBLY-ERROR.
-2. Value -- for a variant whose mode holes fold to a label-free constant,
-   keep it only if the value fits its operand width; if none of the
-   syntax-matching variants fit, fall back to the widest one and let
-   ENCODE-INSTRUCTION's existing WRAP-VALUE mask the value, exactly as a
-   single-mode M1 instruction always did. If any hole is a label reference
-   (value not yet known), pick the *widest* syntax-matching variant instead
-   -- it never has to shrink once the label resolves, so this needs no
-   relaxation loop. Ties, in both cases, keep declaration order.
+2. Value -- for a variant whose mode holes fold to label-free constants,
+   keep it only if every value fits its own hole's operand width; if none of
+   the syntax-matching variants fit, fall back to the widest one (by total
+   operand width) and let ENCODE-INSTRUCTION's existing WRAP-VALUE mask each
+   value, exactly as a single-mode M1 instruction always did. If any hole is
+   a label reference (value not yet known), that variant is excluded from
+   the value filter and only considered as the widest fallback -- it never
+   has to shrink once the label resolves, so this needs no relaxation loop.
+   Ties, in both cases, keep declaration order. Resolvedness is checked per
+   candidate, not once for all of them: two variants of one mnemonic can
+   have different hole counts (e.g. a two-register mode alongside a
+   one-immediate mode), so whether their holes resolve is not the same
+   question for each.
 
 Returns (VALUES chosen-descriptor hole-asts)."
   (let* ((tokens (statement-operand-tokens statement))
@@ -104,38 +109,35 @@ Returns (VALUES chosen-descriptor hole-asts)."
       (%assembly-error (statement-line statement)
                         "~A: no addressing mode matches this operand"
                         (statement-mnemonic statement)))
-    ;; STABLE-SORT, not SORT: ties (equal width) must keep declaration order.
+    ;; STABLE-SORT, not SORT: ties (equal total width) must keep declaration
+    ;; order.
     (let* ((by-width (stable-sort (copy-list candidates) #'>
-                                   :key (lambda (c) (or (instruction-descriptor-operand-width
-                                                          (first c))
-                                                         0))))
+                                   :key (lambda (c) (instruction-descriptor-total-operand-width
+                                                      (first c)))))
            (widest (first by-width))
-           (first-mode (instruction-descriptor-mode (first (first candidates))))
-           (resolvedp (and
-                       ;; A RELATIVE candidate's value is an absolute target,
-                       ;; not the encoded offset (that's computed later, in
-                       ;; %ENCODE, once every address is known) -- checking it
-                       ;; against an operand width here would compare the
-                       ;; wrong quantity. Treat it as unresolved so the widest
-                       ;; candidate is always chosen, same as a label
-                       ;; reference (#23; only matters once a mnemonic
-                       ;; declares RELATIVE alongside another mode, see #27).
-                       (not (and first-mode (mode-descriptor-relativep first-mode)))
-                       (handler-case (progn (mapcar #'eval-expr-constant (second (first candidates)))
-                                            t)
-                        ;; All candidates share the same operand syntax (just
-                        ;; different widths/modes), so whether the value
-                        ;; resolves is the same for every candidate -- check
-                        ;; once against the first.
-                        (unresolved-label () nil)))))
-      (if (not resolvedp)
-          (values-list widest)
-          (let ((fitting (find-if (lambda (c)
-                                     (let* ((width (or (instruction-descriptor-operand-width (first c)) 1))
-                                            (vals (mapcar #'eval-expr-constant (second c))))
-                                       (every (lambda (v) (%fits-width-p v width)) vals)))
-                                   candidates)))
-            (values-list (or fitting widest)))))))
+           (fitting (find-if (lambda (c)
+                                (let* ((mode (instruction-descriptor-mode (first c))))
+                                  (and
+                                   ;; A RELATIVE candidate's value is an
+                                   ;; absolute target, not the encoded offset
+                                   ;; (that's computed later, in %ENCODE,
+                                   ;; once every address is known) --
+                                   ;; checking it against an operand width
+                                   ;; here would compare the wrong quantity.
+                                   ;; Excluded from the fit filter so the
+                                   ;; widest candidate is always chosen, same
+                                   ;; as a label reference (#23; only matters
+                                   ;; once a mnemonic declares RELATIVE
+                                   ;; alongside another mode, see #27).
+                                   (not (and mode (mode-descriptor-relativep mode)))
+                                   (handler-case
+                                       (let ((widths (instruction-descriptor-operand-widths
+                                                      (first c)))
+                                             (vals (mapcar #'eval-expr-constant (second c))))
+                                         (every #'%fits-width-p vals widths))
+                                     (unresolved-label () nil)))))
+                              candidates)))
+      (values-list (or fitting widest)))))
 
 (defun %layout (statements machine origin)
   "Returns (VALUES symbols sized-statements) where SYMBOLS is a string ->
@@ -156,7 +158,7 @@ RELATIVE-mode range-check error, #23), in order."
         (let ((variants (find-instruction-variants machine (statement-mnemonic statement))))
           (multiple-value-bind (descriptor asts) (%choose-variant statement variants)
             (cl:push (list address descriptor asts (statement-line statement)) sized)
-            (incf address (1+ (or (instruction-descriptor-operand-width descriptor) 0)))))))
+            (incf address (1+ (instruction-descriptor-total-operand-width descriptor)))))))
     (values symbols (nreverse sized))))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
@@ -170,7 +172,7 @@ advances PC past the whole instruction before running its semantics, so that
 is the base a branch's own (set! pc (+ pc operand)) actually adds to.
 Signals ASSEMBLY-ERROR if the offset doesn't fit the operand's width, rather
 than silently wrapping to a branch at the wrong address (#23)."
-  (let* ((width (or (instruction-descriptor-operand-width descriptor) 1))
+  (let* ((width (instruction-descriptor-total-operand-width descriptor))
          (next-address (+ address 1 width))
          (offset (- value next-address)))
     (unless (%fits-signed-width-p offset width)
@@ -186,10 +188,13 @@ than silently wrapping to a branch at the wrong address (#23)."
     (dolist (entry sized-statements)
       (destructuring-bind (address descriptor asts line) entry
         (let* ((mode (instruction-descriptor-mode descriptor))
-               (value (when mode (eval-expr (first asts) :symbols symbols))))
+               (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols)) asts)))
           (when (and mode (mode-descriptor-relativep mode))
-            (setf value (%relative-offset address descriptor value line)))
-          (dolist (byte (encode-instruction descriptor value))
+            ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
+            ;; RELATIVE mode has exactly one hole, so VALUES here is always
+            ;; a single-element list.
+            (setf values (list (%relative-offset address descriptor (first values) line))))
+          (dolist (byte (encode-instruction descriptor values))
             (cl:push byte bytes)))))
     (coerce (nreverse bytes) '(vector (unsigned-byte 8)))))
 

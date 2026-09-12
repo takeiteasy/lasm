@@ -110,7 +110,7 @@
 (fiveam:test no-operand-instruction
   (let ((nop (find-instruction 'instr-test-machine 'nop)))
     (fiveam:is (null (instruction-descriptor-mode nop)))
-    (fiveam:is (null (instruction-descriptor-operand-width nop)))))
+    (fiveam:is (null (instruction-descriptor-operand-widths nop)))))
 
 ;;; Multi-mode registration (mode.lisp, #18)
 
@@ -137,14 +137,14 @@
 (fiveam:test multi-mode-per-mode-semantics-override
   (let ((m (make-machine 'instr-test-machine))
         (imm (find-instruction 'instr-test-machine 'lda :mode 'immediate)))
-    (execute-instruction imm m 42)
+    (execute-instruction imm m (list 42))
     (fiveam:is (= 42 (sref m 'a)))))
 
 (fiveam:test multi-mode-shared-default-semantics
   (let ((m (make-machine 'instr-test-machine))
         (abs (find-instruction 'instr-test-machine 'lda :mode 'absolute)))
     (setf (mref m 'ram #x1000) 7)
-    (execute-instruction abs m #x1000)
+    (execute-instruction abs m (list #x1000))
     (fiveam:is (= 7 (sref m 'a)))))
 
 (fiveam:test multi-mode-redefinition-retires-dropped-opcode
@@ -209,14 +209,112 @@
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))))))
 
-(defmode two-hole-test-mode expr "," expr)
+(defmode two-hole-test-mode expr "," expr :width 1)
 
-(fiveam:test mode-with-more-than-one-hole-signals-error
-  ;; #24: an instruction only wires up one operand encoding field
+;;; Multi-operand instructions: a two-hole mode wires up one operand
+;;; encoding field per hole, named or not.
+
+(definstruction instr-test-machine movi
+  (modes two-hole-test-mode)
+  (encoding (opcode #xF8) (operand dst :width 1) (operand src :width 2))
+  (semantics (setf (mref machine 'ram dst) src)))
+
+(fiveam:test multi-operand-instruction-registers-one-width-per-hole
+  (let ((movi (find-instruction 'instr-test-machine 'movi)))
+    (fiveam:is (equal '(1 2) (instruction-descriptor-operand-widths movi)))
+    (fiveam:is (equal '(dst src) (instruction-descriptor-operand-names movi)))
+    (fiveam:is (= 3 (instruction-descriptor-total-operand-width movi)))))
+
+(fiveam:test multi-operand-instruction-too-few-operand-subclauses-signals-error
   (fiveam:signals error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-too-many-operand-subclauses-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes immediate)
+             (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-with-no-operand-subclause-in-multi-mode-form-signals-error
+  ;; the multi-mode form's operand-subclause default only applies to a
+  ;; single-hole mode -- a two-hole mode has no single width to default to
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes (two-hole-test-mode (opcode #xFF)) (absolute (opcode #xFE)))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-encodes-each-field-little-endian
+  (let ((movi (find-instruction 'instr-test-machine 'movi)))
+    ;; distinct bytes at every position pin per-field width and ordering,
+    ;; not just total size
+    (fiveam:is (equal (list #xF8 #x11 #x22 #x33) (encode-instruction movi (list #x11 #x3322))))))
+
+(fiveam:test multi-operand-instruction-binds-named-slots-in-semantics
+  (let ((m (make-machine 'instr-test-machine))
+        (movi (find-instruction 'instr-test-machine 'movi)))
+    (execute-instruction movi m (list #x10 #xAB))
+    (fiveam:is (= #xAB (mref m 'ram #x10)))))
+
+(fiveam:test multi-operand-instruction-duplicate-operand-name-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand n :width 1) (operand n :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-operand-name-shadowing-register-signals-error
+  ;; INSTR-TEST-MACHINE declares a scalar register named A -- naming an
+  ;; operand field the same would leave (semantics ...) unable to see one of
+  ;; them, so this is rejected at DEFINSTRUCTION time rather than silently
+  ;; shadowing the register.
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand a :width 1) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-operand-name-shadowing-flag-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand z :width 1) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-named-operand-not-shadowed-by-register
+  ;; The reverse of the two error tests above, but with a name that does NOT
+  ;; collide (SRC is not a storage element on INSTR-TEST-MACHINE) -- proves
+  ;; %SEMANTICS-FN-FORM's LET is nested inside WITH-MACHINE-BINDINGS so a
+  ;; named operand field actually wins visibility, not just that the
+  ;; colliding case is rejected.
+  (let ((m (make-machine 'instr-test-machine))
+        (movi (find-instruction 'instr-test-machine 'movi)))
+    (execute-instruction movi m (list #x22 #x77))
+    (fiveam:is (= #x77 (mref m 'ram #x22)))))
+
+;; FLEX: one mnemonic with variants of *differing* hole counts -- exercises
+;; %CHOOSE-VARIANT (assembler.lisp) picking correctly among candidates whose
+;; OPERAND-WIDTHS lists aren't even the same length.
+(definstruction instr-test-machine flex
+  (modes
+    (immediate (opcode #x20) (semantics (set! a operand)))
+    (two-hole-test-mode (opcode #x21) (operand :width 1) (operand :width 1)
+                         (semantics nil))))
+
+(fiveam:test multi-operand-variant-alongside-single-operand-variant
+  (let ((variants (find-instruction-variants 'instr-test-machine 'flex)))
+    (fiveam:is (equal '((1) (1 1)) (mapcar #'instruction-descriptor-operand-widths variants)))))
+
+(defmode relative-two-hole-test-mode expr "," expr :width 1 :relative t)
+
+(fiveam:test relative-mode-with-more-than-one-hole-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes relative-two-hole-test-mode)
+             (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test unknown-clause-head-signals-error
@@ -247,7 +345,7 @@
 (fiveam:test unknown-storage-reference-in-semantics-signals-at-runtime
   (let ((m (make-machine 'instr-test-machine))
         (bogus-ref (find-instruction 'instr-test-machine 'bogus-ref)))
-    (fiveam:signals unknown-storage (execute-instruction bogus-ref m 10))))
+    (fiveam:signals unknown-storage (execute-instruction bogus-ref m (list 10)))))
 
 ;;; match-operand-mode is now mode.lisp's territory -- see tests/mode.lisp
 ;;; for pattern-matching coverage (immediate/absolute/indexed-x/indirect-y,
@@ -275,15 +373,15 @@
 
 (fiveam:test encode-immediate-instruction
   (let ((ldx (find-instruction 'instr-test-machine 'ldx)))
-    (fiveam:is (equal (list #xA2 10) (encode-instruction ldx 10)))))
+    (fiveam:is (equal (list #xA2 10) (encode-instruction ldx (list 10))))))
 
 (fiveam:test encode-absolute-instruction-little-endian
   (let ((adc (find-instruction 'instr-test-machine 'adc)))
-    (fiveam:is (equal (list #x6D #x00 #x10) (encode-instruction adc #x1000)))))
+    (fiveam:is (equal (list #x6D #x00 #x10) (encode-instruction adc (list #x1000))))))
 
 (fiveam:test encode-instruction-masks-overwide-value
   (let ((ldx (find-instruction 'instr-test-machine 'ldx)))
-    (fiveam:is (equal (list #xA2 #x2C) (encode-instruction ldx 300)))))
+    (fiveam:is (equal (list #xA2 #x2C) (encode-instruction ldx (list 300))))))
 
 (fiveam:test encode-no-operand-instruction
   (let ((nop (find-instruction 'instr-test-machine 'nop)))
@@ -291,9 +389,9 @@
 
 (fiveam:test explicit-operand-width-overrides-mode-default
   (let ((jmpfar (find-instruction 'instr-test-machine 'jmpfar)))
-    (fiveam:is (= 3 (instruction-descriptor-operand-width jmpfar)))
+    (fiveam:is (equal '(3) (instruction-descriptor-operand-widths jmpfar)))
     ;; distinct bytes in every position pin little-endian ordering, not just width
-    (fiveam:is (equal (list #x4C #x56 #x34 #x12) (encode-instruction jmpfar #x123456)))))
+    (fiveam:is (equal (list #x4C #x56 #x34 #x12) (encode-instruction jmpfar (list #x123456))))))
 
 (fiveam:test ambiguous-memory-element-requires-explicit-width
   (fiveam:signals error
@@ -301,15 +399,15 @@
              (modes absolute)
              (encoding (opcode #xFF) (operand :mode))
              (semantics (set! a operand)))))
-  (fiveam:is (= 2 (instruction-descriptor-operand-width
-                   (find-instruction 'multi-memory-machine 'sta-ram)))))
+  (fiveam:is (equal '(2) (instruction-descriptor-operand-widths
+                          (find-instruction 'multi-memory-machine 'sta-ram)))))
 
 ;;; execute-instruction
 
 (fiveam:test execute-immediate-sets-register
   (let ((m (make-machine 'instr-test-machine))
         (ldx (find-instruction 'instr-test-machine 'ldx)))
-    (execute-instruction ldx m 10)
+    (execute-instruction ldx m (list 10))
     (fiveam:is (= 10 (sref m 'x)))))
 
 (fiveam:test execute-absolute-reads-memory-and-sets-flags
@@ -317,7 +415,7 @@
         (adc (find-instruction 'instr-test-machine 'adc)))
     (setf (sref m 'a) 200)
     (setf (mref m 'ram #x1000) 100)
-    (execute-instruction adc m #x1000)
+    (execute-instruction adc m (list #x1000))
     (fiveam:is (= 44 (sref m 'a)))          ; 200 + 100 wraps mod 256
     (fiveam:is (= 1 (flag m 'c)))
     (fiveam:is (= 0 (flag m 'z)))))
@@ -326,8 +424,8 @@
   (let ((m (make-machine 'instr-test-machine))
         (bne (find-instruction 'instr-test-machine 'bne)))
     (setf (flag m 'z) t)
-    (execute-instruction bne m #x2000)
+    (execute-instruction bne m (list #x2000))
     (fiveam:is (= 0 (sref m 'pc)))          ; branch not taken
     (setf (flag m 'z) nil)
-    (execute-instruction bne m #x2000)
+    (execute-instruction bne m (list #x2000))
     (fiveam:is (= #x2000 (sref m 'pc)))))   ; branch taken

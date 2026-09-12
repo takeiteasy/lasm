@@ -32,8 +32,8 @@ any more; every mode, built-in or user-declared, goes through the same
 verbatim text, case-insensitively — so `"X"` matches `x` too) or the symbol
 `expr` (parses one expression with the shared Pratt parser, `parse.lisp`).
 At least one `expr` is required. `:width`, if given, is this mode's default
-operand byte width — see [`(encoding ...)`](instructions.md#encoding-opcode-n-operand)
-and the width-resolution note below. `:relative t`, if given, marks this
+operand byte width — see [`(encoding ...)`](instructions.md) and the
+width-resolution note below. `:relative t`, if given, marks this
 mode's operand as a PC-relative offset rather than an absolute value — see
 [PC-relative modes](#pc-relative-modes) below.
 
@@ -67,14 +67,15 @@ A mode's own `:width`, when given, is what `(operand :mode)` and a
 multi-mode variant with no `(operand :width n)` of its own resolve to.
 `immediate` and `zero-page` above are always one byte; `absolute` gives no
 `:width`, so instructions using it fall back to the machine's address width
-(see [Instructions](instructions.md#encoding-opcode-n-operand)) — sized once
-per machine rather than hard-coded into the mode.
+(see [Instructions, "`(encoding ...)`"](instructions.md)) — sized once per
+machine rather than hard-coded into the mode.
 
-A mode with more than one `expr` hole (the pattern grammar allows it) can be
-declared, but no instruction can currently *use* one — `definstruction` only
-wires up a single operand encoding field, and signals an error naming this
-if a mode with more than one hole is used. Multi-operand instructions are a
-separate, larger feature.
+A mode with more than one `expr` hole wires up one operand encoding field
+per hole — a two-register `mov` is the standard example (see [Instructions,
+"Repeated `(operand ...)` subclauses"](instructions.md)). The one
+restriction: a `:relative` mode (below) may not have more than one hole,
+since its offset applies to the operand as a whole and there is currently no
+way to mark just one hole of a multi-hole mode as the relative one.
 
 ## PC-relative modes
 
@@ -124,15 +125,18 @@ narrowing.
 ;; => #10 parses to an EXPR-NUMBER AST, (values ast (list ast))
 ```
 
-## Why `statement-operand-tokens`, not `operand-tokens`
+## Why `statement-operand-tokens`, not `operands`
 
 A `statement`'s `operands` (plural) are already split on top-level commas
-(see [Statement grammar & expression parser](parser.md)) — needed for a
-future multi-operand instruction, but wrong for mode matching: a pattern
-like `indexed-x`'s `expr "," "X"` has its own literal comma, and matching it
+(see [Statement grammar & expression parser](parser.md)) — a general
+statement-grammar product, but wrong for mode matching: a pattern like
+`indexed-x`'s `expr "," "X"` has its own literal comma, and matching it
 against one comma-delimited fragment at a time would make it unmatchable.
-Mode matching instead uses `statement-operand-tokens`, the whole run of
-tokens after the mnemonic, uncommitted to any comma split.
+This is also how a *multi*-operand instruction reaches its several operands
+— through a multi-hole mode pattern with its own literal commas (see
+[Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)), not
+through `operands`. Mode matching instead uses `statement-operand-tokens`,
+the whole run of tokens after the mnemonic, uncommitted to any comma split.
 
 ## Scope
 

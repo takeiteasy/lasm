@@ -38,14 +38,20 @@ comma inside a parenthesized group does not split operands.
 (defstruct operand tokens)   ; raw token run — a simple-vector
 ```
 
-`operands` is the comma-split list above — kept for a possible future
-multi-operand instruction, but not what addressing-mode matching uses.
+`operands` is the comma-split list above — a general statement-grammar
+product (a future comma-separated directive, e.g. `.byte 1, 2, 3`, is the
+likely consumer), but not what addressing-mode matching uses, even for a
+multi-operand instruction ([Instructions, "Repeated `(operand ...)`
+subclauses"](instructions.md)): those
+reach their several operands through a multi-hole `defmode` pattern instead,
+whose own literal commas (e.g. a two-register mode's `expr "," expr`) would
+be unmatchable against one already-comma-split `operand` at a time.
 `operand-tokens` is every token after the mnemonic, commas included,
 uncommitted to any comma split: a mode's own pattern can include a literal
 comma (e.g. `indexed-x`'s `expr "," "X"`, [Addressing modes](modes.md)), so
-matching against one comma-delimited `operand` at a time would make such a
-mode unmatchable. `match-operand-mode`/`try-match-operand-mode` take
-`operand-tokens`, not `operands`.
+matching against `operands` instead would make such a mode unmatchable.
+`match-operand-mode`/`try-match-operand-mode` take `operand-tokens`, not
+`operands`.
 
 `(parse string &key (lexer 'default))` tokenizes `string` with `lexer` and
 returns a list of `statement`. Signals `lex-error` or `parse-failure`.

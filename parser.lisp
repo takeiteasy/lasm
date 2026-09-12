@@ -23,9 +23,15 @@
 (defstruct statement
   label           ; string, or nil
   mnemonic        ; string, or nil (label-only line)
-  operands        ; list of OPERAND, split on top-level commas -- kept for
-                   ; #24 (multi-operand instructions); the assembler no
-                   ; longer reads this to match an addressing mode (below)
+  operands        ; list of OPERAND, split on top-level commas -- a general
+                   ; statement-grammar product; a multi-operand instruction
+                   ; (instruction.lisp) instead reaches its operands through
+                   ; a multi-hole addressing-mode pattern (mode.lisp), whose
+                   ; own literal commas would be unmatchable if this split
+                   ; were applied first, so the assembler doesn't read this
+                   ; field to match an addressing mode (below). The likely
+                   ; consumer is a future comma-separated directive
+                   ; (e.g. .byte 1, 2, 3)
   (operand-tokens #() :type simple-vector)  ; every token after the mnemonic,
                    ; commas included -- addressing-mode matching (mode.lisp)
                    ; needs the whole run uncommitted to any comma split,

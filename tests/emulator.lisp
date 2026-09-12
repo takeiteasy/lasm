@@ -58,6 +58,16 @@
     (zero-page (opcode #xA6) (semantics (set! x (mref machine 'ram operand)))))
   (semantics (set! x operand)))
 
+;; Multi-operand: a two-hole mode wiring two operand encoding fields --
+;; proves STEP-MACHINE fetches each field at its own offset and advances PC
+;; past their combined width.
+(defmode emu-two-hole-test-mode expr "," expr :width 1)
+
+(definstruction emu-test-machine movi
+  (modes emu-two-hole-test-mode)
+  (encoding (opcode #x01) (operand addr :width 1) (operand val :width 1))
+  (semantics (setf (mref machine 'ram addr) val)))
+
 ;;; load-program
 
 (fiveam:test load-program-places-bytes-and-sets-pc
@@ -219,6 +229,18 @@ lda $10" :machine 'emu-test-machine)))
     (let ((second-descriptor (step-machine m)))
       (fiveam:is (eq (find-instruction 'emu-test-machine 'lda :mode 'zero-page) second-descriptor))
       (fiveam:is (= 99 (sref m 'x))))))
+
+;;; Multi-operand instructions
+
+(fiveam:test multi-operand-instruction-round-trip-through-run
+  (let* ((m (make-machine 'emu-test-machine))
+         (a (assemble "movi $20, $99
+hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= #x99 (mref m 'ram #x20))))))
 
 ;;; M1 milestone target: end-to-end counter loop, assembled and run
 

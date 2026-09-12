@@ -53,12 +53,28 @@ error.")
   (machine nil :type symbol)
   (mode nil :type (or null mode-descriptor))  ; nil = no operand
   (opcode nil :type (integer 0))
-  (operand-width nil :type (or null (integer 1)))  ; bytes, nil = no operand
+  ;; One byte width per operand encoding field, in the mode's hole order --
+  ;; NIL for a no-operand instruction, a one-element list for the common
+  ;; single-hole case. INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH below sums
+  ;; these for callers (assembler layout, PC advance) that only care about
+  ;; the statement's total size.
+  (operand-widths nil :type list)
+  ;; One symbol (or NIL for an unnamed field) per operand encoding field,
+  ;; parallel to OPERAND-WIDTHS -- a named (operand NAME ...) subclause binds
+  ;; NAME in the semantics body; an unnamed one only ever binds OPERAND
+  ;; (which aliases the first field, named or not).
+  (operand-names nil :type list)
   (semantics-fn nil :type (or null function))
   ;; Parsed and stored, not used (#19) -- there is no timing model yet.
   ;; Accepted because users will copy LASM-plan.md sec. 3.2's (cycles n)
   ;; verbatim.
   (cycles nil :type (or null (integer 0))))
+
+(defun instruction-descriptor-total-operand-width (descriptor)
+  "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the byte count its operand encoding
+occupies as a whole, regardless of how many fields it's split across. 0 for
+a no-operand instruction."
+  (reduce #'+ (instruction-descriptor-operand-widths descriptor) :initial-value 0))
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
@@ -191,71 +207,175 @@ declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode
   (or (mode-descriptor-width mode) (%default-address-width machine-name)))
 
 (defun %operand-width (mode spec machine-name)
-  ;; SPEC is the tail of an (operand ...) encoding subclause: (:mode) or
-  ;; (:width n).
+  ;; SPEC is the tail of an (operand ...) encoding subclause, with any
+  ;; leading field name already stripped off by %PARSE-OPERAND-SUBCLAUSE:
+  ;; (:mode) or (:width n).
   (destructuring-bind (spec-head &optional spec-arg) spec
     (cond
       ((eq spec-head :mode) (%mode-operand-width mode machine-name))
       ((eq spec-head :width) spec-arg)
       (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)" spec)))))
 
-(defun %check-single-hole-mode (mode machine name)
-  ;; DEFINSTRUCTION wires exactly one operand encoding field per variant --
-  ;; a mode pattern declaring more than one EXPR hole has nowhere for its
-  ;; second value to go. Multi-operand instructions are #24.
-  (when (> (%mode-hole-count mode) 1)
-    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has more than one EXPR ~
-hole, but an instruction only has one operand encoding field -- ~
-multi-operand instructions are a separate feature (issue #24)"
+(defun %parse-operand-subclause (subclause)
+  "SUBCLAUSE is one whole (operand ...) form. Returns (VALUES name spec)
+where NAME is the symbol from an (operand NAME :mode) / (operand NAME
+:width n) field, or NIL for the unnamed (operand :mode) / (operand :width
+n) form, and SPEC is the remaining (:mode) or (:width n) tail as
+%OPERAND-WIDTH expects."
+  (let ((rest (cdr subclause)))
+    (if (keywordp (first rest))
+        (values nil rest)
+        (values (first rest) (rest rest)))))
+
+(defun %scalar-bindable-names (machine-name)
+  "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds as
+symbol-macros for MACHINE-NAME: every scalar (:count 1) register, plus
+every flag. An operand field name colliding with one of these would be
+silently shadowed inside (semantics ...) -- see %CHECK-OPERAND-NAMES."
+  (let ((descriptor (find-machine-descriptor machine-name)))
+    (loop for element in (machine-descriptor-elements descriptor)
+          when (or (eq (storage-element-kind element) :flag)
+                   (and (eq (storage-element-kind element) :register)
+                        (= (storage-element-count element) 1)))
+            collect (storage-element-name element))))
+
+(defun %check-operand-names (names machine name mode-name)
+  "Signal an error naming instruction NAME (on MACHINE) and addressing mode
+MODE-NAME if NAMES (this variant's OPERAND-NAMES, NIL entries excluded)
+contains a duplicate, or a name also bound by WITH-MACHINE-BINDINGS
+(a scalar register or flag) -- either would leave (semantics ...) reading
+the wrong thing silently: a duplicate NAME collapses into one LET binding
+overwriting the other, and a register/flag NAME shadows (or is shadowed by,
+depending on binding order) the storage element of the same name."
+  (let ((given (remove nil names)))
+    (let ((dup (loop for (n . rest) on given when (member n rest) return n)))
+      (when dup
+        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names the operand ~S ~
+more than once" machine name mode-name dup)))
+    (dolist (n given)
+      (when (member n (%scalar-bindable-names machine))
+        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names an operand ~S, ~
+which is also a register or flag on ~S -- (semantics ...) can only see one ~
+of them" machine name mode-name n machine)))))
+
+(defun %parse-operand-subclauses (mode subclauses machine name mode-name machine-name)
+  "SUBCLAUSES is every (operand ...) form declared for one variant of
+instruction NAME (on MACHINE) using addressing MODE (named MODE-NAME in
+diagnostics), in declaration order. Returns (VALUES widths names), one
+entry per subclause -- their count must equal MODE's EXPR hole count
+exactly, since each hole needs somewhere to put its parsed value and each
+operand subclause needs a hole to size itself against; mismatch in either
+direction is an error. Named fields are also checked for collisions
+(%CHECK-OPERAND-NAMES)."
+  (let ((holes (%mode-hole-count mode))
+        (n (length subclauses)))
+    (unless (= holes n)
+      (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
+but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
+per hole" machine name mode-name holes n (= n 1))))
+  (multiple-value-bind (widths names)
+      (loop for subclause in subclauses
+            collect (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
+                      (cons name (%operand-width mode spec machine-name))) into pairs
+            finally (return (values (mapcar #'cdr pairs) (mapcar #'car pairs))))
+    (%check-operand-names names machine name mode-name)
+    (values widths names)))
+
+(defun %check-relative-mode-holes (mode machine name)
+  ;; A RELATIVE mode (mode.lisp) marks its *whole* pattern's operand as a
+  ;; PC-relative offset -- there is no way to say "only this hole is
+  ;; relative" yet (a per-hole attribute is a follow-up), so a RELATIVE mode
+  ;; with more than one hole has no coherent meaning and is rejected here
+  ;; rather than silently relative-adjusting the wrong (or every) field.
+  (when (and (mode-descriptor-relativep mode) (> (%mode-hole-count mode) 1))
+    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE and has ~
+more than one EXPR hole -- a RELATIVE mode's offset applies to its whole ~
+operand, so per-hole relative marking is not supported"
            machine name (mode-descriptor-name mode))))
 
 ;; The semantics body has no WITH-MACHINE form of its own to name its machine
 ;; variable (unlike the M0 standalone examples), so DEFINSTRUCTION fixes it
 ;; to the literal symbol MACHINE -- used explicitly for memory/stack access,
-;; e.g. (mref machine 'ram operand) -- and the operand integer to the
-;; literal symbol OPERAND, matching the exact names used throughout the
-;; design mockups.
-(defun %semantics-fn-form (semantics-forms machine)
-  `(lambda (machine operand)
-     (declare (ignorable operand))
-     (with-machine-bindings (machine ,machine)
-       ,@semantics-forms)))
+;; e.g. (mref machine 'ram operand). OPERAND-NAMES gives one entry per
+;; operand encoding field (parallel to OPERAND-WIDTHS), NIL for an unnamed
+;; field: OPERAND is always bound to the first field's value (the only field
+;; in the common single-hole case), and any non-NIL name gets its own
+;; binding to its field's value, so a two-hole (operand dst :width 1)
+;; (operand src :width 1) instruction can write DST/SRC directly instead of
+;; indexing into a list.
+;;
+;; The LET establishing these bindings goes *inside* WITH-MACHINE-BINDINGS's
+;; body, not around the whole form -- WITH-MACHINE-BINDINGS expands to a
+;; SYMBOL-MACROLET, and a SYMBOL-MACROLET's own scope always shadows an
+;; enclosing LET of the same name, so an outer LET would leave a register-
+;; or flag-named operand silently reading the storage element instead
+;; (never observed, since %CHECK-OPERAND-NAMES rejects that combination at
+;; DEFINSTRUCTION time -- this ordering is what makes REJECTING it, rather
+;; than just documenting it, actually sufficient).
+(defun %semantics-fn-form (semantics-forms machine operand-names)
+  (let ((named-bindings (loop for name in operand-names
+                               for i from 0
+                               when name
+                                 collect `(,name (nth ,i operands)))))
+    `(lambda (machine operands)
+       (declare (ignorable operands))
+       (with-machine-bindings (machine ,machine)
+         (let ((operand (first operands))
+               ,@named-bindings)
+           (declare (ignorable operand ,@(remove nil operand-names)))
+           ,@semantics-forms)))))
 
-(defun %descriptor-form (machine name mode-form opcode operand-width cycles semantics-forms)
+(defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
     :mode ,mode-form
     :opcode ,opcode
-    :operand-width ,operand-width
+    :operand-widths ',operand-widths
+    :operand-names ',operand-names
     :cycles ,cycles
-    :semantics-fn ,(%semantics-fn-form semantics-forms machine)))
+    :semantics-fn ,(%semantics-fn-form semantics-forms machine operand-names)))
+
+(defun %resolve-operand-fields (mode operand-subclauses machine name mode-name machine-name)
+  "Resolve the (operand ...) subclauses (zero or more whole forms, in
+declaration order) given for one addressing-mode use into (VALUES widths
+names), one entry per MODE hole. With no subclauses at all, MODE must have
+exactly one hole (a bare width can't be inferred for more) -- its default
+width (%MODE-OPERAND-WIDTH) is used, unnamed. With one or more subclauses,
+their count must match MODE's hole count exactly (%PARSE-OPERAND-
+SUBCLAUSES)."
+  (if operand-subclauses
+      (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name)
+      (if (= (%mode-hole-count mode) 1)
+          (values (list (%mode-operand-width mode machine-name)) (list nil))
+          (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
+-- an (operand ...) subclause is required per hole" machine name mode-name
+                 (%mode-hole-count mode)))))
 
 (defun %parse-mode-variant-clause (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
-(MODE-NAME (opcode n) [(operand :width n)] [(semantics form...)]). Returns a
+(MODE-NAME (opcode n) (operand ...)* [(semantics form...)]). Returns a
 %DESCRIPTOR-FORM for this variant."
   (destructuring-bind (mode-sym &rest body) variant-form
     (let* ((mode (find-mode-descriptor mode-sym))
            (opcode-subclause (find 'opcode body :key #'first))
-           (operand-subclause (find 'operand body :key #'first))
+           (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand)) body))
            (semantics-subclause (find 'semantics body :key #'first)))
-      (%check-single-hole-mode mode machine name)
+      (%check-relative-mode-holes mode machine name)
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
-      (let ((opcode (second opcode-subclause))
-            (operand-width (if operand-subclause
-                                (%operand-width mode (rest operand-subclause) machine)
-                                (%mode-operand-width mode machine)))
-            (semantics-forms (cond
-                                (semantics-subclause (rest semantics-subclause))
-                                (default-semantics-forms default-semantics-forms)
-                                (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
+      (multiple-value-bind (operand-widths operand-names)
+          (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
+        (let ((opcode (second opcode-subclause))
+              (semantics-forms (cond
+                                  (semantics-subclause (rest semantics-subclause))
+                                  (default-semantics-forms default-semantics-forms)
+                                  (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
 (semantics ...) of its own and no shared top-level (semantics ...) default"
-                                          machine name mode-sym)))))
-        (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                           opcode operand-width cycles-form semantics-forms)))))
+                                            machine name mode-sym)))))
+          (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                             opcode operand-widths operand-names cycles-form semantics-forms))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -263,15 +383,18 @@ one of:
   (modes MODE)                       -- 0 or 1 addressing mode, sharing the
                                          top-level (encoding ...) below
   (modes (MODE (opcode n)
-               [(operand :width n)]
+               [(operand [NAME] :mode)
+                | (operand [NAME] :width n)]*
                [(semantics form...)])
          ...)                        -- 2+ addressing modes, each with its
                                          own opcode and (optionally) its own
-                                         operand width and semantics; a
+                                         operand field(s) and semantics; a
                                          mode with no (semantics ...) of its
                                          own uses the shared (semantics ...)
                                          below as its default
-  (encoding (opcode n) [(operand :mode) | (operand :width n)])
+  (encoding (opcode n)
+            [(operand [NAME] :mode)
+             | (operand [NAME] :width n)]*)
                                       -- required with the bare-symbol
                                          (modes MODE) form above; not
                                          allowed with the multi-mode form,
@@ -281,12 +404,21 @@ one of:
                                          machine instance (for explicit
                                          memory/stack access, e.g. (mref
                                          machine 'ram operand)) and OPERAND
-                                         bound to the already-evaluated
-                                         operand integer (or NIL for a
-                                         no-operand instruction). Required
+                                         bound to the first operand field's
+                                         already-evaluated value (or NIL for
+                                         a no-operand instruction). Required
                                          unless every mode in a multi-mode
                                          (modes ...) supplies its own.
   (cycles n)                         -- parsed and stored, not yet used
+
+A mode with more than one EXPR hole (mode.lisp) needs one (operand ...)
+subclause per hole, in hole order -- (operand :mode)/(operand :width n) for
+an unnamed field bound only through OPERAND above, or (operand NAME :mode)/
+(operand NAME :width n) to also bind NAME to that field's value in
+(semantics ...). A single-hole mode may omit (operand ...) entirely in the
+multi-mode form (its default width applies, unnamed); the (encoding ...)
+form always requires it explicitly. Declaring more or fewer (operand ...)
+subclauses than the mode has holes is an error.
 
 MODE names are resolved against DEFMODE's registry (mode.lisp) at
 macroexpansion time, like MACHINE is resolved against DEFMACHINE's.
@@ -321,7 +453,7 @@ but no (modes ...) clause declares an addressing mode" machine name))
            `(eval-when (:compile-toplevel :load-toplevel :execute)
               (register-instruction-variants!
                ',machine
-               (list ,(%descriptor-form machine name nil (second opcode-subclause) nil
+               (list ,(%descriptor-form machine name nil (second opcode-subclause) nil nil
                                          cycles-form (rest semantics-clause))))
               ',name)))
         ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
@@ -356,37 +488,48 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
          (let* ((mode-sym (first mode-forms))
                 (mode (find-mode-descriptor mode-sym))
                 (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
-                (operand-subclause (find 'operand (rest encoding-clause) :key #'first)))
-           (%check-single-hole-mode mode machine name)
+                (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
+                                                    (rest encoding-clause))))
+           (%check-relative-mode-holes mode machine name)
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                     machine name))
-           (unless operand-subclause
+           (unless operand-subclauses
              (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
 (encoding ...) has no (operand ...) subclause" machine name mode-sym))
-           `(eval-when (:compile-toplevel :load-toplevel :execute)
-              (register-instruction-variants!
-               ',machine
-               (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                         (second opcode-subclause)
-                                         (%operand-width mode (rest operand-subclause) machine)
-                                         cycles-form (rest semantics-clause))))
-              ',name)))))))
+           (multiple-value-bind (operand-widths operand-names)
+               (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
+             `(eval-when (:compile-toplevel :load-toplevel :execute)
+                (register-instruction-variants!
+                 ',machine
+                 (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                           (second opcode-subclause)
+                                           operand-widths operand-names
+                                           cycles-form (rest semantics-clause))))
+                ',name))))))))
 
 ;;; Encoding / execution
 
-(defun encode-instruction (descriptor value)
-  "Encode one use of instruction DESCRIPTOR with operand VALUE (an
-already-evaluated integer, or NIL for a no-operand instruction) into a list
-of (unsigned-byte 8) bytes: the opcode, followed by VALUE's bytes
-little-endian if the instruction takes an operand."
-  (let ((width (instruction-descriptor-operand-width descriptor)))
-    (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
-          (when width
-            (loop for i below width
-                  collect (wrap-value (ash value (* -8 i)) 8))))))
+(defun encode-instruction (descriptor values)
+  "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
+already-evaluated integers, one per DESCRIPTOR's OPERAND-WIDTHS entry, in
+the same order -- NIL for a no-operand instruction) into a list of
+(unsigned-byte 8) bytes: the opcode, followed by each value's bytes
+little-endian in turn. VALUES shorter than OPERAND-WIDTHS silently encodes
+fewer fields than DESCRIPTOR declares, rather than erroring -- every caller
+in this codebase (%ENCODE, assembler.lisp) always supplies exactly one
+value per width, so this is unreachable internally, but a caller of this
+exported function on its own should supply the same."
+  (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
+        (loop for value in values
+              for width in (instruction-descriptor-operand-widths descriptor)
+              append (loop for i below width
+                           collect (wrap-value (ash value (* -8 i)) 8)))))
 
-(defun execute-instruction (descriptor machine value)
+(defun execute-instruction (descriptor machine values)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing
-VALUE (an already-evaluated integer, or NIL) as OPERAND to its semantics."
-  (funcall (instruction-descriptor-semantics-fn descriptor) machine value))
+VALUES (a list of already-evaluated integers, one per operand encoding
+field, or NIL for a no-operand instruction) to its semantics -- OPERAND is
+bound to the first (or only) value, and any named field to its own value
+(see %SEMANTICS-FN-FORM)."
+  (funcall (instruction-descriptor-semantics-fn descriptor) machine values))
