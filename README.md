@@ -12,8 +12,9 @@ architectures, not real silicon.
 - [Semantics vocabulary](docs/semantics.md) — `with-machine`, `set!`, `push`/`pop`
 - [Lexer](docs/lexer.md) — `deflexer`, `tokenize`
 - [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`
-- [Instructions](docs/instructions.md) — `definstruction`, addressing modes, encoding
-- [Assembler](docs/assembler.md) — `assemble`, label resolution, encoded bytes
+- [Addressing modes](docs/modes.md) — `defmode`, pattern matching
+- [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
+- [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Getting started](docs/getting-started.md) — install, run, test
 - [Design & roadmap draft](LASM-plan.md)

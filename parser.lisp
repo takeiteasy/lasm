@@ -21,10 +21,18 @@
 ;;; AST structures
 
 (defstruct statement
-  label       ; string, or nil
-  mnemonic    ; string, or nil (label-only line)
-  operands    ; list of OPERAND, or nil
-  line)       ; source line number, for diagnostics
+  label           ; string, or nil
+  mnemonic        ; string, or nil (label-only line)
+  operands        ; list of OPERAND, split on top-level commas -- kept for
+                   ; #24 (multi-operand instructions); the assembler no
+                   ; longer reads this to match an addressing mode (below)
+  (operand-tokens #() :type simple-vector)  ; every token after the mnemonic,
+                   ; commas included -- addressing-mode matching (mode.lisp)
+                   ; needs the whole run uncommitted to any comma split,
+                   ; since a mode's own pattern may include a literal ","
+                   ; (e.g. INDEXED-X: expr "," "X"); empty when there is no
+                   ; mnemonic or no operand tokens
+  line)           ; source line number, for diagnostics
 
 (defstruct operand
   tokens)     ; simple-vector of raw tokens for this operand -- MATCH-OPERAND-MODE
@@ -132,7 +140,7 @@ parentheses do not split) into a list of token-lists, one per operand."
 (defun %parse-line (line-tokens)
   (let* ((tokens (coerce line-tokens 'simple-vector))
          (len (length tokens))
-         (pos 0) label mnemonic operands)
+         (pos 0) label mnemonic operands (operand-tokens #()))
     (when (and (< (1+ pos) len)
                (eq (token-type (aref tokens pos)) :identifier)
                (eq (token-type (aref tokens (1+ pos))) :label-suffix))
@@ -142,6 +150,7 @@ parentheses do not split) into a list of token-lists, one per operand."
       (setf mnemonic (token-value (aref tokens pos)))
       (incf pos 1)
       (when (< pos len)
+        (setf operand-tokens (subseq tokens pos len))
         (setf operands
               (mapcar (lambda (group)
                         (when (null group)
@@ -151,6 +160,7 @@ parentheses do not split) into a list of token-lists, one per operand."
     (when (and (< pos len) (null mnemonic))
       (%parse-error (aref tokens pos) "Expected mnemonic"))
     (make-statement :label label :mnemonic mnemonic :operands operands
+                     :operand-tokens operand-tokens
                      :line (token-line (aref tokens 0)))))
 
 (defun %split-lines (tokens)

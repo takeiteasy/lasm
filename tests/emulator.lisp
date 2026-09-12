@@ -39,6 +39,16 @@
   (encoding (opcode #x00))
   (semantics (trap :halt)))
 
+;; Multi-mode (mode.lisp, #18): LDA's IMMEDIATE and ZERO-PAGE variants share
+;; one mnemonic but distinct opcodes/semantics -- proves opcode decode
+;; (FIND-INSTRUCTION-BY-OPCODE) stays 1:1 per variant once a mnemonic
+;; registers more than one INSTRUCTION-DESCRIPTOR.
+(definstruction emu-test-machine lda
+  (modes
+    (immediate (opcode #xA1) (semantics (set! x operand)))
+    (zero-page (opcode #xA6) (semantics (set! x (mref machine 'ram operand)))))
+  (semantics (set! x operand)))
+
 ;;; load-program
 
 (fiveam:test load-program-places-bytes-and-sets-pc
@@ -126,6 +136,21 @@ bne loop" :machine 'emu-test-machine)))
     (multiple-value-bind (reason steps) (run m :max-steps 4)
       (fiveam:is (eq :max-steps reason))
       (fiveam:is (= 4 steps)))))
+
+;;; Multi-mode opcode decode (mode.lisp, #18)
+
+(fiveam:test step-machine-decodes-each-mode-variant-independently
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "lda #5
+lda $10" :machine 'emu-test-machine)))
+    (setf (mref m 'ram #x10) 99)
+    (load-program m a)
+    (let ((first-descriptor (step-machine m)))
+      (fiveam:is (eq (find-instruction 'emu-test-machine 'lda :mode 'immediate) first-descriptor))
+      (fiveam:is (= 5 (sref m 'x))))
+    (let ((second-descriptor (step-machine m)))
+      (fiveam:is (eq (find-instruction 'emu-test-machine 'lda :mode 'zero-page) second-descriptor))
+      (fiveam:is (= 99 (sref m 'x))))))
 
 ;;; M1 milestone target: end-to-end counter loop, assembled and run
 

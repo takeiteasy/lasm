@@ -5,8 +5,9 @@
 - [Semantics vocabulary](semantics.md) — `with-machine` and the DSL operators
 - [Lexer](lexer.md) — `deflexer` and `tokenize`
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`
-- [Instructions](instructions.md) — `definstruction`, addressing modes, encoding
-- [Assembler](assembler.md) — `assemble`, label resolution, encoded bytes
+- [Addressing modes](modes.md) — `defmode` and pattern matching
+- [Instructions](instructions.md) — `definstruction`, encoding, semantics
+- [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 
 This directory covers what exists today. For the design rationale and the

@@ -5,13 +5,13 @@
 ;;;; parallel evaluator -- so instruction semantics and the standalone M0
 ;;;; examples share one vocabulary.
 ;;;;
-;;;; Also implements matching one parsed OPERAND (parser.lisp) against a
-;;;; single addressing mode and turning it into encoded bytes. M1 keeps mode
-;;;; resolution trivial -- exactly one mode per instruction, IMMEDIATE or
-;;;; ABSOLUTE, from a small built-in table (*BUILTIN-MODE-PREFIXES*) rather
-;;;; than a user-declarative DEFMODE, which is M2's job. The table is kept
-;;;; separate from the call sites specifically so DEFMODE can replace it
-;;;; later without touching MATCH-OPERAND-MODE's callers.
+;;;; M2: an instruction may declare several addressing modes (mode.lisp's
+;;;; DEFMODE), each becoming its own INSTRUCTION-DESCRIPTOR with its own
+;;;; opcode, operand width, and (optionally) its own semantics -- a
+;;;; mnemonic's variants are registered together and looked up as a list
+;;;; (FIND-INSTRUCTION-VARIANTS). Choosing which variant a given operand
+;;;; actually uses is the assembler's job (assembler.lisp), since it depends
+;;;; on operand syntax and, for constants, operand value.
 ;;;;
 ;;;; Scope: this stops at "one instruction + one already-evaluated operand ->
 ;;;; bytes / executed effect". There is no statement-list driver or label
@@ -51,7 +51,7 @@ error.")
 (defstruct instruction-descriptor
   (name nil :type string)      ; mnemonic, upcased
   (machine nil :type symbol)
-  (mode nil :type (or null (member :immediate :absolute)))  ; nil = no operand
+  (mode nil :type (or null mode-descriptor))  ; nil = no operand
   (opcode nil :type (integer 0))
   (operand-width nil :type (or null (integer 1)))  ; bytes, nil = no operand
   (semantics-fn nil :type (or null function))
@@ -59,45 +59,6 @@ error.")
   ;; Accepted because users will copy LASM-plan.md sec. 3.2's (cycles n)
   ;; verbatim.
   (cycles nil :type (or null (integer 0))))
-
-;;; Addressing modes
-;;;
-;;; Each M1 mode is a literal prefix token (or none) followed by exactly one
-;;; `expr` hole, matching LASM-plan.md sec. 3.4's DEFMODE shape without the
-;;; declarative macro. "#" already lexes to :HASH (lexer.lisp) for exactly
-;;; this purpose.
-
-(defparameter *builtin-mode-prefixes*
-  '((:immediate . :hash)
-    (:absolute . nil)))
-
-(defun %mode-keyword (sym)
-  (let ((name (string-upcase (symbol-name sym))))
-    (cond
-      ((string= name "IMMEDIATE") :immediate)
-      ((string= name "ABSOLUTE") :absolute)
-      (t (error "Unknown addressing mode ~S -- M1 only supports IMMEDIATE and ~
-ABSOLUTE; multi-mode resolution (DEFMODE) is M2" sym)))))
-
-(defun match-operand-mode (op mode)
-  "Match OPERAND struct OP's token run (parser.lisp) against the M1
-built-in addressing MODE (:IMMEDIATE or :ABSOLUTE): consume MODE's literal
-prefix token if it has one, then parse the remaining tokens as a single
-expression. Returns the EXPR-* AST. Signals PARSE-FAILURE if the tokens
-don't match MODE or leave an unconsumed trailing token."
-  (let* ((tokens (operand-tokens op))
-         (end (length tokens))
-         (prefix (cdr (assoc mode *builtin-mode-prefixes*)))
-         (start 0))
-    (when prefix
-      (let ((tok (%tok tokens 0 end)))
-        (unless (eq (%punct-value tok) prefix)
-          (%parse-error tok "Operand does not match ~(~A~) addressing mode" mode))
-        (setf start 1)))
-    (multiple-value-bind (ast next-i) (parse-expression tokens :start start :end end)
-      (when (< next-i end)
-        (%parse-error (%tok tokens next-i end) "Unexpected trailing token in operand"))
-      ast)))
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
@@ -143,31 +104,57 @@ this docstring's own examples) use it to mean \"no labels allowed here\"."
   (eval-expr ast :symbols nil))
 
 ;;; DEFINSTRUCTION registration
+;;;
+;;; A mnemonic registers as a list of variants -- one INSTRUCTION-DESCRIPTOR
+;;; per addressing mode it accepts (or a single one-element list for a
+;;; no-operand or single-mode instruction). Choosing which variant a parsed
+;;; operand actually uses is the assembler's job (assembler.lisp): it depends
+;;; on operand syntax and, for a constant operand, its value.
 
-(defun register-instruction! (machine-name descriptor)
+(defun register-instruction-variants! (machine-name descriptors)
+  "Register DESCRIPTORS -- one or more INSTRUCTION-DESCRIPTORs sharing one
+mnemonic -- on machine MACHINE-NAME, replacing any previous registration
+under that mnemonic. Every old opcode not reused by DESCRIPTORS is dropped
+from the opcode table first, so a redefinition that drops a mode's opcode
+does not leave FIND-INSTRUCTION-BY-OPCODE (an emulator's decode step)
+resolving it to a now-stale descriptor."
   (let* ((md (find-machine-descriptor machine-name))
-         (name (instruction-descriptor-name descriptor))
-         (old (gethash name (machine-descriptor-instructions md))))
-    ;; A redefinition under the same mnemonic with a different opcode must
-    ;; not leave the old opcode pointing at this descriptor too -- opcode
-    ;; lookup (FIND-INSTRUCTION-BY-OPCODE, for an emulator's decode step)
-    ;; would otherwise resolve both the old and new opcode to one
-    ;; instruction.
-    (when (and old (/= (instruction-descriptor-opcode old) (instruction-descriptor-opcode descriptor)))
-      (remhash (instruction-descriptor-opcode old) (machine-descriptor-opcodes md)))
-    (setf (gethash name (machine-descriptor-instructions md)) descriptor)
-    (setf (gethash (instruction-descriptor-opcode descriptor) (machine-descriptor-opcodes md))
-          descriptor)
-    descriptor))
+         (name (instruction-descriptor-name (first descriptors)))
+         (old (gethash name (machine-descriptor-instructions md)))
+         (new-opcodes (mapcar #'instruction-descriptor-opcode descriptors)))
+    (dolist (old-descriptor old)
+      (unless (member (instruction-descriptor-opcode old-descriptor) new-opcodes)
+        (remhash (instruction-descriptor-opcode old-descriptor) (machine-descriptor-opcodes md))))
+    (setf (gethash name (machine-descriptor-instructions md)) descriptors)
+    (dolist (descriptor descriptors)
+      (setf (gethash (instruction-descriptor-opcode descriptor) (machine-descriptor-opcodes md))
+            descriptor))
+    descriptors))
 
-(defun find-instruction (machine-name mnemonic)
-  "Look up the INSTRUCTION-DESCRIPTOR registered under MNEMONIC (a string or
-symbol, matched case-insensitively) on machine MACHINE-NAME. Signals
-UNKNOWN-INSTRUCTION if none is registered."
+(defun find-instruction-variants (machine-name mnemonic)
+  "Look up the list of INSTRUCTION-DESCRIPTOR variants registered under
+MNEMONIC (a string or symbol, matched case-insensitively) on machine
+MACHINE-NAME. Signals UNKNOWN-INSTRUCTION if none is registered."
   (let ((md (find-machine-descriptor machine-name))
         (key (string-upcase (string mnemonic))))
     (or (gethash key (machine-descriptor-instructions md))
         (error 'unknown-instruction :machine machine-name :mnemonic mnemonic))))
+
+(defun find-instruction (machine-name mnemonic &key mode)
+  "Look up one INSTRUCTION-DESCRIPTOR variant registered under MNEMONIC on
+machine MACHINE-NAME. MODE (a MODE-DESCRIPTOR, or a symbol naming one) picks
+which variant when the mnemonic has more than one; omitted, the first
+declared variant is returned (the common case: a no-operand or single-mode
+instruction has exactly one). Signals UNKNOWN-INSTRUCTION if the mnemonic is
+unregistered, or if MODE names none of its variants."
+  (let ((variants (find-instruction-variants machine-name mnemonic)))
+    (if mode
+        (let ((mode-name (if (mode-descriptor-p mode) (mode-descriptor-name mode) mode)))
+          (or (find mode-name variants
+                    :key (lambda (d) (and (instruction-descriptor-mode d)
+                                           (mode-descriptor-name (instruction-descriptor-mode d)))))
+              (error 'unknown-instruction :machine machine-name :mnemonic mnemonic)))
+        (first variants))))
 
 (defun find-instruction-by-opcode (machine-name opcode)
   "Look up the INSTRUCTION-DESCRIPTOR registered under OPCODE on machine
@@ -177,44 +164,118 @@ UNKNOWN-INSTRUCTION if none is registered."
     (or (gethash opcode (machine-descriptor-opcodes md))
         (error 'unknown-instruction :machine machine-name :opcode opcode))))
 
-;; Absolute mode's default operand width: the machine's sole memory
-;; element's address width, rounded up to whole (8-bit) bytes,
-;; little-endian on encode. When a machine declares more than one memory
-;; element, DEFINSTRUCTION requires (operand :width n) explicitly rather
-;; than guessing which one an absolute operand addresses.
-(defun %default-absolute-width (machine-name)
+;; A mode's default operand width, when neither the mode itself nor the
+;; instruction gives one explicitly: the machine's sole memory element's
+;; address width, rounded up to whole (8-bit) bytes, little-endian on
+;; encode. When a machine declares more than one memory element, this is
+;; ambiguous and DEFINSTRUCTION requires (operand :width n) explicitly
+;; instead of guessing which memory element an address-shaped operand
+;; addresses. Named for what it does now that ABSOLUTE is an ordinary
+;; DEFMODE with no special standing (formerly %DEFAULT-ABSOLUTE-WIDTH).
+(defun %default-address-width (machine-name)
   (let* ((descriptor (find-machine-descriptor machine-name))
          (mem-elements (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
                                        (machine-descriptor-elements descriptor))))
     (cond
       ((null mem-elements)
-       (error "DEFINSTRUCTION on machine ~S: ABSOLUTE mode needs a memory ~
-element to size its operand, but none is declared" machine-name))
+       (error "DEFINSTRUCTION on machine ~S: this addressing mode needs a ~
+memory element to size its operand, but none is declared" machine-name))
       ((> (length mem-elements) 1)
        (error "DEFINSTRUCTION on machine ~S: more than one memory element ~
 declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode)"
               machine-name (mapcar #'storage-element-name mem-elements)))
       (t (ceiling (storage-element-addr-width (first mem-elements)) 8)))))
 
+(defun %mode-operand-width (mode machine-name)
+  "MODE's own default width, falling back to %DEFAULT-ADDRESS-WIDTH."
+  (or (mode-descriptor-width mode) (%default-address-width machine-name)))
+
 (defun %operand-width (mode spec machine-name)
   ;; SPEC is the tail of an (operand ...) encoding subclause: (:mode) or
   ;; (:width n).
   (destructuring-bind (spec-head &optional spec-arg) spec
     (cond
-      ((eq spec-head :mode)
-       (ecase mode
-         (:immediate 1)
-         (:absolute (%default-absolute-width machine-name))))
+      ((eq spec-head :mode) (%mode-operand-width mode machine-name))
       ((eq spec-head :width) spec-arg)
       (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)" spec)))))
+
+(defun %check-single-hole-mode (mode machine name)
+  ;; DEFINSTRUCTION wires exactly one operand encoding field per variant --
+  ;; a mode pattern declaring more than one EXPR hole has nowhere for its
+  ;; second value to go. Multi-operand instructions are #24.
+  (when (> (%mode-hole-count mode) 1)
+    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has more than one EXPR ~
+hole, but an instruction only has one operand encoding field -- ~
+multi-operand instructions are a separate feature (issue #24)"
+           machine name (mode-descriptor-name mode))))
+
+;; The semantics body has no WITH-MACHINE form of its own to name its machine
+;; variable (unlike the M0 standalone examples), so DEFINSTRUCTION fixes it
+;; to the literal symbol MACHINE -- used explicitly for memory/stack access,
+;; e.g. (mref machine 'ram operand) -- and the operand integer to the
+;; literal symbol OPERAND, matching the exact names used throughout the
+;; design mockups.
+(defun %semantics-fn-form (semantics-forms machine)
+  `(lambda (machine operand)
+     (declare (ignorable operand))
+     (with-machine-bindings (machine ,machine)
+       ,@semantics-forms)))
+
+(defun %descriptor-form (machine name mode-form opcode operand-width cycles semantics-forms)
+  `(make-instruction-descriptor
+    :name ,(string-upcase (symbol-name name))
+    :machine ',machine
+    :mode ,mode-form
+    :opcode ,opcode
+    :operand-width ,operand-width
+    :cycles ,cycles
+    :semantics-fn ,(%semantics-fn-form semantics-forms machine)))
+
+(defun %parse-mode-variant-clause (variant-form machine name default-semantics-forms cycles-form)
+  "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
+(MODE-NAME (opcode n) [(operand :width n)] [(semantics form...)]). Returns a
+%DESCRIPTOR-FORM for this variant."
+  (destructuring-bind (mode-sym &rest body) variant-form
+    (let* ((mode (find-mode-descriptor mode-sym))
+           (opcode-subclause (find 'opcode body :key #'first))
+           (operand-subclause (find 'operand body :key #'first))
+           (semantics-subclause (find 'semantics body :key #'first)))
+      (%check-single-hole-mode mode machine name)
+      (unless opcode-subclause
+        (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
+               machine name mode-sym))
+      (let ((opcode (second opcode-subclause))
+            (operand-width (if operand-subclause
+                                (%operand-width mode (rest operand-subclause) machine)
+                                (%mode-operand-width mode machine)))
+            (semantics-forms (cond
+                                (semantics-subclause (rest semantics-subclause))
+                                (default-semantics-forms default-semantics-forms)
+                                (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
+(semantics ...) of its own and no shared top-level (semantics ...) default"
+                                          machine name mode-sym)))))
+        (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                           opcode operand-width cycles-form semantics-forms)))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
 one of:
-  (modes MODE)                       -- 0 or 1 addressing mode in M1
-                                         (IMMEDIATE or ABSOLUTE); more than
-                                         one is M2 (DEFMODE)
+  (modes MODE)                       -- 0 or 1 addressing mode, sharing the
+                                         top-level (encoding ...) below
+  (modes (MODE (opcode n)
+               [(operand :width n)]
+               [(semantics form...)])
+         ...)                        -- 2+ addressing modes, each with its
+                                         own opcode and (optionally) its own
+                                         operand width and semantics; a
+                                         mode with no (semantics ...) of its
+                                         own uses the shared (semantics ...)
+                                         below as its default
   (encoding (opcode n) [(operand :mode) | (operand :width n)])
+                                      -- required with the bare-symbol
+                                         (modes MODE) form above; not
+                                         allowed with the multi-mode form,
+                                         since each mode supplies its own
   (semantics form...)                -- expanded via WITH-MACHINE-BINDINGS,
                                          with MACHINE bound to the runtime
                                          machine instance (for explicit
@@ -222,12 +283,16 @@ one of:
                                          machine 'ram operand)) and OPERAND
                                          bound to the already-evaluated
                                          operand integer (or NIL for a
-                                         no-operand instruction)
+                                         no-operand instruction). Required
+                                         unless every mode in a multi-mode
+                                         (modes ...) supplies its own.
   (cycles n)                         -- parsed and stored, not yet used
 
-Registers the resulting INSTRUCTION-DESCRIPTOR on MACHINE's descriptor,
-by mnemonic and by opcode, inside an EVAL-WHEN so it is available at
-macroexpansion time like DEFMACHINE (machine.lisp)."
+MODE names are resolved against DEFMODE's registry (mode.lisp) at
+macroexpansion time, like MACHINE is resolved against DEFMACHINE's.
+Registers the resulting variant(s) on MACHINE's descriptor, by mnemonic and
+by opcode, inside an EVAL-WHEN so they are available at macroexpansion time
+like DEFMACHINE itself."
   (let (modes-clause encoding-clause semantics-clause cycles-clause)
     (dolist (clause clauses)
       (case (first clause)
@@ -236,51 +301,77 @@ macroexpansion time like DEFMACHINE (machine.lisp)."
         (semantics (setf semantics-clause clause))
         (cycles (setf cycles-clause clause))
         (t (error "Unknown DEFINSTRUCTION clause head ~S in ~S" (first clause) clause))))
-    (unless encoding-clause
-      (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
-    (unless semantics-clause
-      (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
-    (let* ((mode-syms (rest modes-clause))
-           (mode (cond
-                   ((null mode-syms) nil)
-                   ((= (length mode-syms) 1) (%mode-keyword (first mode-syms)))
-                   (t (error "DEFINSTRUCTION ~S ~S: only one addressing mode is ~
-allowed in M1 (multi-mode resolution is M2), got ~S" machine name mode-syms))))
-           (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
-           (operand-subclause (find 'operand (rest encoding-clause) :key #'first)))
-      (unless opcode-subclause
-        (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
-               machine name))
-      (when (and mode (not operand-subclause))
-        (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
-(encoding ...) has no (operand ...) subclause" machine name mode))
-      (when (and operand-subclause (not mode))
-        (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
+    (let* ((mode-forms (rest modes-clause))
+           (cycles-form (and cycles-clause (second cycles-clause))))
+      (cond
+        ;; No addressing mode -- no operand.
+        ((null mode-forms)
+         (unless encoding-clause
+           (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
+         (unless semantics-clause
+           (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+         (let* ((opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
+                (operand-subclause (find 'operand (rest encoding-clause) :key #'first)))
+           (unless opcode-subclause
+             (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
+                    machine name))
+           (when operand-subclause
+             (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
 but no (modes ...) clause declares an addressing mode" machine name))
-      (let ((opcode (second opcode-subclause))
-            (operand-width (and operand-subclause
-                                 (%operand-width mode (rest operand-subclause) machine))))
-        ;; The semantics body has no WITH-MACHINE form of its own to name its
-        ;; machine variable (unlike the M0 standalone examples), so
-        ;; DEFINSTRUCTION fixes it to the literal symbol MACHINE -- used
-        ;; explicitly for memory/stack access, e.g. (mref machine 'ram
-        ;; operand) -- and the operand integer to the literal symbol OPERAND,
-        ;; matching the exact names used throughout the design mockups.
-        `(eval-when (:compile-toplevel :load-toplevel :execute)
-           (register-instruction!
-            ',machine
-            (make-instruction-descriptor
-             :name ,(string-upcase (symbol-name name))
-             :machine ',machine
-             :mode ,mode
-             :opcode ,opcode
-             :operand-width ,operand-width
-             :cycles ,(and cycles-clause (second cycles-clause))
-             :semantics-fn (lambda (machine operand)
-                              (declare (ignorable operand))
-                              (with-machine-bindings (machine ,machine)
-                                ,@(rest semantics-clause)))))
-           ',name)))))
+           `(eval-when (:compile-toplevel :load-toplevel :execute)
+              (register-instruction-variants!
+               ',machine
+               (list ,(%descriptor-form machine name nil (second opcode-subclause) nil
+                                         cycles-form (rest semantics-clause))))
+              ',name)))
+        ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
+        ((consp (first mode-forms))
+         (when encoding-clause
+           (error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause gives ~
+each mode its own (opcode n) -- a top-level (encoding ...) clause is not allowed"
+                  machine name))
+         (unless (rest mode-forms)
+           (error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause needs ~
+at least two modes -- use (modes MODE) with (encoding ...) for just one" machine name))
+         (let ((default-semantics-forms (and semantics-clause (rest semantics-clause))))
+           `(eval-when (:compile-toplevel :load-toplevel :execute)
+              (register-instruction-variants!
+               ',machine
+               (list ,@(mapcar (lambda (variant-form)
+                                  (%parse-mode-variant-clause variant-form machine name
+                                                              default-semantics-forms cycles-form))
+                                mode-forms)))
+              ',name)))
+        ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
+        ;; all shared with the rest of the instruction -- the M1 shape.
+        (t
+         (when (rest mode-forms)
+           (error "DEFINSTRUCTION ~S ~S: more than one bare addressing-mode ~
+symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
+(opcode ...)) (~A (opcode ...)))" machine name (first mode-forms) (second mode-forms)))
+         (unless encoding-clause
+           (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
+         (unless semantics-clause
+           (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+         (let* ((mode-sym (first mode-forms))
+                (mode (find-mode-descriptor mode-sym))
+                (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
+                (operand-subclause (find 'operand (rest encoding-clause) :key #'first)))
+           (%check-single-hole-mode mode machine name)
+           (unless opcode-subclause
+             (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
+                    machine name))
+           (unless operand-subclause
+             (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
+(encoding ...) has no (operand ...) subclause" machine name mode-sym))
+           `(eval-when (:compile-toplevel :load-toplevel :execute)
+              (register-instruction-variants!
+               ',machine
+               (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                         (second opcode-subclause)
+                                         (%operand-width mode (rest operand-subclause) machine)
+                                         cycles-form (rest semantics-clause))))
+              ',name)))))))
 
 ;;; Encoding / execution
 

@@ -1,6 +1,6 @@
 ;;;; tests/instruction.lisp
-;;;; fiveam tests for DEFINSTRUCTION and the M1 addressing-mode/encoding
-;;;; pipeline (instruction.lisp).
+;;;; fiveam tests for DEFINSTRUCTION and the addressing-mode/encoding
+;;;; pipeline (instruction.lisp, mode.lisp).
 
 (in-package #:lasm)
 
@@ -8,7 +8,7 @@
 (fiveam:in-suite instruction)
 
 ;; A dedicated fixture (rather than reusing TEST-MACHINE from suites.lisp):
-;; one memory element, so %DEFAULT-ABSOLUTE-WIDTH can resolve without
+;; one memory element, so %DEFAULT-ADDRESS-WIDTH can resolve without
 ;; ambiguity, and a PC register per the "PC is a plain register" convention.
 (defmachine instr-test-machine
   (register a :width 8)
@@ -46,6 +46,19 @@
   (encoding (opcode #x4C) (operand :width 3))
   (semantics (set! pc operand)))
 
+;; Multi-mode: each mode gets its own opcode (deliberately not 6502's real
+;; LDA opcodes, to avoid colliding with the other opcodes this fixture and
+;; its tests use, including LDX's temporary #xA9 in
+;; DEFINSTRUCTION-REDEFINITION-REPLACES below), and immediate/zero-page each
+;; override the shared default semantics since only ABSOLUTE addresses
+;; memory -- exercising the per-mode semantics override this ticket adds.
+(definstruction instr-test-machine lda
+  (modes
+    (immediate (opcode #x10) (semantics (set! a operand)))
+    (zero-page (opcode #x11))
+    (absolute  (opcode #x12)))
+  (semantics (set! a (mref machine 'ram operand))))
+
 ;; A second fixture with two memory elements, so (operand :mode) on an
 ;; ABSOLUTE instruction is genuinely ambiguous -- exercises the "more than
 ;; one memory element" branch of %DEFAULT-ABSOLUTE-WIDTH. An explicit
@@ -65,7 +78,7 @@
 (fiveam:test definstruction-registers-by-mnemonic-and-opcode
   (let ((ldx (find-instruction 'instr-test-machine 'ldx)))
     (fiveam:is (string= "LDX" (instruction-descriptor-name ldx)))
-    (fiveam:is (eq :immediate (instruction-descriptor-mode ldx)))
+    (fiveam:is (eq 'immediate (mode-descriptor-name (instruction-descriptor-mode ldx))))
     (fiveam:is (= #xA2 (instruction-descriptor-opcode ldx)))
     (fiveam:is (eq ldx (find-instruction-by-opcode 'instr-test-machine #xA2)))))
 
@@ -91,6 +104,57 @@
     (fiveam:is (null (instruction-descriptor-mode nop)))
     (fiveam:is (null (instruction-descriptor-operand-width nop)))))
 
+;;; Multi-mode registration (mode.lisp, #18)
+
+(fiveam:test multi-mode-registers-one-descriptor-per-mode
+  (let ((variants (find-instruction-variants 'instr-test-machine 'lda)))
+    (fiveam:is (= 3 (length variants)))
+    (fiveam:is (equal '(#x10 #x11 #x12) (mapcar #'instruction-descriptor-opcode variants)))
+    (fiveam:is (equal '(immediate zero-page absolute)
+                       (mapcar (lambda (d) (mode-descriptor-name (instruction-descriptor-mode d)))
+                               variants)))))
+
+(fiveam:test multi-mode-find-instruction-by-mode
+  (let ((imm (find-instruction 'instr-test-machine 'lda :mode 'immediate))
+        (abs (find-instruction 'instr-test-machine 'lda :mode 'absolute)))
+    (fiveam:is (= #x10 (instruction-descriptor-opcode imm)))
+    (fiveam:is (= #x12 (instruction-descriptor-opcode abs)))))
+
+(fiveam:test multi-mode-each-opcode-decodes-independently
+  (fiveam:is (eq (find-instruction 'instr-test-machine 'lda :mode 'immediate)
+                  (find-instruction-by-opcode 'instr-test-machine #x10)))
+  (fiveam:is (eq (find-instruction 'instr-test-machine 'lda :mode 'absolute)
+                  (find-instruction-by-opcode 'instr-test-machine #x12))))
+
+(fiveam:test multi-mode-per-mode-semantics-override
+  (let ((m (make-machine 'instr-test-machine))
+        (imm (find-instruction 'instr-test-machine 'lda :mode 'immediate)))
+    (execute-instruction imm m 42)
+    (fiveam:is (= 42 (sref m 'a)))))
+
+(fiveam:test multi-mode-shared-default-semantics
+  (let ((m (make-machine 'instr-test-machine))
+        (abs (find-instruction 'instr-test-machine 'lda :mode 'absolute)))
+    (setf (mref m 'ram #x1000) 7)
+    (execute-instruction abs m #x1000)
+    (fiveam:is (= 7 (sref m 'a)))))
+
+(fiveam:test multi-mode-redefinition-retires-dropped-opcode
+  (definstruction instr-test-machine redef-multi
+    (modes
+      (immediate (opcode #xF0) (semantics nil))
+      (absolute (opcode #xF1) (semantics nil)))
+    (semantics nil))
+  (fiveam:is (= 2 (length (find-instruction-variants 'instr-test-machine 'redef-multi))))
+  ;; drop the ABSOLUTE variant on redefinition -- its old opcode (#xF1) must
+  ;; no longer resolve
+  (definstruction instr-test-machine redef-multi
+    (modes immediate)
+    (encoding (opcode #xF0) (operand :mode))
+    (semantics nil))
+  (fiveam:is (= 1 (length (find-instruction-variants 'instr-test-machine 'redef-multi))))
+  (fiveam:signals unknown-instruction (find-instruction-by-opcode 'instr-test-machine #xF1)))
+
 ;;; Clause errors
 
 (fiveam:test missing-encoding-clause-signals-error
@@ -105,12 +169,47 @@
              (modes immediate)
              (encoding (opcode #xFF) (operand :mode))))))
 
-(fiveam:test two-modes-signals-error
+(fiveam:test multiple-bare-mode-symbols-signals-error
+  ;; more than one bare mode symbol requires the multi-mode list form
   (fiveam:signals error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate absolute)
              (encoding (opcode #xFF) (operand :mode))
              (semantics (set! x operand))))))
+
+(fiveam:test multi-mode-with-top-level-encoding-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))
+             (encoding (opcode #xFF))
+             (semantics nil)))))
+
+(fiveam:test multi-mode-single-variant-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes (immediate (opcode #xF0)))
+             (semantics nil)))))
+
+(fiveam:test multi-mode-variant-without-opcode-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes (immediate (semantics nil)) (absolute (opcode #xF1)))
+             (semantics nil)))))
+
+(fiveam:test multi-mode-variant-without-semantics-or-default-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))))))
+
+(defmode two-hole-test-mode expr "," expr)
+
+(fiveam:test mode-with-more-than-one-hole-signals-error
+  ;; #24: an instruction only wires up one operand encoding field
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand :width 1))
+             (semantics nil)))))
 
 (fiveam:test unknown-clause-head-signals-error
   (fiveam:signals error
@@ -142,45 +241,27 @@
         (bogus-ref (find-instruction 'instr-test-machine 'bogus-ref)))
     (fiveam:signals unknown-storage (execute-instruction bogus-ref m 10))))
 
-;;; match-operand-mode
+;;; match-operand-mode is now mode.lisp's territory -- see tests/mode.lisp
+;;; for pattern-matching coverage (immediate/absolute/indexed-x/indirect-y,
+;;; case-insensitive literals, trailing-token rejection, TRY-MATCH-OPERAND-
+;;; MODE). This file keeps just enough of it to build ASTs for the
+;;; EVAL-EXPR-CONSTANT tests below.
 
 (defun %single-operand (string)
-  (first (statement-operands (first (parse (format nil "nop ~A" string))))))
-
-(fiveam:test match-operand-mode-immediate
-  (let ((ast (match-operand-mode (%single-operand "#10") :immediate)))
-    (fiveam:is (expr-number-p ast))
-    (fiveam:is (= 10 (expr-number-value ast)))))
-
-(fiveam:test match-operand-mode-immediate-rejects-absolute-syntax
-  (fiveam:signals parse-failure
-    (match-operand-mode (%single-operand "$1000") :immediate)))
-
-(fiveam:test match-operand-mode-absolute
-  (let ((ast (match-operand-mode (%single-operand "$1000") :absolute)))
-    (fiveam:is (expr-number-p ast))
-    (fiveam:is (= #x1000 (expr-number-value ast)))))
-
-(fiveam:test match-operand-mode-absolute-rejects-immediate-syntax
-  (fiveam:signals parse-failure
-    (match-operand-mode (%single-operand "#10") :absolute)))
-
-(fiveam:test match-operand-mode-trailing-token-signals-parse-failure
-  (fiveam:signals parse-failure
-    (match-operand-mode (%single-operand "#10 20") :immediate)))
+  (statement-operand-tokens (first (parse (format nil "nop ~A" string)))))
 
 ;;; eval-expr-constant
 
 (fiveam:test eval-expr-constant-arithmetic
-  (fiveam:is (= 7 (eval-expr-constant (match-operand-mode (%single-operand "#(3+4)") :immediate)))))
+  (fiveam:is (= 7 (eval-expr-constant (match-operand-mode (%single-operand "#(3+4)") 'immediate)))))
 
 (fiveam:test eval-expr-constant-lo-hi
-  (fiveam:is (= #x34 (eval-expr-constant (match-operand-mode (%single-operand "#<$1234") :immediate))))
-  (fiveam:is (= #x12 (eval-expr-constant (match-operand-mode (%single-operand "#>$1234") :immediate)))))
+  (fiveam:is (= #x34 (eval-expr-constant (match-operand-mode (%single-operand "#<$1234") 'immediate))))
+  (fiveam:is (= #x12 (eval-expr-constant (match-operand-mode (%single-operand "#>$1234") 'immediate)))))
 
 (fiveam:test eval-expr-constant-unresolved-label-signals
   (fiveam:signals unresolved-label
-    (eval-expr-constant (match-operand-mode (%single-operand "loop") :absolute))))
+    (eval-expr-constant (match-operand-mode (%single-operand "loop") 'absolute))))
 
 ;;; encode-instruction
 

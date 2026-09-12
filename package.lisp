@@ -106,11 +106,22 @@
    #:expr-binary-left
    #:expr-binary-right
 
+   ;; Addressing modes
+   #:defmode
+   #:find-mode-descriptor
+   #:mode-descriptor
+   #:mode-descriptor-p
+   #:mode-descriptor-name
+   #:mode-descriptor-pattern
+   #:mode-descriptor-width
+   #:match-operand-mode
+   #:try-match-operand-mode
+
    ;; Instructions
    #:definstruction
    #:find-instruction
+   #:find-instruction-variants
    #:find-instruction-by-opcode
-   #:match-operand-mode
    #:eval-expr-constant
    #:encode-instruction
    #:execute-instruction

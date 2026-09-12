@@ -93,9 +93,12 @@ integer.
 ## Scope
 
 This covers fetch/decode/execute over already-encoded bytes and a single
-flat halt/decode-failure/step-budget stop model. It does not cover:
+flat halt/decode-failure/step-budget stop model. Multiple addressing modes
+per mnemonic ([Addressing modes](modes.md)) need no change here: each mode
+variant carries its own distinct opcode, so `find-instruction-by-opcode`'s
+decode step stays one-to-one regardless of how many modes a mnemonic
+declares. It does not cover:
 
-- Multiple addressing modes or multi-mode dispatch — M2.
 - Cycle-accurate timing using `(cycles n)` — undecided, tracked separately.
 - Interrupts, privilege levels, or a generalized trap/interrupt model
   beyond the single `trap` primitive — M6.

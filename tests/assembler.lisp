@@ -1,7 +1,7 @@
 ;;;; tests/assembler.lisp
-;;;; fiveam tests for the M1 assembler pass (assembler.lisp). Reuses the
-;;;; INSTR-TEST-MACHINE fixture and its LDX/ADC/BNE/NOP/JMPFAR instructions
-;;;; from tests/instruction.lisp.
+;;;; fiveam tests for the assembler pass (assembler.lisp), including M2's
+;;;; multi-mode selection. Reuses the INSTR-TEST-MACHINE fixture and its
+;;;; LDX/ADC/BNE/NOP/JMPFAR/LDA instructions from tests/instruction.lisp.
 
 (in-package #:lasm)
 
@@ -72,3 +72,35 @@ nop" :machine 'instr-test-machine)))
 adc target
 target: nop" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xA2 10 #x6D 5 0 #xEA) (assembly-bytes a)))))
+
+;;; M2 multi-mode selection (mode.lisp, #18) -- LDA declares
+;;; immediate/zero-page/absolute (tests/instruction.lisp), zero-page and
+;;; absolute sharing identical operand syntax and differing only by width.
+
+(fiveam:test constant-operand-picks-narrowest-fitting-mode
+  (let ((a (assemble "lda $10" :machine 'instr-test-machine)))
+    ;; zero-page (opcode #x11), not absolute (#x12) -- 2 bytes total
+    (fiveam:is (equalp #(#x11 #x10) (assembly-bytes a)))))
+
+(fiveam:test constant-operand-too-wide-for-zero-page-picks-absolute
+  (let ((a (assemble "lda $1000" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 #x00 #x10) (assembly-bytes a)))))
+
+(fiveam:test label-operand-picks-widest-mode-even-when-zero-page-would-fit
+  ;; "target" resolves to address 3 (comfortably zero-page), but a
+  ;; label-bearing operand always takes the widest syntax-matching mode --
+  ;; this is what buys one-pass layout instead of a relaxation loop.
+  (let ((a (assemble "lda target
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 3 0 #xEA) (assembly-bytes a)))
+    (fiveam:is (= 3 (gethash "target" (assembly-symbols a))))))
+
+(fiveam:test immediate-operand-still-selects-immediate-mode-among-variants
+  (let ((a (assemble "lda #7" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x10 7) (assembly-bytes a)))))
+
+(fiveam:test no-matching-mode-signals-assembly-error
+  ;; ADC only declares ABSOLUTE -- an immediate-syntax operand matches none
+  ;; of its variants.
+  (fiveam:signals assembly-error
+    (assemble "adc #10" :machine 'instr-test-machine)))

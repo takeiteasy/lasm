@@ -35,12 +35,21 @@ sbcl --script examples/counter.lisp
 
 This defines a syntax with `deflexer`, then tokenizes and parses a
 hand-written counter-loop program, printing the resulting tokens and
-statement AST. It then defines a small instruction set with `definstruction`,
-assembles the program (resolving its `bne .loop` label reference) to bytes,
-loads them into a fresh machine, and runs the emulator loop to completion —
-see [Lexer](lexer.md), [Statement grammar & expression parser](parser.md),
-[Instructions](instructions.md), [Assembler](assembler.md), and
-[Emulator](emulator.md).
+statement AST. It then defines a small instruction set with `definstruction`
+(one addressing mode per instruction), assembles the program (resolving its
+`bne .loop` label reference) to bytes, loads them into a fresh machine, and
+runs the emulator loop to completion — see [Lexer](lexer.md), [Statement
+grammar & expression parser](parser.md), [Instructions](instructions.md),
+[Assembler](assembler.md), and [Emulator](emulator.md).
+
+```sh
+sbcl --script examples/modes.lisp
+```
+
+The same pipeline, but `lda`/`adc` each declare several addressing modes
+(`immediate`/`zero-page`/`absolute`/`indexed-x`) via `defmode`, and the
+assembler picks which one each operand actually uses — see [Addressing
+modes](modes.md) and [Assembler](assembler.md#choosing-a-mode).
 
 ## Run the tests
 
@@ -67,6 +76,7 @@ does not define a `test-op` method, so it does not actually invoke
 - [Semantics vocabulary](semantics.md) for what you can write inside `with-machine`.
 - [Lexer](lexer.md) for the full `deflexer` clause reference.
 - [Statement grammar & expression parser](parser.md) for `parse` and `parse-expression`.
-- [Instructions](instructions.md) for `definstruction`, addressing modes, and encoding.
-- [Assembler](assembler.md) for `assemble` and label resolution.
+- [Addressing modes](modes.md) for `defmode` and pattern matching.
+- [Instructions](instructions.md) for `definstruction`, encoding, and semantics.
+- [Assembler](assembler.md) for `assemble`, label resolution, and mode selection.
 - [Emulator](emulator.md) for `load-program`, `step-machine`, and `run`.

@@ -15,10 +15,9 @@ precedence-climbing (Pratt) expression parser reusable at every operand
 This stops at the AST. Label references stay symbolic (`expr-label`) and
 operand token runs are handed back unparsed as raw tokens rather than
 expressions. `parse-expression` is the piece later stages call directly:
-M1's two built-in addressing modes (`immediate`, `absolute`) match against
-it via `match-operand-mode` — see [Instructions](instructions.md); a
-user-declarative `defmode` for additional modes and multi-mode resolution
-is M2. Resolving a label reference against a symbol table is the
+every addressing mode declared with `defmode` matches against it via
+`match-operand-mode`/`try-match-operand-mode` — see [Addressing
+modes](modes.md). Resolving a label reference against a symbol table is the
 [Assembler](assembler.md)'s job (`eval-expr`); `eval-expr-constant` folds
 constant expressions with no label support at all.
 
@@ -35,9 +34,18 @@ A label with no mnemonic is a legal statement (a label on its own line). A
 comma inside a parenthesized group does not split operands.
 
 ```lisp
-(defstruct statement label mnemonic operands line)
+(defstruct statement label mnemonic operands operand-tokens line)
 (defstruct operand tokens)   ; raw token run — a simple-vector
 ```
+
+`operands` is the comma-split list above — kept for a possible future
+multi-operand instruction, but not what addressing-mode matching uses.
+`operand-tokens` is every token after the mnemonic, commas included,
+uncommitted to any comma split: a mode's own pattern can include a literal
+comma (e.g. `indexed-x`'s `expr "," "X"`, [Addressing modes](modes.md)), so
+matching against one comma-delimited `operand` at a time would make such a
+mode unmatchable. `match-operand-mode`/`try-match-operand-mode` take
+`operand-tokens`, not `operands`.
 
 `(parse string &key (lexer 'default))` tokenizes `string` with `lexer` and
 returns a list of `statement`. Signals `lex-error` or `parse-failure`.
@@ -82,8 +90,9 @@ has no comparisons.
 `expr-label-localp` is a heuristic (the name's first character is not
 alphabetic — true for the default lexer's `.`-prefixed local labels), not a
 descriptor-aware scoping check. The [Assembler](assembler.md) does not act
-on it in M1 either — every label, local or not, shares one flat symbol
-table; scoping a local label to its enclosing global label is M2 (#16).
+on it either — every label, local or not, shares one flat symbol table;
+scoping a local label to its enclosing global label is a separate ticket
+(#16).
 
 ## Conditions
 
@@ -94,9 +103,9 @@ doesn't expect.
 
 ## Follow-ups not covered here
 
-- Directive grammar (`.org`, `.byte`/`.word`, `defdirective`) — M2.
+- Directive grammar (`.org`, `.byte`/`.word`, `defdirective`).
 - A location-counter symbol in expressions (`*` or `$` for "current PC") —
   needs a syntax decision, since both candidate spellings collide with
   existing tokens.
 - Local-label scoping (binding a `.loop` reference to its enclosing global
-  label) — M2 (#16); see [Assembler](assembler.md).
+  label) — #16; see [Assembler](assembler.md).

@@ -83,7 +83,10 @@
   ;; string and by opcode, so both the assembler (assembler.lisp, mnemonic ->
   ;; encoding) and the emulator (emulator.lisp, opcode -> decode) share one
   ;; table pair rather than each keeping its own index.
-  (instructions (make-hash-table :test 'equal))  ; mnemonic string -> instruction-descriptor
+  ;; mnemonic string -> list of instruction-descriptor, one per addressing
+  ;; mode the mnemonic accepts (mode.lisp/M2); a no-operand or single-mode
+  ;; mnemonic's list has exactly one element.
+  (instructions (make-hash-table :test 'equal))
   (opcodes (make-hash-table :test 'eql)))         ; opcode -> instruction-descriptor
 
 (defun descriptor-element (descriptor name)
