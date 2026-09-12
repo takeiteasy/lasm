@@ -2,27 +2,25 @@
 ;;;; The M2 assembler pass: turns a STATEMENT list (parser.lisp) into encoded
 ;;;; bytes, resolving labels and selecting an addressing mode along the way.
 ;;;;
-;;;; Two passes: pass 1 (layout, %LAYOUT below) walks the statement list once,
-;;;; binding every label to an address and choosing each instruction's
-;;;; addressing-mode variant (mode.lisp/instruction.lisp) so it can size the
-;;;; statement; pass 2 (encode, %ENCODE) evaluates operands against the
-;;;; completed symbol table and emits bytes. This is what buys forward
+;;;; Layout (%LAYOUT below) binds every label to an address and chooses each
+;;;; instruction's addressing-mode variant (mode.lisp/instruction.lisp) so it
+;;;; can size the statement; encode (%ENCODE) then evaluates operands against
+;;;; the completed symbol table and emits bytes. This is what buys forward
 ;;;; references (`jmp end` ... `end:`) for free.
 ;;;;
 ;;;; M1 sized every statement without looking at its operand at all, since it
 ;;;; allowed only one mode per instruction. M2 modes can overlap in syntax
 ;;;; (zero-page and absolute both match a bare `expr`) and differ in size, so
-;;;; pass 1 now also selects a mode per statement -- see %CHOOSE-VARIANT.
-;;;; Ticket #18 and LASM-plan.md sec. 2 describe M2's two-pass structure as
-;;;; "label resolution before final mode/encoding selection"; this does the
-;;;; reverse (mode selection in pass 1, labels resolved in pass 2) because
-;;;; the literal order needs a relaxation loop -- start every label-bearing
-;;;; operand at its narrowest legal mode, re-run layout until addresses stop
-;;;; moving. Follow-up ticket: narrow a label-bearing operand's mode once
-;;;; layout has converged; %CHOOSE-VARIANT picks the widest legal mode for a
-;;;; label-bearing operand instead, which is never invalidated by a later
-;;;; layout, so one pass suffices and there is no non-convergence case to
-;;;; guard against.
+;;;; layout now also selects a mode per statement -- see %CHOOSE-VARIANT.
+;;;; Since a label's value isn't known on the first attempt, layout iterates:
+;;;; every label-bearing (or relative-mode) operand starts at its narrowest
+;;;; legal variant, and each subsequent pass re-chooses against the previous
+;;;; pass's provisional symbol table, widening whatever no longer fits.
+;;;; Widening is sticky -- a statement's chosen width, once committed, is a
+;;;; floor for every later pass -- which bounds the loop by the number of
+;;;; relaxable statements and makes it impossible to oscillate. %LAYOUT drives
+;;;; %LAYOUT-PASS to a fixpoint on the per-statement width vector, then runs
+;;;; one final pass whose output feeds %ENCODE.
 ;;;;
 ;;;; Local labels (an identifier starting with the lexer's LOCAL-LABEL-PREFIX,
 ;;;; e.g. ".loop") are scoped to their nearest preceding non-local ("global")
@@ -96,30 +94,51 @@ of erroring would branch to the wrong address."
   (let ((bound (ash 1 (1- (* 8 width)))))
     (and (>= value (- bound)) (< value bound))))
 
-(defun %choose-variant (statement variants address)
+(defun %relative-fits-p (value address descriptor)
+  "T if VALUE -- the absolute target a RELATIVE candidate's hole folds to --
+encodes as an offset that fits DESCRIPTOR's operand width, computed the same
+way %RELATIVE-OFFSET (below) will at encode time: relative to the address of
+the *next* instruction, not this one's own. Used by %CHOOSE-VARIANT's value
+filter so a RELATIVE candidate can compete on width like any other once an
+address is available to compute its offset from, rather than always winning
+by default as the widest candidate."
+  (let* ((width (instruction-descriptor-total-operand-width descriptor))
+         (next-address (+ address 1 width)))
+    (%fits-signed-width-p (- value next-address) width)))
+
+(defun %choose-variant (statement variants address &key symbols (floor 0))
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
-for that variant's mode. ADDRESS is this statement's own address, already
-known in pass 1 unlike a label -- passed as EVAL-EXPR-CONSTANT's :PC so a
-location-counter hole (\"*\", #15) folds to a real value and takes part in the
-value filter below exactly like any other constant, rather than always
-falling back to the widest candidate the way an unresolved label does. Two
-filters, applied in VARIANTS' declaration
-order -- so an author should declare narrower/more specific modes before
-wider ones that also match their syntax (e.g. zero-page before absolute):
+for that variant's mode. ADDRESS is this statement's own address; SYMBOLS,
+when given, is the provisional (or, on the final layout pass, complete)
+symbol table built so far -- passed to EVAL-EXPR alongside ADDRESS as :PC so
+both a label reference and a location-counter hole (\"*\", #15) can fold to a
+real value and take part in the value filter below. FLOOR is the narrowest
+total operand width this statement is still allowed to choose -- relaxation
+only ever widens a statement across layout passes (see %LAYOUT), so a
+candidate narrower than FLOOR is dropped before the value filter even runs.
+Filters, applied in VARIANTS' declaration order -- so an author should
+declare narrower/more specific modes before wider ones that also match their
+syntax (e.g. zero-page before absolute):
 
 1. Syntax -- keep variants whose mode's pattern matches the operand tokens
    (a no-operand variant's \"pattern\" is simply an empty token run). No
    match at all is an ASSEMBLY-ERROR.
-2. Value -- for a variant whose mode holes fold to label-free constants,
-   keep it only if every value fits its own hole's operand width; if none of
-   the syntax-matching variants fit, fall back to the widest one (by total
-   operand width) and let ENCODE-INSTRUCTION's existing WRAP-VALUE mask each
-   value, exactly as a single-mode M1 instruction always did. If any hole is
-   a label reference (value not yet known), that variant is excluded from
-   the value filter and only considered as the widest fallback -- it never
-   has to shrink once the label resolves, so this needs no relaxation loop.
-   Ties, in both cases, keep declaration order. Resolvedness is checked per
+2. Floor -- drop any variant narrower than FLOOR.
+3. Value -- for a variant whose mode holes fold (against SYMBOLS), keep it
+   only if every value fits its own hole's operand width; if none of the
+   syntax-and-floor-matching variants fit, fall back to the widest one (by
+   total operand width) and let ENCODE-INSTRUCTION's existing WRAP-VALUE mask
+   each value, exactly as a single-mode M1 instruction always did. If any
+   hole doesn't fold (a label absent from SYMBOLS, or no SYMBOLS at all), that
+   variant is excluded from the value filter and only considered as the
+   *narrowest* eligible fallback instead of the widest -- an operand whose
+   value isn't known yet should be given the chance to fit once it is,
+   rather than committing to the widest mode up front. A RELATIVE candidate's
+   hole folds to an absolute target, not the offset actually encoded, so its
+   fit test goes through %RELATIVE-FITS-P instead of %FITS-WIDTH-P; it is not
+   otherwise treated differently from any other mode's operand. Ties, in
+   every branch, keep declaration order. Resolvedness is checked per
    candidate, not once for all of them: two variants of one mnemonic can
    have different hole counts (e.g. a two-register mode alongside a
    one-immediate mode), so whether their holes resolve is not the same
@@ -134,42 +153,37 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                     (if mode
                                         (try-match-operand-mode tokens mode)
                                         (values nil (zerop (length tokens)))))
-                 when okp collect (list v asts))))
+                 when (and okp (>= (instruction-descriptor-total-operand-width v) floor))
+                   collect (list v asts))))
     (when (null candidates)
       (%assembly-error (statement-line statement)
                         "~A: no addressing mode matches this operand"
                         (statement-mnemonic statement)))
     ;; STABLE-SORT, not SORT: ties (equal total width) must keep declaration
     ;; order.
-    (let* ((by-width (stable-sort (copy-list candidates) #'>
-                                   :key (lambda (c) (instruction-descriptor-total-operand-width
-                                                      (first c)))))
-           (widest (first by-width))
-           (fitting (find-if (lambda (c)
-                                (let* ((mode (instruction-descriptor-mode (first c))))
-                                  (and
-                                   ;; A RELATIVE candidate's value is an
-                                   ;; absolute target, not the encoded offset
-                                   ;; (that's computed later, in %ENCODE,
-                                   ;; once every address is known) --
-                                   ;; checking it against an operand width
-                                   ;; here would compare the wrong quantity.
-                                   ;; Excluded from the fit filter so the
-                                   ;; widest candidate is always chosen, same
-                                   ;; as a label reference (#23; only matters
-                                   ;; once a mnemonic declares RELATIVE
-                                   ;; alongside another mode, see #27).
-                                   (not (and mode (mode-descriptor-relativep mode)))
-                                   (handler-case
-                                       (let ((widths (instruction-descriptor-operand-widths
-                                                      (first c)))
-                                             (vals (mapcar (lambda (ast)
-                                                             (eval-expr-constant ast :pc address))
-                                                           (second c))))
-                                         (every #'%fits-width-p vals widths))
-                                     (unresolved-label () nil)))))
-                              candidates)))
-      (values-list (or fitting widest)))))
+    (let* ((width-key (lambda (c) (instruction-descriptor-total-operand-width (first c))))
+           ;; STABLE-SORT twice, not once-and-REVERSE: reversing a stable
+           ;; descending sort breaks ties in the *wrong* order (last
+           ;; declared, not first), which would silently contradict the
+           ;; declaration-order tiebreak promised above and in
+           ;; docs/assembler.md.
+           (widest (first (stable-sort (copy-list candidates) #'> :key width-key)))
+           (narrowest (first (stable-sort (copy-list candidates) #'< :key width-key)))
+           (resolvedp (lambda (c)
+                        (let ((descriptor (first c))
+                              (mode (instruction-descriptor-mode (first c))))
+                          (handler-case
+                              (let ((widths (instruction-descriptor-operand-widths descriptor))
+                                    (vals (mapcar (lambda (ast)
+                                                    (eval-expr ast :symbols symbols :pc address))
+                                                  (second c))))
+                                (if (and mode (mode-descriptor-relativep mode))
+                                    (%relative-fits-p (first vals) address descriptor)
+                                    (every #'%fits-width-p vals widths)))
+                            (unresolved-label () :unresolved)))))
+           (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
+           (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates)))
+      (values-list (or fitting (if any-unresolvedp narrowest widest))))))
 
 ;;; Directives (directive.lisp, #14) -- operand parsing and argument folding
 
@@ -219,22 +233,29 @@ label\" report wouldn't say why this one operand can't wait for pass 2."
 is not resolvable here (pass 1 has no symbol table yet)"
                           (statement-mnemonic statement) (unresolved-label-name c))))))
 
-(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope)
+(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
 new-address new-asm-origin): before any statement has occupied an address
 (EMITTED-P NIL), .ORG moves both the address counter and the assembly's own
 ORIGIN (so a leading .ORG places the whole program, and LOAD-PROGRAM's
-ASSEMBLY-ORIGIN default, emulator.lisp, lands it there); afterwards it only
-pads forward -- a backward move is ambiguous (overwrite? truncate?) so it
-signals ASSEMBLY-ERROR instead of guessing. A \"*\" in the operand (#15)
-resolves against ADDRESS -- the counter's value *before* this .ORG moves it."
+ASSEMBLY-ORIGIN default, emulator.lisp, lands it there) -- unconditionally,
+regardless of FINALP, since there is no earlier address for this branch to
+move backward from. Afterwards .ORG only pads forward -- a backward move is
+ambiguous (overwrite? truncate?) so it signals ASSEMBLY-ERROR instead of
+guessing, but only when FINALP: an earlier statement growing on a later
+layout pass (see %LAYOUT) can turn what was a legal forward pad into an
+apparent backward move, and that must not fail until the widths have
+actually converged -- a trial pass instead clamps forward (MAX VALUE ADDRESS)
+so layout can keep iterating. A \"*\" in the operand (#15) resolves against
+ADDRESS -- the counter's value *before* this .ORG moves it."
   (let ((value (%directive-constant-arg statement directive address scope)))
     (cond
       ((not emitted-p) (values value value))
       ((>= value address) (values value asm-origin))
-      (t (%assembly-error (statement-line statement)
-                           ".org cannot move the address counter backward (from ~D to ~D)"
-                           address value)))))
+      (finalp (%assembly-error (statement-line statement)
+                                ".org cannot move the address counter backward (from ~D to ~D)"
+                                address value))
+      (t (values address asm-origin)))))
 
 ;;; Local-label scoping (#16) -- qualify a local name against its nearest
 ;;; preceding global label before it ever reaches the (flat) symbol table.
@@ -252,7 +273,13 @@ if SCOPE is NIL (a local label with no enclosing global label)."
   "Destructively rewrite every local EXPR-LABEL node (LOCALP true) reachable
 from AST to its SCOPE-qualified name (%QUALIFY-LOCAL), leaving every other
 node untouched. Safe to call on any AST since each statement's operand ASTs
-(mode.lisp/parser.lisp) are freshly parsed and not shared."
+(mode.lisp/parser.lisp) are freshly parsed and not shared -- it does not
+clear LOCALP after qualifying, so calling it twice on the same node
+double-qualifies the name (e.g. \"loop.next\" becomes \"looploop.next\"). This
+is why %LAYOUT re-parses every statement's operands on every relaxation
+pass instead of reusing one pass's ASTs on the next -- a follow-up ticket
+tracks caching them across passes, which would need this cleared or the
+call made idempotent some other way."
   (etypecase ast
     ((or expr-number expr-location))
     (expr-label
@@ -287,73 +314,148 @@ one, or no label at all, leaves SCOPE unchanged."
        (setf (gethash label symbols) address)
        label))))
 
-(defun %layout (statements machine origin)
-  "Returns (VALUES symbols sized-entries final-address asm-origin). SYMBOLS
-is a string -> address hash table. SIZED-ENTRIES is, in order, one tagged
-entry per mnemonic-bearing statement that occupies address space:
+(defparameter *max-layout-iterations* 8
+  "Safety cap on the number of trial passes %LAYOUT will run while relaxing
+addressing-mode choices before giving up. Sticky widening (%LAYOUT-PASS's
+FLOORS) makes the per-statement width vector monotone non-decreasing and
+bounded above by each statement's widest declared variant, so it always
+reaches a fixpoint in at most (length statements) passes -- exceeding this
+cap without converging means that invariant has been broken elsewhere, not
+that the input program is unusual. Treated as an assertion: it has no test,
+since sticky widening makes it unreachable by construction.")
+
+(defun %layout-pass (statements machine origin prev-symbols floors finalp)
+  "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
+final-address asm-origin new-floors widths). SYMBOLS is a fresh string ->
+address hash table built by this pass alone -- never reused across passes,
+since %BIND-LABEL! signals on a rebind. SIZED-ENTRIES is, in order, one
+tagged entry per mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line)
   (:emit        address width asts line)
   (:reserve     address count line)
--- %ENCODE below dispatches on the leading keyword. A .ORG statement
-\(directive.lisp\) contributes no entry -- it only moves the address counter
-\(and, before anything else has been laid out, ASM-ORIGIN -- see
-%APPLY-ORIGIN-DIRECTIVE\). FINAL-ADDRESS is the address counter's value
-after the last statement, i.e. ORIGIN/ASM-ORIGIN plus the assembled size;
-ASM-ORIGIN is ORIGIN unless a leading .ORG moved it. SCOPE (the nearest
-preceding global label's name, #16) is threaded statement to statement so
-%BIND-LABEL! can qualify a local label definition and so this statement's own
-operands (its own label bound first -- \"loop: bne .x\"'s .x is scoped to
-LOOP, not whatever preceded it) can be qualified via %QUALIFY-LOCALS!."
+-- %ENCODE dispatches on the leading keyword. A .ORG statement (directive.lisp)
+contributes no entry -- it only moves the address counter (and, before
+anything else has been laid out, ASM-ORIGIN -- see %APPLY-ORIGIN-DIRECTIVE).
+FINAL-ADDRESS is the address counter's value after the last statement;
+ASM-ORIGIN is ORIGIN unless a leading .ORG moved it.
+
+PREV-SYMBOLS is the previous pass's completed symbol table (NIL on the very
+first pass, when no addresses are known yet at all) -- %CHOOSE-VARIANT folds
+operand holes against it, so a label's value (forward or backward) can take
+part in mode selection once a prior pass has placed it, not just a
+statement's own address. FLOORS is a vector, one entry per element of
+STATEMENTS (by position -- a plain index, not anything address-derived),
+giving each instruction statement's narrowest still-eligible addressing-mode
+width; NEW-FLOORS is a copy updated to each statement's width as chosen by
+this pass. Because a candidate narrower than its floor is never considered
+(%CHOOSE-VARIANT), and a chosen width becomes the next floor, floors -- and
+so WIDTHS, the parallel list of chosen widths in statement order that
+%LAYOUT compares between passes to detect a fixpoint -- only ever widen.
+
+FINALP defers two checks that only make sense once relaxation has converged:
+an .ORG backward move (%APPLY-ORIGIN-DIRECTIVE) can be a false positive
+mid-relaxation, when an earlier statement hasn't finished widening yet.
+
+SCOPE (the nearest preceding global label's name, #16) is threaded statement
+to statement so %BIND-LABEL! can qualify a local label definition and so a
+statement's own operands (its own label bound first -- \"loop: bne .x\"'s .x
+is scoped to LOOP, not whatever preceded it) can be qualified via
+%QUALIFY-LOCALS!."
   (let ((symbols (make-hash-table :test 'equal))
+        (new-floors (copy-seq floors))
         (address origin)
         (asm-origin origin)
         (emitted-p nil)
         (scope nil)
-        sized)
-    (dolist (statement statements)
-      (let* ((mnemonic (statement-mnemonic statement))
-             (directive (and mnemonic (find-directive-descriptor mnemonic)))
-             (line (statement-line statement)))
-        (cond
-          ;; .ORG binds this statement's own label (if any) to the address
-          ;; it moves *to*, not the address before the move -- so
-          ;; "foo: .org $8000" binds FOO to $8000. Its own operand is
-          ;; qualified against the scope in effect *before* that bind (a
-          ;; label on a .ORG line has no bearing on its own operand).
-          ((and directive (eq (directive-descriptor-action directive) :set-origin))
-           (multiple-value-bind (new-address new-origin)
-               (%apply-origin-directive statement directive address asm-origin emitted-p scope)
-             (setf address new-address asm-origin new-origin))
-           (setf scope (%bind-label! statement symbols address scope)))
-          (t
-           (setf scope (%bind-label! statement symbols address scope))
-           (when mnemonic
-             (cond
-               (directive
-                (ecase (directive-descriptor-action directive)
-                  (:reserve
-                   (let ((count (%directive-constant-arg statement directive address scope)))
-                     (when (minusp count)
-                       (%assembly-error (statement-line statement)
-                                        "~A: count must not be negative" mnemonic))
-                     (cl:push (list :reserve address count (statement-line statement)) sized)
-                     (incf address count)
-                     (setf emitted-p t)))
-                  (:emit
-                   (let* ((asts (%qualify-locals-in-asts!
-                                 (%directive-args statement directive) scope line))
-                          (width (directive-descriptor-width directive)))
-                     (cl:push (list :emit address width asts (statement-line statement)) sized)
-                     (incf address (* width (length asts)))
-                     (setf emitted-p t)))))
-               (t
-                (let ((variants (find-instruction-variants machine mnemonic)))
-                  (multiple-value-bind (descriptor asts) (%choose-variant statement variants address)
-                    (%qualify-locals-in-asts! asts scope line)
-                    (cl:push (list :instruction address descriptor asts (statement-line statement)) sized)
-                    (incf address (1+ (instruction-descriptor-total-operand-width descriptor)))
-                    (setf emitted-p t))))))))))
-    (values symbols (nreverse sized) address asm-origin)))
+        sized
+        widths)
+    (loop for statement in statements
+          for i from 0
+          do (let* ((mnemonic (statement-mnemonic statement))
+                     (directive (and mnemonic (find-directive-descriptor mnemonic)))
+                     (line (statement-line statement)))
+               (cond
+                 ;; .ORG binds this statement's own label (if any) to the
+                 ;; address it moves *to*, not the address before the move --
+                 ;; so "foo: .org $8000" binds FOO to $8000. Its own operand
+                 ;; is qualified against the scope in effect *before* that
+                 ;; bind (a label on a .ORG line has no bearing on its own
+                 ;; operand).
+                 ((and directive (eq (directive-descriptor-action directive) :set-origin))
+                  (multiple-value-bind (new-address new-origin)
+                      (%apply-origin-directive statement directive address asm-origin
+                                                emitted-p scope finalp)
+                    (setf address new-address asm-origin new-origin))
+                  (setf scope (%bind-label! statement symbols address scope)))
+                 (t
+                  (setf scope (%bind-label! statement symbols address scope))
+                  (when mnemonic
+                    (cond
+                      (directive
+                       (ecase (directive-descriptor-action directive)
+                         (:reserve
+                          (let ((count (%directive-constant-arg statement directive address scope)))
+                            (when (minusp count)
+                              (%assembly-error (statement-line statement)
+                                               "~A: count must not be negative" mnemonic))
+                            (cl:push (list :reserve address count (statement-line statement)) sized)
+                            (incf address count)
+                            (setf emitted-p t)))
+                         (:emit
+                          (let* ((asts (%qualify-locals-in-asts!
+                                        (%directive-args statement directive) scope line))
+                                 (width (directive-descriptor-width directive)))
+                            (cl:push (list :emit address width asts (statement-line statement)) sized)
+                            (incf address (* width (length asts)))
+                            (setf emitted-p t)))))
+                      (t
+                       (let ((variants (find-instruction-variants machine mnemonic)))
+                         (multiple-value-bind (descriptor asts)
+                             (%choose-variant statement variants address
+                                               :symbols prev-symbols :floor (aref floors i))
+                           (%qualify-locals-in-asts! asts scope line)
+                           (cl:push (list :instruction address descriptor asts (statement-line statement))
+                                    sized)
+                           (let ((width (instruction-descriptor-total-operand-width descriptor)))
+                             (setf (aref new-floors i) width)
+                             (cl:push width widths)
+                             (incf address (1+ width)))
+                           (setf emitted-p t))))))))))
+    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths))))
+
+(defun %layout (statements machine origin)
+  "Returns (VALUES symbols sized-entries final-address asm-origin) -- see
+%LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES. A label-bearing (or
+RELATIVE-mode) operand's addressing-mode width can't be decided in one walk
+over STATEMENTS, since it depends on an address that isn't known until
+layout has placed it -- so %LAYOUT-PASS runs repeatedly, re-choosing every
+statement's variant against the previous pass's complete symbol table, each
+pass only ever widening (never re-narrowing) a statement that no longer
+fits, until the vector of chosen widths stops changing. Once two consecutive
+passes agree, one more pass runs with FINALP T -- surfacing the two checks
+%LAYOUT-PASS defers until relaxation has settled -- and its result, checked
+against the same width vector as an assertion, is returned."
+  (let ((floors (make-array (length statements) :initial-element 0))
+        (widths :none)
+        (symbols nil))
+    (dotimes (iteration *max-layout-iterations*)
+      (declare (ignore iteration))
+      (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths)
+          (%layout-pass statements machine origin symbols floors nil)
+        (declare (ignore sized final-address asm-origin))
+        (when (equal new-widths widths)
+          (return-from %layout
+            (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
+                                   final-floors final-widths)
+                (%layout-pass statements machine origin new-symbols new-floors t)
+              (declare (ignore final-floors))
+              (unless (equal final-widths new-widths)
+                (%assembly-error nil "addressing-mode layout did not converge -- the final ~
+pass chose different widths than the trial pass it followed"))
+              (values final-symbols final-sized final-address final-asm-origin))))
+        (setf symbols new-symbols floors new-floors widths new-widths)))
+    (%assembly-error nil "addressing-mode layout failed to converge after ~D iterations"
+                      *max-layout-iterations*)))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 

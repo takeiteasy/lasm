@@ -59,7 +59,12 @@ on, so **declare narrower/cheaper modes before wider ones that also match
 their syntax**. Getting this backwards doesn't error — it just silently
 gives every operand the wider mode, since the assembler tries candidates in
 declaration order and a wider candidate placed first is found before a
-narrower one that would also have fit.
+narrower one that would also have fit. A label-bearing operand starts at
+its narrowest candidate before any address is known (see
+[Assembler, "Convergence"](assembler.md#convergence)), but is subject to
+this same declaration-order tiebreak on every later pass, once a symbol
+table exists for its value to fit against — so the advice above applies to
+it too.
 
 ### Width
 
@@ -97,13 +102,14 @@ differs is what the parsed value means and when it's computed:
   a relative-mode instruction body writes a plain `(set! pc (+ pc
   operand))` rather than tracking its own operand width.
 
-Because a `relative` candidate's value isn't the quantity that gets
-range-checked against its width until encode time, `%choose-variant`
-(the assembler's mode selector) treats it the same as an unresolved label —
-always taking the widest syntax-matching variant. This only matters once a
-mnemonic declares `relative` alongside another mode on the same syntax; see
-the tracker for the follow-up on giving that case its own value-based
-narrowing.
+A `relative` candidate's parsed value is the absolute target, not the
+quantity that gets range-checked against its width -- so `%choose-variant`
+(the assembler's mode selector) computes the same offset `%encode` will and
+range-checks *that*, letting a `relative` candidate compete on width like
+any other mode once an address is available to compute the offset from (see
+[Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)). This only
+matters once a mnemonic declares `relative` alongside another mode on the
+same syntax.
 
 ## Matching
 

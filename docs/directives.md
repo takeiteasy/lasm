@@ -72,14 +72,18 @@ address at or past the current one zero-fills the gap; moving backward
 signals `assembly-error` rather than guessing whether the intent was to
 overwrite or truncate.
 
-`.org`'s operand must fold to a **label-free constant** — pass 1 (layout)
-has no symbol table yet, so `.org some_label` signals `assembly-error`
-naming the label, rather than the bare `unresolved-label` a plain
-`eval-expr-constant` miss would give. This is the one directive-design rule
-every other built-in directive is shaped around: a directive whose *size or
-address effect* depends on an argument must fold that argument in pass 1;
-one whose size instead comes from argument *count* (`.byte`/`.word` below)
-can defer its values to pass 2, same as an ordinary instruction operand.
+`.org`'s operand must fold to a **label-free constant** — a directive whose
+*address effect* moves the counter has to fold before layout can even
+compute the addresses layout itself relies on, so `.org some_label` signals
+`assembly-error` naming the label, rather than the bare `unresolved-label` a
+plain `eval-expr-constant` miss would give. (This is unrelated to layout
+running more than one pass to relax addressing-mode choices — `.org`'s own
+operand stays label-free on every pass.) This is the one directive-design
+rule every other built-in directive is shaped around: a directive whose
+*size or address effect* depends on an argument must fold that argument
+during layout; one whose size instead comes from argument *count*
+(`.byte`/`.word` below) can defer its values to encode, same as an ordinary
+instruction operand.
 
 A label on a `.org` line binds to the address `.org` moves *to*:
 
@@ -92,7 +96,7 @@ here: .org $8000   ; here == $8000, not the address before the move
 ```lisp
 .byte 1, 2, 3        ; three one-byte fields: 01 02 03
 .word $1234          ; one two-byte field, little-endian: 34 12
-.byte target         ; a label operand -- resolved in pass 2, like an
+.byte target         ; a label operand -- resolved at encode time, like an
 target: nop          ; ordinary instruction operand
 ```
 
@@ -109,8 +113,8 @@ operand (diagnosing that instead of wrapping is a separate, existing
 follow-up ticket, not specific to directives).
 
 Because layout size here is just argument *count*, `.byte`/`.word` values
-are evaluated against the completed symbol table in pass 2 — a label operand
-works with no special handling.
+are evaluated against the completed symbol table at encode time — a label
+operand works with no special handling.
 
 ## `.res`
 
@@ -118,8 +122,8 @@ works with no special handling.
 .res 4   ; four zero-filled bytes
 ```
 
-Advances the address counter by its (single, constant — same pass-1 folding
-rule as `.org`) operand, zero-filled. A negative count signals
+Advances the address counter by its (single, constant — same label-free
+folding rule as `.org`) operand, zero-filled. A negative count signals
 `assembly-error`. Since the emulator has no way to skip over a run of bytes
 sitting in the middle of the code path (no jump/skip instruction is part of
 the core semantics vocabulary), a `.res` run belongs in a data area the
@@ -141,10 +145,11 @@ caller already holding a parsed `statement` list) get it.
 ## Conditions
 
 - `assembly-error` — wrong operand count for a directive's declared arity, a
-  non-constant `.org`/`.res` operand (a label reference, since pass 1 has no
-  symbol table), a backward-moving `.org`, or a negative `.res` count.
+  non-constant `.org`/`.res` operand (a label reference, which must fold
+  before layout can compute addresses at all), a backward-moving `.org`, or
+  a negative `.res` count.
 - `unresolved-label` — a `.byte`/`.word` operand referencing a label never
-  bound anywhere in the program (from `eval-expr` in pass 2, same as an
+  bound anywhere in the program (from `eval-expr` at encode time, same as an
   instruction operand).
 
 ## Follow-ups

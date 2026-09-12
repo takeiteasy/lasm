@@ -84,7 +84,13 @@
                        ; the zero-page LDA above, chosen because $2000 does
                        ; not fit one byte
         lda $f,X       ; A = RAM[$0F + X] = RAM[$10] -- INDEXED-X (#xBD)
-        hlt")
+        lda scratch    ; A = RAM[scratch] -- a label operand: layout starts
+                       ; it at ZERO-PAGE and confirms that fits once
+                       ; SCRATCH's address is known, rather than always
+                       ; taking ABSOLUTE the way an unresolved forward
+                       ; reference has to on its very first attempt
+        hlt
+scratch: .byte 42")
 
 (format t "~&Source:~%~A~2%" *source*)
 
@@ -98,4 +104,6 @@
     (multiple-value-bind (reason steps) (run m)
       (format t "  stopped: ~A after ~D step~:P~%" reason steps)
       (format t "  A = ~D, RAM[$0010] = ~D, RAM[$2000] = ~D~%"
-              (sref m 'a) (mref m 'ram #x10) (mref m 'ram #x2000)))))
+              (sref m 'a) (mref m 'ram #x10) (mref m 'ram #x2000))
+      (format t "  \"scratch\" = $~4,'0X (zero-page), final A (from RAM[scratch]) = ~D~%"
+              (gethash "scratch" (assembly-symbols assembly)) (sref m 'a)))))

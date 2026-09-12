@@ -45,6 +45,15 @@
   (encoding (opcode #x90) (operand :mode))
   (semantics (set! pc (+ pc operand))))
 
+;; RELATIVE alongside a wider mode sharing the same bare-expr syntax -- the
+;; case #31 needs relaxation's provisional address/symbol table for: a near
+;; target should narrow to the 2-byte relative encoding, a far one should
+;; widen to the 3-byte absolute encoding instead of always winning by default.
+(definstruction instr-test-machine brx
+  (modes
+    (relative (opcode #x91) (semantics (set! pc (+ pc operand))))
+    (absolute (opcode #x92) (semantics (set! pc operand)))))
+
 (definstruction instr-test-machine nop
   (encoding (opcode #xEA))
   (semantics nil))

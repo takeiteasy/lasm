@@ -86,14 +86,74 @@ target: nop" :machine 'instr-test-machine)))
   (let ((a (assemble "lda $1000" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 #x00 #x10) (assembly-bytes a)))))
 
-(fiveam:test label-operand-picks-widest-mode-even-when-zero-page-would-fit
-  ;; "target" resolves to address 3 (comfortably zero-page), but a
-  ;; label-bearing operand always takes the widest syntax-matching mode --
-  ;; this is what buys one-pass layout instead of a relaxation loop.
+(fiveam:test label-operand-narrows-to-zero-page-after-layout-converges
+  ;; "target" resolves to address 2, comfortably zero-page -- relaxation
+  ;; starts LDA at its narrowest mode, lays out, and confirms it fits once a
+  ;; provisional address is available, rather than always taking the widest
+  ;; matching mode.
   (let ((a (assemble "lda target
 target: nop" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#x12 3 0 #xEA) (assembly-bytes a)))
-    (fiveam:is (= 3 (gethash "target" (assembly-symbols a))))))
+    (fiveam:is (equalp #(#x11 2 #xEA) (assembly-bytes a)))
+    (fiveam:is (= 2 (gethash "target" (assembly-symbols a))))))
+
+(fiveam:test label-operand-stays-absolute-when-it-must
+  ;; "target" resolves past zero page, so relaxation widens LDA to absolute.
+  (let ((a (assemble "lda target
+.res $300
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= #x12 (aref (assembly-bytes a) 0)))
+    (fiveam:is (= #x303 (gethash "target" (assembly-symbols a))))))
+
+(fiveam:test label-operand-narrowing-cascades-across-iterations
+  ;; Pass 1 guesses LDA is zero-page, putting A at 256 -- too wide for zero
+  ;; page. Pass 2 widens LDA to absolute, putting A at 257. Pass 3 confirms
+  ;; absolute still fits at 257. Requires more than one relaxation pass to
+  ;; converge.
+  (let ((a (assemble "lda a
+.res 254
+a: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= #x101 (gethash "a" (assembly-symbols a))))
+    (fiveam:is (equalp #(#x12 #x01 #x01) (subseq (assembly-bytes a) 0 3)))))
+
+(fiveam:test label-operand-self-reference-narrows-to-zero-page
+  (let ((a (assemble "here: lda here" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 0) (assembly-bytes a)))))
+
+(fiveam:test backward-label-operand-narrows-to-zero-page
+  (let ((a (assemble "target: nop
+lda target" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA #x11 0) (assembly-bytes a)))))
+
+(fiveam:test org-decouples-relaxation-of-code-before-it
+  ;; Narrowing "lda a" (before the .org) must not move anything after the
+  ;; .org -- "after" is at $8000 either way.
+  (let ((a (assemble "lda a
+a: nop
+.org $8000
+after: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= #x8000 (gethash "after" (assembly-symbols a))))))
+
+(fiveam:test leading-org-with-non-zero-assembly-origin
+  ;; A leading .org takes precedence over a non-zero :origin passed to
+  ;; ASSEMBLE -- exercises %APPLY-ORIGIN-DIRECTIVE's EMITTED-P NIL branch,
+  ;; which the relaxation loop's .org backward-move clamp must not touch.
+  (let ((a (assemble ".org $100
+start: nop" :machine 'instr-test-machine :origin #x200)))
+    (fiveam:is (= #x100 (assembly-origin a)))
+    (fiveam:is (= #x100 (gethash "start" (assembly-symbols a))))))
+
+(fiveam:test relaxed-layout-is-stable-across-repeated-assembly
+  ;; Assembling the same program twice yields identical output -- guards
+  ;; against per-iteration state (floors, provisional symbols) leaking
+  ;; between calls to ASSEMBLE.
+  (let ((a0 (assemble "lda a
+.res 254
+a: nop" :machine 'instr-test-machine))
+        (a1 (assemble "lda a
+.res 254
+a: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp (assembly-bytes a0) (assembly-bytes a1)))
+    (fiveam:is (= (gethash "a" (assembly-symbols a0)) (gethash "a" (assembly-symbols a1))))))
 
 (fiveam:test immediate-operand-still-selects-immediate-mode-among-variants
   (let ((a (assemble "lda #7" :machine 'instr-test-machine)))
@@ -151,6 +211,28 @@ bra loop" :machine 'instr-test-machine :origin #x200)))
     (assemble (format nil "loop: nop~%~{~A~%~}bra loop"
                        (make-list 200 :initial-element "nop"))
               :machine 'instr-test-machine)))
+
+;;; RELATIVE alongside another mode sharing the same syntax (#31) -- BRX
+;;; (tests/instruction.lisp) declares RELATIVE before ABSOLUTE, so relaxation
+;;; must be able to narrow a label operand to the 2-byte relative encoding,
+;;; not always take ABSOLUTE by default.
+
+(fiveam:test relative-candidate-narrows-when-target-is-in-range
+  ;; next-pc after a 2-byte BRX is address+2; a target one byte forward
+  ;; fits the signed 1-byte relative offset, so relaxation picks RELATIVE.
+  (let ((a (assemble "brx target
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x91 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test relative-candidate-widens-when-target-is-out-of-range
+  ;; 200 filler NOPs put "end" out of a signed 1-byte offset's range --
+  ;; relaxation must widen to the 3-byte ABSOLUTE encoding instead of
+  ;; signalling an out-of-range error the way a single-mode RELATIVE
+  ;; instruction (BRA) would.
+  (let ((a (assemble (format nil "brx end~%~{~A~%~}end: nop"
+                              (make-list 200 :initial-element "nop"))
+                      :machine 'instr-test-machine)))
+    (fiveam:is (= #x92 (aref (assembly-bytes a) 0)))))
 
 ;;; Multi-operand instructions -- MOVI/FLEX (tests/instruction.lisp).
 
