@@ -24,11 +24,22 @@
 ;;;; layout, so one pass suffices and there is no non-convergence case to
 ;;;; guard against.
 ;;;;
-;;;; Local labels (a name starting with a non-alphanumeric prefix char, e.g.
-;;;; ".loop") are NOT scoped to an enclosing global label in M1/M2 -- they are
-;;;; ordinary global names, sharing one flat symbol table with everything
-;;;; else. Binding a local label to its enclosing label is a separate ticket
-;;;; (#16).
+;;;; Local labels (an identifier starting with the lexer's LOCAL-LABEL-PREFIX,
+;;;; e.g. ".loop") are scoped to their nearest preceding non-local ("global")
+;;;; label (#16): %LAYOUT threads a SCOPE variable, updated by every global
+;;;; label definition, and qualifies each local name -- both a definition and
+;;;; a reference -- to SCOPE ++ NAME (e.g. "loop" ++ ".next" -> "loop.next")
+;;;; before it ever reaches the symbol table, so SYMBOLS itself stays a flat
+;;;; string -> address table and EVAL-EXPR needs no scope of its own. A local
+;;;; label with no enclosing global label is an ASSEMBLY-ERROR. See
+;;;; %QUALIFY-LOCAL/%QUALIFY-LOCALS! below.
+;;;;
+;;;; The location-counter symbol ("*" in an operand, #15) folds to the
+;;;; address of the statement (or, for a multi-value .BYTE/.WORD, the value)
+;;;; it appears in -- see EVAL-EXPR's :PC argument (instruction.lisp) and
+;;;; %CHOOSE-VARIANT/%ENCODE below, both of which now pass an ADDRESS/PC
+;;;; through even though pass 1 has no symbol table yet, since a statement's
+;;;; own address is already known at that point.
 ;;;;
 ;;;; Directives (directive.lisp, #14) are dispatched in %LAYOUT before a
 ;;;; mnemonic reaches FIND-INSTRUCTION-VARIANTS (which signals on an
@@ -85,10 +96,15 @@ of erroring would branch to the wrong address."
   (let ((bound (ash 1 (1- (* 8 width)))))
     (and (>= value (- bound)) (< value bound))))
 
-(defun %choose-variant (statement variants)
+(defun %choose-variant (statement variants address)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
-for that variant's mode. Two filters, applied in VARIANTS' declaration
+for that variant's mode. ADDRESS is this statement's own address, already
+known in pass 1 unlike a label -- passed as EVAL-EXPR-CONSTANT's :PC so a
+location-counter hole (\"*\", #15) folds to a real value and takes part in the
+value filter below exactly like any other constant, rather than always
+falling back to the widest candidate the way an unresolved label does. Two
+filters, applied in VARIANTS' declaration
 order -- so an author should declare narrower/more specific modes before
 wider ones that also match their syntax (e.g. zero-page before absolute):
 
@@ -147,7 +163,9 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                    (handler-case
                                        (let ((widths (instruction-descriptor-operand-widths
                                                       (first c)))
-                                             (vals (mapcar #'eval-expr-constant (second c))))
+                                             (vals (mapcar (lambda (ast)
+                                                             (eval-expr-constant ast :pc address))
+                                                           (second c))))
                                          (every #'%fits-width-p vals widths))
                                      (unresolved-label () nil)))))
                               candidates)))
@@ -181,30 +199,36 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
                               (statement-mnemonic statement) n (length operands))))))
     (mapcar #'%directive-operand-ast operands)))
 
-(defun %directive-constant-arg (statement directive)
+(defun %directive-constant-arg (statement directive address scope)
   "Fold DIRECTIVE's single argument (STATEMENT's one operand) to a
 label-free constant -- used for .ORG and .RES, whose size/address effect
-must be known in pass 1, before any label has resolved. Signals
-ASSEMBLY-ERROR (not the bare UNRESOLVED-LABEL EVAL-EXPR-CONSTANT itself
-signals) naming the offending directive, since a plain \"unresolved label\"
-report wouldn't say why this one operand can't wait for pass 2."
-  (let ((ast (first (%directive-args statement directive))))
-    (handler-case (eval-expr-constant ast)
+must be known in pass 1, before any label has resolved. ADDRESS is this
+statement's own address (already known in pass 1), resolving a
+location-counter reference (\"*\", #15) in the operand -- e.g. \".org *+16\"
+pads 16 bytes forward from here. SCOPE qualifies a local-label reference
+(#16) before it's folded, so the error below names the qualified form.
+Signals ASSEMBLY-ERROR (not the bare UNRESOLVED-LABEL EVAL-EXPR-CONSTANT
+itself signals) naming the offending directive, since a plain \"unresolved
+label\" report wouldn't say why this one operand can't wait for pass 2."
+  (let ((ast (%qualify-locals! (first (%directive-args statement directive))
+                                scope (statement-line statement))))
+    (handler-case (eval-expr-constant ast :pc address)
       (unresolved-label (c)
         (%assembly-error (statement-line statement)
                           "~A: operand must be a constant expression -- label ~S ~
 is not resolvable here (pass 1 has no symbol table yet)"
                           (statement-mnemonic statement) (unresolved-label-name c))))))
 
-(defun %apply-origin-directive (statement directive address asm-origin emitted-p)
+(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
 new-address new-asm-origin): before any statement has occupied an address
 (EMITTED-P NIL), .ORG moves both the address counter and the assembly's own
 ORIGIN (so a leading .ORG places the whole program, and LOAD-PROGRAM's
 ASSEMBLY-ORIGIN default, emulator.lisp, lands it there); afterwards it only
 pads forward -- a backward move is ambiguous (overwrite? truncate?) so it
-signals ASSEMBLY-ERROR instead of guessing."
-  (let ((value (%directive-constant-arg statement directive)))
+signals ASSEMBLY-ERROR instead of guessing. A \"*\" in the operand (#15)
+resolves against ADDRESS -- the counter's value *before* this .ORG moves it."
+  (let ((value (%directive-constant-arg statement directive address scope)))
     (cond
       ((not emitted-p) (values value value))
       ((>= value address) (values value asm-origin))
@@ -212,12 +236,56 @@ signals ASSEMBLY-ERROR instead of guessing."
                            ".org cannot move the address counter backward (from ~D to ~D)"
                            address value)))))
 
-(defun %bind-label! (statement symbols address)
-  (when (statement-label statement)
-    (when (nth-value 1 (gethash (statement-label statement) symbols))
-      (%assembly-error (statement-line statement)
-                        "Duplicate label ~S" (statement-label statement)))
-    (setf (gethash (statement-label statement) symbols) address)))
+;;; Local-label scoping (#16) -- qualify a local name against its nearest
+;;; preceding global label before it ever reaches the (flat) symbol table.
+
+(defun %qualify-local (scope name line)
+  "Qualify local label NAME (its LOCAL-LABEL-PREFIX included, e.g. \".next\")
+against SCOPE, the nearest preceding global label's name -- e.g. SCOPE
+\"loop\" and NAME \".next\" qualify to \"loop.next\". Signals ASSEMBLY-ERROR
+if SCOPE is NIL (a local label with no enclosing global label)."
+  (unless scope
+    (%assembly-error line "Local label ~S has no enclosing global label" name))
+  (concatenate 'string scope name))
+
+(defun %qualify-locals! (ast scope line)
+  "Destructively rewrite every local EXPR-LABEL node (LOCALP true) reachable
+from AST to its SCOPE-qualified name (%QUALIFY-LOCAL), leaving every other
+node untouched. Safe to call on any AST since each statement's operand ASTs
+(mode.lisp/parser.lisp) are freshly parsed and not shared."
+  (etypecase ast
+    ((or expr-number expr-location))
+    (expr-label
+     (when (expr-label-localp ast)
+       (setf (expr-label-name ast) (%qualify-local scope (expr-label-name ast) line))))
+    (expr-unary (%qualify-locals! (expr-unary-operand ast) scope line))
+    (expr-binary (%qualify-locals! (expr-binary-left ast) scope line)
+                 (%qualify-locals! (expr-binary-right ast) scope line)))
+  ast)
+
+(defun %qualify-locals-in-asts! (asts scope line)
+  (dolist (ast asts) (%qualify-locals! ast scope line))
+  asts)
+
+(defun %bind-label! (statement symbols address scope)
+  "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS, qualifying it
+against SCOPE first if it's local (#16). Returns the SCOPE in effect for any
+later statement: a global label definition becomes the new scope; a local
+one, or no label at all, leaves SCOPE unchanged."
+  (let ((label (statement-label statement)))
+    (cond
+      ((null label) scope)
+      ((statement-label-localp statement)
+       (let ((qualified (%qualify-local scope label (statement-line statement))))
+         (when (nth-value 1 (gethash qualified symbols))
+           (%assembly-error (statement-line statement) "Duplicate label ~S" qualified))
+         (setf (gethash qualified symbols) address))
+       scope)
+      (t
+       (when (nth-value 1 (gethash label symbols))
+         (%assembly-error (statement-line statement) "Duplicate label ~S" label))
+       (setf (gethash label symbols) address)
+       label))))
 
 (defun %layout (statements machine origin)
   "Returns (VALUES symbols sized-entries final-address asm-origin). SYMBOLS
@@ -231,32 +299,40 @@ entry per mnemonic-bearing statement that occupies address space:
 \(and, before anything else has been laid out, ASM-ORIGIN -- see
 %APPLY-ORIGIN-DIRECTIVE\). FINAL-ADDRESS is the address counter's value
 after the last statement, i.e. ORIGIN/ASM-ORIGIN plus the assembled size;
-ASM-ORIGIN is ORIGIN unless a leading .ORG moved it."
+ASM-ORIGIN is ORIGIN unless a leading .ORG moved it. SCOPE (the nearest
+preceding global label's name, #16) is threaded statement to statement so
+%BIND-LABEL! can qualify a local label definition and so this statement's own
+operands (its own label bound first -- \"loop: bne .x\"'s .x is scoped to
+LOOP, not whatever preceded it) can be qualified via %QUALIFY-LOCALS!."
   (let ((symbols (make-hash-table :test 'equal))
         (address origin)
         (asm-origin origin)
         (emitted-p nil)
+        (scope nil)
         sized)
     (dolist (statement statements)
       (let* ((mnemonic (statement-mnemonic statement))
-             (directive (and mnemonic (find-directive-descriptor mnemonic))))
+             (directive (and mnemonic (find-directive-descriptor mnemonic)))
+             (line (statement-line statement)))
         (cond
           ;; .ORG binds this statement's own label (if any) to the address
           ;; it moves *to*, not the address before the move -- so
-          ;; "foo: .org $8000" binds FOO to $8000.
+          ;; "foo: .org $8000" binds FOO to $8000. Its own operand is
+          ;; qualified against the scope in effect *before* that bind (a
+          ;; label on a .ORG line has no bearing on its own operand).
           ((and directive (eq (directive-descriptor-action directive) :set-origin))
            (multiple-value-bind (new-address new-origin)
-               (%apply-origin-directive statement directive address asm-origin emitted-p)
+               (%apply-origin-directive statement directive address asm-origin emitted-p scope)
              (setf address new-address asm-origin new-origin))
-           (%bind-label! statement symbols address))
+           (setf scope (%bind-label! statement symbols address scope)))
           (t
-           (%bind-label! statement symbols address)
+           (setf scope (%bind-label! statement symbols address scope))
            (when mnemonic
              (cond
                (directive
                 (ecase (directive-descriptor-action directive)
                   (:reserve
-                   (let ((count (%directive-constant-arg statement directive)))
+                   (let ((count (%directive-constant-arg statement directive address scope)))
                      (when (minusp count)
                        (%assembly-error (statement-line statement)
                                         "~A: count must not be negative" mnemonic))
@@ -264,14 +340,16 @@ ASM-ORIGIN is ORIGIN unless a leading .ORG moved it."
                      (incf address count)
                      (setf emitted-p t)))
                   (:emit
-                   (let* ((asts (%directive-args statement directive))
+                   (let* ((asts (%qualify-locals-in-asts!
+                                 (%directive-args statement directive) scope line))
                           (width (directive-descriptor-width directive)))
                      (cl:push (list :emit address width asts (statement-line statement)) sized)
                      (incf address (* width (length asts)))
                      (setf emitted-p t)))))
                (t
                 (let ((variants (find-instruction-variants machine mnemonic)))
-                  (multiple-value-bind (descriptor asts) (%choose-variant statement variants)
+                  (multiple-value-bind (descriptor asts) (%choose-variant statement variants address)
+                    (%qualify-locals-in-asts! asts scope line)
                     (cl:push (list :instruction address descriptor asts (statement-line statement)) sized)
                     (incf address (1+ (instruction-descriptor-total-operand-width descriptor)))
                     (setf emitted-p t))))))))))
@@ -318,7 +396,13 @@ contiguous instruction stream could."
 symbol table SYMBOLS and write each entry's bytes at its own address (minus
 ORIGIN) into a byte vector sized to FINAL-ADDRESS - ORIGIN. A gap between
 entries -- a forward .ORG, or a .RESERVE's run -- is left zero-filled by
-%ENSURE-BYTES-LENGTH's growth rather than written explicitly."
+%ENSURE-BYTES-LENGTH's growth rather than written explicitly. A
+location-counter reference (\"*\", #15) in an operand resolves against the
+address of the entry it's *in* -- for :INSTRUCTION that's the whole
+statement's address (further adjusted by %RELATIVE-OFFSET for a RELATIVE
+mode, same as gas's \"bne *\" branching to itself); for :EMIT (e.g.
+\".byte 1, *, 3\") each value gets *its own* element address, not the
+directive statement's address, so \".word *, *\" emits two different words."
   (let ((bytes (%make-growable-bytes (max 0 (- final-address origin)))))
     (dolist (entry sized-entries)
       (ecase (first entry)
@@ -326,7 +410,7 @@ entries -- a forward .ORG, or a .RESERVE's run -- is left zero-filled by
          (destructuring-bind (kind address descriptor asts line) entry
            (declare (ignore kind))
            (let* ((mode (instruction-descriptor-mode descriptor))
-                  (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols)) asts)))
+                  (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
              (when (and mode (mode-descriptor-relativep mode))
                ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
                ;; RELATIVE mode has exactly one hole, so VALUES here is
@@ -340,7 +424,8 @@ entries -- a forward .ORG, or a .RESERVE's run -- is left zero-filled by
            (declare (ignore kind line))
            (loop with i = (- address origin)
                  for ast in asts
-                 do (dolist (byte (%encode-value-bytes (eval-expr ast :symbols symbols) width))
+                 do (dolist (byte (%encode-value-bytes
+                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width))
                       (setf (aref bytes i) byte) (incf i)))))
         (:reserve
          ;; Zero-filled -- %MAKE-GROWABLE-BYTES/%ENSURE-BYTES-LENGTH already

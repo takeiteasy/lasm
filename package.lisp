@@ -26,6 +26,7 @@
    #:lasm-syntax-error-column
    #:lex-error
    #:parse-failure
+   #:unresolved-location
 
    ;; Machine definition
    #:defmachine
@@ -76,6 +77,7 @@
    #:token-text
    #:token-line
    #:token-column
+   #:token-localp
 
    ;; Parser / expression AST
    #:parse
@@ -83,6 +85,7 @@
    #:statement
    #:statement-p
    #:statement-label
+   #:statement-label-localp
    #:statement-mnemonic
    #:statement-operands
    #:statement-line
@@ -96,6 +99,8 @@
    #:expr-label-p
    #:expr-label-name
    #:expr-label-localp
+   #:expr-location
+   #:expr-location-p
    #:expr-unary
    #:expr-unary-p
    #:expr-unary-op

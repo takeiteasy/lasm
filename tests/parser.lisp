@@ -105,6 +105,40 @@ jmp start")))
     (fiveam:is (expr-label-p ast))
     (fiveam:is (expr-label-localp ast))))
 
+(fiveam:test underscore-prefixed-identifier-is-not-local
+  ;; #16: LOCALP is set from the lexer's LOCAL-LABEL-PREFIX (".", for the
+  ;; default lexer), not from a "does this start with a letter" heuristic --
+  ;; an identifier like "_tmp" is an ordinary global name.
+  (let ((ast (%expr "_tmp")))
+    (fiveam:is (expr-label-p ast))
+    (fiveam:is (null (expr-label-localp ast)))))
+
+;;; Location-counter symbol ("*", #15)
+
+(fiveam:test star-parses-to-expr-location
+  (fiveam:is (expr-location-p (%expr "*"))))
+
+(fiveam:test star-plus-offset-parses-as-location-plus-number
+  (let ((ast (%expr "*+2")))
+    (fiveam:is (expr-binary-p ast))
+    (fiveam:is (eq :plus (expr-binary-op ast)))
+    (fiveam:is (expr-location-p (expr-binary-left ast)))
+    (fiveam:is (= 2 (expr-number-value (expr-binary-right ast))))))
+
+(fiveam:test star-still-multiplies-once-a-left-operand-exists
+  (let ((ast (%expr "2*3")))
+    (fiveam:is (expr-binary-p ast))
+    (fiveam:is (eq :star (expr-binary-op ast)))
+    (fiveam:is (= 2 (expr-number-value (expr-binary-left ast))))
+    (fiveam:is (= 3 (expr-number-value (expr-binary-right ast))))))
+
+(fiveam:test location-times-location-both-resolve
+  (let ((ast (%expr "* * *")))
+    (fiveam:is (expr-binary-p ast))
+    (fiveam:is (eq :star (expr-binary-op ast)))
+    (fiveam:is (expr-location-p (expr-binary-left ast)))
+    (fiveam:is (expr-location-p (expr-binary-right ast)))))
+
 (fiveam:test parse-expression-stops-mid-run
   (let ((toks (tokenize "1+2,3")))
     (multiple-value-bind (ast next-i) (parse-expression toks)

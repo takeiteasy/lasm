@@ -369,6 +369,18 @@
   (fiveam:signals unresolved-label
     (eval-expr-constant (match-operand-mode (%single-operand "loop") 'absolute))))
 
+;;; Location counter ("*", #15)
+
+(fiveam:test eval-expr-location-resolves-against-pc
+  (fiveam:is (= 16 (eval-expr-constant (match-operand-mode (%single-operand "*") 'absolute) :pc 16))))
+
+(fiveam:test eval-expr-location-plus-offset
+  (fiveam:is (= 18 (eval-expr-constant (match-operand-mode (%single-operand "*+2") 'absolute) :pc 16))))
+
+(fiveam:test eval-expr-location-with-no-pc-signals-unresolved-location
+  (fiveam:signals unresolved-location
+    (eval-expr-constant (match-operand-mode (%single-operand "*") 'absolute))))
+
 ;;; encode-instruction
 
 (fiveam:test encode-immediate-instruction

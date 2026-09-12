@@ -30,6 +30,15 @@
              (format s "Cannot fold constant expression: unresolved label ~S"
                      (unresolved-label-name c)))))
 
+(define-condition unresolved-location (lasm-error) ()
+  (:documentation "Signalled by EVAL-EXPR on an EXPR-LOCATION node (the \"*\"
+location-counter symbol, #15) when no PC is given to resolve it against --
+e.g. EVAL-EXPR-CONSTANT's default (no :PC), used where no address is known
+yet.")
+  (:report (lambda (c s)
+             (declare (ignore c))
+             (format s "Cannot fold constant expression: \"*\" (location counter) used where no address is known"))))
+
 (define-condition unknown-instruction (lasm-error)
   ((machine :initarg :machine :reader unknown-instruction-machine)
    (mnemonic :initarg :mnemonic :initform nil :reader unknown-instruction-mnemonic)
@@ -78,12 +87,14 @@ a no-operand instruction."
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
-(defun eval-expr (ast &key symbols)
+(defun eval-expr (ast &key symbols pc)
   "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when
 given, is a hash table (string -> address) resolving EXPR-LABEL nodes --
 the assembler pass (assembler.lisp) calls this with its completed layout
-symbol table. Signals UNRESOLVED-LABEL on an EXPR-LABEL whose name is not
-in SYMBOLS (or when SYMBOLS is NIL)."
+symbol table. PC, when given, is the integer address EXPR-LOCATION (the
+\"*\" location-counter symbol, #15) folds to. Signals UNRESOLVED-LABEL on an
+EXPR-LABEL whose name is not in SYMBOLS (or when SYMBOLS is NIL), and
+UNRESOLVED-LOCATION on an EXPR-LOCATION when PC is NIL."
   (etypecase ast
     (expr-number (expr-number-value ast))
     (expr-label
@@ -91,8 +102,11 @@ in SYMBOLS (or when SYMBOLS is NIL)."
          (and symbols (gethash (expr-label-name ast) symbols))
        (unless foundp (error 'unresolved-label :name (expr-label-name ast)))
        value))
+    (expr-location
+     (unless pc (error 'unresolved-location))
+     pc)
     (expr-unary
-     (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols)))
+     (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols :pc pc)))
        (ecase (expr-unary-op ast)
          (:neg (- v))
          (:pos v)
@@ -100,8 +114,8 @@ in SYMBOLS (or when SYMBOLS is NIL)."
          (:lo (logand v #xff))
          (:hi (logand (ash v -8) #xff)))))
     (expr-binary
-     (let ((l (eval-expr (expr-binary-left ast) :symbols symbols))
-           (r (eval-expr (expr-binary-right ast) :symbols symbols)))
+     (let ((l (eval-expr (expr-binary-left ast) :symbols symbols :pc pc))
+           (r (eval-expr (expr-binary-right ast) :symbols symbols :pc pc)))
        (ecase (expr-binary-op ast)
          (:pipe (logior l r))
          (:caret (logxor l r))
@@ -113,11 +127,13 @@ in SYMBOLS (or when SYMBOLS is NIL)."
          (:star (* l r))
          (:slash (truncate l r)))))))
 
-(defun eval-expr-constant (ast)
+(defun eval-expr-constant (ast &key pc)
   "Fold AST to an integer with no symbol table -- the constant-only case of
 EVAL-EXPR, kept as its own name since callers throughout the codebase (and
-this docstring's own examples) use it to mean \"no labels allowed here\"."
-  (eval-expr ast :symbols nil))
+this docstring's own examples) use it to mean \"no labels allowed here\". PC,
+when given, still resolves an EXPR-LOCATION node (#15) -- a location-counter
+reference is not a label, so it's independent of \"no labels allowed here\"."
+  (eval-expr ast :symbols nil :pc pc))
 
 ;;; DEFINSTRUCTION registration
 ;;;

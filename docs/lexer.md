@@ -34,9 +34,11 @@ their own for a conventional dialect.
   its prefix (e.g. `'A` → 65) — there is no closing delimiter.
 - `(label-suffix string)` — e.g. `":"`. A `nil`/omitted clause disables
   label definitions.
-- `(local-label-prefix string)` — e.g. `"."`. Purely conventional at the
-  lexer level: it only matters if it's also listed in `ident-chars`, so that
-  `.loop` lexes as one identifier rather than an error.
+- `(local-label-prefix string)` — e.g. `"."`. It only matters if it's also
+  listed in `ident-chars`, so that `.loop` lexes as one identifier rather than
+  an error. Every `:identifier` token starting with this prefix is flagged
+  `localp` (below); the [Assembler](assembler.md#local-label-scoping-16)
+  scopes such a name to its nearest preceding non-local label (#16).
 - `(string-delim string)` — enables string literals, with `\n`, `\t`, and
   `\<char>` (literal `<char>`) escapes.
 - `(ident-chars :alnum extra-chars-string)` — `:alnum` is currently the only
@@ -59,6 +61,7 @@ their own for a conventional dialect.
 | `value` | parsed value — string (identifier/string), integer (number), keyword (punctuation/label-suffix) |
 | `text` | verbatim source text |
 | `line`, `column` | 1-based source position |
+| `localp` | `:identifier` only — T if `text` starts with `local-label-prefix` (#16) |
 
 `:newline` tokens are significant — the grammar in
 [Statement grammar & expression parser](parser.md) is line-oriented.

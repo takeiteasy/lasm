@@ -47,6 +47,21 @@ this */ b" :lexer 'block-comment-syntax))))
     (fiveam:is (equal "loop" (token-value (first toks))))
     (fiveam:is (equal ".again" (token-value (third toks))))))
 
+(fiveam:test local-label-prefix-sets-token-localp
+  ;; #16: an identifier starting with the descriptor's LOCAL-LABEL-PREFIX
+  ;; (".") is flagged LOCALP; an ordinary identifier -- including one
+  ;; starting with "_", which the old character-class heuristic mistook for
+  ;; local -- is not.
+  (let ((toks (%non-eof (tokenize "loop .loop _tmp"))))
+    (fiveam:is (equal '(nil t nil) (mapcar #'token-localp toks)))))
+
+(fiveam:test no-local-label-prefix-disables-localp
+  (deflexer no-local-prefix-syntax
+    (number-formats (:dec :default))
+    (ident-chars :alnum "."))
+  (let ((toks (%non-eof (tokenize ".loop" :lexer 'no-local-prefix-syntax))))
+    (fiveam:is (null (token-localp (first toks))))))
+
 (fiveam:test string-and-escape-literals
   (let ((toks (%non-eof (tokenize "\"hi\\nthere\""))))
     (fiveam:is (= 1 (length toks)))

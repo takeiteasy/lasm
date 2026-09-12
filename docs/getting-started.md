@@ -68,6 +68,15 @@ A leading `.org` places the program at a fixed address, `.byte` lays down a
 small data table read back through `lda`/`adc`'s `absolute` mode, and `.res`
 reserves a zero-filled scratch run — see [Directives](directives.md).
 
+```sh
+sbcl --script examples/pc-and-scopes.lisp
+```
+
+Two routines each define their own `.loop:` local label without colliding
+(scoped to `count_down`/`count_up`), and a `.word *` emits its own address —
+see [Assembler, "Location counter"](assembler.md#location-counter) and
+[Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16).
+
 ## Run the tests
 
 ```sh

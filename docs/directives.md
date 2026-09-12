@@ -153,6 +153,8 @@ caller already holding a parsed `statement` list) get it.
 - `.ascii`/`.asciz` — needs a string node in the expression parser
   (`parse-expression`, [Statement grammar & expression parser](parser.md)),
   which has none today.
-- `.equ` / symbol assignment — overlaps the location-counter-symbol ticket.
+- `.equ` / symbol assignment — an expression (now that `*`, the location
+  counter, is available too — see [Assembler](assembler.md#location-counter))
+  bound to a name outside the address-counter sequence.
 
 See the tracker for these.

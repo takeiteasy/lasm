@@ -76,29 +76,44 @@ doesn't recognize as an operator).
 | 5 | `+` `-` |
 | 6 | `*` `/` |
 | 7 | prefix `-` `+` `~` `<` `>` |
-| 8 | primary: number, label, `( expr )` |
+| 8 | primary: number, label, `*` (location counter), `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators. **Known
 future collision:** if a later milestone adds comparison operators, `<`/`>`
 will need disambiguating from this prefix use — not a concern for M1, which
 has no comparisons.
 
+A bare `*` in primary position is the location-counter symbol (`expr-location`
+below, #15) rather than multiplication: `%parse-primary` only reaches that
+position where an operand is expected, so `lda *+2` (location counter plus 2)
+and `lda 2*3` (still multiplication, since `2` is already a complete left
+operand by the time `*` is seen) both parse as intended with no lexer
+change.
+
 ### AST nodes
 
 ```lisp
 (defstruct expr-number value)
 (defstruct expr-label name localp)    ; NAME unresolved
+(defstruct expr-location)             ; the "*" location-counter symbol (#15)
+                                       ; -- no slots; it IS the value
 (defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash
 ```
 
-`expr-label-localp` is a heuristic (the name's first character is not
-alphabetic — true for the default lexer's `.`-prefixed local labels), not a
-descriptor-aware scoping check. The [Assembler](assembler.md) does not act
-on it either — every label, local or not, shares one flat symbol table;
-scoping a local label to its enclosing global label is a separate ticket
-(#16).
+`expr-label-localp` is set from the lexer's `local-label-prefix` (`token-localp`,
+[Lexer](lexer.md)) — true for an identifier starting with that prefix (`.` for
+the default lexer), regardless of what characters follow. The parser only
+tags the reference; scoping it to its nearest enclosing global label is the
+[Assembler](assembler.md)'s job (#16) — `eval-expr` and the symbol table
+themselves stay flat.
+
+`expr-location` folds to an address, not a symbol-table lookup: `eval-expr`
+takes it from a `:pc` argument the assembler passes at both layout and encode
+time (its own address at that point), never from `symbols`. See
+[Assembler](assembler.md#location-counter) for how each context (an
+instruction, a `.byte`/`.word` element, `.org`'s operand) supplies it.
 
 ## Conditions
 
@@ -110,8 +125,3 @@ doesn't expect.
 ## Follow-ups not covered here
 
 - Directive grammar (`.org`, `.byte`/`.word`, `defdirective`).
-- A location-counter symbol in expressions (`*` or `$` for "current PC") —
-  needs a syntax decision, since both candidate spellings collide with
-  existing tokens.
-- Local-label scoping (binding a `.loop` reference to its enclosing global
-  label) — #16; see [Assembler](assembler.md).

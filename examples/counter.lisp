@@ -27,16 +27,18 @@
   (line-continuation "\\"))
 
 (defparameter *source*
-  "        ldx #10        ; x = 10
+  "count:  ldx #10        ; x = 10
 .loop:  dex             ; x -= 1
         bne .loop       ; loop while x != 0
         sta $1000
         hlt             ; stop the emulator loop (see docs/emulator.md)")
 
 ;; NOTE: ".loop" is a local label by lexer convention (LOCAL-LABEL-PREFIX
-;; "."), but M1 does not scope it to an enclosing global label -- it is
-;; just an ordinary global name in a single flat symbol table. Scoping a
-;; local label to the nearest preceding global label is M2 (#16).
+;; "."), scoped to its nearest preceding global label (#16, docs/assembler.md)
+;; -- "count" here -- so it binds as "count.loop" in the symbol table, not
+;; bare ".loop". A local label needs some enclosing global label; see
+;; examples/pc-and-scopes.lisp for a program with two routines that each
+;; reuse ".loop" without colliding, and for the location-counter symbol "*".
 
 (format t "~&Source:~%~A~2%" *source*)
 

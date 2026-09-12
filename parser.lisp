@@ -9,6 +9,9 @@
 ;;;; -- no symbol table and no expression evaluation here; those belong to
 ;;;; instruction.lisp (EVAL-EXPR) and assembler.lisp (label resolution), and
 ;;;; addressing-mode matching / operand encoding belong to instruction.lisp.
+;;;; The location-counter symbol "*" (EXPR-LOCATION, #15) is likewise left
+;;;; unresolved here -- EVAL-EXPR folds it against the assembler's current
+;;;; address.
 ;;;;
 ;;;; Grammar (one STATEMENT per source line):
 ;;;;   line      := [label-def] [mnemonic [operands]]
@@ -22,6 +25,9 @@
 
 (defstruct statement
   label           ; string, or nil
+  label-localp    ; T if LABEL starts with the lexer's local-label prefix --
+                   ; the assembler (assembler.lisp, #16) scopes a local label
+                   ; definition to the nearest preceding non-local one.
   mnemonic        ; string, or nil (label-only line)
   operands        ; list of OPERAND, split on top-level commas -- a general
                    ; statement-grammar product; a multi-operand instruction
@@ -46,11 +52,19 @@
               ; this and calls PARSE-EXPRESSION on the pattern's `expr` hole(s)
 
 (defstruct expr-number value)
-(defstruct expr-label name localp)          ; NAME unresolved; LOCALP a heuristic
-                                             ; (name starts with a non-alphanumeric
-                                             ; prefix char, e.g. "."), not a real
-                                             ; descriptor-aware scoping check --
-                                             ; local-label scoping is M2 (#16).
+(defstruct expr-label name localp)          ; NAME unresolved; LOCALP set from
+                                             ; the lexer's LOCAL-LABEL-PREFIX
+                                             ; (lexer.lisp's TOKEN-LOCALP) --
+                                             ; scoping the reference to its
+                                             ; enclosing global label is the
+                                             ; assembler's job (assembler.lisp,
+                                             ; #16).
+(defstruct expr-location)                   ; the location-counter symbol "*"
+                                             ; in operand position -- folds to
+                                             ; the current statement's address
+                                             ; (#15). No slots; it IS the
+                                             ; value, resolved by EVAL-EXPR's
+                                             ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash
@@ -86,10 +100,15 @@
       ((eq (token-type tok) :number)
        (values (make-expr-number :value (token-value tok)) (1+ i)))
       ((eq (token-type tok) :identifier)
-       (values (make-expr-label :name (token-value tok)
-                                 :localp (and (plusp (length (token-value tok)))
-                                              (not (alpha-char-p (char (token-value tok) 0)))))
+       (values (make-expr-label :name (token-value tok) :localp (token-localp tok))
                (1+ i)))
+      ((eq (%punct-value tok) :star)
+       ;; The location-counter symbol (#15): "*" in operand/primary position
+       ;; is the current address, not multiplication -- precedence climbing
+       ;; only reaches %PARSE-PRIMARY where an operand is expected, so this
+       ;; never shadows "*" as the binary multiply operator once a left
+       ;; operand exists (2 * 3 still multiplies; "*+2" and "lda *" don't).
+       (values (make-expr-location) (1+ i)))
       ((eq (%punct-value tok) :lparen)
        (multiple-value-bind (inner next-i) (%parse-binary tokens (1+ i) end 0)
          (let ((close (%tok tokens next-i end)))
@@ -146,11 +165,12 @@ parentheses do not split) into a list of token-lists, one per operand."
 (defun %parse-line (line-tokens)
   (let* ((tokens (coerce line-tokens 'simple-vector))
          (len (length tokens))
-         (pos 0) label mnemonic operands (operand-tokens #()))
+         (pos 0) label label-localp mnemonic operands (operand-tokens #()))
     (when (and (< (1+ pos) len)
                (eq (token-type (aref tokens pos)) :identifier)
                (eq (token-type (aref tokens (1+ pos))) :label-suffix))
-      (setf label (token-value (aref tokens pos)))
+      (setf label (token-value (aref tokens pos))
+            label-localp (token-localp (aref tokens pos)))
       (incf pos 2))
     (when (and (< pos len) (eq (token-type (aref tokens pos)) :identifier))
       (setf mnemonic (token-value (aref tokens pos)))
@@ -165,7 +185,8 @@ parentheses do not split) into a list of token-lists, one per operand."
                       (%split-operands (coerce (subseq tokens pos len) 'list))))))
     (when (and (< pos len) (null mnemonic))
       (%parse-error (aref tokens pos) "Expected mnemonic"))
-    (make-statement :label label :mnemonic mnemonic :operands operands
+    (make-statement :label label :label-localp label-localp
+                     :mnemonic mnemonic :operands operands
                      :operand-tokens operand-tokens
                      :line (token-line (aref tokens 0)))))
 

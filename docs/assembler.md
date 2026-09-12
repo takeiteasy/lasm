@@ -176,13 +176,90 @@ assembler needs the same folding logic once labels *are* known, so
 `eval-expr-constant` is defined in terms of a more general function:
 
 ```lisp
-(eval-expr AST &key symbols)     ; symbols: string -> address hash table
-(eval-expr-constant AST) = (eval-expr AST :symbols nil)
+(eval-expr AST &key symbols pc)  ; symbols: string -> address hash table
+                                  ; pc: this statement's address, or NIL
+(eval-expr-constant AST &key pc) = (eval-expr AST :symbols nil :pc pc)
 ```
 
 `eval-expr` looks an `expr-label`'s name up in `symbols` and signals
 `unresolved-label` only on a miss (or when `symbols` is `nil`, matching the
-old no-labels-ever behavior).
+old no-labels-ever behavior). An `expr-location` node (the `"*"`
+location-counter symbol, below) resolves from `pc` instead, independently of
+`symbols` — `eval-expr-constant` still folds no labels, but a caller can
+still supply `:pc` to fold a location-counter reference.
+
+## Location counter
+
+```lisp
+lda *+2      ; the byte after this instruction's operand
+bne *        ; branch to self
+.org *+16    ; pad 16 bytes forward from here
+.word *      ; this .word entry's own address
+```
+
+`"*"` in operand position parses to `expr-location` ([Statement grammar &
+expression parser](parser.md)) rather than the multiply operator — see that
+doc for why the two never actually collide. Resolving it just needs an
+address, which pass 1 already has for every statement (unlike a label, whose
+address may not be known until pass 1 finishes), so both passes pass one
+through as `eval-expr`'s `:pc`:
+
+- **An instruction operand** resolves against the statement's own address —
+  the same address `%choose-variant` uses to pick a mode in pass 1, and the
+  same one `%encode` passes to `eval-expr` in pass 2. A `relative`-mode
+  operand ("PC-relative offsets" above) still runs through the usual
+  next-instruction adjustment afterward, so `bne *` branches to itself exactly
+  like `here: bne here` does.
+- **A `.byte`/`.word` element** ([Directives](directives.md)) resolves
+  against *its own* address, not the directive statement's — `.byte *, *` at
+  address `$10` emits `$10` then `$11`, matching how each element already
+  gets its own address for a label reference.
+- **A `.org`/`.res` operand** ([Directives](directives.md#org)) resolves
+  against the address counter's value *before* this directive moves or
+  reserves anything — `.org *+16` pads 16 bytes forward from here, and a
+  label on the same `.org` line still binds to the address it moves *to*, not
+  this one.
+
+With no address available at all — `eval-expr-constant` called with no
+`:pc`, e.g. by a standalone caller outside the assembler — an `expr-location`
+signals `unresolved-location`.
+
+## Local-label scoping (#16)
+
+A local label (an identifier starting with the lexer's `local-label-prefix`,
+e.g. `.loop` for the default lexer — `token-localp`/`expr-label-localp`, see
+[Lexer](lexer.md) and [Statement grammar & expression
+parser](parser.md#ast-nodes)) is scoped to its nearest preceding non-local
+("global") label, so the same local name can repeat once per routine:
+
+```lisp
+a:
+  ldx #0
+.loop:      ; -> bound as "a.loop"
+  bne .loop ; -> resolves against "a.loop"
+
+b:
+  ldx #0
+.loop:      ; -> bound as "b.loop"; does not collide with "a.loop"
+  bne .loop
+```
+
+`%layout` threads a `scope` variable (the nearest preceding global label's own
+name) through the statement list; every local label definition and reference
+is qualified to `scope ++ name` (`%qualify-local`/`%qualify-locals!` in
+`assembler.lisp`) before it ever reaches the symbol table or an operand
+AST — so `symbols` itself stays the same flat string → address table, and
+`eval-expr` needs no scope argument of its own. **A statement's own label is
+bound (and, if global, becomes the new scope) before its own operands are
+qualified** — so in `loop: bne .x`, `.x` is scoped to `loop`, the label on
+that same line, not whatever preceded it.
+
+A local label with no enclosing global label — at its definition or at a
+reference — signals `assembly-error`. A qualified name can collide with an
+identically-spelled global (a global literally named `loop.next` alongside a
+`.next:` under `loop:`) — this surfaces loudly as the ordinary duplicate-label
+`assembly-error`, never as silent aliasing; a follow-up ticket tracks a
+reserved separator that rules this out entirely.
 
 ## `:origin`
 
@@ -201,19 +278,11 @@ same `origin` — see [Directives](directives.md#org) — so `(assemble
 compose in the obvious way (`:origin` picks the starting point layout begins
 at, `.org` can still move it further before the first byte).
 
-## Local labels are flat
-
-A local label (lexer convention: a name starting with a non-alphanumeric
-prefix, e.g. `.loop`) is **not** scoped to an enclosing global label here —
-it shares one flat symbol table with every other name. Two different
-routines both using `.loop` as their loop-back label will collide as a
-duplicate-label error. Binding a local label to its nearest preceding global
-label is a separate ticket (#16).
-
 ## Conditions
 
-- `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate label,
-  an operand whose syntax matches none of the mnemonic's declared
+- `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate label, a
+  local label with no enclosing global label (see "Local-label scoping"
+  above), an operand whose syntax matches none of the mnemonic's declared
   addressing-mode variants, a `relative`-mode offset that doesn't fit its
   operand's width (see "PC-relative offsets" above), or a malformed
   directive use (wrong operand count, a non-constant `.org`/`.res` operand,
@@ -222,6 +291,9 @@ label is a separate ticket (#16).
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in
   the program (from `eval-expr`).
+- `unresolved-location` — a `"*"` location-counter reference folded with no
+  `:pc` given (see "Location counter" above); does not occur during ordinary
+  assembly, only from a standalone `eval-expr`/`eval-expr-constant` call.
 - `lex-error` / `parse-failure` — from the front end (`assemble` only).
 
 ## Scope

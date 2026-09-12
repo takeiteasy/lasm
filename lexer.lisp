@@ -22,7 +22,9 @@
           ; keyword (punctuation/label-suffix)
   text    ; verbatim source text
   line
-  column)
+  column
+  localp) ; :identifier only -- T if TEXT starts with the lexer descriptor's
+          ; LOCAL-LABEL-PREFIX (#16); NIL for every other token type
 
 ;;; Descriptor structures
 
@@ -280,8 +282,12 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
         (loop for ch = (%peek state)
               while (and ch (%ident-char-p ch descriptor))
               do (vector-push-extend ch chars) (%advance state))
-        (let ((text (coerce chars 'simple-string)))
-          (make-token :type :identifier :value text :text text :line line :column col))))))
+        (let* ((text (coerce chars 'simple-string))
+               (prefix (lexer-descriptor-local-label-prefix descriptor)))
+          (make-token :type :identifier :value text :text text :line line :column col
+                      :localp (and prefix (plusp (length prefix))
+                                   (>= (length text) (length prefix))
+                                   (string= prefix text :end2 (length prefix)))))))))
 
 (defun %match-label-suffix (state descriptor)
   (let ((suf (lexer-descriptor-label-suffix descriptor)))

@@ -245,3 +245,88 @@ next: nop" :machine 'instr-test-machine)))
   ;; FIND-INSTRUCTION-VARIANTS (which would signal UNKNOWN-INSTRUCTION).
   (let ((a (assemble ".byte 1" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(1) (assembly-bytes a)))))
+
+;;; Location-counter symbol ("*", #15)
+
+(fiveam:test word-directive-with-location-counter-emits-own-address
+  ;; nop occupies address 0, so the .word entry starts at address 1 -- "*"
+  ;; there must fold to 1, not 0 (the statement's address, not the program's).
+  (let ((a (assemble "nop
+.word *" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA 1 0) (assembly-bytes a)))))
+
+(fiveam:test byte-directive-with-two-location-counters-emits-two-different-values
+  ;; Each "*" resolves to its own element's address, not the directive
+  ;; statement's -- ".byte *, *" at address 0 emits 0 then 1.
+  (let ((a (assemble ".byte *, *" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(0 1) (assembly-bytes a)))))
+
+(fiveam:test location-counter-operand-picks-narrowest-fitting-mode
+  ;; "*" at address 0 is 0, a zero-page-fitting value -- same variant
+  ;; selection as an equivalent literal constant.
+  (let ((a (assemble "lda *" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 0) (assembly-bytes a)))))
+
+(fiveam:test location-counter-with-offset-in-operand
+  (let ((a (assemble "lda *+3" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 3) (assembly-bytes a)))))
+
+(fiveam:test relative-branch-to-location-counter-is-minus-two
+  ;; "bra *" should behave exactly like the equivalent self-referencing
+  ;; label ("here: bra here", see RELATIVE-BRANCH-TO-ITSELF-IS-MINUS-TWO).
+  (let ((a (assemble "bra *" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x90 #xFE) (assembly-bytes a)))))
+
+(fiveam:test org-with-location-counter-pads-forward-from-current-address
+  (let ((a (assemble "nop
+.org *+4
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA 0 0 0 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test location-counter-with-no-address-known-signals-unresolved-location
+  ;; EVAL-EXPR-CONSTANT with no :PC (e.g. a standalone caller, not the
+  ;; assembler) can't fold "*" at all.
+  (fiveam:signals unresolved-location
+    (eval-expr-constant (parse-expression (tokenize "*")))))
+
+;;; Local-label scoping (#16) -- a ".name" label/reference is qualified
+;;; against the nearest preceding non-local ("global") label.
+
+(fiveam:test local-labels-in-different-scopes-do-not-collide
+  ;; Both routines use ".loop:" -- without scoping this would be a duplicate
+  ;; label; qualified as "a.loop"/"b.loop" they coexist, and each BRA .LOOP
+  ;; resolves to its own routine's loop, producing the identical -3 offset.
+  (let ((a (assemble "a: nop
+.loop: nop
+bra .loop
+b: nop
+.loop: nop
+bra .loop" :machine 'instr-test-machine)))
+    (fiveam:is (= 0 (gethash "a" (assembly-symbols a))))
+    (fiveam:is (= 1 (gethash "a.loop" (assembly-symbols a))))
+    (fiveam:is (= 4 (gethash "b" (assembly-symbols a))))
+    (fiveam:is (= 5 (gethash "b.loop" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA #xEA #x90 #xFD #xEA #xEA #x90 #xFD) (assembly-bytes a)))))
+
+(fiveam:test duplicate-local-label-within-the-same-scope-still-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "a: nop
+.loop: nop
+.loop: nop" :machine 'instr-test-machine)))
+
+(fiveam:test local-label-reference-does-not-see-a-different-scope
+  ;; ".loop" is only ever bound under "a" -- a reference under "b" looks for
+  ;; "b.loop", which doesn't exist.
+  (fiveam:signals unresolved-label
+    (assemble "a: nop
+.loop: nop
+b: nop
+bra .loop" :machine 'instr-test-machine)))
+
+(fiveam:test local-label-definition-with-no-enclosing-global-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".loop: nop" :machine 'instr-test-machine)))
+
+(fiveam:test local-label-reference-with-no-enclosing-global-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "bra .loop" :machine 'instr-test-machine)))
