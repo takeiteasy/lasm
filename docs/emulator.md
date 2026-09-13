@@ -95,6 +95,8 @@ at `pc` isn't a registered opcode on this machine.
 
 Calls `step-machine` in a loop until one of three stop conditions:
 
+### Stop reasons
+
 | `reason` | Meaning |
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. A generalized interrupt/exception model replacing `trap` outright is M6. |
@@ -104,6 +106,16 @@ Calls `step-machine` in a loop until one of three stop conditions:
 `steps` counts instructions that actually executed. A step that traps still
 counts (its semantics ran to completion before signalling); a step that
 fails to decode does not (nothing executed that iteration).
+
+**Not currently a stop reason:** a storage condition raised from inside an
+instruction's semantics — `stack-overflow`, `stack-underflow`,
+`address-out-of-range` (see [Machine model, "Conditions"](machine-model.md))
+— propagates straight out of `run` as an ordinary Lisp error, since
+`step-machine` only catches `unknown-instruction` and `run` only catches
+`lasm-trap`. `tests/emulator.lisp`'s `stack-underflow-escapes-run` and
+`stack-overflow-escapes-run` pin this down as the current behaviour;
+whether `run` should instead catch `storage-error` and return a fourth stop
+reason is tracked as a follow-up.
 
 ## Note on flags in your own semantics (#22)
 

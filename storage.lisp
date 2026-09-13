@@ -114,7 +114,8 @@
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
 ;;                         unsigned integer
-;;   :stack             -> a cons (vector . sp), vector is adjustable
+;;   :stack             -> a cons (vector . sp), vector is a fixed-size
+;;                         simple-vector sized to :depth, not adjustable
 ;;   :memory            -> a (simple-array (unsigned-byte cell-width) (*))
 
 (defun wrap-value (value width)

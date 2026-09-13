@@ -31,7 +31,18 @@ widths against a machine defined earlier in the same file.
   (`:count 1`, the default) registers are readable/writable. Indexed access
   is tracked as a follow-up ticket.
 - `(stack NAME :width n :depth n)` — a fixed-depth LIFO stack of `:width`-bit
-  values. Overflow/underflow signal `stack-overflow`/`stack-underflow`.
+  values. Grows upward: the stack pointer starts at 0 and always equals the
+  number of live entries, incrementing on push and decrementing on pop.
+  Overflow/underflow signal `stack-overflow`/`stack-underflow`; see
+  "Conditions" below for how those interact (or currently don't) with `run`.
+  The stack pointer itself is internal bookkeeping, not an addressable
+  storage element — `stack-depth` is the only way to read it, and there is
+  no `stack-ref`/`(setf stack-ref)` for indexed access into the stack (no
+  `PICK`/`OVER`, no stack-relative addressing mode; tracked as a follow-up).
+  A machine with only a stack (plus PC and memory) is a valid, fully
+  expressible machine — see [`examples/stack.lisp`](../examples/stack.lisp),
+  the M3 milestone's validation that this abstraction isn't secretly
+  register-shaped.
 - `(memory NAME :width n :addr-width n [:cell-width n])` — addressable
   storage. `:addr-width` is the number of address bits (so the element has
   `2^addr-width` cells); `:cell-width` is the bit width of each cell and
@@ -87,3 +98,9 @@ All signalled conditions inherit `lasm-error`: `unknown-storage`,
 `address-out-of-range`, `stack-overflow`, `stack-underflow`. `lasm-trap` is
 signalled by the `trap` semantics operator (see
 [Semantics vocabulary](semantics.md)) and is not a storage error.
+
+None of these storage conditions are currently a `run` stop reason (see
+[Emulator, "Stop reasons"](emulator.md#stop-reasons)) — an instruction that
+overflows or underflows a stack, or addresses memory out of range, escapes
+`run` as a raw Lisp condition rather than returning `:trap`,
+`:decode-failure`, or `:max-steps`.

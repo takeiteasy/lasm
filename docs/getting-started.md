@@ -93,6 +93,17 @@ sbcl --script examples/complete.lisp
 together in one program — see [Directives](directives.md#equ), [Macros](macros.md),
 and [Addressing modes, "Forcing a mode with a mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix).
 
+```sh
+sbcl --script examples/stack.lisp
+```
+
+A pure stack-based machine (`stackfoo`) with no general-purpose registers at
+all — just PC, a data stack, and RAM — running a counted loop that sums
+1..5 through `push`/`pop`-based arithmetic. This is the M3 milestone's
+validation case that the storage abstraction generalizes beyond
+register-shaped machines — see [Machine model](machine-model.md) and
+[Semantics vocabulary](semantics.md).
+
 ## Run the tests
 
 ```sh

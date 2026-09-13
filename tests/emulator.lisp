@@ -305,3 +305,151 @@ loop:   dex
       (fiveam:is (= 23 steps))
       (fiveam:is (= 0 (sref m 'x)))
       (fiveam:is (= 0 (mref m 'ram #x1000))))))
+
+;;; M3 milestone target: a pure stack-based fantasy CPU, assembled and run
+;;; end to end (#51). STACK-TEST-MACHINE declares no general-purpose
+;;; registers at all -- only PC (still a plain register, by the %RESOLVE-PC
+;;; convention), a data stack, and RAM -- mirroring examples/stack.lisp.
+
+(defmachine stack-test-machine
+  (register pc :width 16)
+  (stack ds :width 8 :depth 32)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction stack-test-machine psh
+  (modes immediate)
+  (encoding (opcode #x01) (operand :mode))
+  (semantics (push operand ds)))
+
+(definstruction stack-test-machine ldm
+  (modes absolute)
+  (encoding (opcode #x02) (operand :mode))
+  (semantics (push (mref machine 'ram operand) ds)))
+
+(definstruction stack-test-machine sto
+  (modes absolute)
+  (encoding (opcode #x03) (operand :mode))
+  (semantics (setf (mref machine 'ram operand) (pop ds))))
+
+(definstruction stack-test-machine add
+  (encoding (opcode #x04))
+  (semantics (let ((b (pop ds)) (a (pop ds)))
+               (push (wrap-value (+ a b) 8) ds))))
+
+(definstruction stack-test-machine sub
+  (encoding (opcode #x05))
+  (semantics (let ((b (pop ds)) (a (pop ds)))
+               (push (wrap-value (- a b) 8) ds))))
+
+(definstruction stack-test-machine jz
+  (modes relative)
+  (encoding (opcode #x06) (operand :mode))
+  (semantics (let ((v (pop ds)))
+               (when (zerop v) (set! pc (+ pc operand))))))
+
+(definstruction stack-test-machine jmp
+  (modes relative)
+  (encoding (opcode #x07) (operand :mode))
+  (semantics (set! pc (+ pc operand))))
+
+(definstruction stack-test-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+;; A machine with a one-deep data stack, just for exercising overflow/
+;; underflow -- STACK-TEST-MACHINE's own DS is deliberately roomy so its
+;; other tests never trip either condition by accident.
+(defmachine shallow-stack-test-machine
+  (register pc :width 16)
+  (stack ds :width 8 :depth 1)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction shallow-stack-test-machine psh
+  (modes immediate)
+  (encoding (opcode #x01) (operand :mode))
+  (semantics (push operand ds)))
+
+(definstruction shallow-stack-test-machine add
+  (encoding (opcode #x02))
+  (semantics (let ((b (pop ds)) (a (pop ds)))
+               (push (wrap-value (+ a b) 8) ds))))
+
+(definstruction shallow-stack-test-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(fiveam:test stack-machine-arithmetic
+  ;; LIFO order matters for non-commutative ops: (ldm a)(psh b)(sub) must
+  ;; compute a - b, not b - a -- SUB's semantics pop B (top, pushed last)
+  ;; before A.
+  (let* ((m (make-machine 'stack-test-machine))
+         (a (assemble "psh #10
+psh #3
+sub
+sto $2000
+psh #2
+psh #5
+add
+sto $2001
+hlt" :machine 'stack-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 9 steps))
+      (fiveam:is (= 7 (mref m 'ram #x2000)))
+      (fiveam:is (= 7 (mref m 'ram #x2001)))
+      (fiveam:is (= 0 (stack-depth m 'ds))))))
+
+(fiveam:test stack-machine-end-to-end
+  ;; The M3 milestone's actual validation case: a counted loop (5+4+3+2+1)
+  ;; built entirely on PC + one stack + RAM, no general-purpose registers,
+  ;; no flags. See examples/stack.lisp for the annotated version and the
+  ;; write-up of what this does (and doesn't) require of the storage model.
+  (let* ((m (make-machine 'stack-test-machine))
+         (a (assemble "        psh #5
+        sto $0000
+        psh #0
+        sto $1000
+loop:   ldm $0000
+        jz end
+        ldm $0000
+        ldm $1000
+        add
+        sto $1000
+        ldm $0000
+        psh #1
+        sub
+        sto $0000
+        jmp loop
+end:    hlt" :machine 'stack-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      ;; Proves the loop actually iterated 5 times rather than falling
+      ;; through: 4 setup + 5*(11 loop-body steps) + 1 final jz + 1 hlt.
+      (fiveam:is (= 62 steps))
+      (fiveam:is (= 15 (mref m 'ram #x1000)))
+      (fiveam:is (= 0 (stack-depth m 'ds))))))
+
+;; #51 finding: stack over/underflow are STORAGE-ERROR conditions
+;; (storage.lisp), not caught by RUN/STEP-MACHINE (which only handle
+;; LASM-TRAP and UNKNOWN-INSTRUCTION respectively) -- so they propagate out
+;; of RUN as a raw Lisp error rather than becoming a stop reason like :TRAP
+;; or :DECODE-FAILURE. These two tests pin down that current behaviour;
+;; see the follow-up ticket asking whether RUN should instead catch
+;; STORAGE-ERROR and return a new stop reason.
+
+(fiveam:test stack-underflow-escapes-run
+  (let* ((m (make-machine 'stack-test-machine))
+         (a (assemble "add
+hlt" :machine 'stack-test-machine)))
+    (load-program m a)
+    (fiveam:signals stack-underflow (run m))))
+
+(fiveam:test stack-overflow-escapes-run
+  (let* ((m (make-machine 'shallow-stack-test-machine))
+         (a (assemble "psh #1
+psh #2
+hlt" :machine 'shallow-stack-test-machine)))
+    (load-program m a)
+    (fiveam:signals stack-overflow (run m))))

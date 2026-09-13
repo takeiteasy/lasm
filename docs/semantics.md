@@ -41,11 +41,17 @@ evaluates `body` with:
 ## `push`/`pop` and Common Lisp
 
 `push` and `pop` here are LASM's stack-semantics operators, not
-`cl:push`/`cl:pop`. They are the *same symbols*, re-exported from the
-`lasm` package (not shadowed) — `with-machine` locally rebinds them via
-`macrolet` for the extent of `body` only. Code outside `with-machine`
-(anywhere else in a package that uses `lasm`) sees ordinary
-`cl:push`/`cl:pop` list operations, unaffected.
+`cl:push`/`cl:pop`. `lasm`'s package definition **shadows** `#:push` and
+`#:pop` (`(:shadow #:push #:pop)`) rather than re-exporting the `cl:`
+symbols — SBCL's package locks forbid `macrolet` from locally rebinding a
+`cl:`-package symbol, even lexically, so `with-machine` needs its own
+distinct `push`/`pop` symbols to rebind via `macrolet` for the extent of
+`body`. Code in a package that `:use`s `lasm` therefore sees *these*
+`push`/`pop` everywhere, not `cl:push`/`cl:pop` — outside `with-machine`
+they're plain unbound-as-functions symbols (no ordinary list-`push`/`pop`
+meaning). LASM's own source (`storage.lisp`, `machine.lisp`, ...) avoids
+the ambiguity by calling `cl:push`/`cl:pop` explicitly wherever it wants
+list operations.
 
 ## Deviation from the design draft
 
