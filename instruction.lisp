@@ -299,10 +299,13 @@ per hole" machine name mode-name holes n (= n 1))))
 
 (defun %check-relative-mode-holes (mode machine name)
   ;; A RELATIVE mode (mode.lisp) marks its *whole* pattern's operand as a
-  ;; PC-relative offset -- there is no way to say "only this hole is
-  ;; relative" yet (a per-hole attribute is a follow-up), so a RELATIVE mode
-  ;; with more than one hole has no coherent meaning and is rejected here
-  ;; rather than silently relative-adjusting the wrong (or every) field.
+  ;; single PC-relative offset -- there is no way to say "only this hole is
+  ;; the offset" yet (a per-hole attribute is a follow-up), so a RELATIVE
+  ;; mode with more than one hole has no coherent meaning and is rejected
+  ;; here rather than silently offset-adjusting the wrong (or every) field.
+  ;; This restriction is specific to RELATIVE's offset computation, not to
+  ;; signedness in general -- a plain SIGNED mode (#30) may have any number
+  ;; of holes; each is sign-extended independently (emulator.lisp).
   (when (and (mode-descriptor-relativep mode) (> (%mode-hole-count mode) 1))
     (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE and has ~
 more than one EXPR hole -- a RELATIVE mode's offset applies to its whole ~

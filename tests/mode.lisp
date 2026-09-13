@@ -9,6 +9,7 @@
 (defmode test-indexed-x expr "," "X")
 (defmode test-indirect-y "(" expr ")" "," "Y")
 (defmode test-no-width expr)
+(defmode test-signed-imm "#" expr :width 1 :signed t)
 
 (defun %tokens-for (string)
   "Tokenize STRING with the default lexer and return it as a SIMPLE-VECTOR
@@ -34,6 +35,22 @@ looks like."
 
 (fiveam:test defmode-relativep-defaults-nil
   (fiveam:is (null (mode-descriptor-relativep (find-mode-descriptor 'absolute)))))
+
+;;; :SIGNED, split off :RELATIVE (#30)
+
+(fiveam:test defmode-signed-option
+  (fiveam:is (mode-descriptor-signedp (find-mode-descriptor 'test-signed-imm)))
+  (fiveam:is (null (mode-descriptor-relativep (find-mode-descriptor 'test-signed-imm)))))
+
+(fiveam:test defmode-signedp-defaults-nil
+  (fiveam:is (null (mode-descriptor-signedp (find-mode-descriptor 'absolute)))))
+
+(fiveam:test defmode-relative-implies-signed
+  (fiveam:is (mode-descriptor-signedp (find-mode-descriptor 'relative))))
+
+(fiveam:test defmode-relative-t-signed-nil-signals-error
+  (fiveam:signals error
+    (eval '(defmode bogus-relative-unsigned expr :relative t :signed nil))))
 
 (fiveam:test defmode-no-expr-hole-signals-error
   (fiveam:signals error

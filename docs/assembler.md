@@ -119,6 +119,15 @@ declared in `(modes ...)`:
      so its fit test computes that offset the same way `%encode` will (see
      "PC-relative offsets" below) and checks it against the signed range
      instead of comparing the raw target to an operand width.
+   - A non-`relative` **`:signed`** mode candidate ([Addressing modes,
+     "Signed operands"](modes.md#signed-operands)) fits against the signed
+     range only (`%fits-signed-width-p`), not the wider unsigned-inclusive
+     range `%fits-width-p` accepts — so e.g. `ldsi #200` on a one-byte
+     `:signed` mode does not fit it and the filter moves on to a wider
+     candidate, even though `200` would fit an ordinary (non-`:signed`) mode
+     of the same width. Only `relative` errors instead of falling back at
+     encode time (see "PC-relative offsets" below); a `:signed` operand that
+     doesn't fit any candidate falls back and wraps like any other mode.
    - If **no** candidate fits — `ldx #300` on a one-byte `immediate` — fall
      back to the **widest** syntax-and-floor-matching candidate (by total
      operand width) and let `encode-instruction`'s existing `wrap-value`

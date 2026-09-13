@@ -76,6 +76,19 @@
     (absolute  (opcode #x12)))
   (semantics (set! a (mref machine 'ram operand))))
 
+;; SIGNED, non-RELATIVE (#30) alongside a wider unsigned mode sharing the
+;; same "#" expr syntax -- like BRX above but for %CHOOSE-VARIANT's signed
+;; fit test instead of the RELATIVE one: a value in the unsigned-only range
+;; (e.g. 200) must not fit the signed byte and should widen, while a negative
+;; value should fit it.
+(defmode instr-signed-imm-test-mode "#" expr :width 1 :signed t)
+(defmode instr-wide-imm-test-mode "#" expr :width 2)
+
+(definstruction instr-test-machine ldsi
+  (modes
+    (instr-signed-imm-test-mode (opcode #x93) (semantics (set! a operand)))
+    (instr-wide-imm-test-mode (opcode #x94) (semantics (set! a operand)))))
+
 ;; A second fixture with two memory elements, so (operand :mode) on an
 ;; ABSOLUTE instruction is genuinely ambiguous -- exercises the "more than
 ;; one memory element" branch of %DEFAULT-ABSOLUTE-WIDTH. An explicit

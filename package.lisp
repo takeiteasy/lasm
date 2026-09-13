@@ -130,6 +130,7 @@
    #:mode-descriptor-pattern
    #:mode-descriptor-width
    #:mode-descriptor-relativep
+   #:mode-descriptor-signedp
    #:match-operand-mode
    #:try-match-operand-mode
 

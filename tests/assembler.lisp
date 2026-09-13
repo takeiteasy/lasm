@@ -234,6 +234,22 @@ target: nop" :machine 'instr-test-machine)))
                       :machine 'instr-test-machine)))
     (fiveam:is (= #x92 (aref (assembly-bytes a) 0)))))
 
+;;; SIGNED, non-RELATIVE (#30) mode selection -- LDSI (tests/instruction.lisp)
+;;; declares the signed 1-byte mode before a wider unsigned one, sharing the
+;;; same "#" expr syntax, mirroring the BRX case above but for the signed
+;;; fit test (%FITS-SIGNED-WIDTH-P) instead of the RELATIVE one.
+
+(fiveam:test signed-candidate-selected-when-value-fits-signed-range
+  (let ((a (assemble "ldsi #-5" :machine 'instr-test-machine)))
+    (fiveam:is (equalp (vector #x93 (wrap-value -5 8)) (assembly-bytes a)))))
+
+(fiveam:test signed-candidate-rejected-when-value-is-unsigned-only
+  ;; 200 fits one byte unsigned but not signed -- before #30, this would
+  ;; still have selected the narrower (then RELATIVE-blind) candidate via
+  ;; %FITS-WIDTH-P; now it must widen to the 2-byte unsigned mode instead.
+  (let ((a (assemble "ldsi #200" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x94 200 0) (assembly-bytes a)))))
+
 ;;; Multi-operand instructions -- MOVI/FLEX (tests/instruction.lisp).
 
 (fiveam:test multi-operand-statement-sizes-as-sum-of-field-widths

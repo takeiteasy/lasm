@@ -68,6 +68,29 @@
   (encoding (opcode #x01) (operand addr :width 1) (operand val :width 1))
   (semantics (setf (mref machine 'ram addr) val)))
 
+;; SIGNED, non-RELATIVE (#30) -- a signed immediate that is not a branch
+;; offset, proving sign-extension in STEP-MACHINE is keyed off SIGNEDP, not
+;; RELATIVEP. TRAP's optional DATA (semantics.lisp) carries OPERAND out so
+;; the test can inspect the reinterpreted value directly, since writing it
+;; into a register would re-wrap it unsigned (STORAGE.LISP's WRAP-VALUE).
+(defmode emu-signed-imm "#" expr :width 1 :signed t)
+
+(definstruction emu-test-machine ldsi
+  (modes emu-signed-imm)
+  (encoding (opcode #x02) (operand :mode))
+  (semantics (trap :ldsi operand)))
+
+;; SIGNED with more than one hole -- RELATIVE modes are restricted to a
+;; single hole (%CHECK-RELATIVE-MODE-HOLES, instruction.lisp), but a plain
+;; SIGNED mode is not; this proves STEP-MACHINE sign-extends every hole by
+;; its own width rather than assuming (and rebuilding from) a single value.
+(defmode emu-two-hole-signed-test-mode expr "," expr :width 1 :signed t)
+
+(definstruction emu-test-machine movsi
+  (modes emu-two-hole-signed-test-mode)
+  (encoding (opcode #x03) (operand a :width 1) (operand b :width 1))
+  (semantics (trap :movsi (list a b))))
+
 ;;; load-program
 
 (fiveam:test load-program-places-bytes-and-sets-pc
@@ -180,6 +203,29 @@ loop:   dex
       (fiveam:is (= 23 steps))
       (fiveam:is (= 0 (sref m 'x)))
       (fiveam:is (= 0 (mref m 'ram #x1000))))))
+
+;;; SIGNED, non-RELATIVE (#30)
+
+(fiveam:test step-machine-signed-non-relative-operand-sign-extends
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "ldsi #-1" :machine 'emu-test-machine)))
+    (load-program m a)
+    (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
+      (lasm-trap (c) (fiveam:is (= -1 (lasm-trap-data c)))))))
+
+(fiveam:test step-machine-signed-non-relative-operand-positive-value-unaffected
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "ldsi #10" :machine 'emu-test-machine)))
+    (load-program m a)
+    (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
+      (lasm-trap (c) (fiveam:is (= 10 (lasm-trap-data c)))))))
+
+(fiveam:test step-machine-multi-hole-signed-mode-sign-extends-each-hole
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "movsi -1, -2" :machine 'emu-test-machine)))
+    (load-program m a)
+    (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
+      (lasm-trap (c) (fiveam:is (equal '(-1 -2) (lasm-trap-data c)))))))
 
 (fiveam:test step-machine-decode-failure-on-unknown-opcode
   (let ((m (make-machine 'emu-test-machine)))

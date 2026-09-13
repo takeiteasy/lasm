@@ -24,7 +24,7 @@ any more; every mode, built-in or user-declared, goes through the same
 ## `defmode`
 
 ```lisp
-(defmode NAME pattern-element... [:width n])
+(defmode NAME pattern-element... [:width n] [:signed t] [:relative t])
 ```
 
 `NAME` is a symbol, registered globally (like a lexer — see below).
@@ -33,9 +33,13 @@ verbatim text, case-insensitively — so `"X"` matches `x` too) or the symbol
 `expr` (parses one expression with the shared Pratt parser, `parse.lisp`).
 At least one `expr` is required. `:width`, if given, is this mode's default
 operand byte width — see [`(encoding ...)`](instructions.md) and the
-width-resolution note below. `:relative t`, if given, marks this
-mode's operand as a PC-relative offset rather than an absolute value — see
-[PC-relative modes](#pc-relative-modes) below.
+width-resolution note below. `:signed t`, if given, marks this mode's
+operand as a signed quantity rather than an unsigned one — see
+[Signed operands](#signed-operands) below. `:relative t`, if given, marks
+this mode's operand as a PC-relative offset rather than an absolute value —
+see [PC-relative modes](#pc-relative-modes) below. `:relative t` **implies**
+`:signed t` (a branch offset can go either direction); passing `:signed nil`
+alongside `:relative t` is a contradiction and `defmode` signals an error.
 
 Registration happens inside an `eval-when`, like `defmachine` — a mode
 must be resolvable by `definstruction` at macroexpansion time, not only
@@ -77,10 +81,35 @@ machine rather than hard-coded into the mode.
 
 A mode with more than one `expr` hole wires up one operand encoding field
 per hole — a two-register `mov` is the standard example (see [Instructions,
-"Repeated `(operand ...)` subclauses"](instructions.md)). The one
-restriction: a `:relative` mode (below) may not have more than one hole,
-since its offset applies to the operand as a whole and there is currently no
-way to mark just one hole of a multi-hole mode as the relative one.
+"Repeated `(operand ...)` subclauses"](instructions.md)). A `:signed` mode
+may have any number of holes — each is sign-extended independently (see
+[Signed operands](#signed-operands) below). The one restriction is specific
+to `:relative`: a `:relative` mode may not have more than one hole, since
+its *offset* applies to the operand as a whole and there is currently no way
+to mark just one hole of a multi-hole mode as the relative one (see
+[PC-relative modes](#pc-relative-modes) below).
+
+## Signed operands
+
+`:signed t` (#30) marks a mode's operand as a signed quantity rather than an
+unsigned one. This affects two things:
+
+- The emulator sign-extends each fetched hole back to a signed integer,
+  by its own operand width, before running an instruction's `semantics`
+  ([Emulator](emulator.md)) — so a signed-mode instruction body sees a plain
+  negative Lisp integer rather than having to reinterpret an unsigned byte
+  itself.
+- The assembler's mode selector range-checks a signed candidate's value
+  against the *signed* range (`-(2^(8w-1))` to `2^(8w-1)-1`) rather than the
+  wider range an ordinary operand accepts, so e.g. `#200` no longer fits a
+  signed byte and the selector moves on to a wider candidate instead of
+  wrapping it (see [Assembler, "Choosing a
+  mode"](assembler.md#choosing-a-mode)).
+
+`:relative` (below) **implies** `:signed` — a branch offset can go either
+direction — but the two attributes are otherwise independent: a signed,
+non-relative mode (e.g. a signed 8-bit immediate) declares `:signed t` on
+its own, with no offset computation attached.
 
 ## PC-relative modes
 
@@ -96,10 +125,13 @@ differs is what the parsed value means and when it's computed:
   assembler computes this once both the branch and its target have an
   address ([Assembler](assembler.md#pc-relative-offsets)), and signals
   `assembly-error` if the offset doesn't fit the operand's width rather than
-  silently wrapping to a branch at the wrong address.
+  silently wrapping to a branch at the wrong address — unlike an ordinary
+  signed operand (above), which falls back to a wider candidate, or wraps if
+  none fits.
 - The emulator sign-extends the fetched operand back to a signed integer
-  before running an instruction's `semantics` ([Emulator](emulator.md)), so
-  a relative-mode instruction body writes a plain `(set! pc (+ pc
+  before running an instruction's `semantics`, exactly as any other
+  `:signed` mode's operand does (see [Signed operands](#signed-operands)
+  above) — a relative-mode instruction body writes a plain `(set! pc (+ pc
   operand))` rather than tracking its own operand width.
 
 A `relative` candidate's parsed value is the absolute target, not the

@@ -78,10 +78,11 @@ names exactly this failure."))
 
 (defun %fits-width-p (value width)
   "T if VALUE (a folded constant) fits in WIDTH bytes, either as an unsigned
-or a two's-complement signed value -- e.g. both 255 and -1 fit one byte, so a
-signed operand like a lo/hi-masked value isn't rejected just because it folds
-negative. Accepts the full unsigned range too, so this is NOT the right
-predicate for a RELATIVE branch offset (#23) -- see %FITS-SIGNED-WIDTH-P."
+or a two's-complement signed value -- e.g. both 255 and -1 fit one byte, so an
+operand that hasn't declared itself SIGNED (mode.lisp, #30) isn't rejected
+just because it folds negative. Accepts the full unsigned range too, so this
+is NOT the right predicate for a SIGNED mode's operand (a RELATIVE branch
+offset, #23, included) -- see %FITS-SIGNED-WIDTH-P."
   (and (>= value (- (ash 1 (1- (* 8 width)))))
        (< value (ash 1 (* 8 width)))))
 
@@ -89,8 +90,9 @@ predicate for a RELATIVE branch offset (#23) -- see %FITS-SIGNED-WIDTH-P."
   "T if VALUE fits as a two's-complement signed WIDTH-byte integer, i.e.
 -(2^(8*width-1)) <= VALUE < 2^(8*width-1). Unlike %FITS-WIDTH-P, this
 rejects the unsigned-only range (e.g. +200 does not fit one byte) -- used to
-range-check a RELATIVE mode's offset (#23), where wrapping silently instead
-of erroring would branch to the wrong address."
+range-check any SIGNED mode's operand (mode.lisp, #30), a RELATIVE mode's
+offset (#23) included, where wrapping silently instead of erroring would run
+the wrong (or a wrapped) value."
   (let ((bound (ash 1 (1- (* 8 width)))))
     (and (>= value (- bound)) (< value bound))))
 
@@ -136,9 +138,12 @@ syntax (e.g. zero-page before absolute):
    value isn't known yet should be given the chance to fit once it is,
    rather than committing to the widest mode up front. A RELATIVE candidate's
    hole folds to an absolute target, not the offset actually encoded, so its
-   fit test goes through %RELATIVE-FITS-P instead of %FITS-WIDTH-P; it is not
-   otherwise treated differently from any other mode's operand. Ties, in
-   every branch, keep declaration order. Resolvedness is checked per
+   fit test goes through %RELATIVE-FITS-P instead of %FITS-WIDTH-P. A
+   non-RELATIVE SIGNED candidate (mode.lisp, #30) fits against
+   %FITS-SIGNED-WIDTH-P instead of %FITS-WIDTH-P, so e.g. #200 no longer
+   fits a signed byte and the filter moves on to a wider candidate; every
+   other mode is unaffected. Ties, in every branch, keep declaration order.
+   Resolvedness is checked per
    candidate, not once for all of them: two variants of one mnemonic can
    have different hole counts (e.g. a two-register mode alongside a
    one-immediate mode), so whether their holes resolve is not the same
@@ -177,9 +182,12 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                     (vals (mapcar (lambda (ast)
                                                     (eval-expr ast :symbols symbols :pc address))
                                                   (second c))))
-                                (if (and mode (mode-descriptor-relativep mode))
-                                    (%relative-fits-p (first vals) address descriptor)
-                                    (every #'%fits-width-p vals widths)))
+                                (cond
+                                  ((and mode (mode-descriptor-relativep mode))
+                                   (%relative-fits-p (first vals) address descriptor))
+                                  ((and mode (mode-descriptor-signedp mode))
+                                   (every #'%fits-signed-width-p vals widths))
+                                  (t (every #'%fits-width-p vals widths))))
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates)))

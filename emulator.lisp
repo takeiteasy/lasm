@@ -98,15 +98,19 @@ it."
                                                                       (* 8 i))))
                                            finally (return v))
                              do (incf offset width))))
-          ;; A RELATIVE operand (mode.lisp, #23) was assembled as a signed
-          ;; offset (assembler.lisp's %RELATIVE-OFFSET) but is fetched above
-          ;; as an unsigned WIDTH-byte quantity, like every other operand --
-          ;; reinterpret it here so semantics can write a plain
-          ;; (set! pc (+ pc operand)) with no width of its own to track. A
-          ;; RELATIVE mode always has exactly one hole (%CHECK-RELATIVE-
-          ;; MODE-HOLES, instruction.lisp), so VALUES here is one element.
-          (when (and mode (mode-descriptor-relativep mode))
-            (setf values (list (signed-value (first values) (* 8 (first widths))))))
+          ;; A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies
+          ;; SIGNED) was assembled as a signed quantity (a RELATIVE operand
+          ;; specifically as an offset, assembler.lisp's %RELATIVE-OFFSET)
+          ;; but is fetched above as an unsigned WIDTH-byte quantity, like
+          ;; every other operand -- reinterpret each hole here, by its own
+          ;; width, so semantics sees a plain signed integer (a RELATIVE
+          ;; instruction body can then write (set! pc (+ pc operand)) with no
+          ;; width of its own to track). Unlike RELATIVE (%CHECK-RELATIVE-
+          ;; MODE-HOLES, instruction.lisp), a SIGNED mode may have more than
+          ;; one hole, so this maps over every VALUE/WIDTH pair rather than
+          ;; assuming a single element.
+          (when (and mode (mode-descriptor-signedp mode))
+            (setf values (mapcar (lambda (v w) (signed-value v (* 8 w))) values widths)))
           (setf (sref machine pc) (+ address 1 total-width))
           (execute-instruction descriptor machine values)
           descriptor)

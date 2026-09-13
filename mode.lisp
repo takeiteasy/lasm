@@ -33,11 +33,17 @@
     name       ; symbol, upcased on lookup like instruction mnemonics
     pattern    ; list of (:literal "text") | (:expr), in match order
     width      ; default operand byte width, or nil (caller/machine decides)
-    relativep))  ; T if this mode's operand is a PC-relative offset (#23),
-                 ; not an absolute value -- the assembler computes the offset
-                 ; from the branch's own address at encode time (assembler.lisp)
-                 ; and the emulator sign-extends the fetched operand
-                 ; (emulator.lisp) before handing it to semantics.
+    relativep  ; T if this mode's operand is a PC-relative offset (#23), not
+               ; an absolute value -- the assembler computes the offset from
+               ; the branch's own address at encode time (assembler.lisp).
+               ; Implies SIGNEDP (below); a RELATIVE mode is always signed,
+               ; since a branch offset can go either direction.
+    signedp))  ; T if this mode's operand is a signed quantity (#30, split off
+               ; RELATIVE): the emulator sign-extends the fetched operand
+               ; (emulator.lisp) before handing it to semantics, and the
+               ; assembler's mode selector range-checks candidate values
+               ; against the signed range rather than the unsigned one
+               ; (assembler.lisp's %CHOOSE-VARIANT).
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
 ;; (lexer.lisp) and *MACHINES* (storage.lisp). Unlike those two, this needs
@@ -95,23 +101,31 @@ options start at the first keyword symbol; everything before it is pattern."
       (let ((pattern (%parse-mode-pattern pattern-elements)))
         (unless (find :expr pattern :key #'first)
           (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
-        (destructuring-bind (&key width relative) options
+        (destructuring-bind (&key width relative signed) options
+          (when (and relative (not (eq signed t)) (member :signed options))
+            (error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
+:SIGNED NIL alongside it" name))
           (make-mode-descriptor :name name :pattern pattern :width width
-                                 :relativep relative))))))
+                                 :relativep relative
+                                 :signedp (or relative signed)))))))
 
 (defmacro defmode (name &body pattern)
   "Define an addressing mode named NAME matching PATTERN, a sequence of
 string literals and the symbol EXPR (one per operand hole), optionally
 followed by :WIDTH n (a default operand byte width instructions using this
-mode may omit from their own encoding) and/or :RELATIVE t (this mode's
-operand is a PC-relative offset rather than an absolute value -- see
-RELATIVE below and #23). E.g.:
+mode may omit from their own encoding), :SIGNED t (this mode's operand is a
+signed quantity -- the emulator sign-extends it and the assembler
+range-checks candidate values against the signed range; #30), and/or
+:RELATIVE t (this mode's operand is a PC-relative offset rather than an
+absolute value -- see RELATIVE below and #23; implies :SIGNED t, so passing
+:SIGNED NIL alongside :RELATIVE T is an error). E.g.:
 
   (defmode immediate  \"#\" expr        :width 1)
   (defmode zero-page  expr            :width 1)
   (defmode absolute   expr)
   (defmode indexed-x  expr \",\" \"X\")
   (defmode indirect-y \"(\" expr \")\" \",\" \"Y\")
+  (defmode signed-imm \"#\" expr        :width 1 :signed t)
   (defmode relative   expr            :width 1 :relative t)
 
 Registers the resulting MODE-DESCRIPTOR under NAME in *MODES*, inside an
@@ -191,9 +205,10 @@ unconsumed."
 ;; RELATIVE (#23): syntactically identical to ABSOLUTE (a bare expr), but its
 ;; operand is a signed offset from the address of the *next* instruction, not
 ;; an absolute target -- computed by the assembler once layout has placed
-;; both the branch and its target (assembler.lisp's %ENCODE) and
-;; sign-extended by the emulator on fetch (emulator.lisp's STEP-MACHINE) so
-;; semantics can write (set! pc (+ pc operand)) with no width of its own to
-;; worry about. :WIDTH 1 is only this mode's default -- a machine with wider
-;; branches overrides it per instruction via the existing (operand :width n).
+;; both the branch and its target (assembler.lisp's %ENCODE). :RELATIVE T
+;; implies :SIGNED T (#30): the emulator sign-extends it on fetch
+;; (emulator.lisp's STEP-MACHINE) so semantics can write (set! pc (+ pc
+;; operand)) with no width of its own to worry about. :WIDTH 1 is only this
+;; mode's default -- a machine with wider branches overrides it per
+;; instruction via the existing (operand :width n).
 (defmode relative expr :width 1 :relative t)

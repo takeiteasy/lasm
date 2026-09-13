@@ -65,18 +65,22 @@ it running afterward. It's also the base the assembler computes a
 `relative`-mode offset from (see below) — `pc` is already the *next*
 instruction's address by the time semantics runs.
 
-If the decoded instruction's mode is `relative`
-([Addressing modes](modes.md#pc-relative-modes)), the fetched operand is
-reinterpreted as a signed integer (`signed-value`) before being passed to
-`execute-instruction` — the assembler encoded it as a two's-complement
-offset ([Assembler](assembler.md#pc-relative-offsets)), and fetching treats
-every operand as unsigned like any other mode, so this is undone here
-rather than in every relative instruction's own `semantics`. A `relative`
-instruction's body therefore just writes `(set! pc (+ pc operand))`. A
-`relative` mode always has exactly one field (`definstruction` rejects one
-with more, [Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)),
-so this reinterprets
-the sole fetched value, never several.
+If the decoded instruction's mode is `:signed`
+([Addressing modes, "Signed operands"](modes.md#signed-operands)) — `relative`
+([Addressing modes, "PC-relative modes"](modes.md#pc-relative-modes)) included,
+since `:relative` implies `:signed` — every fetched field is reinterpreted as
+a signed integer (`signed-value`, each by its own operand width) before being
+passed to `execute-instruction`. The assembler encoded a `relative` operand
+specifically as a two's-complement offset
+([Assembler](assembler.md#pc-relative-offsets)); either way, fetching treats
+every operand as unsigned like any other mode, so this is undone here rather
+than in every signed instruction's own `semantics`. A `relative` instruction's
+body therefore just writes `(set! pc (+ pc operand))`. A `relative` mode
+always has exactly one field (`definstruction` rejects one with more,
+[Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)), so
+this reinterprets the sole fetched value for it, never several — but an
+ordinary (non-`relative`) `:signed` mode may have more than one field, and
+each is reinterpreted independently.
 
 Returns the executed `instruction-descriptor`, or the keyword
 `:decode-failure` (without advancing `pc` or executing anything) if the byte

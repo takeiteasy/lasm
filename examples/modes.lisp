@@ -20,6 +20,7 @@
 (defmachine sixtyfoo-m2
   (register a :width 8)
   (register x :width 8)
+  (register y :width 8)
   (register pc :width 16)
   (memory ram :width 8 :addr-width 16)
   (flags z n c))
@@ -28,6 +29,19 @@
   (modes immediate)
   (encoding (opcode #xA2) (operand :mode))
   (semantics (set! x operand) (set-flags! (z (zero? x)))))
+
+;; SIGNED-IMMEDIATE (#30): like IMMEDIATE above, but declares :SIGNED T --
+;; the emulator sign-extends its operand before semantics runs, so LDY below
+;; sees a negative Lisp integer straight off a negative immediate, rather
+;; than the unsigned byte IMMEDIATE's operand always is. Not one of LASM's
+;; built-in modes (mode.lisp); a machine that wants signed immediates
+;; declares its own, same as any other custom mode.
+(defmode signed-immediate "#" expr :width 1 :signed t)
+
+(definstruction sixtyfoo-m2 ldy
+  (modes signed-immediate)
+  (encoding (opcode #xA0) (operand :mode))
+  (semantics (set! y (wrap-value operand 8))))
 
 ;; LDA: three modes sharing one mnemonic, each with its own opcode and (for
 ;; IMMEDIATE) its own semantics -- ZERO-PAGE and ABSOLUTE share the shared
@@ -89,6 +103,10 @@
                        ; SCRATCH's address is known, rather than always
                        ; taking ABSOLUTE the way an unresolved forward
                        ; reference has to on its very first attempt
+        ldy #-5        ; Y = -5 -- SIGNED-IMMEDIATE (#30): the emulator
+                       ; sign-extends the fetched byte instead of treating
+                       ; it as unsigned 251, the way IMMEDIATE's operand
+                       ; would be
         hlt
 scratch: .byte 42")
 
@@ -106,4 +124,5 @@ scratch: .byte 42")
       (format t "  A = ~D, RAM[$0010] = ~D, RAM[$2000] = ~D~%"
               (sref m 'a) (mref m 'ram #x10) (mref m 'ram #x2000))
       (format t "  \"scratch\" = $~4,'0X (zero-page), final A (from RAM[scratch]) = ~D~%"
-              (gethash "scratch" (assembly-symbols assembly)) (sref m 'a)))))
+              (gethash "scratch" (assembly-symbols assembly)) (sref m 'a))
+      (format t "  Y (signed) = ~D~%" (signed-value (sref m 'y) 8)))))
