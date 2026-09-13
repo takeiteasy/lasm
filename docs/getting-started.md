@@ -104,6 +104,19 @@ validation case that the storage abstraction generalizes beyond
 register-shaped machines — see [Machine model](machine-model.md) and
 [Semantics vocabulary](semantics.md).
 
+```sh
+sbcl --script examples/hybrid.lisp
+```
+
+M3's second validation case: a hybrid machine (`hybridfoo`) with an
+accumulator, index registers, and one stack doing double duty as both a
+data stack and an implicit call stack. `jsr`/`rts` call and return by
+`push`/`pop`-ing `pc` onto that stack, and a subroutine reaches its
+argument — sitting just underneath its own return address — with the
+`stack-relative` addressing mode's `stack-ref` accessor — see [Machine
+model](machine-model.md) and [Addressing modes, "Stack-relative
+addressing"](modes.md#stack-relative-addressing).
+
 ## Run the tests
 
 ```sh

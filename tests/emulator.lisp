@@ -453,3 +453,150 @@ psh #2
 hlt" :machine 'shallow-stack-test-machine)))
     (load-program m a)
     (fiveam:signals stack-overflow (run m))))
+
+;;; M3 milestone target: a hybrid machine -- accumulator + index registers +
+;;; an implicit call stack (#52), mirroring examples/hybrid.lisp. JSR/RTS are
+;;; built entirely from PUSH/POP of PC onto S, no dedicated call-stack
+;;; primitive, and DOUBLE reaches its argument with STACK-RELATIVE addressing
+;;; (#50) since JSR's own return address sits on top of it on the same S.
+
+(defmachine hybrid-test-machine
+  (register a :width 8)
+  (register x :width 8)
+  (register y :width 8)
+  (register pc :width 16)
+  (stack s :width 16 :depth 64)
+  (memory ram :width 8 :addr-width 16)
+  (flags z))
+
+(definstruction hybrid-test-machine lda
+  (modes
+    (immediate      (opcode #xA9) (semantics (set! a operand)))
+    (stack-relative (opcode #xA3) (semantics (set! a (stack-ref machine 's operand))))
+    (absolute       (opcode #xAD)))
+  (semantics (set! a (mref machine 'ram operand))))
+
+(definstruction hybrid-test-machine sta
+  (modes
+    (stack-relative (opcode #x83) (semantics (setf (stack-ref machine 's operand) a)))
+    (absolute       (opcode #x8D)))
+  (semantics (setf (mref machine 'ram operand) a)))
+
+(definstruction hybrid-test-machine sty
+  (modes absolute)
+  (encoding (opcode #x8C) (operand :mode))
+  (semantics (setf (mref machine 'ram operand) y)))
+
+(definstruction hybrid-test-machine pha
+  (encoding (opcode #x48))
+  (semantics (push a s)))
+
+(definstruction hybrid-test-machine pla
+  (encoding (opcode #x68))
+  (semantics (set! a (pop s))))
+
+(definstruction hybrid-test-machine asl
+  (encoding (opcode #x0A))
+  (semantics (set! a (wrap-value (* a 2) 8))))
+
+(definstruction hybrid-test-machine ldx
+  (modes immediate)
+  (encoding (opcode #xA2) (operand :mode))
+  (semantics (set! x operand) (set-flags! (z (zero? x)))))
+
+(definstruction hybrid-test-machine dex
+  (encoding (opcode #xCA))
+  (semantics (set! x (wrap-value (1- x) 8)) (set-flags! (z (zero? x)))))
+
+(definstruction hybrid-test-machine iny
+  (encoding (opcode #xC8))
+  (semantics (set! y (wrap-value (1+ y) 8))))
+
+(definstruction hybrid-test-machine bne
+  (modes relative)
+  (encoding (opcode #xD0) (operand :mode))
+  (semantics (when (zerop z) (set! pc (+ pc operand)))))
+
+(definstruction hybrid-test-machine jsr
+  (modes absolute)
+  (encoding (opcode #x20) (operand :mode))
+  (semantics (push pc s) (set! pc operand)))
+
+(definstruction hybrid-test-machine rts
+  (encoding (opcode #x60))
+  (semantics (set! pc (pop s))))
+
+(definstruction hybrid-test-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(fiveam:test jsr-rts-round-trips-through-stack
+  ;; JSR pushes the address of the instruction after itself; RTS pops it
+  ;; back into PC, so control returns to that exact address rather than to
+  ;; DOUBLE's own body or one byte off in either direction.
+  (let* ((m (make-machine 'hybrid-test-machine))
+         (a (assemble "        lda #5
+        jsr double
+        sta $1000
+        hlt
+double: rts" :machine 'hybrid-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 5 steps)) ; lda, jsr, rts, sta, hlt
+      (fiveam:is (= 5 (mref m 'ram #x1000)))
+      (fiveam:is (= 0 (stack-depth m 's))))))
+
+(fiveam:test stack-relative-reads-past-return-address
+  ;; DOUBLE's argument is pushed before JSR's own return address, so it
+  ;; sits at 1,S -- not 0,S, which is the return address itself.
+  (let* ((m (make-machine 'hybrid-test-machine))
+         (a (assemble "        lda #10
+        pha
+        jsr double
+        pla
+        sta $1000
+        hlt
+double: lda 1,S
+        asl
+        sta 1,S
+        rts" :machine 'hybrid-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (declare (ignore steps))
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 20 (mref m 'ram #x1000)))
+      (fiveam:is (= 0 (stack-depth m 's))))))
+
+(fiveam:test hybrid-machine-end-to-end
+  ;; The M3 milestone's second validation case: DOUBLE called three times
+  ;; through the same JSR/RTS + STACK-RELATIVE machinery as
+  ;; examples/hybrid.lisp, doubling ram[$1000] each time (1 -> 2 -> 4 -> 8)
+  ;; and counting the calls into ram[$1001] via Y.
+  (let* ((m (make-machine 'hybrid-test-machine))
+         (a (assemble "        ldx #3
+        lda #1
+        sta $1000
+loop:   lda $1000
+        pha
+        jsr double
+        pla
+        sta $1000
+        dex
+        bne loop
+        sty $1001
+        hlt
+
+double: iny
+        lda 1,S
+        asl
+        sta 1,S
+        rts" :machine 'hybrid-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      ;; Pinned down by running examples/hybrid.lisp, not hand-counted.
+      (fiveam:is (= 41 steps))
+      (fiveam:is (= 8 (mref m 'ram #x1000)))
+      (fiveam:is (= 3 (mref m 'ram #x1001)))
+      (fiveam:is (= 0 (stack-depth m 's))))))
