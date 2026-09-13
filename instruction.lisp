@@ -324,15 +324,16 @@ n) form, and SPEC is the remaining (:mode) or (:width n) tail as
         (values (first rest) (rest rest)))))
 
 (defun %scalar-bindable-names (machine-name)
-  "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds as
-symbol-macros for MACHINE-NAME: every scalar (:count 1) register, plus
-every flag. An operand field name colliding with one of these would be
-silently shadowed inside (semantics ...) -- see %CHECK-OPERAND-NAMES."
+  "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds for
+MACHINE-NAME: every register (scalar as a symbol-macro, banked (#13) as a
+macrolet taking an index) plus every flag. An operand field name colliding
+with one of these would be silently shadowed inside (semantics ...) -- see
+%CHECK-OPERAND-NAMES. Despite the name (kept for history), this now covers
+banked registers too -- a macrolet binding shadows exactly as silently as a
+symbol-macrolet one."
   (let ((descriptor (find-machine-descriptor machine-name)))
     (loop for element in (machine-descriptor-elements descriptor)
-          when (or (eq (storage-element-kind element) :flag)
-                   (and (eq (storage-element-kind element) :register)
-                        (= (storage-element-count element) 1)))
+          when (member (storage-element-kind element) '(:flag :register))
             collect (storage-element-name element))))
 
 (defun %check-operand-names (names machine name mode-name)

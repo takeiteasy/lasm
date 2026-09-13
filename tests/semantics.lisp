@@ -23,6 +23,25 @@
     (fiveam:is (eq 'test-machine (machine-descriptor-name (machine-descriptor m))))
     (fiveam:signals lasm-trap (trap :illegal-opcode))))
 
+;; #13: banked registers (:count > 1) bind as a MACROLET taking a run-time
+;; index, e.g. (bank i), rather than a plain symbol-macro -- TEST-MACHINE's
+;; BANK element is :width 8 :count 4.
+
+(fiveam:test with-machine-banked-register-indexed-read-write
+  (with-machine (m test-machine)
+    (let ((i 2))
+      (set! (bank i) 7)
+      (fiveam:is (= 7 (bank i)))
+      (fiveam:is (= 7 (bank 2))))
+    (fiveam:is (= 0 (bank 0)))))
+
+(fiveam:test with-machine-banked-register-cells-are-independent
+  (with-machine (m test-machine)
+    (set! (bank 0) 1)
+    (set! (bank 1) 2)
+    (fiveam:is (= 1 (bank 0)))
+    (fiveam:is (= 2 (bank 1)))))
+
 ;; #57: TEST-MACHINE declares exactly one stack (S), so PUSH/POP may omit the
 ;; stack name and resolve to it -- mirroring emulator.lisp's %RESOLVE-MEMORY
 ;; convention for the sole :memory element. This makes the design draft's own

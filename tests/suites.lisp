@@ -14,6 +14,7 @@
 (defmachine test-machine
   (register a :width 8)
   (register wide :width 16)
+  (register bank :width 8 :count 4)
   (stack s :width 8 :depth 4)
   (memory ram :width 8 :addr-width 8)
   (memory wram :width 8 :addr-width 4 :cell-width 16)

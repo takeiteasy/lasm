@@ -17,8 +17,12 @@ evaluates `body` with:
 
 - every **scalar** register and flag of the machine bound as a symbol, e.g.
   `a` reads/sets the `a` register directly (via `symbol-macrolet`, so
-  `(set! a (+ a 1))` and plain `a` both work). Banked registers (`:count >
-  1`) are not bound this way — see [Machine model](machine-model.md).
+  `(set! a (+ a 1))` and plain `a` both work).
+- every **banked** register (`:count > 1`) bound as a local macro taking a
+  run-time index instead, e.g. `(v idx)` reads bank `idx` of `v` (expanding
+  to `regref`) and `(set! (v idx) n)` writes it (through `set!`'s plain
+  `setf` expansion, so no separate write form is needed) — see
+  [Machine model](machine-model.md).
 - the operators below, available as local macros for the extent of `body`.
 - memory accessed by name through the `mref` accessor, since it takes an
   explicit address operand. Stacks are accessed through `push`/`pop` by

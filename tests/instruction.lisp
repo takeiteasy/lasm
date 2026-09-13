@@ -14,6 +14,7 @@
   (register a :width 8)
   (register x :width 8)
   (register pc :width 16)
+  (register v :width 8 :count 4)  ; #13: banked, for the operand-shadowing test below
   (memory ram :width 8 :addr-width 16)
   (flags z n c))
 
@@ -311,6 +312,17 @@
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand a :width 1) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test multi-operand-instruction-operand-name-shadowing-banked-register-signals-error
+  ;; #13: INSTR-TEST-MACHINE's V is a banked (:count 4) register, bound by
+  ;; WITH-MACHINE-BINDINGS as a MACROLET rather than a symbol-macro -- an
+  ;; operand named V would shadow it exactly as silently as a scalar
+  ;; register would, so %SCALAR-BINDABLE-NAMES must reject it too.
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand v :width 1) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test multi-operand-instruction-operand-name-shadowing-flag-signals-error

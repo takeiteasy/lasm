@@ -112,6 +112,51 @@
     (fiveam:signals unknown-storage (mref m 'nope 0))
     (fiveam:signals unknown-storage (stack-push m 'nope 1))))
 
+;;; REGREF / (SETF REGREF) (#13) -- indexed access into a banked (:count >
+;;; 1) register. TEST-MACHINE's BANK element is :width 8 :count 4.
+
+(fiveam:test regref-independent-cells
+  (let ((m (make-machine 'test-machine)))
+    (setf (regref m 'bank 0) 10)
+    (setf (regref m 'bank 1) 20)
+    (fiveam:is (= 10 (regref m 'bank 0)))
+    (fiveam:is (= 20 (regref m 'bank 1)))
+    (fiveam:is (= 0 (regref m 'bank 2)))))
+
+(fiveam:test regref-width-masking
+  (let ((m (make-machine 'test-machine)))
+    (setf (regref m 'bank 0) 300) ; wraps mod 256, same width as SREF
+    (fiveam:is (= 44 (regref m 'bank 0)))))
+
+(fiveam:test regref-index-out-of-range-signalled
+  (let ((m (make-machine 'test-machine)))
+    (fiveam:signals register-index-out-of-range (regref m 'bank 4))
+    (fiveam:signals register-index-out-of-range (regref m 'bank -1))
+    (fiveam:signals register-index-out-of-range (setf (regref m 'bank 4) 1))))
+
+(fiveam:test regref-on-scalar-register-treats-it-as-a-one-element-bank
+  ;; REGREF is not restricted to :count > 1 elements -- a scalar register is
+  ;; a valid size-1 bank, so index 0 works and index 1 is out of range.
+  (let ((m (make-machine 'test-machine)))
+    (setf (sref m 'a) 9)
+    (fiveam:is (= 9 (regref m 'a 0)))
+    (fiveam:signals register-index-out-of-range (regref m 'a 1))))
+
+(fiveam:test sref-on-banked-register-signalled
+  ;; SREF is the scalar accessor -- a banked register has no single cell 0
+  ;; answer, so it must error rather than silently alias every index.
+  (let ((m (make-machine 'test-machine)))
+    (fiveam:signals unknown-storage (sref m 'bank))
+    (fiveam:signals unknown-storage (setf (sref m 'bank) 1))))
+
+(fiveam:test reset-zeroes-banked-register
+  (let ((m (make-machine 'test-machine)))
+    (setf (regref m 'bank 0) 1)
+    (setf (regref m 'bank 3) 2)
+    (reset m)
+    (fiveam:is (= 0 (regref m 'bank 0)))
+    (fiveam:is (= 0 (regref m 'bank 3)))))
+
 (fiveam:test defmachine-rejects-duplicate-names
   (fiveam:signals error
     (eval '(defmachine dup-test

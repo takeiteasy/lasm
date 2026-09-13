@@ -26,19 +26,21 @@ convention for the sole :memory element -- a machine declaring more than one
 stack (or none) signals an error at macroexpansion time, since the descriptor
 is already known here.
 
-Storage elements with :count > 1 (banked registers) are not bound here --
-symbol-macrolet can't express indexed access like (V 3); see the
-storage-element :count docstring in storage.lisp. This applies equally to
-instruction semantics expanded through this macro -- see the M1/M4 backlog
-ticket for indexed access."
+Storage elements with :count > 1 (banked registers, #13) are bound as a
+local macro instead of a symbol-macro -- symbol-macrolet can't express an
+indexed form like (V 3) with a run-time index. So (V idx) reads bank IDX of
+V (expanding to REGREF), and (set! (V idx) val) writes it (through SET!'s
+plain SETF expansion to (SETF (REGREF ...) VAL)). See the storage-element
+:count docstring in storage.lisp."
   (let ((descriptor (find-machine-descriptor machine-name)))
-    (let (symbol-macros stack-names)
+    (let (symbol-macros stack-names banked-names)
       (dolist (element (machine-descriptor-elements descriptor))
         (case (storage-element-kind element)
           (:register
-           (when (= (storage-element-count element) 1)
-             (let ((name (storage-element-name element)))
-               (cl:push `(,name (sref ,machine-var ',name)) symbol-macros))))
+           (let ((name (storage-element-name element)))
+             (if (= (storage-element-count element) 1)
+                 (cl:push `(,name (sref ,machine-var ',name)) symbol-macros)
+                 (cl:push name banked-names))))
           (:flag
            (let ((name (storage-element-name element)))
              (cl:push `(,name (flag ,machine-var ',name)) symbol-macros)))
@@ -57,7 +59,10 @@ ticket for indexed access."
                             (format nil "PUSH/POP on machine ~S: more than one stack element ~
 declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names)))))
         `(symbol-macrolet ,(nreverse symbol-macros)
-           (macrolet ((set! (place value)
+           (macrolet (,@(mapcar (lambda (name)
+                                   `(,name (index) `(regref ,',machine-var ',',name ,index)))
+                                 (nreverse banked-names))
+                      (set! (place value)
                         `(setf ,place ,value))
                       (push (value &optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-stack)))

@@ -45,6 +45,15 @@
                      (stack-index-out-of-range-index c)
                      (storage-error-name c) (storage-error-machine c)))))
 
+;; #13: signalled by REGREF/(SETF REGREF) for an INDEX outside a banked
+;; register's [0, count) range. Mirrors STACK-INDEX-OUT-OF-RANGE's shape.
+(define-condition register-index-out-of-range (storage-error)
+  ((index :initarg :index :reader register-index-out-of-range-index))
+  (:report (lambda (c s)
+             (format s "Register index ~S out of range for register ~S on machine ~S"
+                     (register-index-out-of-range-index c)
+                     (storage-error-name c) (storage-error-machine c)))))
+
 ;; Generalized trap primitive placeholder. M6 replaces this with a full
 ;; interrupt/exception model (deftrap/definterrupt, vectors, priority);
 ;; for now `trap` just signals this condition with a tag and optional data.
@@ -78,10 +87,13 @@
   (name nil :type symbol)
   (kind nil :type (member :register :stack :memory :flag))
   (width nil :type (or null (integer 1)))
-  ;; :count > 1 marks a banked/array register (e.g. CHIP8's V0-VF). M0 only
-  ;; implements scalar (:count 1) access via WITH-MACHINE's symbol-macrolet;
-  ;; indexed access for :count > 1 is parsed/stored here but not yet wired
-  ;; up to an accessor -- see the M1/M4 backlog ticket for indexed access.
+  ;; :count > 1 marks a banked/array register (e.g. CHIP8's V0-VF, #13). A
+  ;; banked register allocates :count cells (MAKE-STORAGE-SLOT) and is
+  ;; accessed by runtime index through REGREF/(SETF REGREF), not SREF --
+  ;; SREF is scalar-only and errors on a banked element. WITH-MACHINE-
+  ;; BINDINGS (semantics.lisp) binds a :count 1 register as a symbol-macro
+  ;; but a :count > 1 register as a MACROLET expanding to REGREF, since
+  ;; symbol-macrolet can't express an indexed form like (V x).
   (count 1 :type (integer 1))
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
@@ -167,7 +179,11 @@
 
 (defun make-storage-slot (element)
   (ecase (storage-element-kind element)
-    ((:register :flag)
+    (:register
+     ;; :count cells -- 1 for an ordinary scalar register, more for a
+     ;; banked register (#13, e.g. CHIP8's 16 V registers).
+     (make-array (storage-element-count element) :initial-element 0))
+    (:flag
      (make-array 1 :initial-element 0))
     (:stack
      (cons (make-array (storage-element-depth element) :initial-element 0)
@@ -197,7 +213,7 @@
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
-        ((:register :flag) (setf (aref slot 0) 0))
+        ((:register :flag) (fill slot 0))
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
   machine)
@@ -212,7 +228,8 @@
     (values (gethash name (machine-slots machine)) element)))
 
 (defun sref (machine name)
-  "Read a register or flag by NAME as an unsigned integer."
+  "Read a scalar register or flag by NAME as an unsigned integer. Signals
+UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
   (multiple-value-bind (slot element) (%slot-any machine name)
     (declare (ignore element))
     (aref slot 0)))
@@ -222,11 +239,37 @@
     (unless (member (storage-element-kind element) '(:register :flag))
       (error 'unknown-storage :machine (machine-descriptor-name (machine-descriptor machine))
                                :name name))
+    ;; SREF/(SETF SREF) are the scalar accessor -- a banked register (#13)
+    ;; has no single cell 0 answer, so treat it as unaddressable by this
+    ;; path rather than silently aliasing every index to one cell.
+    (when (> (storage-element-count element) 1)
+      (error 'unknown-storage :machine (machine-descriptor-name (machine-descriptor machine))
+                               :name name))
     (values (gethash name (machine-slots machine)) element)))
 
 (defun (setf sref) (value machine name)
   (multiple-value-bind (slot element) (%slot-any machine name)
     (setf (aref slot 0) (wrap-value value (storage-element-width element)))))
+
+;; #13: indexed access into a banked (:count > 1) register, e.g. CHIP8's
+;; V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J. INDEX is evaluated at run time --
+;; unlike STACK-REF's top-relative OFFSET, this is a plain 0-based bank
+;; index (0 = the register's first element) since a banked register has no
+;; notion of "top". Mirrors SREF/MREF's shape.
+(defun regref (machine name index)
+  "Read banked register NAME on MACHINE at bank INDEX as an unsigned integer."
+  (multiple-value-bind (slot element) (%slot machine name :register)
+    (unless (and (>= index 0) (< index (storage-element-count element)))
+      (error 'register-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                                           :name name :index index))
+    (aref slot index)))
+
+(defun (setf regref) (value machine name index)
+  (multiple-value-bind (slot element) (%slot machine name :register)
+    (unless (and (>= index 0) (< index (storage-element-count element)))
+      (error 'register-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                                           :name name :index index))
+    (setf (aref slot index) (wrap-value value (storage-element-width element)))))
 
 (defun flag (machine name)
   "Read a flag by NAME as 0 or 1."

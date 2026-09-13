@@ -26,10 +26,17 @@ widths against a machine defined earlier in the same file.
 
 - `(register NAME :width n [:count n])` — a fixed-width storage cell.
   `:count n` (n > 1) declares a *banked* register (e.g. CHIP8's 16 `V`
-  registers). **Currently `:count > 1` is parsed and stored on the
-  descriptor but there is no indexed accessor yet** — only scalar
-  (`:count 1`, the default) registers are readable/writable. Indexed access
-  is tracked as a follow-up ticket.
+  registers, [`examples/chip8.lisp`](../examples/chip8.lisp)). A scalar
+  register (`:count 1`, the default) is read/written by `sref`/
+  `(setf sref)` and, inside `with-machine`/instruction semantics, bound
+  directly by name (e.g. `a`). A banked register is read/written by
+  `regref`/`(setf regref)`, which take a run-time bank index and mask/wrap
+  the value to the element's own `:width` exactly like `sref` does; an
+  out-of-range index signals `register-index-out-of-range`. `sref` is
+  scalar-only and signals `unknown-storage` on a banked element. Inside
+  `with-machine`/instruction semantics, a banked register is bound as a
+  local macro taking an index, e.g. `(v idx)` reads bank `idx` of `v` and
+  `(set! (v idx) n)` writes it — see [Semantics vocabulary](semantics.md).
 - `(stack NAME :width n :depth n)` — a fixed-depth LIFO stack of `:width`-bit
   values. Grows upward: the stack pointer starts at 0 and always equals the
   number of live entries, incrementing on push and decrementing on pop.
@@ -105,9 +112,15 @@ signed/unsigned mode.
 
 | Element kind | Read | Write |
 |---|---|---|
-| register / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
+| register (scalar) / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
+| register (banked, `:count > 1`) | `(regref machine name index)` | `(setf (regref machine name index) v)` |
 | stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-ref machine name offset) v)` |
 | memory | `(mref machine name address)` | `(setf (mref machine name address) v)` |
+
+`regref` also works on a scalar (`:count 1`) register, treating it as a
+one-element bank (`index` 0); `sref` is the reverse restriction, and signals
+`unknown-storage` on a banked element rather than aliasing every index to
+one cell.
 
 `flag` treats any non-`nil` value as 1 and `nil` as 0 on write, and reads
 back as `0`/`1`.
@@ -117,7 +130,8 @@ back as `0`/`1`.
 All signalled conditions inherit `lasm-error`: `unknown-storage`,
 `address-out-of-range`, `stack-overflow`, `stack-underflow`,
 `stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
-`(setf stack-ref)`). `lasm-trap` is signalled by the `trap` semantics
+`(setf stack-ref)`), `register-index-out-of-range` (an out-of-range
+`index` to `regref`/`(setf regref)`). `lasm-trap` is signalled by the `trap` semantics
 operator (see [Semantics vocabulary](semantics.md)) and is not a storage
 error.
 
