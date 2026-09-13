@@ -1,6 +1,6 @@
 # Emulator
 
-A tree-walking fetch/decode/execute loop running encoded bytes (see
+A tree-walking fetch/decode/execute loop running encoded cells (see
 [Assembler](assembler.md)) against a live `machine` (see [Machine
 model](machine-model.md)), dispatching on opcode to each instruction's
 semantics (see [Instructions](instructions.md)).
@@ -35,17 +35,24 @@ operand width when more than one memory element is declared.
 ## `load-program`
 
 ```lisp
-(load-program MACHINE bytes &key memory origin)
+(load-program MACHINE cells &key memory origin)
 ```
 
-`bytes` is an `assembly` (see [Assembler](assembler.md)) or any sequence of
-`(unsigned-byte 8)`. Writes each byte into `memory` starting at `origin`,
+`cells` is an `assembly` (see [Assembler](assembler.md)) or any sequence of
+`(unsigned-byte n)`. Writes each cell into `memory` starting at `origin`,
 then sets the PC register to `origin`.
 
-`origin` defaults to the assembly's own `origin` slot when `bytes` is an
+`origin` defaults to the assembly's own `origin` slot when `cells` is an
 `assembly` — so `(assemble source :origin #x200)` and `load-program`
 *cannot* silently disagree about where the program's labels point — and to
 `0` otherwise.
+
+When `cells` is an `assembly`, its own `assembly-cell-width` (#53, see
+[Assembler](assembler.md#assemblys-cell-width)) must match `memory`'s
+declared `:cell-width` — `load-program` signals otherwise, rather than
+silently placing every cell one address too far apart, which is what would
+happen if a program assembled against a byte-addressed memory element were
+loaded into a word-addressed one with no other symptom.
 
 ## `step-machine`
 
@@ -53,10 +60,12 @@ then sets the PC register to `origin`.
 (step-machine MACHINE &key pc memory)
 ```
 
-Fetches the opcode byte at `pc`, decodes it (`find-instruction-by-opcode`),
+Fetches the opcode cell at `pc`, decodes it (`find-instruction-by-opcode`),
 reads its declared `operand-widths` fields little-endian **one after
-another** (each field's own width, in the order `definstruction` wired them
-up — see [Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)),
+another**, each cell masked at the machine's own `:cell-width` (#53 — 8 bits
+on every byte-addressed machine) rather than a fixed 8 (each field's own
+width, in the order `definstruction` wired them up — see [Instructions,
+"Repeated `(operand ...)` subclauses"](instructions.md)),
 **advances `pc` past the
 whole instruction (opcode plus every field), then executes its semantics**
 — in that order. This ordering is what lets a branch instruction's own
@@ -83,16 +92,17 @@ ordinary (non-`relative`) `:signed` mode may have more than one field, and
 each is reinterpreted independently.
 
 Returns the executed `instruction-descriptor`, or the keyword
-`:decode-failure` (without advancing `pc` or executing anything) if the byte
+`:decode-failure` (without advancing `pc` or executing anything) if the cell
 at `pc` isn't a registered opcode on this machine.
 
 ### Word-encoded machines (#20)
 
 On a machine declaring an `instruction-word` clause ([Machine
 model](machine-model.md)), `step-machine` instead fetches one whole
-instruction word (little-endian, `instruction-word-layout-width-bytes`
-bytes), extracts its `opcode` field to find the `instruction-descriptor`
-(`find-instruction-by-opcode`, same as the byte-encoded path — a
+instruction word (little-endian, `instruction-word-layout-width-cells`
+cells at the machine's own `:cell-width`, #53), extracts its `opcode` field
+to find the `instruction-descriptor`
+(`find-instruction-by-opcode`, same as the cell-encoded path — a
 word-encoded family's several sibling descriptors, one per operand-field
 variant, all share one opcode value, so *whichever* sibling occupies the
 opcode table works equally well here), then decodes each operand field
@@ -127,7 +137,7 @@ Calls `step-machine` in a loop until one of three stop conditions:
 | `reason` | Meaning |
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. A generalized interrupt/exception model replacing `trap` outright is M6. |
-| `:decode-failure` | `step-machine` hit a byte that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
+| `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
 | `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer (`(cycles n)` on `definstruction` is parsed but not used yet — a separate follow-up). |
 
 `steps` counts instructions that actually executed. A step that traps still
@@ -155,7 +165,7 @@ integer.
 
 ## Scope
 
-This covers fetch/decode/execute over already-encoded bytes and a single
+This covers fetch/decode/execute over already-encoded cells and a single
 flat halt/decode-failure/step-budget stop model. Multiple addressing modes
 per mnemonic ([Addressing modes](modes.md)) need no change here: each mode
 variant carries its own distinct opcode, so `find-instruction-by-opcode`'s
@@ -165,4 +175,4 @@ declares. It does not cover:
 - Cycle-accurate timing using `(cycles n)` — undecided, tracked separately.
 - Interrupts, privilege levels, or a generalized trap/interrupt model
   beyond the single `trap` primitive — M6.
-- A disassembler recovering source from encoded bytes — M7 (#21).
+- A disassembler recovering source from encoded cells — M7 (#21).

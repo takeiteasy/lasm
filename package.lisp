@@ -50,7 +50,7 @@
    #:instruction-word-layout
    #:instruction-word-layout-p
    #:instruction-word-layout-width
-   #:instruction-word-layout-width-bytes
+   #:instruction-word-layout-width-cells
    #:instruction-word-layout-fields
    #:instruction-word-field
 
@@ -202,7 +202,8 @@
    #:assemble-statements
    #:assembly
    #:assembly-p
-   #:assembly-bytes
+   #:assembly-cells
+   #:assembly-cell-width
    #:assembly-origin
    #:assembly-symbols
    #:assembly-error

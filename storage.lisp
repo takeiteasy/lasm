@@ -90,17 +90,18 @@
 ;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
 ;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
 ;; (machine.lisp) for a DCPU-16-shaped machine whose whole instruction is one
-;; WIDTH-bit word split into named bit fields rather than a byte-per-operand
+;; WIDTH-bit word split into named bit fields rather than a cell-per-operand
 ;; stream. FIELDS is a list of (name width shift) in *declared* (most-
 ;; significant-first) order -- SHIFT is each field's bit offset from the
 ;; word's LSB, derived once here so encode/decode never recompute it.
-;; WIDTH-BYTES is WIDTH/8, checked to be a whole number at parse time
-;; (machine.lisp) since the word is still emitted as little-endian bytes
-;; (#53 -- the assembler pipeline stays byte-typed; this only adds a way to
-;; pack sub-byte fields into those bytes before they're written).
+;; WIDTH-CELLS is WIDTH/CELL-WIDTH, checked to be a whole number at parse
+;; time (machine.lisp) since the word is emitted as CELL-WIDTH-wide,
+;; little-endian cells (#53 -- the assembler pipeline is typed to the
+;; target machine's own memory cell width, not fixed at 8 bits).
 (defstruct instruction-word-layout
   (width nil :type (integer 1))
-  (width-bytes nil :type (integer 1))
+  (width-cells nil :type (integer 1))
+  (cell-width nil :type (integer 1))
   (fields nil :type list))          ; (name width shift), MSB-first as declared
 
 (defun instruction-word-field (layout name)

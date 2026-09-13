@@ -1,7 +1,9 @@
 # Assembler
 
 `assemble` turns a program's source text (or an already-parsed statement
-list) into encoded bytes, resolving labels and choosing an addressing mode
+list) into encoded cells (a byte on an ordinary byte-addressed machine, a
+wider unit on a word-addressed one -- see "`assembly`'s cell width" below),
+resolving labels and choosing an addressing mode
 along the way.
 
 ```lisp
@@ -23,8 +25,8 @@ the result.
 ## `assemble` / `assemble-statements`
 
 ```lisp
-(assemble SOURCE &key machine (lexer 'default) (origin 0))
-(assemble-statements STATEMENTS &key machine (origin 0))
+(assemble SOURCE &key machine (lexer 'default) (origin 0) memory)
+(assemble-statements STATEMENTS &key machine (origin 0) memory)
 ```
 
 `assemble` is `parse` (see [Statement grammar & expression
@@ -33,19 +35,41 @@ holding a `statement` list (e.g. from its own preprocessing) can call the
 latter directly. Both return an `assembly`:
 
 ```lisp
-(defstruct assembly bytes origin symbols)
+(defstruct assembly cells cell-width origin symbols)
 ```
 
-- `bytes` — a `(vector (unsigned-byte 8))` of the encoded program. A gap left
-  by a forward `.org` or a `.res` run (see [Directives](directives.md)) is
-  zero-filled.
-- `origin` — the address the first byte was placed at: the `:origin` key
+- `cells` — a `(vector (unsigned-byte cell-width))` of the encoded program,
+  `cell-width` being the target memory element's own `:cell-width` (see
+  "`assembly`'s cell width" below; 8 on every byte-addressed machine, same
+  as every LASM machine before this). A gap left by a forward `.org` or a
+  `.res` run (see [Directives](directives.md)) is zero-filled.
+- `cell-width` — the bit width of one element of `cells`, resolved once at
+  assemble time (see below); never larger than a `fixnum` in practice, but
+  not otherwise constrained.
+- `origin` — the address the first cell was placed at: the `:origin` key
   below, unless a leading `.org` moved it first (see "`:origin`" below).
 - `symbols` — a hash table (name string → value) of every symbol bound while
   assembling, forward or backward: a label's address, or an `.equ`'s folded
   value (see "`.equ` / symbol assignment" below) — the two share one flat
   table and one duplicate check, so a program can't bind the same name both
   ways.
+
+### `assembly`'s cell width
+
+Every address a program's labels and location counter resolve to is counted
+in the target machine's own memory cells, not bytes — on a machine whose
+memory declares `:cell-width 16` (word-addressed, e.g. a DCPU-16-shaped
+design), a label two instructions in is address `2`, not `4`, and `assemble`
+emits a `(vector (unsigned-byte 16))`, not a byte stream `load-program`
+would need to re-pack. `MEMORY` names which of `machine`'s memory elements
+this assembly targets, exactly like `load-program`'s own `:memory` — it
+defaults to the machine's sole memory element, or (when several elements
+share one cell width) that shared width; declaring more than one memory
+element with *different* cell widths makes this ambiguous and `assemble`
+requires `:memory` explicitly. `load-program` checks an `assembly`'s
+`cell-width` against its target memory element and signals if they
+disagree, rather than silently misplacing every cell (see
+[Emulator](emulator.md#load-program)).
 
 ## Macro expansion
 
@@ -66,9 +90,10 @@ reaches `assemble-statements` after parsing.
    [Instructions](instructions.md)), which **chooses one** (see "Choosing a
    mode" below) and advances the counter by that variant's encoded size
    (`instruction-descriptor-size` — `1 +` the sum of its operand field
-   widths on an ordinary byte-encoded machine, or a word-encoded one's own
-   word size times `1 +` its extra-word count, #20; see "Word-encoded
-   instructions" below). A variant may wire up more than one field, one per
+   widths, all counted in the machine's own memory cells (#53), on an
+   ordinary cell-encoded machine, or a word-encoded one's own word size
+   times `1 +` its extra-word count, #20; see "Word-encoded instructions"
+   below). A variant may wire up more than one field, one per
    hole of its mode; see "Multi-operand instructions" below. Directive lookup
    has to come first:
    `find-instruction-variants` signals on an unregistered name, so it can't
@@ -240,11 +265,11 @@ target: nop       ; encode, little-endian, one after the other
 
 A machine declaring an `instruction-word` clause ([Machine
 model](machine-model.md)) encodes one instruction as a single fixed-width
-word rather than an opcode byte plus operand bytes — see [Instructions,
+word rather than an opcode cell plus operand cells — see [Instructions,
 "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
 for how `definstruction` declares it. Sizing and relaxation still go through
 the same `%choose-variant` pipeline described above, generalized via
-`instruction-descriptor-size` instead of assuming a byte opcode:
+`instruction-descriptor-size` instead of assuming a single-cell opcode:
 
 - A variant-bearing operand field expands `definstruction` into several
   `instruction-descriptor`s sharing one mnemonic, mode, and opcode
@@ -253,13 +278,13 @@ the same `%choose-variant` pipeline described above, generalized via
   convention above, generalized from addressing-mode width to extra-word
   count.
 - The value filter's word-encoded branch (above) checks each field's value
-  against its own declared inline range rather than a byte width; an
+  against its own declared inline range rather than a cell width; an
   `extra-word` field always fits, since any value can spill into its own
   word.
-- `instruction-descriptor-size` — a word-encoded machine's own word byte
-  width times `1 +` its chosen variant's extra-word count — replaces `1 +
-  total-operand-width` everywhere layout and relative-offset arithmetic used
-  to assume a byte opcode.
+- `instruction-descriptor-size` — a word-encoded machine's own word cell
+  width (#53, the target memory's `:cell-width`) times `1 +` its chosen
+  variant's extra-word count — replaces `1 + total-operand-width` everywhere
+  layout and relative-offset arithmetic used to assume a single-cell opcode.
 - A `:relative` addressing mode is rejected at `definstruction` time on a
   word-encoded machine (see [Instructions](instructions.md#word-encoded-instructions-20)),
   so "PC-relative offsets" below never applies to one.
@@ -289,7 +314,7 @@ past the branch *before* running its semantics — so an instruction's own
 `(set! pc (+ pc operand))` adds the offset to exactly the base it was
 computed from, at any `:origin`. `encode-instruction` itself needs no
 special case: `wrap-value` already renders a negative offset as its
-two's-complement byte (e.g. `-3` as `#xFD`).
+two's-complement cell (e.g. `-3` as `#xFD` on an 8-bit-cell machine).
 
 If the offset doesn't fit the operand's width, this signals `assembly-error`
 naming the mnemonic, the offset, and the legal range, rather than silently

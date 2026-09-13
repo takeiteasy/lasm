@@ -34,9 +34,10 @@ including zero. `action-form` must be exactly one of:
   no earlier statement has occupied an address yet, the assembly's own
   `origin` — see "`.org`" below) to `value-name`. Zero layout size.
 - `(reserve value-name)` — advance the address counter by `value-name`
-  bytes, zero-filled.
+  cells (the machine's own addressable unit, #53 — bytes on every
+  byte-addressed machine, the only kind before this), zero-filled.
 - `(emit width values-name)` — lay down `(length values-name)` little-endian
-  `width`-byte fields, one per value. Layout size is `width * (length
+  `width`-cell fields, one per value. Layout size is `width * (length
   values-name)`.
 - `(assign name-name value-name)` — bind `name-name` (an identifier operand,
   not an expression) to `value-name` in the symbol table, without occupying
@@ -99,23 +100,31 @@ here: .org $8000   ; here == $8000, not the address before the move
 ## `.byte` / `.word`
 
 ```lisp
-.byte 1, 2, 3        ; three one-byte fields: 01 02 03
-.word $1234          ; one two-byte field, little-endian: 34 12
+.byte 1, 2, 3        ; three one-cell fields: 01 02 03
+.word $1234          ; one two-cell field, little-endian: 34 12
 .byte target         ; a label operand -- resolved at encode time, like an
 target: nop          ; ordinary instruction operand
 ```
 
 Variadic; zero or more comma-separated operands (`statement-operands`, see
 [Statement grammar & expression parser](parser.md) — each one a bare
-expression, not an addressing-mode pattern). `.byte` lays down one byte per
-value, `.word` one little-endian two-byte field per value — both via
-`%encode-value-bytes`, the same little-endian byte-splitting
+expression, not an addressing-mode pattern). `.byte` lays down one cell per
+value, `.word` one little-endian two-cell field per value — both via
+`%encode-value-cells`, the same little-endian cell-splitting
 `encode-instruction` uses for an ordinary operand ([Instructions,
 "Encoding"](instructions.md)), so directive data and instruction operands
-can't drift apart in how they lay bytes down. A value out of its field's
+can't drift apart in how they lay cells down. A value out of its field's
 range wraps via the existing `wrap-value`, exactly like an instruction
 operand (diagnosing that instead of wrapping is a separate, existing
 follow-up ticket, not specific to directives).
+
+**On a word-addressed machine** (`:cell-width` other than 8, #53) `.byte`
+and `.word` still mean *one* and *two of the machine's own cells* — the
+names are inherited from every byte-addressed example so far and are a
+misnomer there (`.byte 1, 2` on a 16-bit-cell machine lays down two 16-bit
+cells, not two 8-bit bytes; DCPU-16 assemblers call the equivalent `dat`). A
+dedicated `.cell`/`.dat` alias is a follow-up ticket, kept separate so this
+change doesn't touch any existing byte-addressed machine's source.
 
 Because layout size here is just argument *count*, `.byte`/`.word` values
 are evaluated against the completed symbol table at encode time — a label
@@ -124,15 +133,17 @@ operand works with no special handling.
 ## `.res`
 
 ```lisp
-.res 4   ; four zero-filled bytes
+.res 4   ; four zero-filled cells
 ```
 
 Advances the address counter by its (single, constant — same label-free
-folding rule as `.org`) operand, zero-filled. A negative count signals
-`assembly-error`. Since the emulator has no way to skip over a run of bytes
-sitting in the middle of the code path (no jump/skip instruction is part of
-the core semantics vocabulary), a `.res` run belongs in a data area the
-program's control flow doesn't traverse — see
+folding rule as `.org`) operand, zero-filled — cells, not necessarily
+8-bit bytes (#53; `.org`'s own operand is an address and was always
+cell-indexed, so `.org` itself needs no such caveat). A negative count
+signals `assembly-error`. Since the emulator has no way to skip over a run
+of cells sitting in the middle of the code path (no jump/skip instruction is
+part of the core semantics vocabulary), a `.res` run belongs in a data area
+the program's control flow doesn't traverse — see
 [`examples/directives.lisp`](../examples/directives.lisp).
 
 ## `.equ`

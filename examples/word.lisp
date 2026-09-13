@@ -87,11 +87,11 @@ hlt")
 
 (format t "Assembling:~%")
 (let ((assembly (assemble *source* :machine 'wordfoo)))
-  (format t "  bytes:  ~S~%" (coerce (assembly-bytes assembly) 'list))
+  (format t "  bytes:  ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  length: ~D bytes (2 each for SETA/ADD/HLT's one word, 4 for SETB's ~
 extra word)~%"
-          (length (assembly-bytes assembly)))
-  (assert (= 10 (length (assembly-bytes assembly))))
+          (length (assembly-cells assembly)))
+  (assert (= 10 (length (assembly-cells assembly))))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'wordfoo)))

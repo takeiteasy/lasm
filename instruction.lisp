@@ -112,7 +112,7 @@ then delete the winner's entry outright as an apparently orphaned opcode.")
   (extra-words 0 :type (integer 0)))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
-  "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the byte count its operand encoding
+  "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
 occupies as a whole, regardless of how many fields it's split across. 0 for
 a no-operand instruction, and always 0 for a word-encoded descriptor (#20),
 whose OPERAND-WIDTHS is NIL by construction -- see INSTRUCTION-DESCRIPTOR-SIZE
@@ -126,10 +126,16 @@ slot rather than cached on the descriptor, so it can't drift from the
 machine descriptor it names."
   (machine-descriptor-instruction-word (find-machine-descriptor (instruction-descriptor-machine descriptor))))
 
+(defun instruction-descriptor-cell-width (descriptor)
+  "DESCRIPTOR's machine's code cell width in bits (#53) -- looked up via
+%MACHINE-CELL-WIDTH (machine.lisp) rather than cached on the descriptor, same
+rationale as INSTRUCTION-DESCRIPTOR-WORD-LAYOUT."
+  (%machine-cell-width (instruction-descriptor-machine descriptor)))
+
 (defun instruction-descriptor-size (descriptor)
-  "Total encoded bytes for one use of DESCRIPTOR -- 1 (opcode byte) plus
-operand byte widths on an ordinary byte-encoded machine, or
-INSTRUCTION-WORD-LAYOUT-WIDTH-BYTES * (1 + EXTRA-WORDS) on a word-encoded one
+  "Total encoded cells for one use of DESCRIPTOR -- 1 (opcode cell) plus
+operand cell widths on an ordinary byte/cell-encoded machine, or
+INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS * (1 + EXTRA-WORDS) on a word-encoded one
 (#20). Centralizes what used to be five separate \"1 + operand width\"
 computations scattered across the assembler's layout/relaxation, its
 relative-branch offset arithmetic, and the emulator's fetch loop, so a
@@ -137,7 +143,7 @@ word-encoded descriptor's size is computed identically everywhere rather than
 each caller assuming a byte opcode."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
-        (* (instruction-word-layout-width-bytes layout) (1+ (instruction-descriptor-extra-words descriptor)))
+        (* (instruction-word-layout-width-cells layout) (1+ (instruction-descriptor-extra-words descriptor)))
         (1+ (instruction-descriptor-total-operand-width descriptor)))))
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
@@ -270,12 +276,13 @@ UNKNOWN-INSTRUCTION if none is registered."
 
 ;; A mode's default operand width, when neither the mode itself nor the
 ;; instruction gives one explicitly: the machine's sole memory element's
-;; address width, rounded up to whole (8-bit) bytes, little-endian on
-;; encode. When a machine declares more than one memory element, this is
-;; ambiguous and DEFINSTRUCTION requires (operand :width n) explicitly
-;; instead of guessing which memory element an address-shaped operand
-;; addresses. Named for what it does now that ABSOLUTE is an ordinary
-;; DEFMODE with no special standing (formerly %DEFAULT-ABSOLUTE-WIDTH).
+;; address width, rounded up to whole cells of that same element's own
+;; CELL-WIDTH (#53), little-endian on encode. When a machine declares more
+;; than one memory element, this is ambiguous and DEFINSTRUCTION requires
+;; (operand :width n) explicitly instead of guessing which memory element an
+;; address-shaped operand addresses. Named for what it does now that
+;; ABSOLUTE is an ordinary DEFMODE with no special standing (formerly
+;; %DEFAULT-ABSOLUTE-WIDTH).
 (defun %default-address-width (machine-name)
   (let* ((descriptor (find-machine-descriptor machine-name))
          (mem-elements (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
@@ -288,7 +295,8 @@ memory element to size its operand, but none is declared" machine-name))
        (error "DEFINSTRUCTION on machine ~S: more than one memory element ~
 declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode)"
               machine-name (mapcar #'storage-element-name mem-elements)))
-      (t (ceiling (storage-element-addr-width (first mem-elements)) 8)))))
+      (t (ceiling (storage-element-addr-width (first mem-elements))
+                  (storage-element-cell-width (first mem-elements)))))))
 
 (defun %mode-operand-width (mode machine-name)
   "MODE's own default width, falling back to %DEFAULT-ADDRESS-WIDTH."
@@ -908,22 +916,23 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
 
 ;;; Encoding / execution
 
-(defun %encode-value-bytes (value width)
+(defun %encode-value-cells (value width cell-width)
   "Split (already-evaluated integer) VALUE into WIDTH little-endian
-(unsigned-byte 8) bytes, wrapping each with WRAP-VALUE (storage.lisp) like
-every other encoded quantity in this codebase. Shared by ENCODE-INSTRUCTION
-below and the assembler's .BYTE/.WORD directive encoding (assembler.lisp,
-#14), so instruction operands and directive data can't drift apart in how
-they lay bytes down."
-  (loop for i below width collect (wrap-value (ash value (* -8 i)) 8)))
+(unsigned-byte CELL-WIDTH) cells, wrapping each with WRAP-VALUE
+(storage.lisp) like every other encoded quantity in this codebase. Shared by
+ENCODE-INSTRUCTION below and the assembler's .BYTE/.WORD directive encoding
+(assembler.lisp, #14), so instruction operands and directive data can't
+drift apart in how they lay cells down."
+  (loop for i below width collect (wrap-value (ash value (* (- cell-width) i)) cell-width)))
 
 (defun %encode-word-instruction (descriptor layout values)
   "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode and
 each operand's chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES)
 into one LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
-(%ENCODE-VALUE-BYTES) followed by each :EXTRA-WORD operand's own value, also
-little-endian, in operand declaration order."
-  (let ((word 0) extra-word-values)
+(%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH) followed by each
+:EXTRA-WORD operand's own value, also little-endian, in operand declaration
+order."
+  (let ((word 0) extra-word-values (cell-width (instruction-word-layout-cell-width layout)))
     (destructuring-bind (opcode-width opcode-shift)
         (rest (instruction-word-field layout 'opcode))
       (setf word (ash (wrap-value (instruction-descriptor-opcode descriptor) opcode-width) opcode-shift)))
@@ -938,20 +947,22 @@ little-endian, in operand declaration order."
                 (setf word (logior word (ash (word-field-choice-escape choice)
                                               (word-field-choice-shift choice))))
                 (cl:push value extra-word-values))))
-    (append (%encode-value-bytes word (instruction-word-layout-width-bytes layout))
+    (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width)
             (loop for value in (nreverse extra-word-values)
-                  append (%encode-value-bytes value (instruction-word-layout-width-bytes layout))))))
+                  append (%encode-value-cells value (instruction-word-layout-width-cells layout) cell-width)))))
 
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
 already-evaluated integers, one per operand encoding field, in the same
-order -- NIL for a no-operand instruction) into a list of (unsigned-byte 8)
-bytes. On an ordinary byte-encoded machine: the opcode, followed by each
-value's bytes little-endian in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a
-word-encoded machine (#20, INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one
-instruction word packing the opcode and every inline operand's biased value
-or extra-word escape by bit field, little-endian, followed by each
-extra-word operand's own value, also little-endian, in declaration order
+order -- NIL for a no-operand instruction) into a list of
+(unsigned-byte cell-width) cells, CELL-WIDTH being DESCRIPTOR's machine's own
+code cell width (#53, INSTRUCTION-DESCRIPTOR-CELL-WIDTH). On an ordinary
+cell-encoded machine: the opcode, followed by each value's cells
+little-endian in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a word-encoded
+machine (#20, INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one instruction
+word packing the opcode and every inline operand's biased value or
+extra-word escape by bit field, little-endian, followed by each extra-word
+operand's own value, also little-endian, in declaration order
 (%ENCODE-WORD-INSTRUCTION). VALUES shorter than DESCRIPTOR declares silently
 encodes fewer fields, rather than erroring -- every caller in this codebase
 (%ENCODE, assembler.lisp) always supplies exactly one value per field, so
@@ -960,10 +971,11 @@ its own should supply the same."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
         (%encode-word-instruction descriptor layout values)
-        (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
-              (loop for value in values
-                    for width in (instruction-descriptor-operand-widths descriptor)
-                    append (%encode-value-bytes value width))))))
+        (let ((cell-width (instruction-descriptor-cell-width descriptor)))
+          (cons (wrap-value (instruction-descriptor-opcode descriptor) cell-width)
+                (loop for value in values
+                      for width in (instruction-descriptor-operand-widths descriptor)
+                      append (%encode-value-cells value width cell-width)))))))
 
 (defun execute-instruction (descriptor machine values)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing

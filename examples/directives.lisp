@@ -64,7 +64,7 @@ table:   .byte 5, 10, 15")
 (format t "Assembling:~%")
 (let ((assembly (assemble *source* :machine 'sixtyfoo-directives)))
   (format t "  origin: $~4,'0X~%" (assembly-origin assembly))
-  (format t "  bytes: ~{~2,'0X~^ ~}~%" (coerce (assembly-bytes assembly) 'list))
+  (format t "  bytes: ~{~2,'0X~^ ~}~%" (coerce (assembly-cells assembly) 'list))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'sixtyfoo-directives)))

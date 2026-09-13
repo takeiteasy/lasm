@@ -222,10 +222,11 @@ rather than a hard boundary.
 
 ### 3.8 Word-addressed memory + variant encoding (DCPU-16-style)
 
-Implemented as two separate pieces: the bitfield/variant encoding below
-(bitfield/variant encoding for value-dependent instruction length), and
-word-addressed memory (assembler/encoder pipeline hardcoded to byte-addressed
-output), which is still open — the DCPU-16 example below needs both.
+Implemented as two separate pieces, both now landed: the bitfield/variant
+encoding below (value-dependent instruction length), and word-addressed
+memory (the assembler/encoder pipeline is typed to a machine's own code
+cell width rather than fixed at 8 bits) — a full DCPU-16-shaped example
+combining both is a separate, further ticket.
 
 Field widths are declared once, machine-level, in `defmachine`'s
 `instruction-word` clause — not per instruction, since decode has to split
@@ -255,9 +256,13 @@ blocked and the reserved value is visible in the source:
 ```
 
 See [docs/instructions.md](docs/instructions.md#word-encoded-instructions-20)
-and [`examples/word.lisp`](examples/word.lisp) for the implemented mechanism
-end to end (on a byte-addressed machine — the memory model half above is
-still separate).
+and [`examples/word.lisp`](examples/word.lisp) for the bitfield/variant
+mechanism end to end (on a byte-addressed machine), and
+[docs/machine-model.md](docs/machine-model.md#cell-width-and-the-assembler)
+and [`examples/wordaddr.lisp`](examples/wordaddr.lisp) for word-addressed
+memory end to end (with the ordinary opcode-plus-operand-cells encoding,
+not this section's bitfield scheme) — a machine combining both, DCPU-16
+shaped, is the further ticket noted above.
 
 ### 3.9 Memory regions & MMIO
 ```lisp

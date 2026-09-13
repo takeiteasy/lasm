@@ -107,6 +107,36 @@
     (fiveam:is (= #xEA (mref m 'ram #x10)))
     (fiveam:is (= #x10 (sref m 'pc)))))
 
+;;; Cell-width-typed load/run (#53) -- WORDADDR-TEST-MACHINE
+;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory.
+
+(fiveam:test load-program-places-cells-on-word-addressed-machine
+  (let ((m (make-machine 'wordaddr-test-machine))
+        (a (assemble "lda #$1234" :machine 'wordaddr-test-machine :origin 4)))
+    (load-program m a)
+    (fiveam:is (= 1 (mref m 'ram 4)))
+    (fiveam:is (= #x1234 (mref m 'ram 5)))
+    (fiveam:is (= 4 (sref m 'pc)))))
+
+(fiveam:test load-program-signals-on-cell-width-mismatch
+  ;; An assembly built against EMU-TEST-MACHINE's 8-bit memory loaded into a
+  ;; 16-bit-cell one would otherwise silently place every assembled cell one
+  ;; address too far apart, with no other symptom -- LOAD-PROGRAM must catch
+  ;; the mismatch instead.
+  (let ((m (make-machine 'wordaddr-test-machine))
+        (a (assemble "ldx #10" :machine 'emu-test-machine)))
+    (fiveam:signals error (load-program m a))))
+
+(fiveam:test run-word-addressed-machine-round-trip-end-to-end
+  (let ((m (make-machine 'wordaddr-test-machine))
+        (a (assemble "lda #$2A
+hlt" :machine 'wordaddr-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= #x2A (sref m 'a))))))
+
 ;;; step-machine
 
 (fiveam:test step-machine-advances-pc-and-executes

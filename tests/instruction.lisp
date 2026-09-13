@@ -517,10 +517,26 @@
     (eval '(defmachine bogus-word-machine
              (instruction-word (field opcode 4))))))
 
-(fiveam:test instruction-word-clause-requires-whole-byte-width
+(fiveam:test instruction-word-clause-requires-whole-cell-width
+  ;; A MEMORY element is required here so the check this exercises --
+  ;; %FINISH-INSTRUCTION-WORD-LAYOUT's (mod width cell-width) test
+  ;; (machine.lisp) -- is actually reached; a machine with no memory element
+  ;; fails earlier with a different error ("no memory element declared",
+  ;; %MACHINE-CELL-WIDTH), which FIVEAM:SIGNALS ERROR can't tell apart from
+  ;; the intended failure.
   (fiveam:signals error
     (eval '(defmachine bogus-word-machine
+             (memory ram :width 8 :addr-width 8)
              (instruction-word :width 12 (field opcode 12))))))
+
+(fiveam:test instruction-word-clause-requires-whole-cell-width-non-8-bit-cell
+  ;; Same check, on a machine whose cell width isn't 8 -- :width 24 doesn't
+  ;; divide evenly by a 16-bit cell (24 mod 16 = 8), so this must still
+  ;; signal rather than only ever checking against a hardcoded 8.
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine-16
+             (memory ram :width 16 :addr-width 8 :cell-width 16)
+             (instruction-word :width 24 (field opcode 24))))))
 
 (fiveam:test instruction-word-clause-requires-opcode-field
   (fiveam:signals error
@@ -540,7 +556,7 @@
 (fiveam:test instruction-word-clause-fields-are-msb-first
   (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor 'word-test-machine))))
     (fiveam:is (= 16 (instruction-word-layout-width layout)))
-    (fiveam:is (= 2 (instruction-word-layout-width-bytes layout)))
+    (fiveam:is (= 2 (instruction-word-layout-width-cells layout)))
     (fiveam:is (equal '(opcode 4 12) (instruction-word-field layout 'opcode)))
     (fiveam:is (equal '(dst 2 10) (instruction-word-field layout 'dst)))
     (fiveam:is (equal '(src 10 0) (instruction-word-field layout 'src)))))
@@ -630,3 +646,61 @@
   (let ((hlt (find-instruction 'word-test-machine 'hlt)))
     ;; word = (2 << 12) = #x2000
     (fiveam:is (equal (list #x00 #x20) (encode-instruction hlt nil)))))
+
+;;; Cell-width-typed encoding (#53) -- a machine whose memory is
+;;; word-addressed (:CELL-WIDTH 16) rather than byte-addressed, but with an
+;;; ordinary opcode-plus-operand-cells encoding (not INSTRUCTION-WORD/#20's
+;;; bitfield scheme -- that's a separate axis: #20 is about packing several
+;;; operands into one fixed-width word, this ticket is about what a "byte" of
+;;; encoded output actually is). ADDR-WIDTH 12 exercises %DEFAULT-ADDRESS-WIDTH
+;;; rounding up to a whole CELL rather than a whole 8-bit byte.
+(defmachine wordaddr-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 16 :addr-width 12 :cell-width 16))
+
+(definstruction wordaddr-test-machine nop
+  (encoding (opcode 0))
+  (semantics nil))
+
+(definstruction wordaddr-test-machine lda
+  (modes immediate)
+  (encoding (opcode 1) (operand :mode))
+  (semantics (set! a operand)))
+
+(definstruction wordaddr-test-machine jmp
+  (modes absolute)
+  (encoding (opcode 2) (operand :mode))
+  (semantics (set! pc operand)))
+
+(definstruction wordaddr-test-machine hlt
+  (encoding (opcode 3))
+  (semantics (trap :halt)))
+
+(fiveam:test encode-value-cells-splits-into-16-bit-cells
+  ;; #x00011234 split into two 16-bit cells, little-endian: low cell #x1234,
+  ;; high cell #x0001 -- the cell-width-typed counterpart of the byte-encoded
+  ;; suite's ENCODE-ABSOLUTE-INSTRUCTION-LITTLE-ENDIAN test.
+  (fiveam:is (equal (list #x1234 #x0001) (%encode-value-cells #x00011234 2 16))))
+
+(fiveam:test encode-value-cells-wraps-overwide-value
+  (fiveam:is (equal (list (wrap-value #x1FFFF 16)) (%encode-value-cells #x1FFFF 1 16))))
+
+(fiveam:test wordaddr-default-address-width-is-one-cell
+  ;; ADDR-WIDTH 12 rounds up to one 16-bit cell, not two 8-bit bytes --
+  ;; (ceiling 12 16) = 1.
+  (let ((jmp (find-instruction 'wordaddr-test-machine 'jmp)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths jmp)))))
+
+(fiveam:test encode-instruction-returns-cells-not-byte-pairs
+  ;; LDA #x1234 encodes as two 16-bit CELLS -- (opcode value), not four bytes
+  ;; (opcode value-lo value-hi).
+  (let ((lda (find-instruction 'wordaddr-test-machine 'lda)))
+    (fiveam:is (equal (list 1 #x1234) (encode-instruction lda (list #x1234))))))
+
+(fiveam:test encode-instruction-opcode-masked-to-cell-width-not-8-bits
+  ;; Confirms the opcode mask in ENCODE-INSTRUCTION's cell-encoded path is
+  ;; CELL-WIDTH, not a hardcoded 8 -- a value that would overflow an 8-bit
+  ;; mask but fits 16 bits must round-trip unchanged.
+  (let ((nop (find-instruction 'wordaddr-test-machine 'nop)))
+    (fiveam:is (equal (list 0) (encode-instruction nop nil)))))

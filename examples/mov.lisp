@@ -56,7 +56,7 @@
 
 (format t "Assembling:~%")
 (let ((assembly (assemble *source* :lexer 'twoop-syntax :machine 'twoop)))
-  (format t "  bytes: ~S~%" (coerce (assembly-bytes assembly) 'list))
+  (format t "  bytes: ~S~%" (coerce (assembly-cells assembly) 'list))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'twoop)))

@@ -19,7 +19,7 @@
 
 (in-package #:lasm)
 
-;;; PC / memory resolution
+;;; PC resolution
 
 (defun %resolve-pc (machine-name pc)
   (or pc
@@ -30,37 +30,33 @@
             (error "RUN/STEP-MACHINE on machine ~S: no register named PC -- ~
 pass :PC explicitly" machine-name)))))
 
-(defun %resolve-memory (machine-name memory)
-  (or memory
-      (let* ((descriptor (find-machine-descriptor machine-name))
-             (mem-elements (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
-                                           (machine-descriptor-elements descriptor))))
-        (cond
-          ((null mem-elements)
-           (error "RUN/STEP-MACHINE on machine ~S: no memory element declared" machine-name))
-          ((> (length mem-elements) 1)
-           (error "RUN/STEP-MACHINE on machine ~S: more than one memory element ~
-declared (~S) -- pass :MEMORY explicitly" machine-name
-                  (mapcar #'storage-element-name mem-elements)))
-          (t (storage-element-name (first mem-elements)))))))
-
 ;;; Loading
 
-(defun load-program (machine bytes &key memory origin)
-  "Write BYTES (an ASSEMBLY, or any sequence of (unsigned-byte 8)) into
+(defun load-program (machine cells &key memory origin)
+  "Write CELLS (an ASSEMBLY, or any sequence of (unsigned-byte n)) into
 MACHINE's MEMORY element starting at ORIGIN, and set MACHINE's PC register
-to ORIGIN. MEMORY defaults per %RESOLVE-MEMORY. ORIGIN defaults to BYTES'
-own ASSEMBLY-ORIGIN when BYTES is an ASSEMBLY (so a program assembled with
+to ORIGIN. MEMORY defaults per %RESOLVE-MEMORY. ORIGIN defaults to CELLS'
+own ASSEMBLY-ORIGIN when CELLS is an ASSEMBLY (so a program assembled with
 :ORIGIN #x200 always loads where its labels were computed against),
-otherwise 0."
+otherwise 0. Signals if CELLS is an ASSEMBLY whose own ASSEMBLY-CELL-WIDTH
+does not match MEMORY's declared :CELL-WIDTH (#53) -- e.g. a program
+assembled against a byte-addressed memory element loaded into a
+word-addressed one would otherwise place every assembled cell one address
+too far apart with no other symptom."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
-         (assembly-p (assembly-p bytes))
-         (origin (or origin (if assembly-p (assembly-origin bytes) 0)))
-         (data (if assembly-p (assembly-bytes bytes) bytes)))
+         (assembly-p (assembly-p cells))
+         (origin (or origin (if assembly-p (assembly-origin cells) 0)))
+         (data (if assembly-p (assembly-cells cells) cells)))
+    (when assembly-p
+      (let ((target-width (%machine-cell-width machine-name memory))
+            (source-width (assembly-cell-width cells)))
+        (unless (= target-width source-width)
+          (error "LOAD-PROGRAM on machine ~S: assembly's cell width (~D) does not ~
+match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
     (let ((address origin))
-      (map nil (lambda (byte)
-                 (setf (mref machine memory address) byte)
+      (map nil (lambda (cell)
+                 (setf (mref machine memory address) cell)
                  (incf address))
            data))
     (setf (sref machine 'pc) origin)
@@ -68,14 +64,15 @@ otherwise 0."
 
 ;;; Step
 
-(defun %fetch-word (machine memory address width-bytes)
-  "Read WIDTH-BYTES bytes of MACHINE's MEMORY starting at ADDRESS as one
-little-endian unsigned integer -- the word-encoded (#20) counterpart of
-STEP-MACHINE's byte-encoded operand fetch loop, shared by the instruction
-word itself and every extra word following it."
+(defun %fetch-word (machine memory address width-cells cell-width)
+  "Read WIDTH-CELLS cells of MACHINE's MEMORY starting at ADDRESS as one
+little-endian unsigned integer, each cell CELL-WIDTH bits wide -- the
+word-encoded (#20) counterpart of STEP-MACHINE's cell-encoded operand fetch
+loop, shared by the instruction word itself and every extra word following
+it."
   (loop with v = 0
-        for i below width-bytes
-        do (setf v (logior v (ash (mref machine memory (+ address i)) (* 8 i))))
+        for i below width-cells
+        do (setf v (logior v (ash (mref machine memory (+ address i)) (* cell-width i))))
         finally (return v)))
 
 (defun %word-choice-matches-p (raw-value choice)
@@ -89,7 +86,7 @@ WORD-FIELD-CHOICE, instruction.lisp) would encode: its exact ESCAPE for an
 
 (defun %step-word-machine (machine machine-name pc memory address layout)
   "STEP-MACHINE's word-encoded (#20) path: fetch one INSTRUCTION-WORD-LAYOUT-
-WIDTH-BYTES-wide word at ADDRESS, extract its OPCODE field to find DESCRIPTOR
+WIDTH-CELLS-wide word at ADDRESS, extract its OPCODE field to find DESCRIPTOR
 (any sibling combo registered under that opcode works equally well here --
 see REGISTER-INSTRUCTION-VARIANTS!'s docstring, instruction.lisp), then
 decode each operand field against DESCRIPTOR's WORD-ALTERNATIVES: a fetched
@@ -98,14 +95,15 @@ follows in its own word (fetched and consumed in turn); matching an inline
 alternative's biased range instead means the value *is* the field, debiased.
 A raw value matching no alternative at all is :DECODE-FAILURE, same as an
 unregistered opcode -- an encoding this DEFINSTRUCTION never declared."
-  (let* ((width-bytes (instruction-word-layout-width-bytes layout))
-         (word (%fetch-word machine memory address width-bytes))
+  (let* ((width-cells (instruction-word-layout-width-cells layout))
+         (cell-width (instruction-word-layout-cell-width layout))
+         (word (%fetch-word machine memory address width-cells cell-width))
          (opcode-field (instruction-word-field layout 'opcode)))
     (destructuring-bind (opcode-width opcode-shift) (rest opcode-field)
       (let ((opcode (ldb (byte opcode-width opcode-shift) word)))
         (handler-case
             (let ((descriptor (find-instruction-by-opcode machine-name opcode)))
-              (loop with offset = width-bytes
+              (loop with offset = width-cells
                     for alternatives in (instruction-descriptor-word-alternatives descriptor)
                     for choice0 = (first alternatives)
                     for raw = (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word)
@@ -114,8 +112,8 @@ unregistered opcode -- an encoding this DEFINSTRUCTION never declared."
                     collect (ecase (word-field-choice-kind match)
                               (:inline (- raw (word-field-choice-bias match)))
                               (:extra-word
-                               (prog1 (%fetch-word machine memory (+ address offset) width-bytes)
-                                 (incf offset width-bytes))))
+                               (prog1 (%fetch-word machine memory (+ address offset) width-cells cell-width)
+                                 (incf offset width-cells))))
                       into values
                     finally
                        (setf (sref machine pc) (+ address offset))
@@ -124,8 +122,22 @@ unregistered opcode -- an encoding this DEFINSTRUCTION never declared."
           (unknown-instruction () :decode-failure))))))
 
 (defun %step-byte-machine (machine machine-name pc memory address)
-  "STEP-MACHINE's ordinary byte-encoded path, unchanged since before #20."
-  (let ((opcode (mref machine memory address)))
+  "STEP-MACHINE's ordinary cell-encoded path, unchanged in shape since before
+#20 -- only the (* 8 i)/(* 8 w) shifts are now the machine's own cell width
+(#53), never hardcoded to 8 bits.
+
+PERFORMANCE: %MACHINE-CELL-WIDTH below re-resolves MACHINE-NAME's cell width
+(two hash lookups) on every single step, where before #53 this path did no
+such lookup at all. INSTRUCTION-DESCRIPTOR-CELL-WIDTH (instruction.lisp,
+ENCODE-INSTRUCTION's cell-encoded path) has the same shape. Both are cheap
+relative to a full fetch/decode/execute step, but this is the emulator's
+innermost loop -- caching the resolved width on the MACHINE-DESCRIPTOR (or
+threading it down from STEP-MACHINE/RUN, which already resolve MEMORY once
+per call) instead of re-deriving it every step is a real speedup on a tight
+loop. Left uncached for now (this ticket's #55/#21 M4-M7 targets aren't
+performance-sensitive); see the follow-up ticket filed for this."
+  (let* ((opcode (mref machine memory address))
+         (cell-width (%machine-cell-width machine-name memory)))
     (handler-case
         (let* ((descriptor (find-instruction-by-opcode machine-name opcode))
                (mode (instruction-descriptor-mode descriptor))
@@ -135,13 +147,13 @@ unregistered opcode -- an encoding this DEFINSTRUCTION never declared."
                              collect (loop with v = 0
                                            for i below width
                                            do (setf v (logior v (ash (mref machine memory (+ address offset i))
-                                                                      (* 8 i))))
+                                                                      (* cell-width i))))
                                            finally (return v))
                              do (incf offset width))))
           ;; A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies
           ;; SIGNED) was assembled as a signed quantity (a RELATIVE operand
           ;; specifically as an offset, assembler.lisp's %RELATIVE-OFFSET)
-          ;; but is fetched above as an unsigned WIDTH-byte quantity, like
+          ;; but is fetched above as an unsigned WIDTH-cell quantity, like
           ;; every other operand -- reinterpret each hole here, by its own
           ;; width, so semantics sees a plain signed integer (a RELATIVE
           ;; instruction body can then write (set! pc (+ pc operand)) with no
@@ -150,7 +162,7 @@ unregistered opcode -- an encoding this DEFINSTRUCTION never declared."
           ;; one hole, so this maps over every VALUE/WIDTH pair rather than
           ;; assuming a single element.
           (when (and mode (mode-descriptor-signedp mode))
-            (setf values (mapcar (lambda (v w) (signed-value v (* 8 w))) values widths)))
+            (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
           (setf (sref machine pc) (+ address (instruction-descriptor-size descriptor)))
           (execute-instruction descriptor machine values)
           descriptor)

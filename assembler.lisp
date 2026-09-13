@@ -107,7 +107,16 @@ names exactly this failure."))
 ;;; Result
 
 (defstruct assembly
-  (bytes nil :type (or null (vector (unsigned-byte 8))))
+  (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
+                                       ; machine's own code cell width (#53)
+                                       ; -- not declared (vector (unsigned-byte
+                                       ; n)) here: under SBCL a specialized
+                                       ; array type is not a subtype of
+                                       ; another by element width, so a fixed
+                                       ; element-type declaration would make
+                                       ; every non-8-bit MAKE-ASSEMBLY a type
+                                       ; error
+  (cell-width 8 :type (integer 1))
   (origin 0 :type (integer 0))
   (symbols nil :type (or null hash-table)))  ; string -> value (a label's
                                               ; address, or an .EQU's folded
@@ -115,27 +124,29 @@ names exactly this failure."))
 
 ;;; Pass 1: layout -- size every statement, bind every label, choose modes
 
-(defun %fits-width-p (value width)
-  "T if VALUE (a folded constant) fits in WIDTH bytes, either as an unsigned
-or a two's-complement signed value -- e.g. both 255 and -1 fit one byte, so an
-operand that hasn't declared itself SIGNED (mode.lisp, #30) isn't rejected
-just because it folds negative. Accepts the full unsigned range too, so this
-is NOT the right predicate for a SIGNED mode's operand (a RELATIVE branch
-offset, #23, included) -- see %FITS-SIGNED-WIDTH-P."
-  (and (>= value (- (ash 1 (1- (* 8 width)))))
-       (< value (ash 1 (* 8 width)))))
+(defun %fits-width-p (value width cell-width)
+  "T if VALUE (a folded constant) fits in WIDTH cells of CELL-WIDTH bits
+each, either as an unsigned or a two's-complement signed value -- e.g. both
+255 and -1 fit one 8-bit cell, so an operand that hasn't declared itself
+SIGNED (mode.lisp, #30) isn't rejected just because it folds negative.
+Accepts the full unsigned range too, so this is NOT the right predicate for
+a SIGNED mode's operand (a RELATIVE branch offset, #23, included) -- see
+%FITS-SIGNED-WIDTH-P."
+  (and (>= value (- (ash 1 (1- (* cell-width width)))))
+       (< value (ash 1 (* cell-width width)))))
 
-(defun %fits-signed-width-p (value width)
-  "T if VALUE fits as a two's-complement signed WIDTH-byte integer, i.e.
--(2^(8*width-1)) <= VALUE < 2^(8*width-1). Unlike %FITS-WIDTH-P, this
-rejects the unsigned-only range (e.g. +200 does not fit one byte) -- used to
-range-check any SIGNED mode's operand (mode.lisp, #30), a RELATIVE mode's
-offset (#23) included, where wrapping silently instead of erroring would run
-the wrong (or a wrapped) value."
-  (let ((bound (ash 1 (1- (* 8 width)))))
+(defun %fits-signed-width-p (value width cell-width)
+  "T if VALUE fits as a two's-complement signed WIDTH-cell integer at
+CELL-WIDTH bits per cell, i.e. -(2^(cell-width*width-1)) <= VALUE <
+2^(cell-width*width-1). Unlike %FITS-WIDTH-P, this rejects the unsigned-only
+range (e.g. +200 does not fit one 8-bit cell) -- used to range-check any
+SIGNED mode's operand (mode.lisp, #30), a RELATIVE mode's offset (#23)
+included, where wrapping silently instead of erroring would run the wrong
+(or a wrapped) value."
+  (let ((bound (ash 1 (1- (* cell-width width)))))
     (and (>= value (- bound)) (< value bound))))
 
-(defun %relative-fits-p (value address descriptor)
+(defun %relative-fits-p (value address descriptor cell-width)
   "T if VALUE -- the absolute target a RELATIVE candidate's hole folds to --
 encodes as an offset that fits DESCRIPTOR's operand width, computed the same
 way %RELATIVE-OFFSET (below) will at encode time: relative to the address of
@@ -144,10 +155,10 @@ filter so a RELATIVE candidate can compete on width like any other once an
 address is available to compute its offset from, rather than always winning
 by default as the widest candidate. :RELATIVE is rejected on a word-encoded
 machine (instruction.lisp's %CHECK-WORD-RELATIVE, #20), so DESCRIPTOR here
-is always byte-encoded and WIDTH is its operand byte width."
+is always cell-encoded and WIDTH is its operand cell width."
   (let* ((width (instruction-descriptor-total-operand-width descriptor))
          (next-address (+ address (instruction-descriptor-size descriptor))))
-    (%fits-signed-width-p (- value next-address) width)))
+    (%fits-signed-width-p (- value next-address) width cell-width)))
 
 (defun %word-variant-fits-p (values descriptor)
   "T if VALUES -- one already-evaluated operand value per DESCRIPTOR's
@@ -198,7 +209,7 @@ Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
                             (statement-mnemonic statement) suffix (mode-descriptor-name mode)))
         (values variant asts)))))
 
-(defun %choose-variant (statement variants address &key symbols (floor 0))
+(defun %choose-variant (statement variants address &key symbols (floor 0) (cell-width 8))
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
 for that variant's mode. ADDRESS is this statement's own address; SYMBOLS,
@@ -293,10 +304,10 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                   ;; branches below apply.
                                   (word-fields (%word-variant-fits-p vals descriptor))
                                   ((and mode (mode-descriptor-relativep mode))
-                                   (%relative-fits-p (first vals) address descriptor))
+                                   (%relative-fits-p (first vals) address descriptor cell-width))
                                   ((and mode (mode-descriptor-signedp mode))
-                                   (every #'%fits-signed-width-p vals widths))
-                                  (t (every #'%fits-width-p vals widths))))
+                                   (every (lambda (v w) (%fits-signed-width-p v w cell-width)) vals widths))
+                                  (t (every (lambda (v w) (%fits-width-p v w cell-width)) vals widths))))
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates)))
@@ -509,7 +520,7 @@ cap without converging means that invariant has been broken elsewhere, not
 that the input program is unusual. Treated as an assertion: it has no test,
 since sticky widening makes it unreachable by construction.")
 
-(defun %layout-pass (statements machine origin prev-symbols floors finalp)
+(defun %layout-pass (statements machine origin prev-symbols floors finalp cell-width)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
 final-address asm-origin new-floors widths). SYMBOLS is a fresh string ->
 value hash table built by this pass alone (a label's address, or an .EQU's
@@ -551,7 +562,11 @@ is scoped to LOOP, not whatever preceded it) can be qualified via
 CONSTANTS (#35) is a second, sparser table -- built alongside SYMBOLS -- of
 only the *pure* .EQU bindings seen so far (%PUREP); it's what
 %DIRECTIVE-CONSTANT-ARG passes to .ORG/.RES, since those must fold before
-addresses are final."
+addresses are final.
+
+CELL-WIDTH is MACHINE's own code cell width (#53, %MACHINE-CELL-WIDTH) --
+every operand-width fit check below (%CHOOSE-VARIANT) is counted in cells of
+this width, resolved once by %LAYOUT rather than per pass or per statement."
   (let ((symbols (make-hash-table :test 'equal))
         (constants (make-hash-table :test 'equal))
         (new-floors (copy-seq floors))
@@ -618,7 +633,8 @@ addresses are final."
                        (let ((variants (find-instruction-variants machine mnemonic)))
                          (multiple-value-bind (descriptor asts)
                              (%choose-variant statement variants address
-                                               :symbols prev-symbols :floor (aref floors i))
+                                               :symbols prev-symbols :floor (aref floors i)
+                                               :cell-width cell-width)
                            (%qualify-locals-in-asts! asts scope line)
                            (cl:push (list :instruction address descriptor asts (statement-line statement))
                                     sized)
@@ -629,7 +645,7 @@ addresses are final."
                            (setf emitted-p t))))))))))
     (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths))))
 
-(defun %layout (statements machine origin)
+(defun %layout (statements machine origin cell-width)
   "Returns (VALUES symbols sized-entries final-address asm-origin) -- see
 %LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES. A label-bearing (or
 RELATIVE-mode) operand's addressing-mode width can't be decided in one walk
@@ -640,20 +656,22 @@ pass only ever widening (never re-narrowing) a statement that no longer
 fits, until the vector of chosen widths stops changing. Once two consecutive
 passes agree, one more pass runs with FINALP T -- surfacing the two checks
 %LAYOUT-PASS defers until relaxation has settled -- and its result, checked
-against the same width vector as an assertion, is returned."
+against the same width vector as an assertion, is returned. CELL-WIDTH is
+MACHINE's own code cell width (#53), resolved once here and threaded through
+every pass."
   (let ((floors (make-array (length statements) :initial-element 0))
         (widths :none)
         (symbols nil))
     (dotimes (iteration *max-layout-iterations*)
       (declare (ignore iteration))
       (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths)
-          (%layout-pass statements machine origin symbols floors nil)
+          (%layout-pass statements machine origin symbols floors nil cell-width)
         (declare (ignore sized final-address asm-origin))
         (when (equal new-widths widths)
           (return-from %layout
             (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
                                    final-floors final-widths)
-                (%layout-pass statements machine origin new-symbols new-floors t)
+                (%layout-pass statements machine origin new-symbols new-floors t cell-width)
               (declare (ignore final-floors))
               (unless (equal final-widths new-widths)
                 (%assembly-error nil "addressing-mode layout did not converge -- the final ~
@@ -665,7 +683,7 @@ pass chose different widths than the trial pass it followed"))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
-(defun %relative-offset (address descriptor value line)
+(defun %relative-offset (address descriptor value line cell-width)
   "VALUE is the absolute target address a RELATIVE-mode operand (mode.lisp)
 folded to; ADDRESS is this instruction's own address and DESCRIPTOR its
 chosen INSTRUCTION-DESCRIPTOR. Returns the signed offset to encode, computed
@@ -677,41 +695,42 @@ than silently wrapping to a branch at the wrong address (#23)."
   (let* ((width (instruction-descriptor-total-operand-width descriptor))
          (next-address (+ address (instruction-descriptor-size descriptor)))
          (offset (- value next-address)))
-    (unless (%fits-signed-width-p offset width)
+    (unless (%fits-signed-width-p offset width cell-width)
       (%assembly-error line
-                        "~A: relative branch offset ~D out of range for ~D-byte operand ~
+                        "~A: relative branch offset ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
                         (instruction-descriptor-name descriptor) offset width
-                        (- (ash 1 (1- (* 8 width)))) (1- (ash 1 (1- (* 8 width))))))
+                        (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))
     offset))
 
-(defun %make-growable-bytes (size)
-  (make-array size :element-type '(unsigned-byte 8) :adjustable t :fill-pointer size
+(defun %make-growable-cells (size cell-width)
+  (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
                     :initial-element 0))
 
-(defun %ensure-bytes-length (bytes n)
-  "Grow the adjustable vector BYTES (%MAKE-GROWABLE-BYTES) to at least N
+(defun %ensure-cells-length (cells n)
+  "Grow the adjustable vector CELLS (%MAKE-GROWABLE-CELLS) to at least N
 elements, zero-filling the new tail -- a directive statement can leave a
 gap (a forward .ORG, #14) that no earlier entry ever writes, so the
 accumulator can't be a flat push-then-reverse list the way M1/M2's
 contiguous instruction stream could."
-  (when (> n (length bytes))
-    (adjust-array bytes n :fill-pointer n :initial-element 0))
-  bytes)
+  (when (> n (length cells))
+    (adjust-array cells n :fill-pointer n :initial-element 0))
+  cells)
 
-(defun %encode (sized-entries symbols origin final-address)
+(defun %encode (sized-entries symbols origin final-address cell-width)
   "Evaluate SIZED-ENTRIES (%LAYOUT's tagged output) against the completed
-symbol table SYMBOLS and write each entry's bytes at its own address (minus
-ORIGIN) into a byte vector sized to FINAL-ADDRESS - ORIGIN. A gap between
-entries -- a forward .ORG, or a .RESERVE's run -- is left zero-filled by
-%ENSURE-BYTES-LENGTH's growth rather than written explicitly. A
-location-counter reference (\"*\", #15) in an operand resolves against the
-address of the entry it's *in* -- for :INSTRUCTION that's the whole
-statement's address (further adjusted by %RELATIVE-OFFSET for a RELATIVE
-mode, same as gas's \"bne *\" branching to itself); for :EMIT (e.g.
-\".byte 1, *, 3\") each value gets *its own* element address, not the
-directive statement's address, so \".word *, *\" emits two different words."
-  (let ((bytes (%make-growable-bytes (max 0 (- final-address origin)))))
+symbol table SYMBOLS and write each entry's cells at its own address (minus
+ORIGIN) into a cell vector, CELL-WIDTH bits per element (#53), sized to
+FINAL-ADDRESS - ORIGIN. A gap between entries -- a forward .ORG, or a
+.RESERVE's run -- is left zero-filled by %ENSURE-CELLS-LENGTH's growth
+rather than written explicitly. A location-counter reference (\"*\", #15) in
+an operand resolves against the address of the entry it's *in* -- for
+:INSTRUCTION that's the whole statement's address (further adjusted by
+%RELATIVE-OFFSET for a RELATIVE mode, same as gas's \"bne *\" branching to
+itself); for :EMIT (e.g. \".byte 1, *, 3\") each value gets *its own*
+element address, not the directive statement's address, so \".word *, *\"
+emits two different words."
+  (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
     (dolist (entry sized-entries)
       (ecase (first entry)
         (:instruction
@@ -723,32 +742,32 @@ directive statement's address, so \".word *, *\" emits two different words."
                ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
                ;; RELATIVE mode has exactly one hole, so VALUES here is
                ;; always a single-element list.
-               (setf values (list (%relative-offset address descriptor (first values) line))))
+               (setf values (list (%relative-offset address descriptor (first values) line cell-width))))
              (loop with i = (- address origin)
-                   for byte in (encode-instruction descriptor values)
-                   do (setf (aref bytes i) byte) (incf i)))))
+                   for cell in (encode-instruction descriptor values)
+                   do (setf (aref cells i) cell) (incf i)))))
         (:emit
          (destructuring-bind (kind address width asts line) entry
            (declare (ignore kind line))
            (loop with i = (- address origin)
                  for ast in asts
-                 do (dolist (byte (%encode-value-bytes
-                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width))
-                      (setf (aref bytes i) byte) (incf i)))))
+                 do (dolist (cell (%encode-value-cells
+                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width))
+                      (setf (aref cells i) cell) (incf i)))))
         (:reserve
-         ;; Zero-filled -- %MAKE-GROWABLE-BYTES/%ENSURE-BYTES-LENGTH already
+         ;; Zero-filled -- %MAKE-GROWABLE-CELLS/%ENSURE-CELLS-LENGTH already
          ;; zero-initialize every element, so there is nothing to write here
          ;; beyond making sure the run is covered (relevant when a .RESERVE
          ;; is the very last statement, so no later write grows the vector
          ;; past it).
          (destructuring-bind (kind address count line) entry
            (declare (ignore kind line))
-           (%ensure-bytes-length bytes (- (+ address count) origin))))))
-    (make-array (length bytes) :element-type '(unsigned-byte 8) :initial-contents bytes)))
+           (%ensure-cells-length cells (- (+ address count) origin))))))
+    (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)))
 
 ;;; Entry points
 
-(defun assemble-statements (statements &key machine (origin 0))
+(defun assemble-statements (statements &key machine (origin 0) memory)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
 ASSEMBLY. Runs EXPAND-MACROS (macro.lisp, #33) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
@@ -764,15 +783,24 @@ block or invocation, UNKNOWN-INSTRUCTION on an unregistered mnemonic, and
 UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label that is never
 defined anywhere in STATEMENTS. ORIGIN is the assembly's starting address
 unless a leading .ORG (before any other statement occupies an address)
-moves it -- see ASSEMBLY-ORIGIN."
-  (multiple-value-bind (symbols sized final-address asm-origin)
-      (%layout (expand-macros statements) machine origin)
-    (make-assembly :bytes (%encode sized symbols asm-origin final-address)
-                   :origin asm-origin :symbols symbols)))
+moves it -- see ASSEMBLY-ORIGIN. MEMORY names which of MACHINE's memory
+elements this assembly is targeting, resolving its CELL-WIDTH (#53) -- the
+bit width of the assembled ASSEMBLY-CELLS vector's own elements; defaults
+per %MACHINE-CELL-WIDTH (MACHINE's sole memory element, or its shared
+cell-width across several), same rule as LOAD-PROGRAM's own :MEMORY. A
+machine with no memory element at all cannot be assembled -- its code cell
+width is undefined -- and signals the same error %MACHINE-CELL-WIDTH gives
+any other caller in that position."
+  (let ((cell-width (%machine-cell-width machine memory)))
+    (multiple-value-bind (symbols sized final-address asm-origin)
+        (%layout (expand-macros statements) machine origin cell-width)
+      (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
+                     :cell-width cell-width
+                     :origin asm-origin :symbols symbols))))
 
-(defun assemble (source &key machine (lexer 'default) (origin 0))
+(defun assemble (source &key machine (lexer 'default) (origin 0) memory)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
 ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
-front end."
-  (assemble-statements (parse source :lexer lexer) :machine machine :origin origin))
+front end, and for what MEMORY selects."
+  (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory))

@@ -72,8 +72,11 @@ widths against a machine defined earlier in the same file.
 Widths and depths must be positive integers; duplicate element names and
 unknown clause heads are compile-time errors. `instruction-word`'s field
 widths must sum exactly to its own `:width`, which must itself be a whole
-number of bytes (the word is still emitted as little-endian bytes — see
-"Byte- vs. word-encoded instructions" below).
+number of the machine's own memory cells (#53 — see "Cell width and the
+assembler" below; a whole number of 8-bit bytes on every byte-addressed
+machine, the only kind before this) — the word is still emitted as
+little-endian cells of that width, see "Cell- vs. word-encoded
+instructions" below.
 
 ### Deviation from the design draft
 
@@ -124,24 +127,39 @@ overflows or underflows a stack, or addresses memory out of range, escapes
 `run` as a raw Lisp condition rather than returning `:trap`,
 `:decode-failure`, or `:max-steps`.
 
-## Byte- vs. word-encoded instructions
+## Cell- vs. word-encoded instructions
 
 Every machine before `instruction-word` (M1–M3) encodes one instruction as an
-opcode byte followed by fixed-width operand bytes chosen by addressing mode —
-`instruction-descriptor-total-operand-width` is the byte count that encoding
-occupies. A machine declaring `instruction-word` instead encodes one
-instruction as a single fixed-width word whose bits are split into named
-fields (a DCPU-16-shaped machine, #20) — see
+opcode cell followed by fixed-width operand cells chosen by addressing
+mode — `instruction-descriptor-total-operand-width` is the cell count that
+encoding occupies. A machine declaring `instruction-word` instead encodes
+one instruction as a single fixed-width word whose bits are split into
+named fields (a DCPU-16-shaped machine, #20) — see
 [Instructions](instructions.md#word-encoded-instructions-20) for how
 `definstruction` fills those fields, including operand values that pack
 inline for a small range or escape to their own following word depending on
 the *value* being encoded, not just its addressing-mode syntax.
 
 `instruction-descriptor-size` is the one accessor that covers both schemes —
-the total encoded byte count for one use of an instruction, byte-encoded or
+the total encoded cell count for one use of an instruction, cell-encoded or
 word-encoded alike. The instruction word itself (and any extra word an
-escaped operand needs) is still emitted as ordinary little-endian bytes, so
-`assembly-bytes` stays `(vector (unsigned-byte 8))` regardless of which
-scheme a machine uses — a fully word-*addressed* memory pipeline (assembler
-output typed to a machine's own cell width) is a separate, larger piece of
-work than this ticket covers.
+escaped operand needs) is emitted as little-endian cells at the target
+machine's own cell width, so `assembly-cells` is `(vector (unsigned-byte 8))`
+on every byte-addressed machine and `(vector (unsigned-byte n))` on one
+declaring `:cell-width n` (#53) — see "Cell width and the assembler" below.
+
+## Cell width and the assembler
+
+`:cell-width` isn't only a storage-layer property (`mref`/`(setf mref)`
+masking and allocation, above) — the assembler resolves it too, since a
+program's labels and location counter are addresses in the *same* units
+`mref` indexes by. `assemble`/`assemble-statements`
+([Assembler](assembler.md#assemblys-cell-width)) and `load-program`
+([Emulator](emulator.md#load-program)) all resolve a machine's code cell
+width the same way: the sole memory element's `:cell-width`, or (when a
+machine declares several) their shared width if every one agrees. A machine
+declaring more than one memory element with *different* cell widths makes
+this ambiguous, and each of those entry points takes an explicit `:memory`
+argument for exactly that case — the same shape as `%default-address-width`
+(instruction.lisp) already uses to pick a sole memory element's address
+width when an addressing mode doesn't declare one.

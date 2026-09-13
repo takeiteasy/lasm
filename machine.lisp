@@ -42,10 +42,16 @@
 
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
-;; split into bit fields rather than a byte-per-operand stream. FIELDS is
+;; split into bit fields rather than a cell-per-operand stream. FIELDS is
 ;; parsed MSB-first as declared: the first field named occupies the highest
 ;; bits, mirroring how (opcode n)/(operand ...) subclauses already read
 ;; top-down in the mockups this is modeled on (LASM-plan.md sec. 3.8).
+;;
+;; The whole-cell check (WIDTH must be a multiple of the machine's own memory
+;; cell width, #53) can't happen here -- a MEMORY clause may be declared after
+;; INSTRUCTION-WORD in source order, and DEFMACHINE parses clauses one at a
+;; time. BUILD-MACHINE-DESCRIPTOR finishes the layout (WIDTH-CELLS,
+;; CELL-WIDTH) once every element is known.
 (defun parse-instruction-word-clause (form)
   (let* ((body (rest form))
          (width-pos (position :width body))
@@ -55,8 +61,6 @@
                            body)))
     (unless width (error "instruction-word requires :width"))
     (%check-positive width ":width" 'instruction-word)
-    (unless (zerop (mod width 8))
-      (error "instruction-word :width ~D must be a whole number of bytes" width))
     (unless field-forms
       (error "instruction-word requires at least one (field name width) clause"))
     (let ((seen (make-hash-table :test 'eq))
@@ -85,12 +89,96 @@
       (let ((shift width))
         (make-instruction-word-layout
          :width width
-         :width-bytes (/ width 8)
+         :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
+         :cell-width 1  ; placeholder
          :fields (mapcar (lambda (f)
                             (destructuring-bind (name field-width) f
                               (decf shift field-width)
                               (list name field-width shift)))
                           fields))))))
+
+(defun %finish-instruction-word-layout (layout cell-width)
+  "Fill in LAYOUT's WIDTH-CELLS and CELL-WIDTH once the machine's own memory
+cell width is known (BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has
+been parsed) -- see PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this
+can't happen at clause-parse time. Signals if the instruction word's bit
+width isn't a whole number of cells."
+  (let ((width (instruction-word-layout-width layout)))
+    (unless (zerop (mod width cell-width))
+      (error "instruction-word :width ~D must be a whole number of ~D-bit cells"
+             width cell-width))
+    (setf (instruction-word-layout-width-cells layout) (/ width cell-width)
+          (instruction-word-layout-cell-width layout) cell-width))
+  layout)
+
+;;; Memory / cell-width resolution
+;;
+;; Shared by DEFINSTRUCTION (default operand width), ASSEMBLE (the assembled
+;; output's element width, #53), and the emulator (LOAD-PROGRAM, STEP-MACHINE)
+;; -- one place decides which memory element a machine-level operation means
+;; and how wide its cells are, so those three pipelines can't drift apart on
+;; a machine with more than one memory element.
+
+(defun %descriptor-memory-elements (descriptor)
+  (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
+                  (machine-descriptor-elements descriptor)))
+
+(defun %descriptor-resolve-memory (descriptor memory)
+  "MEMORY if given, else the sole :MEMORY element declared on DESCRIPTOR.
+Signals if DESCRIPTOR declares none or more than one -- an ambiguous case
+that requires the caller to say which memory element it means. Works
+directly off a MACHINE-DESCRIPTOR object (rather than a name looked up via
+FIND-MACHINE-DESCRIPTOR) so BUILD-MACHINE-DESCRIPTOR can call it on a
+descriptor still being built, before it's registered in *MACHINES* --
+%RESOLVE-MEMORY is the name-based wrapper every other caller uses."
+  (or memory
+      (let ((mem-elements (%descriptor-memory-elements descriptor)))
+        (cond
+          ((null mem-elements)
+           (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+          ((> (length mem-elements) 1)
+           (error "Machine ~S: more than one memory element declared (~S) -- ~
+pass :MEMORY explicitly" (machine-descriptor-name descriptor)
+                  (mapcar #'storage-element-name mem-elements)))
+          (t (storage-element-name (first mem-elements)))))))
+
+(defun %descriptor-cell-width (descriptor &optional memory-name)
+  "DESCRIPTOR's code cell width in bits (#53): MEMORY-NAME's own CELL-WIDTH
+when given, else the sole memory element's. When DESCRIPTOR declares more
+than one memory element and MEMORY-NAME isn't given, this only succeeds if
+every element's cell width agrees -- otherwise the caller must specify which
+memory element it means, same as %DESCRIPTOR-RESOLVE-MEMORY's own ambiguity
+error. See %DESCRIPTOR-RESOLVE-MEMORY for why this takes a descriptor object
+rather than a machine name."
+  (if memory-name
+      (storage-element-cell-width (descriptor-element descriptor memory-name))
+      (let ((mem-elements (%descriptor-memory-elements descriptor)))
+        (cond
+          ((null mem-elements)
+           (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+          ((null (rest mem-elements))
+           (storage-element-cell-width (first mem-elements)))
+          (t (let ((widths (remove-duplicates (mapcar #'storage-element-cell-width mem-elements))))
+               (if (null (rest widths))
+                   (first widths)
+                   (error "Machine ~S: more than one memory element declared with ~
+different cell widths (~{~S~^, ~}) -- pass :MEMORY explicitly"
+                          (machine-descriptor-name descriptor)
+                          (mapcar (lambda (e) (list (storage-element-name e)
+                                                     (storage-element-cell-width e)))
+                                  mem-elements)))))))))
+
+(defun %resolve-memory (machine-name memory)
+  "MEMORY if given, else the sole :MEMORY element declared on MACHINE-NAME.
+Signals if MACHINE-NAME declares none or more than one. Name-based wrapper
+around %DESCRIPTOR-RESOLVE-MEMORY for every caller outside DEFMACHINE's own
+expansion (the assembler, the emulator, DEFINSTRUCTION)."
+  (%descriptor-resolve-memory (find-machine-descriptor machine-name) memory))
+
+(defun %machine-cell-width (machine-name &optional memory-name)
+  "MACHINE-NAME's code cell width in bits (#53). Name-based wrapper around
+%DESCRIPTOR-CELL-WIDTH for every caller outside DEFMACHINE's own expansion."
+  (%descriptor-cell-width (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-machine-clauses (clauses)
   (let (elements instruction-word)
@@ -119,6 +207,15 @@
         (setf (gethash (storage-element-name element) (machine-descriptor-table descriptor))
               element))
       (setf (machine-descriptor-elements descriptor) elements)
+      ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH can only be finished now
+      ;; that every MEMORY element is known (#53) -- see
+      ;; PARSE-INSTRUCTION-WORD-CLAUSE and %FINISH-INSTRUCTION-WORD-LAYOUT.
+      ;; A machine with no memory element at all (e.g. SIXTYFOO's
+      ;; instruction-less ancestor) or more than one with disagreeing cell
+      ;; widths only matters once an instruction-word clause is actually
+      ;; declared, so %MACHINE-CELL-WIDTH's error is deferred to here.
+      (when instruction-word
+        (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)))
       descriptor)))
 
 (defmacro defmachine (name &body clauses)

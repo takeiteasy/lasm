@@ -113,7 +113,8 @@ assembly time, not here — see [Assembler](assembler.md#choosing-a-mode).
 ### `(encoding (opcode n) [(operand ...)]*)`
 
 Only valid with the single-mode sugar form. `(opcode n)` is required and
-gives the instruction's one-byte opcode. An `(operand ...)` subclause is
+gives the instruction's one-cell opcode (a byte on every byte-addressed
+machine, the only kind before #53). An `(operand ...)` subclause is
 required exactly once per `EXPR` hole in `(modes MODE)`'s mode (zero when
 `(modes ...)` is omitted) — mismatching the count in either direction is an
 error.
@@ -121,11 +122,13 @@ error.
 - `(operand :mode)` — take this field's width from the mode's own `:width`
   (see [Addressing modes](modes.md#width)), falling back to the machine's
   address width when the mode declares none: the machine's sole `memory`
-  element's `:addr-width` rounded up to whole bytes (so a 16-bit-addressed
-  memory gives a 2-byte operand by default). If the machine declares more
-  than one memory element, this fallback is ambiguous and signals an error
-  asking for an explicit width instead.
-- `(operand :width n)` — override with an explicit byte count.
+  element's `:addr-width` rounded up to whole *cells* of that element's own
+  `:cell-width` (#53) — so a 16-bit-addressed byte-cell memory gives a
+  2-byte operand by default, but a 16-bit-addressed 16-bit-cell (word-
+  addressed) memory gives a 1-cell operand, not 2. If the machine declares
+  more than one memory element, this fallback is ambiguous and signals an
+  error asking for an explicit width instead.
+- `(operand :width n)` — override with an explicit cell count.
 - `(operand NAME :mode)` / `(operand NAME :width n)` — as above, and also
   bind `NAME` to this field's value in `(semantics ...)` (see "Named operand
   fields" below).
@@ -134,9 +137,9 @@ A single-hole mode needs exactly one `(operand ...)` subclause here; a mode
 with more holes (see "Repeated `(operand ...)` subclauses" below) needs one
 per hole, in hole order.
 
-Encoded bytes are little-endian and each field's bytes are masked with the
-existing `wrap-value` (see [Machine model](machine-model.md)), so an
-over-wide value wraps rather than erroring.
+Encoded cells are little-endian and each field's cells are masked with the
+existing `wrap-value` (see [Machine model](machine-model.md)) at the
+machine's own cell width, so an over-wide value wraps rather than erroring.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
@@ -285,16 +288,17 @@ and turning it into bytes or an executed effect:
   [Assembler](assembler.md) calls with its completed label table;
   `eval-expr-constant` is just `eval-expr` with `symbols` omitted.
 - `(encode-instruction descriptor values)` returns a list of
-  `(unsigned-byte 8)` bytes for one use of instruction `descriptor` with
-  operand field values `values` (a list, one per operand encoding field, or
-  `nil` for a no-operand instruction): on an ordinary byte-encoded machine,
-  the opcode followed by each field's bytes little-endian in turn; on a
-  word-encoded one (#20), the instruction word (opcode and every field
-  packed in by bit shift) followed by each `:extra-word` field's own value,
-  also little-endian.
-- `(instruction-descriptor-size descriptor)` — total encoded bytes for one
-  use of `descriptor`, covering both encoding schemes: `1 +` operand byte
-  widths on a byte-encoded machine, or the instruction-word's own byte
+  `(unsigned-byte cell-width)` cells (`cell-width` being `descriptor`'s
+  machine's own code cell width, #53 — 8 on every byte-addressed machine)
+  for one use of instruction `descriptor` with operand field values `values`
+  (a list, one per operand encoding field, or `nil` for a no-operand
+  instruction): on an ordinary cell-encoded machine, the opcode followed by
+  each field's cells little-endian in turn; on a word-encoded one (#20), the
+  instruction word (opcode and every field packed in by bit shift) followed
+  by each `:extra-word` field's own value, also little-endian.
+- `(instruction-descriptor-size descriptor)` — total encoded cells for one
+  use of `descriptor`, covering both encoding schemes: `1 +` operand cell
+  widths on a cell-encoded machine, or the instruction-word's own cell
   width times `1 +` its extra-word count on a word-encoded one. This is what
   the assembler's layout/relaxation and the emulator's fetch loop use
   instead of assuming a one-byte opcode.
@@ -304,8 +308,8 @@ and turning it into bytes or an executed effect:
 
 ## Word-encoded instructions (#20)
 
-Everything above assumes a byte-encoded machine (opcode byte + fixed-width
-operand bytes). A machine declaring an `instruction-word` clause (see
+Everything above assumes a cell-encoded machine (opcode cell + fixed-width
+operand cells). A machine declaring an `instruction-word` clause (see
 [Machine model](machine-model.md)) instead encodes one instruction as a
 single fixed-width word split into named bit fields, and `(operand ...)`
 reads differently:
@@ -372,16 +376,16 @@ itself is checked the same way, against the `opcode` field's own width.
 
 A `:relative` addressing mode is not supported on a word-encoded machine —
 its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
-assumes a byte operand width. A word-encoded field also has no `:signed`
-mode of its own to sign-extend on decode the way a byte-encoded operand
+assumes a cell-counted operand width. A word-encoded field also has no `:signed`
+mode of its own to sign-extend on decode the way a cell-encoded operand
 does — a negative inline value's sign is carried entirely by its variant's
 `:bias`, decoded back by subtracting the same bias, not by two's-complement
 reinterpretation.
 
-Unlike the byte-encoded multi-mode form, a single-hole mode may **not** omit
+Unlike the cell-encoded multi-mode form, a single-hole mode may **not** omit
 `(operand ...)` here even though the mode itself has only one hole — there
 is no "default field" a word-encoded operand could fall back to the way a
-byte-encoded one falls back to the machine's address width, so an omitted
+cell-encoded one falls back to the machine's address width, so an omitted
 subclause against a mode with holes is an error rather than silently
 dropping that hole's value.
 
@@ -394,10 +398,10 @@ to its own extra word.
 This covers one instruction variant and its already-evaluated operand
 field(s). It does not cover:
 
-- A statement-list → byte-vector driver, a symbol table for label
+- A statement-list → cell-vector driver, a symbol table for label
   resolution, or *choosing* which variant an operand's syntax and value
   select — see [Assembler](assembler.md).
-- A fetch/execute loop advancing `pc` over encoded bytes — see
+- A fetch/execute loop advancing `pc` over encoded cells — see
   [Emulator](emulator.md).
 - Marking just one hole of a multi-hole mode as PC-relative — a `:relative`
   mode may only have one hole (see "Repeated `(operand ...)` subclauses"

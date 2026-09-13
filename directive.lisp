@@ -33,7 +33,7 @@
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | :variadic
   action      ; :set-origin | :emit | :reserve | :assign
-  width)      ; element byte width for :emit (1 for .byte, 2 for .word);
+  width)      ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
               ; NIL for :set-origin / :reserve / :assign
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
@@ -132,10 +132,12 @@ referencing PARAMS' own parameter name(s), in order:
                               counter; must fold to a label-free constant at
                               layout time (the assembler has no symbol table
                               yet in pass 1). Zero layout size.
-  (reserve count)          -- advance the address counter by COUNT bytes,
-                              zero-filled; COUNT must also fold label-free.
+  (reserve count)          -- advance the address counter by COUNT cells
+                              (#53 -- a machine's own addressable unit, not
+                              necessarily 8 bits), zero-filled; COUNT must
+                              also fold label-free.
   (emit width values)      -- lay down (length VALUES) little-endian
-                              WIDTH-byte fields, one per value in VALUES;
+                              WIDTH-cell fields, one per value in VALUES;
                               layout size is WIDTH * (length VALUES); each
                               value may reference a label (resolved in
                               pass 2, like an ordinary instruction operand).
@@ -168,8 +170,19 @@ anything -- see this file's header comment."
 
 ;;; Built-in directives
 
+;; .BYTE/.WORD's widths are in cells (#53), not bits -- 1 and 2 cells
+;; respectively, same as they always meant 1 and 2 8-bit bytes on every
+;; byte-addressed machine so far. On a word-addressed machine (:CELL-WIDTH
+;; 16), ".byte 1, 2" lays down two 16-bit cells, not two 8-bit bytes -- the
+;; name is a misnomer there (DCPU-16 assemblers call the equivalent "dat");
+;; a dedicated .CELL/.DAT alias is a follow-up ticket rather than a rename
+;; here, to keep every byte-addressed machine's existing source unchanged.
 (defdirective ".org"  (address)      (set-origin! address))
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
+;; .RES's count is also in cells (#53) -- on a word-addressed machine
+;; ".res 4" reserves 4 cells, not 4 bytes. .ORG's operand was always an
+;; address, and addresses were always cell-indexed, so .ORG itself needs no
+;; change at all.
 (defdirective ".res"  (count)        (reserve count))
 (defdirective ".equ"  (name value)   (assign name value))

@@ -16,7 +16,7 @@
 .endm
     loadx 10" :machine 'instr-test-machine))
         (hand-written (assemble "ldx #10" :machine 'instr-test-machine)))
-    (fiveam:is (equalp (assembly-bytes hand-written) (assembly-bytes expanded)))))
+    (fiveam:is (equalp (assembly-cells hand-written) (assembly-cells expanded)))))
 
 (fiveam:test macro-can-be-invoked-more-than-once
   (let ((a (assemble ".macro loadx n
@@ -24,14 +24,14 @@
 .endm
     loadx 10
     loadx 20" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xA2 10 #xA2 20) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xA2 10 #xA2 20) (assembly-cells a)))))
 
 (fiveam:test macro-can-be-invoked-before-its-own-definition
   (let ((a (assemble "    loadx 10
 .macro loadx n
     ldx #n
 .endm" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xA2 10) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xA2 10) (assembly-cells a)))))
 
 ;;; Substitution into a multi-hole addressing mode (MOVI, two-hole-test-mode)
 
@@ -40,7 +40,7 @@
     movi dst, src
 .endm
     store 1, 2" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xF8 1 2 0) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xF8 1 2 0) (assembly-cells a)))))
 
 ;;; Zero-parameter and empty-body macros
 
@@ -49,7 +49,7 @@
     nop
 .endm
     noop" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xEA) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 (fiveam:test empty-body-macro-with-label-binds-and-emits-nothing
   (let ((a (assemble ".macro nothing
@@ -57,7 +57,7 @@
 here: nothing
     nop" :machine 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "here" (assembly-symbols a))))
-    (fiveam:is (equalp #(#xEA) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 ;;; A label on the invocation line
 
@@ -68,7 +68,7 @@ here: nothing
 start: loadx 10
     bne start" :machine 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "start" (assembly-symbols a))))
-    (fiveam:is (equalp #(#xA2 10 #xD0 0 0) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xA2 10 #xD0 0 0) (assembly-cells a)))))
 
 ;;; Nested invocation (a macro invoking another macro)
 
@@ -80,7 +80,7 @@ start: loadx 10
     inner n
 .endm
     outer 10" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xA2 10) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xA2 10) (assembly-cells a)))))
 
 ;;; assemble-statements sees expansion too, not just assemble
 
@@ -90,7 +90,7 @@ start: loadx 10
 .endm
     loadx 10"))
          (a (assemble-statements statements :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xA2 10) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#xA2 10) (assembly-cells a)))))
 
 ;;; expand-macros is directly callable and idempotent on macro-free input
 
@@ -195,4 +195,4 @@ tag: nop
     lda.w n
 .endm
     loada 5" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#x12 5 0) (assembly-bytes a)))))
+    (fiveam:is (equalp #(#x12 5 0) (assembly-cells a)))))

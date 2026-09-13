@@ -84,7 +84,7 @@ self:   .word *                 ; \"*\": this word's own address (a
 
 (format t "Assembling:~%")
 (let ((assembly (assemble *source* :lexer 'sixtyfoo-syntax :machine 'sixtyfoo-scopes)))
-  (format t "  bytes:   ~S~%" (coerce (assembly-bytes assembly) 'list))
+  (format t "  bytes:   ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  symbols: ~{~A=$~4,'0X~^, ~}~%"
           (loop for k being the hash-keys of (assembly-symbols assembly)
                   using (hash-value v)
