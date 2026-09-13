@@ -137,10 +137,10 @@ is a per-statement action with a size the assembler can compute without
 evaluating anything; a macro instead captures a *range* of statements and
 substitutes parameter tokens into them at each invocation site — there is no
 action form in `defdirective`'s vocabulary that could express "collect
-everything up to the matching `.endm`". It's tracked as its own follow-up
-ticket: a statement-expansion pass living inside `assemble-statements`
-([Assembler](assembler.md)) so both of its entry points (`assemble` and a
-caller already holding a parsed `statement` list) get it.
+everything up to the matching `.endm`". It lives in its own statement-
+expansion pass instead, `expand-macros` (`macro.lisp`), which
+`assemble-statements` ([Assembler](assembler.md)) runs before layout ever
+sees the statement list — see [Macros](macros.md).
 
 ## Conditions
 
@@ -154,7 +154,6 @@ caller already holding a parsed `statement` list) get it.
 
 ## Follow-ups
 
-- `.macro`/`.endm` (above).
 - `.ascii`/`.asciz` — needs a string node in the expression parser
   (`parse-expression`, [Statement grammar & expression parser](parser.md)),
   which has none today.

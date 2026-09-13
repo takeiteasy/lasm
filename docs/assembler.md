@@ -15,8 +15,10 @@ along the way.
 See [`examples/counter.lisp`](../examples/counter.lisp) for a runnable
 single-mode version, [`examples/modes.lisp`](../examples/modes.lisp) for a
 multi-mode one, [`examples/directives.lisp`](../examples/directives.lisp) for
-one using `.org`/`.byte`/`.res` (see [Directives](directives.md)), and
-[Emulator](emulator.md) for running the result.
+one using `.org`/`.byte`/`.res` (see [Directives](directives.md)),
+[`examples/macros.lisp`](../examples/macros.lisp) for one using `.macro`/
+`.endm` (see [Macros](macros.md)), and [Emulator](emulator.md) for running
+the result.
 
 ## `assemble` / `assemble-statements`
 
@@ -41,6 +43,15 @@ latter directly. Both return an `assembly`:
   below, unless a leading `.org` moved it first (see "`:origin`" below).
 - `symbols` — a hash table (label name string → address) of every label
   bound while assembling, forward or backward.
+
+## Macro expansion
+
+`assemble-statements` runs `expand-macros` ([Macros](macros.md)) before
+layout ever sees the statement list — every `.macro`...`.endm` block is
+collected and every invocation replaced by its substituted body first, so
+neither layout nor encode below has any notion of a macro at all. Both entry
+points (`assemble` and `assemble-statements`) get this, since `assemble`
+reaches `assemble-statements` after parsing.
 
 ## Layout and encode
 
@@ -322,6 +333,8 @@ at, `.org` can still move it further before the first byte).
   operand's width (see "PC-relative offsets" above), or a malformed
   directive use (wrong operand count, a non-constant `.org`/`.res` operand,
   or a backward-moving `.org` — see [Directives](directives.md)).
+- `macro-error` — a malformed `.macro`/`.endm` block or invocation (see
+  [Macros](macros.md)).
 - `unknown-instruction` — an unregistered mnemonic (from
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in
@@ -334,8 +347,7 @@ at, `.org` can still move it further before the first byte).
 ## Scope
 
 This produces bytes and a symbol table from a statement list, including
-directives (`.org`, `.byte`/`.word`, `.res` — see [Directives](directives.md)).
-It does not cover `.macro` (a statement-expansion pass, not a per-statement
-directive — see [Directives](directives.md#scope-macro-is-not-a-directive))
-or a listing / source-map output tying addresses back to source lines (both
-separate, follow-up tickets).
+directives (`.org`, `.byte`/`.word`, `.res` — see [Directives](directives.md))
+and macro expansion (`.macro`/`.endm` — see [Macros](macros.md)). It does not
+cover a listing / source-map output tying addresses back to source lines — a
+separate, follow-up ticket.

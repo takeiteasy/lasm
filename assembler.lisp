@@ -39,6 +39,11 @@
 ;;;; through even though pass 1 has no symbol table yet, since a statement's
 ;;;; own address is already known at that point.
 ;;;;
+;;;; ASSEMBLE-STATEMENTS runs EXPAND-MACROS (macro.lisp, #33) before %LAYOUT
+;;;; ever sees the statement list -- a .macro/.endm block is collected and
+;;;; every invocation replaced by its substituted body first, so neither
+;;;; %LAYOUT nor %ENCODE below has any notion of a macro at all.
+;;;;
 ;;;; Directives (directive.lisp, #14) are dispatched in %LAYOUT before a
 ;;;; mnemonic reaches FIND-INSTRUCTION-VARIANTS (which signals on an
 ;;;; unregistered name, so directive lookup can't be a fallback after that
@@ -552,15 +557,20 @@ directive statement's address, so \".word *, *\" emits two different words."
 
 (defun assemble-statements (statements &key machine (origin 0))
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
-ASSEMBLY. Signals ASSEMBLY-ERROR on a duplicate label, an operand matching
-no addressing mode, a malformed or backward-moving directive (#14, e.g.
-.ORG with a label operand or one that moves the address counter
-backward), UNKNOWN-INSTRUCTION on an unregistered mnemonic, and
-UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label that is never
-defined anywhere in STATEMENTS. ORIGIN is the assembly's starting address
-unless a leading .ORG (before any other statement occupies an address)
-moves it -- see ASSEMBLY-ORIGIN."
-  (multiple-value-bind (symbols sized final-address asm-origin) (%layout statements machine origin)
+ASSEMBLY. Runs EXPAND-MACROS (macro.lisp, #33) first, so both this entry
+point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
+blocks collected and every invocation replaced by its substituted body
+before layout ever looks at the statement list. Signals ASSEMBLY-ERROR on a
+duplicate label, an operand matching no addressing mode, a malformed or
+backward-moving directive (#14, e.g. .ORG with a label operand or one that
+moves the address counter backward), MACRO-ERROR on a malformed
+.macro/.endm block or invocation, UNKNOWN-INSTRUCTION on an unregistered
+mnemonic, and UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label
+that is never defined anywhere in STATEMENTS. ORIGIN is the assembly's
+starting address unless a leading .ORG (before any other statement occupies
+an address) moves it -- see ASSEMBLY-ORIGIN."
+  (multiple-value-bind (symbols sized final-address asm-origin)
+      (%layout (expand-macros statements) machine origin)
     (make-assembly :bytes (%encode sized symbols asm-origin final-address)
                    :origin asm-origin :symbols symbols)))
 

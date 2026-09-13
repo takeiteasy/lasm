@@ -8,6 +8,7 @@
 - [Addressing modes](modes.md) — `defmode` and pattern matching
 - [Instructions](instructions.md) — `definstruction`, encoding, semantics
 - [Directives](directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
+- [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 

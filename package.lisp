@@ -121,6 +121,16 @@
    #:directive-descriptor-action
    #:directive-descriptor-width
 
+   ;; Macros
+   #:expand-macros
+   #:macro-error
+   #:macro-descriptor
+   #:macro-descriptor-p
+   #:macro-descriptor-name
+   #:macro-descriptor-params
+   #:macro-descriptor-body
+   #:*max-macro-expansion-rounds*
+
    ;; Addressing modes
    #:defmode
    #:find-mode-descriptor

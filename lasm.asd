@@ -16,6 +16,7 @@
                (:file "mode")
                (:file "instruction")
                (:file "directive")
+               (:file "macro")
                (:file "assembler")
                (:file "emulator")))
 
@@ -34,5 +35,6 @@
                (:file "mode")
                (:file "instruction")
                (:file "directive")
+               (:file "macro")
                (:file "assembler")
                (:file "emulator")))

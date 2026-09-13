@@ -77,6 +77,13 @@ Two routines each define their own `.loop:` local label without colliding
 see [Assembler, "Location counter"](assembler.md#location-counter) and
 [Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16).
 
+```sh
+sbcl --script examples/macros.lisp
+```
+
+A two-parameter `.macro` expands twice against two different call sites,
+each under its own global label — see [Macros](macros.md).
+
 ## Run the tests
 
 ```sh
