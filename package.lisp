@@ -5,7 +5,7 @@
   (:use #:cl)
   (:shadow #:push #:pop)
   (:export
-   #:lasm ; the fiveam test suite name, defined in tests.lisp
+   #:lasm ; the fiveam test suite name, defined in tests/suites.lisp
 
    ;; NOTE: PUSH and POP are shadowed here (distinct from CL:PUSH/CL:POP)
    ;; because SBCL's package locks forbid MACROLET from locally rebinding a
@@ -211,4 +211,25 @@
    ;; Emulator
    #:load-program
    #:step-machine
-   #:run))
+   #:run
+
+   ;; Decoder (#21)
+   #:decode-instruction-at
+   #:machine-cell-reader
+   #:vector-cell-reader
+
+   ;; Disassembler (#21)
+   #:disassemble-cells
+   #:disassemble-assembly
+   #:disassemble-memory
+   #:disassembly-text
+   #:print-disassembly
+   #:disassembly-line
+   #:disassembly-line-p
+   #:disassembly-line-address
+   #:disassembly-line-size
+   #:disassembly-line-cells
+   #:disassembly-line-descriptor
+   #:disassembly-line-values
+   #:disassembly-line-label
+   #:disassembly-line-text))

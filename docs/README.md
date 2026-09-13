@@ -11,6 +11,7 @@
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
+- [Disassembler](disassembler.md) — decode cells back to source, round-trip fidelity
 
 This directory covers what exists today. For the design rationale and the
 milestone roadmap, see [`LASM-plan.md`](../LASM-plan.md) at the repo root —

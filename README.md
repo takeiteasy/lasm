@@ -15,8 +15,10 @@ architectures, not real silicon.
 - [Addressing modes](docs/modes.md) — `defmode`, pattern matching
 - [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
 - [Directives](docs/directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
+- [Macros](docs/macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
+- [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity
 - [Getting started](docs/getting-started.md) — install, run, test
 - [Design & roadmap draft](LASM-plan.md)
 

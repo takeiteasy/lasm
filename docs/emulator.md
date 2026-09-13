@@ -60,6 +60,15 @@ loaded into a word-addressed one with no other symptom.
 (step-machine MACHINE &key pc memory)
 ```
 
+The fetch/decode step itself — both paths described below — lives in
+`decode-instruction-at` (see [Disassembler](disassembler.md#decode-instruction-at)),
+a pure function taking a cell-reading closure rather than a live `machine`
+directly; `step-machine` resolves `pc`/`memory` as described here, calls it,
+advances `pc` by the decoded size, and executes. The disassembler
+(`disassemble-cells`/`disassemble-assembly`/`disassemble-memory`) calls the
+same function, so encoded cells decode identically whether they're about to
+be executed or merely read back as text.
+
 Fetches the opcode cell at `pc`, decodes it (`find-instruction-by-opcode`),
 reads its declared `operand-widths` fields little-endian **one after
 another**, each cell masked at the machine's own `:cell-width` (#53 — 8 bits
@@ -175,4 +184,5 @@ declares. It does not cover:
 - Cycle-accurate timing using `(cycles n)` — undecided, tracked separately.
 - Interrupts, privilege levels, or a generalized trap/interrupt model
   beyond the single `trap` primitive — M6.
-- A disassembler recovering source from encoded cells — M7 (#21).
+- Recovering source text from encoded cells — see [Disassembler](disassembler.md)
+  (#21), built on this file's own `decode-instruction-at`.

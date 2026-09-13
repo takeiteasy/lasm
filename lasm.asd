@@ -15,10 +15,12 @@
                (:file "parser")
                (:file "mode")
                (:file "instruction")
+               (:file "decoder")
                (:file "directive")
                (:file "macro")
                (:file "assembler")
-               (:file "emulator")))
+               (:file "emulator")
+               (:file "disassembler")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -37,4 +39,5 @@
                (:file "directive")
                (:file "macro")
                (:file "assembler")
-               (:file "emulator")))
+               (:file "emulator")
+               (:file "disassembler")))
