@@ -83,11 +83,13 @@ set, and for declaring your own).
 Each mode gets its own `(opcode n)` (required), and optionally its own
 `(operand :width n)` (default: the mode's own `:width`, if `defmode` gave it
 one, else the machine's address width — see [Addressing
-modes](modes.md#width)) and its own `(semantics ...)` override. A mode
-without its own `(semantics ...)` uses the instruction's shared top-level
-`(semantics ...)` as its default; a mode with neither is an error. A
-top-level `(encoding ...)` clause is not allowed here, since each mode
-supplies its own opcode.
+modes](modes.md#width)), its own `(semantics ...)` override, and its own
+`(cycles n)` override ([below](#cycles-n)). A mode without its own
+`(semantics ...)` uses the instruction's shared top-level `(semantics ...)`
+as its default (a mode with neither is an error); a mode without its own
+`(cycles ...)` likewise uses the shared top-level `(cycles ...)`, or `1` if
+there is none either. A top-level `(encoding ...)` clause is not allowed
+here, since each mode supplies its own opcode.
 
 The per-mode override exists because a mode's syntax doesn't determine its
 semantics: an `immediate` operand is a literal value, ready to use directly,
@@ -200,11 +202,15 @@ available the same way.
 
 ### `(cycles n)`
 
-Parsed and stored on the instruction descriptor but **not used** — there is
-no timing model yet. Accepted (rather than rejected as an unknown clause)
-because [`LASM-plan.md`](../LASM-plan.md) §3.2's mockup includes it and
-users are expected to copy that shape. A follow-up ticket tracks giving it
-meaning.
+This instruction's cycle cost (#75) — the amount the emulator's step loop
+adds to `machine-cycles` each time it executes (see
+[Emulator](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75)).
+Optional; an instruction with no `(cycles n)` costs `1`. On a multi-mode
+instruction, a variant's own `(cycles n)` overrides this shared default for
+that mode alone — e.g. a 6502-shaped `LDA`'s `zero-page` mode costing less
+than its `absolute` sibling. `n` must be a non-negative integer; `0` is
+allowed (an instruction that consumes no time at all, e.g. a metadata-only
+no-op).
 
 ## PC is a plain register
 

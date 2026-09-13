@@ -53,6 +53,8 @@
    #:instruction-word-layout-width-cells
    #:instruction-word-layout-fields
    #:instruction-word-field
+   #:machine-descriptor-clock-speed
+   #:machine-cycles
 
    ;; Storage accessors
    #:sref
@@ -231,6 +233,9 @@
    #:load-program
    #:step-machine
    #:run
+   #:run-for-cycles
+   #:run-for-duration
+   #:machine-elapsed-seconds
 
    ;; Decoder (#21)
    #:decode-instruction-at

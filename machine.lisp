@@ -40,6 +40,16 @@
   (loop for name in form
         collect (make-storage-element :name name :kind :flag :width 1)))
 
+;; #75: (clock-speed n) -- the machine's nominal rate in Hz, n a positive
+;; integer. Optional; a machine with no such clause leaves MACHINE-
+;; DESCRIPTOR-CLOCK-SPEED NIL (storage.lisp), which is what keeps
+;; RUN-FOR-DURATION's wall-time-equivalent conversion opt-in rather than
+;; forcing every machine to declare a rate it doesn't care about.
+(defun parse-clock-speed-clause (form)
+  ;; (clock-speed n)
+  (destructuring-bind (hz) form
+    (%check-positive hz ":clock-speed" 'clock-speed)))
+
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
 ;; split into bit fields rather than a cell-per-operand stream. FIELDS is
@@ -181,7 +191,7 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
   (%descriptor-cell-width (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word)
+  (let (elements instruction-word clock-speed)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -192,12 +202,17 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
          (when instruction-word
            (error "DEFMACHINE: more than one instruction-word clause"))
          (setf instruction-word (parse-instruction-word-clause clause)))
+        (clock-speed
+         (when clock-speed
+           (error "DEFMACHINE: more than one clock-speed clause"))
+         (setf clock-speed (parse-clock-speed-clause (rest clause))))
         (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
-    (values (nreverse elements) instruction-word)))
+    (values (nreverse elements) instruction-word clock-speed)))
 
 (defun build-machine-descriptor (name clauses)
-  (multiple-value-bind (elements instruction-word) (parse-machine-clauses clauses)
-    (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word))
+  (multiple-value-bind (elements instruction-word clock-speed) (parse-machine-clauses clauses)
+    (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
+                                                :clock-speed clock-speed))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
@@ -225,12 +240,19 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
      (memory NAME :width n :addr-width n [:cell-width n])
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
+     (clock-speed n)
 
-The last (#20, M4) declares a fixed-width instruction word split into named
-bit fields (MSB-first, one of them named OPCODE) instead of the default
-opcode-byte-plus-operand-bytes encoding -- see DEFINSTRUCTION's (operand NAME
-:field F (variant ...)) clause for how an instruction fills those fields.
-Optional; a machine with no such clause keeps the default byte encoding.
+INSTRUCTION-WORD (#20, M4) declares a fixed-width instruction word split into
+named bit fields (MSB-first, one of them named OPCODE) instead of the
+default opcode-byte-plus-operand-bytes encoding -- see DEFINSTRUCTION's
+(operand NAME :field F (variant ...)) clause for how an instruction fills
+those fields. Optional; a machine with no such clause keeps the default
+byte encoding.
+
+CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
+RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to
+wall-time-equivalent seconds. Optional; a machine with no such clause can
+still use RUN-FOR-CYCLES and read MACHINE-CYCLES, just not RUN-FOR-DURATION.
 
 Registration happens inside an EVAL-WHEN so the resulting machine-descriptor
 is available at macroexpansion time, not only after this file is loaded --

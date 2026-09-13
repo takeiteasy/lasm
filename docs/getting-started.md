@@ -9,13 +9,32 @@ find, e.g.:
 git clone https://git.sr.ht/~takeiteasy/lasm ~/quicklisp/local-projects/lasm
 ```
 
+LASM depends on
+[`trivial-high-precision-timer`](https://git.sr.ht/~takeiteasy/trivial-high-precision-timer)
+(used by the emulator's `run-for-duration :throttle t`, [Emulator, "Cycle-cost
+model, clock speed, and cycle-accurate
+execution"](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75)).
+It isn't on Quicklisp either, so it needs the same treatment — clone it
+alongside `lasm` under `~/quicklisp/local-projects/`, not fetched from the
+Quicklisp dist:
+
+```sh
+git clone https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
+```
+
 Then, from a Lisp REPL (SBCL):
 
 ```lisp
 (ql:quickload :lasm)
-;; or, without Quicklisp, given lasm.asd is on asdf:*central-registry*:
+;; or, without Quicklisp, given lasm.asd (and cffi's and trivial-high-
+;; precision-timer's own .asd files) are all on asdf:*central-registry*:
 (asdf:load-system :lasm)
 ```
+
+Every `examples/*.lisp` script runs standalone via `sbcl --script` (no
+`~/.sbclrc`), so each one bootstraps Quicklisp itself — see the top of
+[`examples/counter.lisp`](../examples/counter.lisp) — rather than assuming
+`cffi`/`trivial-high-precision-timer` are reachable any other way.
 
 ## Run the example
 
@@ -165,6 +184,18 @@ registers. `set 1, 1000` exercises the extra-word escape path; every other
 operand packs inline — see [Instructions, "Word-encoded
 instructions"](instructions.md#word-encoded-instructions-20) and [Machine
 model, "Cell width and the assembler"](machine-model.md#cell-width-and-the-assembler).
+
+```sh
+sbcl --script examples/cycles.lisp
+```
+
+The same counter-loop program as `examples/counter.lisp`, but `sixtyfoo2`
+declares a `(clock-speed 1000000)` and each instruction its own `(cycles n)`
+— run to completion reports total cycles and wall-time-equivalent
+microseconds, `run-for-cycles` stops the same program partway through on a
+cycle budget, and `run-for-duration` stops it on a simulated-time budget —
+see [Emulator, "Cycle-cost model, clock speed, and cycle-accurate
+execution"](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
 
 ## Run the tests
 

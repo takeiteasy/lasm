@@ -89,9 +89,10 @@ then delete the winner's entry outright as an apparently orphaned opcode.")
   ;; (which aliases the first field, named or not).
   (operand-names nil :type list)
   (semantics-fn nil :type (or null function))
-  ;; Parsed and stored, not used (#19) -- there is no timing model yet.
-  ;; Accepted because users will copy LASM-plan.md sec. 3.2's (cycles n)
-  ;; verbatim.
+  ;; #75: this variant's cycle cost. NIL (no (cycles n) clause given) means
+  ;; the default of 1 -- resolved by %DESCRIPTOR-CYCLE-COST (emulator.lisp),
+  ;; the one place that default lives, rather than by every caller
+  ;; separately defaulting a NIL.
   (cycles nil :type (or null (integer 0)))
   ;; #20 (M4): non-NIL only on a word-encoded machine (MACHINE-DESCRIPTOR-
   ;; INSTRUCTION-WORD non-NIL, storage.lisp). WORD-FIELDS is *this*
@@ -719,21 +720,32 @@ supported on word-encoded machine ~S" machine name machine-name)))
 
 (defun %parse-mode-variant-clause-forms (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
-(MODE-NAME (opcode n) (operand ...)* [(semantics form...)]). Returns a list
-of INSTRUCTION-DESCRIPTOR forms for this variant -- more than one only on a
-word-encoded machine (#20), where a variant-bearing operand field expands
-into several descriptors sharing this one mode/opcode."
+(MODE-NAME (opcode n) (operand ...)* [(semantics form...)] [(cycles n)]).
+Returns a list of INSTRUCTION-DESCRIPTOR forms for this variant -- more than
+one only on a word-encoded machine (#20), where a variant-bearing operand
+field expands into several descriptors sharing this one mode/opcode.
+
+#75: a variant's own (cycles n) subclause overrides the shared top-level
+CYCLES-FORM for this mode alone -- e.g. a zero-page mode costing less than
+its absolute-mode sibling."
   (destructuring-bind (mode-sym &rest body) variant-form
     (let* ((mode (find-mode-descriptor mode-sym))
            (opcode-subclause (find 'opcode body :key #'first))
            (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand)) body))
-           (semantics-subclause (find 'semantics body :key #'first)))
+           (semantics-subclause (find 'semantics body :key #'first))
+           ;; NOTE (#92): like OPCODE-SUBCLAUSE/OPERAND-SUBCLAUSES/SEMANTICS-
+           ;; SUBCLAUSE above, this FINDs known subclause heads out of BODY
+           ;; and silently drops anything unrecognized -- a typo'd
+           ;; (cycle 2) vanishes with no error. Pre-existing, not specific to
+           ;; CYCLES; #92 tracks rejecting unknown subclauses here instead.
+           (cycles-subclause (find 'cycles body :key #'first)))
       (%check-relative-mode-holes mode machine name)
       (%check-word-relative mode machine name machine)
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
       (let ((opcode (second opcode-subclause))
+            (cycles-form (if cycles-subclause (second cycles-subclause) cycles-form))
             (semantics-forms (cond
                                 (semantics-subclause (rest semantics-subclause))
                                 (default-semantics-forms default-semantics-forms)
@@ -758,13 +770,15 @@ one of:
   (modes (MODE (opcode n)
                [(operand [NAME] :mode)
                 | (operand [NAME] :width n)]*
-               [(semantics form...)])
+               [(semantics form...)]
+               [(cycles n)])
          ...)                        -- 2+ addressing modes, each with its
                                          own opcode and (optionally) its own
-                                         operand field(s) and semantics; a
-                                         mode with no (semantics ...) of its
-                                         own uses the shared (semantics ...)
-                                         below as its default
+                                         operand field(s), semantics, and
+                                         cycle cost; a mode with no
+                                         (semantics ...)/(cycles ...) of its
+                                         own uses the shared (semantics ...)/
+                                         (cycles ...) below as its default
   (encoding (opcode n)
             [(operand [NAME] :mode)
              | (operand [NAME] :width n)]*)
@@ -782,7 +796,13 @@ one of:
                                          a no-operand instruction). Required
                                          unless every mode in a multi-mode
                                          (modes ...) supplies its own.
-  (cycles n)                         -- parsed and stored, not yet used
+  (cycles n)                         -- this instruction's cycle cost (#75),
+                                         accumulated by the emulator's step
+                                         loop (STEP-MACHINE, emulator.lisp).
+                                         Optional; defaults to 1 when
+                                         omitted. A multi-mode variant's own
+                                         (cycles n) subclause overrides this
+                                         shared default for that mode alone.
 
 A mode with more than one EXPR hole (mode.lisp) needs one (operand ...)
 subclause per hole, in hole order -- (operand :mode)/(operand :width n) for

@@ -100,9 +100,13 @@ this reinterprets the sole fetched value for it, never several — but an
 ordinary (non-`relative`) `:signed` mode may have more than one field, and
 each is reinterpreted independently.
 
-Returns the executed `instruction-descriptor`, or the keyword
-`:decode-failure` (without advancing `pc` or executing anything) if the cell
-at `pc` isn't a registered opcode on this machine.
+Returns `(values result cost)`: `result` is the executed
+`instruction-descriptor`, or the keyword `:decode-failure` (without
+advancing `pc` or executing anything, `cost` `0`) if the cell at `pc` isn't a
+registered opcode on this machine. `cost` is the executed instruction's
+cycle cost (`(cycles n)`, [Instructions](instructions.md#cycles-n) — 1 when
+undeclared), already added to `machine-cycles` — see "Cycle-cost model and
+clock speed" below.
 
 ### Word-encoded machines (#20)
 
@@ -147,11 +151,16 @@ Calls `step-machine` in a loop until one of three stop conditions:
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. A generalized interrupt/exception model replacing `trap` outright is M6. |
 | `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
-| `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer (`(cycles n)` on `definstruction` is parsed but not used yet — a separate follow-up). |
+| `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer. `run-for-cycles`/`run-for-duration` below add the cycle-based budgets `(cycles n)` was accepted for. |
+| `:max-cycles` | `run-for-cycles` only — see below. |
+| `:duration` | `run-for-duration` only — see below. |
 
 `steps` counts instructions that actually executed. A step that traps still
 counts (its semantics ran to completion before signalling); a step that
-fails to decode does not (nothing executed that iteration).
+fails to decode does not (nothing executed that iteration). The same rule
+governs `machine-cycles` (below): a trapping instruction's cost is still
+added (its semantics ran to completion before signalling); a decode failure
+adds nothing.
 
 **Not currently a stop reason:** a storage condition raised from inside an
 instruction's semantics — `stack-overflow`, `stack-underflow`,
@@ -163,6 +172,90 @@ ordinary Lisp error, since
 `stack-overflow-escapes-run` pin this down as the current behaviour;
 whether `run` should instead catch `storage-error` and return a fourth stop
 reason is tracked as a follow-up.
+
+## Cycle-cost model, clock speed, and cycle-accurate execution (#75)
+
+Every `instruction-descriptor` carries a cycle cost — its own `(cycles n)`
+clause ([Instructions](instructions.md#cycles-n)), or `1` when undeclared.
+`step-machine` accumulates each executed instruction's cost onto
+`machine-cycles`, a running total on the `machine` struct itself (not a
+storage element, so it isn't touched by `sref`/`mref` and isn't zeroed by
+iterating a machine's declared elements — `reset` zeroes it explicitly).
+This accumulation happens unconditionally, regardless of whether the
+machine's `defmachine` declares a clock speed:
+
+```lisp
+(defmachine sixtyfoo
+  ...
+  (clock-speed 1000000)) ; optional -- Hz, only needed to convert cycles to seconds
+```
+
+`(clock-speed n)` is optional and purely declarative — a machine with no
+such clause can still read `machine-cycles` and call `run-for-cycles`; only
+`run-for-duration` and `machine-elapsed-seconds` need one, since converting
+a cycle count to a wall-time-equivalent duration has no other input.
+
+```lisp
+(machine-elapsed-seconds MACHINE)
+;; => machine-cycles / declared clock-speed, as seconds. Pure arithmetic —
+;; no timer touched. Signals if MACHINE's descriptor declares no clock-speed.
+
+(run-for-cycles MACHINE cycles &key pc memory (max-steps 10000))
+;; => (values reason steps [condition])
+;; Like `run`, but also stops with :max-cycles once machine-cycles has
+;; advanced by at least CYCLES since this call started. No clock-speed
+;; needed -- a plain cycle budget.
+
+(run-for-duration MACHINE seconds &key pc memory (max-steps 10000) throttle)
+;; => (values reason steps [condition])
+;; Like `run`, but also stops with :duration once the wall-time-equivalent
+;; of the cycles consumed since this call started reaches SECONDS. Requires
+;; a declared clock-speed -- signals otherwise, same message as
+;; machine-elapsed-seconds.
+```
+
+Both budget checks happen **after** the step executes, not before — a
+step's cost isn't known until it has already been decoded and run, so a
+budget may be overshot by at most one instruction's own cost. This mirrors
+`step-machine`/`run`'s own PC-then-execute ordering rather than adding a
+second, inconsistent convention.
+
+`run-for-duration`'s `:throttle` (default `nil`) additionally paces real
+wall-clock time to match the simulated schedule, using
+[`trivial-high-precision-timer`](https://sr.ht/~takeiteasy/trivial-high-precision-timer/)
+(lasm's only dependency, resolved the same way as lasm itself — see [Getting
+started](getting-started.md)). After each step it compares real elapsed time
+against simulated elapsed time (`machine-cycles`-derived) and `sleep`s off
+any surplus once it exceeds roughly a millisecond — recomputed from scratch
+every step rather than accumulated, so it self-corrects instead of drifting.
+SBCL's `sleep` floors near that same millisecond resolution, so sleeping on
+every single step (each perhaps a few hundred nanoseconds of simulated time
+on a fast fantasy CPU) would slow execution by orders of magnitude rather
+than pace it — hence the threshold. With `:throttle nil` (the default),
+`:duration` is purely a cycle budget expressed in simulated seconds; no
+timer is touched at all, keeping the default path as cheap as
+`run-for-cycles`.
+
+### Per-mode cycle cost
+
+A multi-mode instruction ([Instructions, "Multiple addressing
+modes"](instructions.md)) can give each mode its own cost, overriding the
+mnemonic's shared default for that mode alone:
+
+```lisp
+(definstruction m lda
+  (modes
+    (immediate (opcode #xA1) (semantics ...) (cycles 2))
+    (zero-page (opcode #xA6) (semantics ...) (cycles 4)))
+  (semantics ...)
+  (cycles 1)) ; default for a mode that declares no cycles of its own
+```
+
+This is a *static* per-mode cost, fixed at `definstruction` time. Dynamic
+adjustments that depend on runtime state — a page-crossing penalty, a
+branch-taken penalty — are a separate, follow-up feature; they need the
+step loop to inspect the actual operand/branch outcome, not just which
+mode was chosen.
 
 ## Note on flags in your own semantics (#22)
 
@@ -181,7 +274,6 @@ variant carries its own distinct opcode, so `find-instruction-by-opcode`'s
 decode step stays one-to-one regardless of how many modes a mnemonic
 declares. It does not cover:
 
-- Cycle-accurate timing using `(cycles n)` — undecided, tracked separately.
 - Interrupts, privilege levels, or a generalized trap/interrupt model
   beyond the single `trap` primitive — M6.
 - Recovering source text from encoded cells — see [Disassembler](disassembler.md)

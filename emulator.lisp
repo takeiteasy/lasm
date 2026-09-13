@@ -21,6 +21,18 @@
 ;;;; now lives in decoder.lisp's DECODE-INSTRUCTION-AT, shared with the
 ;;;; disassembler -- STEP-MACHINE below only resolves PC/MEMORY, decodes,
 ;;;; advances PC, and executes.
+;;;;
+;;;; #75: cycle-cost model, clock speed, and cycle-accurate execution.
+;;;; STEP-MACHINE accumulates each executed instruction's (cycles n) cost
+;;;; (instruction.lisp) -- defaulting to 1 when undeclared -- onto MACHINE-
+;;;; CYCLES (storage.lisp) regardless of whether the machine declares a
+;;;; CLOCK-SPEED; only converting that count to wall-time-equivalent seconds
+;;;; (MACHINE-ELAPSED-SECONDS, RUN-FOR-DURATION) needs one. RUN, RUN-FOR-
+;;;; CYCLES, and RUN-FOR-DURATION share one stop-condition loop, %RUN-LOOP,
+;;;; differing only in what additional budget (if any) they check after each
+;;;; step -- a budget check happens *after* the step executes, so it may be
+;;;; overshot by at most one instruction's own cost (its cost isn't known
+;;;; until the instruction has already been decoded and run).
 
 (in-package #:lasm)
 
@@ -67,25 +79,39 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
     (setf (sref machine 'pc) origin)
     machine))
 
+;;; Cycle cost
+
+(defun %descriptor-cycle-cost (descriptor)
+  "DESCRIPTOR's cycle cost (#75): its own (cycles n), or 1 when undeclared.
+The one place this default lives, so STEP-MACHINE's accumulation and any
+future listing annotation (a follow-up ticket) can't disagree on it."
+  (or (instruction-descriptor-cycles descriptor) 1))
+
 ;;; Step
 
 (defun step-machine (machine &key pc memory)
   "Fetch one instruction from MACHINE's MEMORY at its PC register, advance
-PC past it, then execute it against MACHINE. Returns the executed
-INSTRUCTION-DESCRIPTOR, or :DECODE-FAILURE (without advancing PC or
-executing anything) when the byte(s) at PC do not decode to a registered
-instruction -- distinguishable from an UNKNOWN-INSTRUCTION signal so RUN can
-treat it as an ordinary stop reason rather than a crash.
+PC past it, then execute it against MACHINE. Returns (VALUES result cost):
+RESULT is the executed INSTRUCTION-DESCRIPTOR, or :DECODE-FAILURE (without
+advancing PC or executing anything, COST 0) when the byte(s) at PC do not
+decode to a registered instruction -- distinguishable from an UNKNOWN-
+INSTRUCTION signal so RUN can treat it as an ordinary stop reason rather
+than a crash. COST is the executed instruction's cycle cost (#75,
+%DESCRIPTOR-CYCLE-COST), already added to MACHINE-CYCLES by the time this
+returns.
 
 PC is advanced past the whole instruction *before* executing its
 semantics, not after -- so a branch instruction's own (set! pc operand)
 in its semantics overrides the increment, rather than being clobbered by
-it.
+it. MACHINE-CYCLES is likewise incremented before executing semantics, not
+after -- so an instruction whose semantics signal LASM-TRAP still counts
+its own cost, the same way RUN still counts a trapping step (its semantics
+ran to completion before signalling).
 
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
 (disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
-PC by the decoded SIZE, and executes."
+PC by the decoded SIZE, accounts cycles, and executes."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (pc (%resolve-pc machine-name pc))
          (memory (%resolve-memory machine-name memory))
@@ -93,31 +119,116 @@ PC by the decoded SIZE, and executes."
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
       (if (eq descriptor :decode-failure)
-          :decode-failure
-          (progn
+          (values :decode-failure 0)
+          (let ((cost (%descriptor-cycle-cost descriptor)))
             (setf (sref machine pc) (+ address size))
+            (incf (machine-cycles machine) cost)
             (execute-instruction descriptor machine values)
-            descriptor)))))
+            (values descriptor cost))))))
 
 ;;; Run
 
-(defun run (machine &key pc memory (max-steps 10000))
-  "Repeatedly STEP-MACHINE against MACHINE until one of three stop
-conditions, returning (VALUES reason steps [condition]):
+(defun %run-loop (machine &key pc memory (max-steps 10000) stop-reason stop-p on-step)
+  "Shared stop-condition loop behind RUN, RUN-FOR-CYCLES, and RUN-FOR-
+DURATION. Repeatedly STEP-MACHINE against MACHINE until one of:
   :TRAP           -- an instruction's semantics signalled LASM-TRAP; the
                       condition itself is returned as a third value.
   :DECODE-FAILURE -- STEP-MACHINE hit a byte that is not a registered
                       opcode.
+  STOP-REASON     -- STOP-P (a no-argument predicate, checked after each
+                      step successfully executes, once its cost is already
+                      on MACHINE-CYCLES) returned true. NIL/NIL is RUN's own
+                      \"no extra budget\" case, where this never trips.
   :MAX-STEPS      -- MAX-STEPS instructions executed without stopping
-                      otherwise (a runaway-program guard, not a real timer)."
+                      otherwise (a runaway-program guard, not a real timer).
+Returns (VALUES reason steps [condition]).
+
+STOP-P is checked *after* the step executes -- a cycle/duration budget may
+be overshot by at most one instruction's own cost, since that cost isn't
+known until the instruction has already been decoded and run. ON-STEP, when
+given, is called with the step's cost after it executes but before STOP-P
+is checked (RUN-FOR-DURATION's :THROTTLE hook)."
   (loop for steps from 0 below max-steps
         do (handler-case
-               (when (eq (step-machine machine :pc pc :memory memory) :decode-failure)
-                 (return-from run (values :decode-failure steps)))
+               (multiple-value-bind (result cost) (step-machine machine :pc pc :memory memory)
+                 (when (eq result :decode-failure)
+                   (return-from %run-loop (values :decode-failure steps)))
+                 (when on-step (funcall on-step cost))
+                 (when (and stop-p (funcall stop-p))
+                   (return-from %run-loop (values stop-reason (1+ steps)))))
              (lasm-trap (c)
                ;; The trapping instruction's semantics ran to completion (the
                ;; trap fires from inside them) before signalling, so it
                ;; counts as an executed step -- unlike a decode failure,
                ;; where nothing was executed this iteration.
-               (return-from run (values :trap (1+ steps) c))))
+               (return-from %run-loop (values :trap (1+ steps) c))))
         finally (return (values :max-steps steps))))
+
+(defun run (machine &key pc memory (max-steps 10000))
+  "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :DECODE-FAILURE, or
+:MAX-STEPS -- see %RUN-LOOP. Returns (VALUES reason steps [condition])."
+  (%run-loop machine :pc pc :memory memory :max-steps max-steps))
+
+;;; Cycle-accurate execution (#75)
+
+(defun run-for-cycles (machine cycles &key pc memory (max-steps 10000))
+  "Like RUN, but also stops with :MAX-CYCLES once MACHINE-CYCLES has
+advanced by at least CYCLES since this call started (independent of any
+CLOCK-SPEED -- a plain cycle budget). May overshoot CYCLES by at most one
+instruction's own cost; see %RUN-LOOP."
+  (let ((start (machine-cycles machine)))
+    (%run-loop machine :pc pc :memory memory :max-steps max-steps
+                        :stop-reason :max-cycles
+                        :stop-p (lambda () (>= (- (machine-cycles machine) start) cycles)))))
+
+(defun machine-elapsed-seconds (machine)
+  "MACHINE-CYCLES converted to wall-time-equivalent seconds using MACHINE's
+declared CLOCK-SPEED (defmachine's (clock-speed n) clause, machine.lisp).
+Pure arithmetic -- no timer involved, and available regardless of whether
+any run has ever throttled. Signals if MACHINE's descriptor declares no
+CLOCK-SPEED, since there is then no rate to convert against."
+  (let* ((descriptor (machine-descriptor machine))
+         (clock-speed (machine-descriptor-clock-speed descriptor)))
+    (unless clock-speed
+      (error "MACHINE-ELAPSED-SECONDS on machine ~S: no (clock-speed n) clause ~
+declared -- cycles cannot be converted to seconds without one"
+             (machine-descriptor-name descriptor)))
+    (/ (machine-cycles machine) (float clock-speed 1.0d0))))
+
+(defun run-for-duration (machine seconds &key pc memory (max-steps 10000) throttle)
+  "Like RUN, but also stops with :DURATION once the wall-time-equivalent of
+the cycles consumed since this call started (elapsed-cycles / CLOCK-SPEED)
+reaches SECONDS. Requires MACHINE's descriptor to declare a (clock-speed n)
+clause (machine.lisp) -- signals otherwise, same as MACHINE-ELAPSED-SECONDS.
+
+THROTTLE (default NIL) additionally paces real wall-clock time to match:
+after each step, it measures real elapsed time against simulated elapsed
+time (via trivial-high-precision-timer) and SLEEPs off any surplus once it
+exceeds ~1ms -- SBCL's SLEEP floors near that resolution, so sleeping on
+every single step (each perhaps a few hundred nanoseconds of simulated time)
+would slow execution by orders of magnitude rather than pace it. Recomputed
+from scratch every step (not accumulated), so it self-corrects rather than
+drifting. With THROTTLE NIL (the default), :DURATION is purely a cycle
+budget expressed in simulated seconds -- no timer is touched at all."
+  (let* ((descriptor (machine-descriptor machine))
+         (clock-speed (machine-descriptor-clock-speed descriptor)))
+    (unless clock-speed
+      (error "RUN-FOR-DURATION on machine ~S: no (clock-speed n) clause ~
+declared -- cycles cannot be converted to seconds without one"
+             (machine-descriptor-name descriptor)))
+    (let* ((start (machine-cycles machine))
+           (timer (and throttle (trivial-high-precision-timer:make-precision-timer)))
+           (clock-speed-f (float clock-speed 1.0d0)))
+      (%run-loop machine :pc pc :memory memory :max-steps max-steps
+                          :stop-reason :duration
+                          :stop-p (lambda ()
+                                    (>= (/ (- (machine-cycles machine) start) clock-speed-f) seconds))
+                          :on-step (and throttle
+                                        (lambda (cost)
+                                          (declare (ignore cost))
+                                          (let* ((simulated (/ (- (machine-cycles machine) start) clock-speed-f))
+                                                 (real (trivial-high-precision-timer:sec
+                                                        timer (trivial-high-precision-timer:now timer)))
+                                                 (deficit (- simulated real)))
+                                            (when (> deficit 0.001d0)
+                                              (sleep deficit)))))))))

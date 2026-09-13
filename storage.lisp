@@ -136,7 +136,14 @@
   ;; NIL for an ordinary byte-encoded machine (every machine before #20) --
   ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
   ;; vs. an INSTRUCTION-WORD-LAYOUT to pick between the two encoding schemes.
-  (instruction-word nil :type (or null instruction-word-layout)))
+  (instruction-word nil :type (or null instruction-word-layout))
+  ;; #75: NIL unless DEFMACHINE declares a (clock-speed n) clause -- the
+  ;; machine's nominal rate in Hz. NIL is what keeps cycle-accurate execution
+  ;; a zero-cost opt-in subsystem (LASM-plan.md sec. 1, pillar 4):
+  ;; RUN-FOR-DURATION requires this to be set (it has no other way to convert
+  ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
+  ;; MACHINE-CYCLES below need no clock speed at all.
+  (clock-speed nil :type (or null (integer 1))))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))
@@ -158,7 +165,13 @@
 
 (defstruct (machine (:constructor %make-machine (descriptor)))
   (descriptor nil :type machine-descriptor)
-  (slots (make-hash-table :test 'eq)))    ; name -> slot representation
+  (slots (make-hash-table :test 'eq))     ; name -> slot representation
+  ;; #75: total cycles consumed by every instruction STEP-MACHINE has
+  ;; executed on this machine since the last RESET. Accumulated regardless of
+  ;; whether the machine's descriptor declares a CLOCK-SPEED -- the count
+  ;; itself is always meaningful, only the cycles-to-seconds conversion needs
+  ;; one.
+  (cycles 0 :type unsigned-byte))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -209,13 +222,17 @@
       m)))
 
 (defun reset (machine)
-  "Zero all storage on MACHINE."
+  "Zero all storage on MACHINE, including the #75 cycle counter -- which
+lives on the MACHINE struct itself rather than as a storage element, so the
+loop below (driven off MACHINE-DESCRIPTOR-ELEMENTS) never sees it and must
+be told separately."
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
         ((:register :flag) (fill slot 0))
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
+  (setf (machine-cycles machine) 0)
   machine)
 
 ;;; Accessors

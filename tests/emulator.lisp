@@ -722,3 +722,201 @@ hlt" :machine 'word-test-machine)))
     (setf (mref m 'ram 1) #xf0)         ; opcode #xf, unregistered
     (fiveam:is (eq :decode-failure (step-machine m)))
     (fiveam:is (= 0 (sref m 'pc)))))    ; PC not advanced on decode failure
+
+;;; Cycle-cost model, clock speed, cycle-accurate execution (#75)
+
+;; CLOCK-SPEED declared; NOP has no (cycles n) (defaults to 1); SLOW has a
+;; fixed (cycles 5); LDA's two modes give each its own per-mode cost,
+;; overriding the top-level (cycles 1) default -- IMMEDIATE cheaper than
+;; ZERO-PAGE, the shape a real ISA's addressing-mode cost table takes.
+(defmachine cycle-test-machine
+  (register x :width 8)
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (flags z)
+  (clock-speed 1000000)) ; 1 MHz -- 1 cycle = 1 microsecond
+
+(definstruction cycle-test-machine nop
+  (encoding (opcode #x00))
+  (semantics nil))
+
+(definstruction cycle-test-machine slow
+  (encoding (opcode #x01))
+  (semantics nil)
+  (cycles 5))
+
+(definstruction cycle-test-machine hlt
+  (encoding (opcode #x02))
+  (semantics (trap :halt)))
+
+(definstruction cycle-test-machine lda
+  (modes
+    (immediate (opcode #x10) (semantics (set! x operand)) (cycles 2))
+    (zero-page (opcode #x11) (semantics (set! x (mref machine 'ram operand))) (cycles 4)))
+  (semantics (set! x operand))
+  (cycles 1))
+
+;; No CLOCK-SPEED declared -- for RUN-FOR-DURATION's missing-clause error.
+(defmachine no-clock-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction no-clock-test-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+;; A deliberately slow clock (1 kHz -- 1 cycle = 1 millisecond), its own
+;; fixture rather than mutating CYCLE-TEST-MACHINE's declared clock speed,
+;; for RUN-FOR-DURATION-THROTTLE-PACES-REAL-TIME below -- pacing a handful
+;; of milliseconds of simulated time takes real wall-clock time to observe
+;; without making the test suite slow.
+(defmachine slow-clock-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (clock-speed 1000))
+
+(definstruction slow-clock-test-machine nop
+  (encoding (opcode #x00))
+  (semantics nil))
+
+(fiveam:test step-machine-default-cycle-cost-is-one
+  (let ((m (make-machine 'cycle-test-machine)))
+    (load-program m (list #x00)) ; nop, no (cycles n)
+    (multiple-value-bind (descriptor cost) (step-machine m)
+      (fiveam:is (eq (find-instruction 'cycle-test-machine 'nop) descriptor))
+      (fiveam:is (= 1 cost))
+      (fiveam:is (= 1 (machine-cycles m))))))
+
+(fiveam:test step-machine-honours-declared-cycles
+  (let ((m (make-machine 'cycle-test-machine)))
+    (load-program m (list #x01)) ; slow, (cycles 5)
+    (multiple-value-bind (descriptor cost) (step-machine m)
+      (fiveam:is (eq (find-instruction 'cycle-test-machine 'slow) descriptor))
+      (fiveam:is (= 5 cost))
+      (fiveam:is (= 5 (machine-cycles m))))))
+
+(fiveam:test step-machine-per-mode-cycles-override-shared-default
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "lda #5
+lda $10" :machine 'cycle-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (descriptor cost) (step-machine m)
+      (fiveam:is (eq (find-instruction 'cycle-test-machine 'lda :mode 'immediate) descriptor))
+      (fiveam:is (= 2 cost)))
+    (multiple-value-bind (descriptor cost) (step-machine m)
+      (fiveam:is (eq (find-instruction 'cycle-test-machine 'lda :mode 'zero-page) descriptor))
+      (fiveam:is (= 4 cost)))
+    (fiveam:is (= 6 (machine-cycles m)))))
+
+(fiveam:test machine-cycles-accumulates-across-run-and-reset-zeroes-it
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "slow
+slow
+hlt" :machine 'cycle-test-machine)))
+    (load-program m a)
+    (run m)
+    (fiveam:is (= 11 (machine-cycles m))) ; 5 + 5 + 1 (hlt's own default cost)
+    (reset m)
+    (fiveam:is (= 0 (machine-cycles m)))))
+
+(fiveam:test run-for-cycles-stops-exactly-on-budget-when-a-step-lands-on-it
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "slow
+nop
+nop" :machine 'cycle-test-machine)))
+    (load-program m a)
+    ;; slow (5) then nop (1) lands exactly on 6 -- the budget check trips
+    ;; with no overshoot on this schedule.
+    (multiple-value-bind (reason steps) (run-for-cycles m 6)
+      (fiveam:is (eq :max-cycles reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= 6 (machine-cycles m))))))
+
+(fiveam:test run-for-cycles-overshoots-by-at-most-one-instructions-cost
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "slow
+nop" :machine 'cycle-test-machine)))
+    (load-program m a)
+    ;; Budget of 3 lands mid-instruction: SLOW alone (its own cost of 5) is
+    ;; already the first step, so the budget is checked only after SLOW has
+    ;; executed -- the actual overshoot this pins down is 5 - 3 = 2, bounded
+    ;; by SLOW's own cost, never unbounded.
+    (multiple-value-bind (reason steps) (run-for-cycles m 3)
+      (fiveam:is (eq :max-cycles reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 5 (machine-cycles m))))))
+
+(fiveam:test run-for-cycles-trap-counts-its-cycles-decode-failure-counts-none
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "hlt" :machine 'cycle-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run-for-cycles m 100)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 1 (machine-cycles m))))) ; hlt's default cost of 1 still counted
+  (let ((m (make-machine 'cycle-test-machine)))
+    (load-program m (list #xFF)) ; unregistered opcode
+    (multiple-value-bind (reason steps) (run-for-cycles m 100)
+      (fiveam:is (eq :decode-failure reason))
+      (fiveam:is (= 0 steps))
+      (fiveam:is (= 0 (machine-cycles m))))))
+
+(fiveam:test machine-elapsed-seconds-is-pure-arithmetic-no-clock-needed
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "slow
+hlt" :machine 'cycle-test-machine)))
+    (load-program m a)
+    (run m)
+    ;; 6 cycles at 1 MHz (1 cycle = 1 microsecond) = 6e-6 seconds.
+    (fiveam:is (= 6 (machine-cycles m)))
+    (fiveam:is (= 6.0d-6 (machine-elapsed-seconds m)))))
+
+(fiveam:test machine-elapsed-seconds-signals-without-clock-speed
+  (let ((m (make-machine 'no-clock-test-machine)))
+    (fiveam:signals error (machine-elapsed-seconds m))))
+
+(fiveam:test run-for-duration-signals-without-clock-speed
+  (let ((m (make-machine 'no-clock-test-machine))
+        (a (assemble "hlt" :machine 'no-clock-test-machine)))
+    (load-program m a)
+    (fiveam:signals error (run-for-duration m 1.0d0))))
+
+(fiveam:test run-for-duration-stops-on-duration-budget
+  (let ((m (make-machine 'cycle-test-machine))
+        (a (assemble "loop: slow
+nop
+nop" :machine 'cycle-test-machine)))
+    (load-program m a)
+    ;; 6 microseconds of simulated time at 1 MHz = 6 cycles' worth.
+    (multiple-value-bind (reason steps) (run-for-duration m 6.0d-6)
+      (fiveam:is (eq :duration reason))
+      (fiveam:is (> steps 0))
+      (fiveam:is (>= (machine-cycles m) 6)))))
+
+(fiveam:test defmachine-rejects-non-positive-clock-speed
+  (fiveam:signals error (eval '(defmachine bad-clock-test-machine
+                                 (register pc :width 16)
+                                 (memory ram :width 8 :addr-width 16)
+                                 (clock-speed 0))))
+  (fiveam:signals error (eval '(defmachine bad-clock-test-machine
+                                 (register pc :width 16)
+                                 (memory ram :width 8 :addr-width 16)
+                                 (clock-speed -1)))))
+
+;; Tolerance-based (elapsed >= expected * 0.8), not exact-match, since real
+;; wall-clock timing is inherently noisy -- and kept to a tiny duration so
+;; the suite doesn't hang. Proves :THROTTLE T actually paces (sleeps), not
+;; just that it computes the same stop condition as the untimed default.
+(fiveam:test run-for-duration-throttle-paces-real-time
+  (let ((m (make-machine 'slow-clock-test-machine))
+        ;; 1 kHz machine, run-for-duration for 0.05s (50ms) of simulated
+        ;; time -- one NOP (1 cycle) per simulated millisecond, so this
+        ;; takes real wall-clock time to pace through with :THROTTLE T.
+        (a (loop repeat 200 collect #x00))) ; 200 nops
+    (load-program m a)
+    (let ((start (trivial-high-precision-timer:make-precision-timer)))
+      (multiple-value-bind (reason steps) (run-for-duration m 0.05d0 :throttle t)
+        (declare (ignore reason steps))
+        (let ((elapsed (trivial-high-precision-timer:sec
+                        start (trivial-high-precision-timer:now start))))
+          (fiveam:is (>= elapsed (* 0.05d0 0.8d0))))))))

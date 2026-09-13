@@ -6,6 +6,13 @@
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
   :version "0.1.0"
+  ;; #75: lasm's first dependency -- RUN-FOR-DURATION's :THROTTLE T path
+  ;; (emulator.lisp) needs a monotonic clock finer than CL:GET-INTERNAL-
+  ;; REAL-TIME's portable-but-coarse resolution to pace cycle-accurate
+  ;; execution against a declared CLOCK-SPEED. Resolves via
+  ;; ~/quicklisp/local-projects, not the Quicklisp dist -- see
+  ;; docs/getting-started.md.
+  :depends-on (#:trivial-high-precision-timer)
   :serial t
   :components ((:file "package")
                (:file "storage")

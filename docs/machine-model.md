@@ -75,6 +75,12 @@ widths against a machine defined earlier in the same file.
   uses. See [Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
   for how `definstruction` fills a field, and
   [`examples/word.lisp`](../examples/word.lisp) for a complete machine.
+- `(clock-speed n)` — the machine's nominal rate in Hz (#75). Optional; a
+  machine with no such clause can still accumulate `machine-cycles` and use
+  `run-for-cycles`, just not `run-for-duration` or `machine-elapsed-seconds`
+  (which convert a cycle count to wall-time-equivalent seconds, and so need
+  a rate to convert against). See
+  [Emulator](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
 
 Widths and depths must be positive integers; duplicate element names and
 unknown clause heads are compile-time errors. `instruction-word`'s field
