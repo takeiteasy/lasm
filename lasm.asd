@@ -20,7 +20,8 @@
                (:file "macro")
                (:file "assembler")
                (:file "emulator")
-               (:file "disassembler")))
+               (:file "disassembler")
+               (:file "listing")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -40,4 +41,5 @@
                (:file "macro")
                (:file "assembler")
                (:file "emulator")
-               (:file "disassembler")))
+               (:file "disassembler")
+               (:file "listing")))

@@ -1,0 +1,121 @@
+# Listing and source map
+
+`assemble`/`assemble-statements` compute a complete address↔statement
+mapping during layout — see [Assembler](assembler.md) — and used to discard
+it once encoding was done, keeping only the final bytes and the label
+symbol table. `ASSEMBLY` now retains that mapping (#25), and this file
+renders it as a conventional listing and answers address↔line lookups
+against it.
+
+```lisp
+(let ((a (assemble source :machine 'sixtyfoo)))
+  (print-listing a))
+```
+
+See [`examples/listing.lisp`](../examples/listing.lisp) for a runnable
+version.
+
+## The retained mapping: `assembly-listing` / `assembly-source`
+
+`ASSEMBLY` (assembler.lisp) gains two slots:
+
+- `assembly-listing` — a list of `listing-line`, ascending by address, one
+  per address-occupying statement (an instruction, a `.byte`/`.word`, or a
+  `.res`; a `.org` or `.equ` occupies no address and contributes none).
+- `assembly-source` — the original source string `assemble` was given, or
+  `nil` when the `assembly` came from `assemble-statements` called directly
+  with no `:source`.
+
+```lisp
+(defstruct listing-line
+  address    ; where this statement starts
+  size       ; cells occupied
+  line       ; 1-based source line
+  kind       ; :instruction | :emit | :reserve
+  descriptor)  ; the chosen INSTRUCTION-DESCRIPTOR, :instruction only
+```
+
+A `listing-line` stores no cells of its own — `listing-text` slices them out
+of `assembly-cells` on demand, at `[address - origin, address - origin +
+size)`, which is always in bounds even for a trailing `.res`.
+
+`assemble-statements` accepts `:source` directly for a caller building
+`statements` by hand; `assemble` passes its own `source` argument through
+automatically, so the common path needs nothing extra to get a listing with
+source lines attached.
+
+## Lookup
+
+```lisp
+(listing-line-at assembly address)             ; => listing-line, or NIL
+(listing-lines-for-source-line assembly line)   ; => list of listing-line
+```
+
+`listing-line-at` is the address→line direction and always returns at most
+one entry — an address belongs to at most one statement's
+`[address, address + size)` run, or falls in a gap (a forward `.org`'s pad)
+and returns `nil`.
+
+`listing-lines-for-source-line` is the reverse direction, and returns a
+**list**, because line→address is not a function here: `.macro`/`.endm`
+expansion (see [Macros](macros.md)) copies each expanded statement's source
+line from the *macro body's own definition*, not the call site, so two
+invocations of the same one-instruction macro both contribute a
+`listing-line` tagged with that one body line, at two different addresses.
+A call site's own line, having expanded to no entry of its own (its
+statements were spliced in as the macro body plus a leading label
+placeholder), returns an empty list.
+
+`listing-line-at` is a linear scan over `assembly-listing` — fine at the
+program sizes LASM currently targets; an address-indexed structure is a
+follow-up if that ever matters.
+
+## Rendering: `listing-text` / `print-listing`
+
+```lisp
+(listing-text assembly &key stream)  ; => string, or writes to STREAM
+(print-listing assembly &key stream) ; listing-text to *standard-output* by default
+```
+
+Four columns: address, encoded cells (hex), and the original source line,
+one row per source line when `assembly-source` is present:
+
+```
+0000      EA            start: nop
+0001      A2 0A         ldx #10
+0003      01 02 03      .byte 1,2,3
+0006      EA            end: nop
+```
+
+A source line with no `listing-line` at all — a comment, a label-only line,
+`.org`, `.equ` — still renders, with blank address/cells columns, so the
+listing is complete rather than silently skipping non-code lines. A macro
+invocation's body line renders once per entry found for it (see "Lookup"
+above), each at its own address; the call site's own line renders once with
+blank columns, same as any other address-free statement. The printed
+source text for a macro body line is the template as written (e.g. `ldx
+#val`), not the substituted argument — only the encoded cells shown
+alongside it reflect the actual invocation.
+
+With `assembly-source` absent (`assemble-statements` called with no
+`:source`), `listing-text` degrades to an entry-ordered listing with no
+source column at all — there is no source text to index into.
+
+The cell hex field is sized from `assembly-cell-width` —
+`(ceiling cell-width 4)` digits per cell — so a 16-bit-cell machine
+(DCPU-16-shaped, see [Machine model](machine-model.md#cell-width-and-the-assembler))
+renders full 4-digit cells rather than truncating to 2. A long cell run (a
+sizeable `.res`) is elided to `... ` after the first several cells, to keep
+one entry to one line.
+
+## Scope
+
+This covers retaining and rendering the mapping `assemble` already computes
+internally. It does not cover:
+
+- **Runtime diagnostics naming a source line** (e.g. a trap or an
+  out-of-range access reporting "line 12") — the emulator holds no
+  reference to the `assembly` it was loaded from, so wiring one in is a
+  separate design decision, tracked as a follow-up.
+- **A CLI `--listing` flag** — anticipated by the M7 roadmap once both this
+  and [the disassembler](disassembler.md) (#21) exist, not part of this.

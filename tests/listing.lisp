@@ -1,0 +1,181 @@
+;;;; tests/listing.lisp
+;;;; fiveam tests for listing.lisp (#25): the retained address<->statement
+;;;; mapping (ASSEMBLY-LISTING, assembler.lisp) and its rendering/lookup
+;;;; entry points. Reuses INSTR-TEST-MACHINE (tests/instruction.lisp) for the
+;;;; byte-encoded fixture, same as tests/assembler.lisp, and
+;;;; DISASM-WORD-MACHINE (tests/disassembler.lisp) for the cell-width case.
+
+(in-package #:lasm)
+
+(fiveam:def-suite listing :in lasm)
+(fiveam:in-suite listing)
+
+;;; Entries match their statements
+
+(fiveam:test listing-entries-match-statements
+  (let* ((a (assemble "start: ldx #10
+adc $10
+end: nop" :machine 'instr-test-machine))
+         (entries (assembly-listing a)))
+    (fiveam:is (= 3 (length entries)))
+    (destructuring-bind (e1 e2 e3) entries
+      (fiveam:is (= 0 (listing-line-address e1)))
+      (fiveam:is (= 2 (listing-line-size e1)))
+      (fiveam:is (= 1 (listing-line-line e1)))
+      (fiveam:is (eq :instruction (listing-line-kind e1)))
+      (fiveam:is (not (null (listing-line-descriptor e1))))
+      (fiveam:is (= 2 (listing-line-address e2)))
+      (fiveam:is (= 3 (listing-line-size e2)))
+      (fiveam:is (= 2 (listing-line-line e2)))
+      (fiveam:is (= 5 (listing-line-address e3)))
+      (fiveam:is (= 1 (listing-line-size e3)))
+      (fiveam:is (= 3 (listing-line-line e3))))))
+
+(fiveam:test listing-entries-ascending-non-overlapping
+  (let* ((a (assemble "ldx #1
+adc $10
+nop
+ldx #2" :machine 'instr-test-machine))
+         (entries (assembly-listing a)))
+    (loop for (this next) on entries
+          while next
+          do (fiveam:is (<= (+ (listing-line-address this) (listing-line-size this))
+                             (listing-line-address next))))))
+
+;;; .byte/.word (:emit) and .res (:reserve) sizing; .org/.equ contribute no entry
+
+(fiveam:test emit-entry-size-is-width-times-count
+  (let* ((a (assemble ".byte 1, 2, 3
+.word 100, 200" :machine 'instr-test-machine))
+         (entries (assembly-listing a)))
+    (fiveam:is (= 2 (length entries)))
+    (destructuring-bind (byte-entry word-entry) entries
+      (fiveam:is (eq :emit (listing-line-kind byte-entry)))
+      (fiveam:is (= 3 (listing-line-size byte-entry)))
+      (fiveam:is (eq :emit (listing-line-kind word-entry)))
+      (fiveam:is (= 4 (listing-line-size word-entry))))))
+
+(fiveam:test reserve-entry-size-is-count
+  (let* ((a (assemble ".res 5" :machine 'instr-test-machine))
+         (entries (assembly-listing a)))
+    (fiveam:is (= 1 (length entries)))
+    (fiveam:is (eq :reserve (listing-line-kind (first entries))))
+    (fiveam:is (= 5 (listing-line-size (first entries))))))
+
+(fiveam:test org-and-equ-contribute-no-entry-but-source-line-still-renders
+  (let* ((a (assemble "size = 4
+.org $10
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 1 (length (assembly-listing a))))
+    (let ((text (listing-text a)))
+      (fiveam:is (search "size = 4" text))
+      (fiveam:is (search ".org $10" text))
+      (fiveam:is (search "nop" text)))))
+
+;;; Cells sliced from ASSEMBLY-CELLS (via %LISTING-CELLS, listing.lisp)
+;;; reproduce the whole vector, concatenated in entry order
+
+(fiveam:test listing-cells-slices-reproduce-assembly-cells
+  (let* ((a (assemble "ldx #10
+adc $20
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp (coerce (assembly-cells a) 'list)
+                        (mapcan (lambda (l) (%listing-cells a l)) (assembly-listing a))))))
+
+(fiveam:test listing-cells-slices-account-for-non-zero-origin
+  (let* ((a (assemble "ldx #10
+adc $20" :machine 'instr-test-machine :origin #x200)))
+    (fiveam:is (equalp (coerce (assembly-cells a) 'list)
+                        (mapcan (lambda (l) (%listing-cells a l)) (assembly-listing a))))))
+
+;;; LISTING-LINE-AT
+
+(fiveam:test listing-line-at-finds-interior-address
+  (let ((a (assemble "ldx #10
+adc $20" :machine 'instr-test-machine)))
+    (fiveam:is (= 0 (listing-line-address (listing-line-at a 0))))
+    (fiveam:is (= 0 (listing-line-address (listing-line-at a 1))))
+    (fiveam:is (= 2 (listing-line-address (listing-line-at a 2))))
+    (fiveam:is (= 2 (listing-line-address (listing-line-at a 4))))))
+
+(fiveam:test listing-line-at-nil-in-org-gap-and-past-end
+  (let ((a (assemble "nop
+.org $10
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (null (listing-line-at a 5)))
+    (fiveam:is (null (listing-line-at a 100)))))
+
+;;; LISTING-LINES-FOR-SOURCE-LINE and macro expansion
+
+(fiveam:test lines-for-source-line-finds-macro-body-across-invocations
+  ;; Every invocation of TWO's body statements retains the *body's own*
+  ;; definition line, unchanged by substitution (macro.lisp) -- two
+  ;; invocations of a one-instruction macro both contribute a LISTING-LINE
+  ;; tagged with that one body line, at two different addresses.
+  (let ((a (assemble ".macro two
+nop
+.endm
+two
+two" :machine 'instr-test-machine)))
+    (let ((entries (listing-lines-for-source-line a 2)))
+      (fiveam:is (= 2 (length entries)))
+      (fiveam:is (equal '(0 1) (mapcar #'listing-line-address entries))))
+    (fiveam:is (null (listing-lines-for-source-line a 4)))))
+
+;;; LISTING-TEXT
+
+(fiveam:test listing-text-with-source-includes-every-line-once
+  (let* ((a (assemble "start: ldx #10
+adc $20" :machine 'instr-test-machine))
+         (text (listing-text a)))
+    (fiveam:is (= 1 (count #\Newline text :start (or (search "ldx" text) 0)
+                                          :end (search "adc" text))))
+    (fiveam:is (search "0000" text))
+    (fiveam:is (search "A2 0A" text))
+    (fiveam:is (search "ldx #10" text))))
+
+(fiveam:test listing-text-without-source-omits-source-column
+  (let* ((stmts (parse "ldx #10"))
+         (a (assemble-statements stmts :machine 'instr-test-machine))
+         (text (listing-text a)))
+    (fiveam:is (null (assembly-source a)))
+    (fiveam:is (search "A2 0A" text))
+    (fiveam:is (not (search "ldx" text)))))
+
+(fiveam:test listing-text-trailing-newline-adds-no-blank-row
+  ;; A source ending in a newline (the common case for a real file) must not
+  ;; render one spurious blank row past the last statement, matching
+  ;; PARSE's own %SPLIT-LINES treatment of a trailing newline.
+  (let* ((a (assemble (format nil "ldx #10~%") :machine 'instr-test-machine))
+         (text (listing-text a)))
+    (fiveam:is (= 1 (count #\Newline text)))))
+
+;;; Cell hex width follows ASSEMBLY-CELL-WIDTH
+
+(fiveam:test listing-hex-width-follows-cell-width
+  (let* ((a8 (assemble "ldx #10" :machine 'instr-test-machine))
+         (a16 (assemble "hlt" :machine 'disasm-word-machine)))
+    (fiveam:is (search "A2 0A" (listing-text a8)))
+    (fiveam:is (not (search "A2 0A0A" (listing-text a8))))
+    ;; DISASM-WORD-MACHINE's HLT is a single 16-bit-cell opcode; its 4-digit
+    ;; hex rendering must not collapse to 2.
+    (let* ((cells (assembly-cells a16))
+           (text (listing-text a16)))
+      (fiveam:is (search (format nil "~4,'0X" (aref cells 0)) text)))))
+
+;;; Cross-check vs. #21's disassembler -- an instruction-only program (no
+;;; trailing .byte data, whose sizes could legitimately diverge from a
+;;; from-scratch decode) should agree address-for-address, size-for-size.
+
+(fiveam:test listing-matches-disassembler-addresses-and-sizes
+  (let* ((a (assemble "start: ldx #10
+adc $20
+bra start
+nop" :machine 'instr-test-machine))
+         (listing (assembly-listing a))
+         (disasm (disassemble-assembly a :machine 'instr-test-machine :labels nil)))
+    (fiveam:is (= (length listing) (length disasm)))
+    (loop for l in listing
+          for d in disasm
+          do (fiveam:is (= (listing-line-address l) (disassembly-line-address d)))
+             (fiveam:is (= (listing-line-size l) (disassembly-line-size d))))))

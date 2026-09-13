@@ -26,7 +26,7 @@ the result.
 
 ```lisp
 (assemble SOURCE &key machine (lexer 'default) (origin 0) memory)
-(assemble-statements STATEMENTS &key machine (origin 0) memory)
+(assemble-statements STATEMENTS &key machine (origin 0) memory source)
 ```
 
 `assemble` is `parse` (see [Statement grammar & expression
@@ -35,7 +35,7 @@ holding a `statement` list (e.g. from its own preprocessing) can call the
 latter directly. Both return an `assembly`:
 
 ```lisp
-(defstruct assembly cells cell-width origin symbols)
+(defstruct assembly cells cell-width origin symbols listing source)
 ```
 
 - `cells` — a `(vector (unsigned-byte cell-width))` of the encoded program,
@@ -53,6 +53,12 @@ latter directly. Both return an `assembly`:
   value (see "`.equ` / symbol assignment" below) — the two share one flat
   table and one duplicate check, so a program can't bind the same name both
   ways.
+- `listing` / `source` (#25) — the retained address↔statement mapping
+  layout computes, and the source text it came from (when known); see
+  [Listing and source map](listing.md) for how it's rendered and looked up.
+  `assemble` fills `source` in automatically from its own `SOURCE`
+  argument; `assemble-statements`' `:source` key is for a caller building
+  `statements` by hand.
 
 ### `assembly`'s cell width
 

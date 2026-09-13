@@ -206,7 +206,16 @@
    #:assembly-cell-width
    #:assembly-origin
    #:assembly-symbols
+   #:assembly-listing
+   #:assembly-source
    #:assembly-error
+   #:listing-line
+   #:listing-line-p
+   #:listing-line-address
+   #:listing-line-size
+   #:listing-line-line
+   #:listing-line-kind
+   #:listing-line-descriptor
 
    ;; Emulator
    #:load-program
@@ -232,4 +241,11 @@
    #:disassembly-line-descriptor
    #:disassembly-line-values
    #:disassembly-line-label
-   #:disassembly-line-text))
+   #:disassembly-line-text
+
+   ;; Listing (#25)
+   #:listing-text
+   #:print-listing
+   #:listing-line-at
+   #:listing-lines-for-source-line
+   #:*listing-max-cells-shown*))

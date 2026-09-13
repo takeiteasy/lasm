@@ -89,6 +89,14 @@
 ;;;; Once %LAYOUT's widths have converged, every address is fixed, so every
 ;;;; .EQU's value is too -- the existing width-vector fixpoint check already
 ;;;; implies an .EQU fixpoint, and nothing new needs to converge.
+;;;;
+;;;; %LAYOUT's SIZED-ENTRIES already *is* the address<->statement mapping a
+;;;; listing/source map needs (#25) -- ASSEMBLE-STATEMENTS used to let it
+;;;; fall on the floor once %ENCODE had consumed it. %BUILD-LISTING (below,
+;;;; near the entry points) instead keeps a LISTING-LINE per entry (address,
+;;;; size, source line, kind) as ASSEMBLY-LISTING, without duplicating the
+;;;; encoded cells themselves -- see listing.lisp, which renders it and
+;;;; answers address<->line lookups.
 
 (in-package #:lasm)
 
@@ -106,6 +114,20 @@ names exactly this failure."))
 
 ;;; Result
 
+(defstruct listing-line
+  "One address-occupying statement's entry in an ASSEMBLY's LISTING (#25) --
+enough to look a statement back up by ADDRESS (LISTING-LINE-AT) or by LINE
+(LISTING-LINES-FOR-SOURCE-LINE, listing.lisp) and to slice its own encoded
+cells out of ASSEMBLY-CELLS at render time, without duplicating them here.
+KIND is :INSTRUCTION, :EMIT (.byte/.word), or :RESERVE (.res) -- the same
+three tags %LAYOUT-PASS's SIZED-ENTRIES already carries; DESCRIPTOR is only
+ever non-NIL for :INSTRUCTION."
+  (address 0 :type (integer 0))
+  (size 0 :type (integer 0))
+  (line 0 :type (integer 0))
+  (kind :instruction :type keyword)
+  (descriptor nil :type (or null instruction-descriptor)))
+
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
                                        ; machine's own code cell width (#53)
@@ -118,9 +140,17 @@ names exactly this failure."))
                                        ; error
   (cell-width 8 :type (integer 1))
   (origin 0 :type (integer 0))
-  (symbols nil :type (or null hash-table)))  ; string -> value (a label's
-                                              ; address, or an .EQU's folded
-                                              ; value, #35)
+  (symbols nil :type (or null hash-table))  ; string -> value (a label's
+                                             ; address, or an .EQU's folded
+                                             ; value, #35)
+  (listing nil :type list)            ; LISTING-LINE list, ascending by
+                                       ; address (#25) -- see listing.lisp
+  (source nil :type (or null string)))  ; the original source text, or NIL
+                                         ; when ASSEMBLE-STATEMENTS was
+                                         ; called directly with no :SOURCE
+                                         ; (#25) -- LISTING-TEXT degrades to
+                                         ; an entry-ordered listing with no
+                                         ; source column in that case
 
 ;;; Pass 1: layout -- size every statement, bind every label, choose modes
 
@@ -765,9 +795,36 @@ emits two different words."
            (%ensure-cells-length cells (- (+ address count) origin))))))
     (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)))
 
+;;; Listing (#25) -- retain %LAYOUT's address<->statement mapping instead of
+;;; discarding it once %ENCODE has run. See listing.lisp for the rendering
+;;; and lookup entry points built on this.
+
+(defun %sized-entry-listing-line (entry)
+  "Convert one of %LAYOUT-PASS's tagged SIZED-ENTRIES to a LISTING-LINE.
+Mirrors %ENCODE's own ECASE dispatch on ENTRY's leading keyword -- kept
+separate from it (rather than folded into the same walk) since %ENCODE
+needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
+  (ecase (first entry)
+    (:instruction
+     (destructuring-bind (kind address descriptor asts line) entry
+       (declare (ignore asts))
+       (make-listing-line :address address :size (instruction-descriptor-size descriptor)
+                            :line line :kind kind :descriptor descriptor)))
+    (:emit
+     (destructuring-bind (kind address width asts line) entry
+       (make-listing-line :address address :size (* width (length asts)) :line line :kind kind)))
+    (:reserve
+     (destructuring-bind (kind address count line) entry
+       (make-listing-line :address address :size count :line line :kind kind)))))
+
+(defun %build-listing (sized-entries)
+  "SIZED-ENTRIES in address order in, LISTING-LINE list in address order out
+-- see %SIZED-ENTRY-LISTING-LINE."
+  (mapcar #'%sized-entry-listing-line sized-entries))
+
 ;;; Entry points
 
-(defun assemble-statements (statements &key machine (origin 0) memory)
+(defun assemble-statements (statements &key machine (origin 0) memory source)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
 ASSEMBLY. Runs EXPAND-MACROS (macro.lisp, #33) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
@@ -790,17 +847,29 @@ per %MACHINE-CELL-WIDTH (MACHINE's sole memory element, or its shared
 cell-width across several), same rule as LOAD-PROGRAM's own :MEMORY. A
 machine with no memory element at all cannot be assembled -- its code cell
 width is undefined -- and signals the same error %MACHINE-CELL-WIDTH gives
-any other caller in that position."
+any other caller in that position. SOURCE (#25), when given, is the
+original source text this STATEMENTS list came from -- ASSEMBLE passes its
+own SOURCE argument through automatically; a caller building STATEMENTS by
+hand (e.g. from PARSE directly, or synthesizing them) may pass it too, or
+leave it NIL, in which case the returned ASSEMBLY's LISTING (below) is
+still complete but ASSEMBLY-SOURCE is NIL and LISTING-TEXT (listing.lisp)
+renders without a source column. Retains the address<->statement mapping
+%LAYOUT computes -- discarded before #25 -- as ASSEMBLY-LISTING, a
+LISTING-LINE list in address order; see listing.lisp for how it's rendered
+and looked up."
   (let ((cell-width (%machine-cell-width machine memory)))
     (multiple-value-bind (symbols sized final-address asm-origin)
         (%layout (expand-macros statements) machine origin cell-width)
       (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
                      :cell-width cell-width
-                     :origin asm-origin :symbols symbols))))
+                     :origin asm-origin :symbols symbols
+                     :listing (%build-listing sized) :source source))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
 ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
-front end, and for what MEMORY selects."
-  (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory))
+front end, for what MEMORY selects, and for how SOURCE (passed through
+automatically here) is retained as ASSEMBLY-SOURCE (#25)."
+  (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory
+                        :source source))

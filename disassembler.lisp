@@ -311,7 +311,15 @@ indented by INDENT. Returns the text as a string when STREAM is NIL
   "Print LINES (DISASSEMBLY-LINE list) as an address/cells/text listing for
 human reading -- not re-assemblable source (see DISASSEMBLY-TEXT for that).
 ORIGIN is accepted, unused, to keep the same call shape as DISASSEMBLY-TEXT
-convenient at a call site that has one on hand. Returns LINES."
+convenient at a call site that has one on hand. Returns LINES.
+
+KNOWN ISSUE: the cell field below is hardcoded to 2 hex digits (~2,'0X),
+right for an 8-bit cell but too narrow for a wider one -- on a word-encoded
+machine (e.g. dcpu16, 16-bit cells) a cell needing fewer than 4 digits
+prints unpadded (\"3E8\", not \"03E8\") instead of a fixed width. LISTING-TEXT
+(listing.lisp, #25) gets this right, sizing its own hex field from
+ASSEMBLY-CELL-WIDTH -- (CEILING CELL-WIDTH 4) digits -- but this predates it
+and hasn't been fixed to match; tracked as a follow-up ticket."
   (declare (ignore origin))
   (dolist (l lines)
     (format stream "~4,'0X  ~{~2,'0X~^ ~}~24T~A~%"
