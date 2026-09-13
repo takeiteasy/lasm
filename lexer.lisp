@@ -300,13 +300,17 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
 ;; their single-char prefixes, so "<<"/">>" win maximal munch over "<"/">").
 ;; "#" has no meaning to the lexer or expression parser -- it is here so
 ;; addressing-mode literal patterns (LASM-plan.md sec. 3.4's immediate mode,
-;; "#" expr) have a token to match against once #9 implements DEFMODE.
+;; "#" expr) have a token to match against once #9 implements DEFMODE. "="
+;; likewise has no meaning to the expression parser (it's absent from both
+;; *BINARY-PRECEDENCE* and *UNARY-OPS*, parser.lisp) -- it exists only so
+;; %PARSE-LINE (parser.lisp, #35) can recognize "name = value" as sugar for
+;; ".equ name, value".
 (defparameter *punctuators*
   '(("<<" . :shl) (">>" . :shr)
     ("|" . :pipe) ("^" . :caret) ("&" . :amp)
     ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash) ("~" . :tilde)
     ("(" . :lparen) (")" . :rparen) ("," . :comma) ("#" . :hash)
-    ("<" . :lt) (">" . :gt)))
+    ("<" . :lt) (">" . :gt) ("=" . :equals)))
 
 (defun %match-punctuation (state descriptor)
   (declare (ignore descriptor))

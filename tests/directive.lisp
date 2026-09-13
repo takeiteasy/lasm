@@ -14,7 +14,11 @@
   (fiveam:is (eq :set-origin (directive-descriptor-action (find-directive-descriptor ".org"))))
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".byte"))))
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".word"))))
-  (fiveam:is (eq :reserve (directive-descriptor-action (find-directive-descriptor ".res")))))
+  (fiveam:is (eq :reserve (directive-descriptor-action (find-directive-descriptor ".res"))))
+  (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".equ")))))
+
+(fiveam:test equ-directive-has-fixed-arity-two
+  (fiveam:is (equal '(:fixed 2) (directive-descriptor-arity (find-directive-descriptor ".equ")))))
 
 (fiveam:test directive-lookup-is-case-insensitive
   (fiveam:is (eq (find-directive-descriptor ".org") (find-directive-descriptor ".ORG"))))
@@ -54,7 +58,26 @@
 
 (fiveam:test defdirective-rejects-malformed-params
   (fiveam:signals error
-    (eval '(defdirective ".bad" (x y) (set-origin! x)))))
+    (eval '(defdirective ".bad" (x y z) (set-origin! x)))))
+
+(fiveam:test defdirective-rejects-malformed-rest-params
+  ;; (&rest x y) -- more than one name after &REST -- must still be rejected
+  ;; even though it's the same length as .EQU's legal (x y). Param-list
+  ;; checks run inside BUILD-DIRECTIVE-DESCRIPTOR (called from the
+  ;; expansion's body), so this needs EVAL, not just MACROEXPAND.
+  (fiveam:signals error
+    (eval '(defdirective ".bad" (&rest x y) (emit 1 x)))))
+
+(fiveam:test defdirective-accepts-two-fixed-params-for-assign
+  ;; (x y) is exactly .EQU's own param list (#35) -- legal now that ASSIGN
+  ;; exists, unlike the three-parameter case above.
+  (defdirective ".test-assign" (x y) (assign x y))
+  (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".test-assign"))))
+  (fiveam:is (equal '(:fixed 2) (directive-descriptor-arity (find-directive-descriptor ".test-assign")))))
+
+(fiveam:test defdirective-rejects-assign-referencing-wrong-parameters
+  (fiveam:signals error
+    (eval '(defdirective ".bad" (x y) (assign y x)))))
 
 (fiveam:test defdirective-registers-a-new-directive
   (defdirective ".test-marker" (n) (reserve n))

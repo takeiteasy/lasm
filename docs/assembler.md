@@ -41,8 +41,11 @@ latter directly. Both return an `assembly`:
   zero-filled.
 - `origin` — the address the first byte was placed at: the `:origin` key
   below, unless a leading `.org` moved it first (see "`:origin`" below).
-- `symbols` — a hash table (label name string → address) of every label
-  bound while assembling, forward or backward.
+- `symbols` — a hash table (name string → value) of every symbol bound while
+  assembling, forward or backward: a label's address, or an `.equ`'s folded
+  value (see "`.equ` / symbol assignment" below) — the two share one flat
+  table and one duplicate check, so a program can't bind the same name both
+  ways.
 
 ## Macro expansion
 
@@ -222,7 +225,7 @@ assembler needs the same folding logic once labels *are* known, so
 `eval-expr-constant` is defined in terms of a more general function:
 
 ```lisp
-(eval-expr AST &key symbols pc)  ; symbols: string -> address hash table
+(eval-expr AST &key symbols pc)  ; symbols: string -> value hash table
                                   ; pc: this statement's address, or NIL
 (eval-expr-constant AST &key pc) = (eval-expr AST :symbols nil :pc pc)
 ```
@@ -305,7 +308,47 @@ reference — signals `assembly-error`. A qualified name can collide with an
 identically-spelled global (a global literally named `loop.next` alongside a
 `.next:` under `loop:`) — this surfaces loudly as the ordinary duplicate-label
 `assembly-error`, never as silent aliasing; a follow-up ticket tracks a
-reserved separator that rules this out entirely.
+reserved separator that rules this out entirely. An `.equ` name (below) is
+qualified the same way if it's local, and shares this collision hazard.
+
+## `.equ` / symbol assignment
+
+```lisp
+.equ size, 16     ; "size" -> 16, no address occupied
+count = 4         ; sugar for ".equ count, 4" -- see Directives
+```
+
+An `.equ` (see [Directives, "`.equ`"](directives.md#equ)) binds a name to a
+computed value in `symbols` without occupying any address — distinct from a
+label, which always binds to the current address. Its value must fold
+*during the layout pass that reaches it*, against that pass's `symbols` table
+as built so far: an `.equ` can reference any label or `.equ` bound above it,
+never one below (a forward reference signals `assembly-error`, the same
+"must fold now" rule `.org`/`.res`'s own operand already follows). Rebinding
+an already-bound name — a label redefined as an `.equ`, an `.equ` redefined
+as a label, or a second `.equ` of the same name — is the same duplicate-
+symbol `assembly-error` a repeated label signals.
+
+Because `.org`/`.res` must fold their own operand in pass 1, before any
+address is final, they may only reference a **pure** `.equ` — one whose value
+contains no label and no `"*"` (location counter), so it can't change as
+addresses move across relaxation passes:
+
+```lisp
+.equ bufsize, 16
+.res bufsize        ; fine -- bufsize doesn't depend on any address
+
+start: nop
+.equ size, * - start
+.res size           ; assembly-error -- size depends on start's address,
+                    ; which .res's own layout-time fold can't wait for
+```
+
+This restriction only affects `.org`/`.res`; an ordinary instruction operand
+or `.byte`/`.word` value may reference any `.equ`, pure or not, since those
+fold at encode time against the completed table like any label reference. A
+follow-up ticket (#41) tracks lifting the restriction with a purity check
+strong enough to still guarantee `%layout` converges.
 
 ## `:origin`
 
@@ -326,13 +369,16 @@ at, `.org` can still move it further before the first byte).
 
 ## Conditions
 
-- `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate label, a
-  local label with no enclosing global label (see "Local-label scoping"
+- `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate symbol (a
+  label or `.equ` name bound twice, in any combination), a local label or
+  `.equ` name with no enclosing global label (see "Local-label scoping"
   above), an operand whose syntax matches none of the mnemonic's declared
   addressing-mode variants, a `relative`-mode offset that doesn't fit its
   operand's width (see "PC-relative offsets" above), or a malformed
   directive use (wrong operand count, a non-constant `.org`/`.res` operand,
-  or a backward-moving `.org` — see [Directives](directives.md)).
+  an `.org`/`.res` operand referencing a non-pure `.equ`, an `.equ`'s value
+  referencing a symbol not yet defined, or a backward-moving `.org` — see
+  [Directives](directives.md)).
 - `macro-error` — a malformed `.macro`/`.endm` block or invocation (see
   [Macros](macros.md)).
 - `unknown-instruction` — an unregistered mnemonic (from
@@ -347,7 +393,7 @@ at, `.org` can still move it further before the first byte).
 ## Scope
 
 This produces bytes and a symbol table from a statement list, including
-directives (`.org`, `.byte`/`.word`, `.res` — see [Directives](directives.md))
-and macro expansion (`.macro`/`.endm` — see [Macros](macros.md)). It does not
-cover a listing / source-map output tying addresses back to source lines — a
-separate, follow-up ticket.
+directives (`.org`, `.byte`/`.word`, `.res`, `.equ` — see
+[Directives](directives.md)) and macro expansion (`.macro`/`.endm` — see
+[Macros](macros.md)). It does not cover a listing / source-map output tying
+addresses back to source lines — a separate, follow-up ticket.

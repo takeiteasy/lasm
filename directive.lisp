@@ -1,12 +1,15 @@
 ;;;; directive.lisp
 ;;;; DEFDIRECTIVE: a declarative assembler-directive grammar (LASM-plan.md
 ;;;; sec. 3.6, #14). A directive is a named parameter list plus exactly one
-;;;; action form from a fixed vocabulary (SET-ORIGIN!, EMIT, RESERVE) --
-;;;; restricting the body to one action, rather than arbitrary Lisp, is what
-;;;; lets the assembler (assembler.lisp) derive a directive statement's
+;;;; action form from a fixed vocabulary (SET-ORIGIN!, EMIT, RESERVE, ASSIGN)
+;;;; -- restricting the body to one action, rather than arbitrary Lisp, is
+;;;; what lets the assembler (assembler.lisp) derive a directive statement's
 ;;;; layout size *statically*, the same way it already knows an instruction
 ;;;; statement's size from its chosen INSTRUCTION-DESCRIPTOR without running
-;;;; any semantics.
+;;;; any semantics. ASSIGN (#35's .EQU) is zero-size like SET-ORIGIN!, but
+;;;; binds a name in the symbol table instead of moving the address counter
+;;;; -- see assembler.lisp's header for why that's a layout-time bind, not a
+;;;; label-like one.
 ;;;;
 ;;;; Unlike DEFMODE (mode.lisp), this registers with a plain top-level SETF,
 ;;;; not an EVAL-WHEN: DEFMODE needs compile-time registration because
@@ -29,9 +32,9 @@
 (defstruct directive-descriptor
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | :variadic
-  action      ; :set-origin | :emit | :reserve
+  action      ; :set-origin | :emit | :reserve | :assign
   width)      ; element byte width for :emit (1 for .byte, 2 for .word);
-              ; NIL for :set-origin / :reserve
+              ; NIL for :set-origin / :reserve / :assign
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
 ;; *LEXERS* (lexer.lisp), a plain runtime hash table with no EVAL-WHEN (see
@@ -49,60 +52,81 @@ instruction one, so a miss is an ordinary outcome, not a caller error."
 ;;; DEFDIRECTIVE
 
 (defun %parse-directive-params (params)
-  "PARAMS is DEFDIRECTIVE's parameter list: either (name) for a fixed
-single argument, or (&rest name) for a variadic directive. Returns (VALUES
-arity name) where ARITY is (:FIXED 1) or :VARIADIC."
+  "PARAMS is DEFDIRECTIVE's parameter list: (name) for a fixed single
+argument, (name value) for a fixed two-argument directive (#35's .EQU), or
+(&rest name) for a variadic directive. Returns (VALUES arity param-names)
+where ARITY is (:FIXED 1), (:FIXED 2), or :VARIADIC and PARAM-NAMES is a
+list of the parameter symbols in order -- checked for &REST first since
+(&rest name) and (name value) are both length 2."
   (cond
     ((and (= (length params) 2) (eq (first params) '&rest))
-     (values :variadic (second params)))
+     (values :variadic (list (second params))))
     ((= (length params) 1)
-     (values '(:fixed 1) (first params)))
-    (t (error "Malformed DEFDIRECTIVE parameter list ~S -- expected (name) ~
-or (&rest name)" params))))
+     (values '(:fixed 1) params))
+    ((= (length params) 2)
+     (values '(:fixed 2) params))
+    (t (error "Malformed DEFDIRECTIVE parameter list ~S -- expected (name), ~
+(name value), or (&rest name)" params))))
 
-(defun %parse-directive-action (action-form param-name)
-  "ACTION-FORM is DEFDIRECTIVE's single body form. PARAM-NAME is the symbol
-bound by the parameter list (%PARSE-DIRECTIVE-PARAMS) -- the action form
-must reference exactly this symbol as its argument, so DEFDIRECTIVE can
-compile the action without evaluating arbitrary Lisp. Returns (VALUES
-action width)."
+(defun %parse-directive-action (action-form param-names)
+  "ACTION-FORM is DEFDIRECTIVE's single body form. PARAM-NAMES are the
+symbols bound by the parameter list (%PARSE-DIRECTIVE-PARAMS) -- the action
+form must reference exactly these symbols, in order, as its arguments, so
+DEFDIRECTIVE can compile the action without evaluating arbitrary Lisp.
+Returns (VALUES action width). Handles the one-argument actions
+(SET-ORIGIN!, RESERVE); EMIT and ASSIGN take two arguments and are parsed
+by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
   (unless (and (consp action-form) (= (length action-form) 2)
-               (eq (second action-form) param-name))
+               (equal (rest action-form) param-names))
     (error "Malformed DEFDIRECTIVE action ~S -- expected one of (set-origin! ~
-~S), (emit width ~S), (reserve ~S) referencing this directive's own ~
-parameter" action-form param-name param-name param-name))
+~S), (reserve ~S) referencing this directive's own parameter"
+           action-form (first param-names) (first param-names)))
   (destructuring-bind (head arg) action-form
     (declare (ignore arg))
     (case head
       (set-origin! (values :set-origin nil))
       (reserve (values :reserve nil))
       (t (error "Unknown DEFDIRECTIVE action head ~S -- expected SET-ORIGIN!, ~
-EMIT, or RESERVE" head)))))
+EMIT, RESERVE, or ASSIGN" head)))))
 
-(defun %parse-emit-action (action-form param-name)
-  "EMIT is the one action taking two arguments (a literal width, then the
-variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's one-argument
-shape -- handled separately. Returns (VALUES :emit width)."
+(defun %parse-emit-action (action-form param-names)
+  "EMIT is one of the two actions taking two arguments (a literal width,
+then the variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's
+one-argument shape -- handled separately. Returns (VALUES :emit width)."
   (destructuring-bind (head width-form values-sym) action-form
-    (unless (and (eq head 'emit) (integerp width-form) (eq values-sym param-name))
+    (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names))
       (error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S)"
-             action-form param-name))
+             action-form (first param-names)))
     (values :emit width-form)))
 
+(defun %parse-assign-action (action-form param-names)
+  "ASSIGN (#35's .EQU) is the other two-argument action -- a name symbol and
+a value expression, both referencing the directive's own two parameters, in
+order. Returns :ASSIGN."
+  (unless (and (consp action-form) (eq (first action-form) 'assign)
+               (equal (rest action-form) param-names))
+    (error "Malformed DEFDIRECTIVE action ~S -- expected (assign ~{~S~^ ~})"
+           action-form param-names))
+  :assign)
+
 (defun build-directive-descriptor (name params action-form)
-  (multiple-value-bind (arity param-name) (%parse-directive-params params)
+  (multiple-value-bind (arity param-names) (%parse-directive-params params)
     (multiple-value-bind (action width)
-        (if (and (consp action-form) (eq (first action-form) 'emit))
-            (%parse-emit-action action-form param-name)
-            (%parse-directive-action action-form param-name))
+        (cond
+          ((and (consp action-form) (eq (first action-form) 'emit))
+           (%parse-emit-action action-form param-names))
+          ((and (consp action-form) (eq (first action-form) 'assign))
+           (values (%parse-assign-action action-form param-names) nil))
+          (t (%parse-directive-action action-form param-names)))
       (make-directive-descriptor :name (string-upcase name) :arity arity
                                   :action action :width width))))
 
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
-either (VALUE-NAME) for a directive with exactly one argument, or (&rest
-VALUES-NAME) for a variadic one (e.g. \".byte\"). BODY must be exactly one
-action form referencing PARAMS' own parameter name:
+(VALUE-NAME) for a directive with exactly one argument, (NAME-NAME
+VALUE-NAME) for one with exactly two (#35's .EQU), or (&rest VALUES-NAME)
+for a variadic one (e.g. \".byte\"). BODY must be exactly one action form
+referencing PARAMS' own parameter name(s), in order:
 
   (set-origin! address)   -- ADDRESS becomes the assembler's new address
                               counter; must fold to a label-free constant at
@@ -115,12 +139,20 @@ action form referencing PARAMS' own parameter name:
                               layout size is WIDTH * (length VALUES); each
                               value may reference a label (resolved in
                               pass 2, like an ordinary instruction operand).
+  (assign name value)      -- bind NAME (an identifier operand, not an
+                              expression) to VALUE in the symbol table,
+                              without occupying any address -- #35's .EQU.
+                              VALUE must fold at layout time, against labels
+                              and .EQUs already bound above it (a forward
+                              reference is an ASSEMBLY-ERROR); zero layout
+                              size.
 
 E.g.:
   (defdirective \".org\"  (address)      (set-origin! address))
   (defdirective \".byte\" (&rest values) (emit 1 values))
   (defdirective \".word\" (&rest values) (emit 2 values))
   (defdirective \".res\"  (count)        (reserve count))
+  (defdirective \".equ\"  (name value)   (assign name value))
 
 Registers the resulting DIRECTIVE-DESCRIPTOR under NAME (upcased) in
 *DIRECTIVES*, retrievable with FIND-DIRECTIVE-DESCRIPTOR. Restricting BODY
@@ -140,3 +172,4 @@ anything -- see this file's header comment."
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
 (defdirective ".res"  (count)        (reserve count))
+(defdirective ".equ"  (name value)   (assign name value))

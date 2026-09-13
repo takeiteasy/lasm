@@ -57,6 +57,27 @@
 ;;;; layout) or contribute no bytes at all (.ORG itself), %ENCODE below
 ;;;; writes each entry at its own address into a growable byte vector
 ;;;; instead of accumulating a flat list.
+;;;;
+;;;; .EQU (a DIRECTIVE-DESCRIPTOR with ACTION :ASSIGN, #35) binds a name to a
+;;;; computed value in the symbol table without occupying any address --
+;;;; distinct from a label, which always binds to the current address. Its
+;;;; value must fold during the pass that reaches it, against that pass's
+;;;; symbol table as built *so far* -- so an .EQU sees every label and .EQU
+;;;; above it, never one below (a forward reference is an ASSEMBLY-ERROR,
+;;;; same rule as .ORG/.RES's own operand). This makes the symbol table a
+;;;; string -> value map, not string -> address: an ordinary instruction
+;;;; operand or .BYTE/.WORD value can reference either kind of symbol
+;;;; interchangeably at encode time, since EVAL-EXPR doesn't distinguish
+;;;; them. Because a later layout pass's addresses can change an
+;;;; address-dependent .EQU's value (e.g. \"size = * - start\"), while
+;;;; .ORG/.RES must fold *before* any address is final, those two directives
+;;;; may only reference a *pure* .EQU -- one whose value contains no label
+;;;; and no \"*\" -- kept in a separate CONSTANTS table (%LAYOUT-PASS) built
+;;;; alongside the main one; an address-dependent .EQU used there is an
+;;;; ASSEMBLY-ERROR pointing at #41, which tracks lifting the restriction.
+;;;; Once %LAYOUT's widths have converged, every address is fixed, so every
+;;;; .EQU's value is too -- the existing width-vector fixpoint check already
+;;;; implies an .EQU fixpoint, and nothing new needs to converge.
 
 (in-package #:lasm)
 
@@ -77,7 +98,9 @@ names exactly this failure."))
 (defstruct assembly
   (bytes nil :type (or null (vector (unsigned-byte 8))))
   (origin 0 :type (integer 0))
-  (symbols nil :type (or null hash-table)))  ; string -> address
+  (symbols nil :type (or null hash-table)))  ; string -> value (a label's
+                                              ; address, or an .EQU's folded
+                                              ; value, #35)
 
 ;;; Pass 1: layout -- size every statement, bind every label, choose modes
 
@@ -226,27 +249,33 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
                               (statement-mnemonic statement) n (length operands))))))
     (mapcar #'%directive-operand-ast operands)))
 
-(defun %directive-constant-arg (statement directive address scope)
-  "Fold DIRECTIVE's single argument (STATEMENT's one operand) to a
-label-free constant -- used for .ORG and .RES, whose size/address effect
-must be known in pass 1, before any label has resolved. ADDRESS is this
-statement's own address (already known in pass 1), resolving a
-location-counter reference (\"*\", #15) in the operand -- e.g. \".org *+16\"
-pads 16 bytes forward from here. SCOPE qualifies a local-label reference
-(#16) before it's folded, so the error below names the qualified form.
-Signals ASSEMBLY-ERROR (not the bare UNRESOLVED-LABEL EVAL-EXPR-CONSTANT
-itself signals) naming the offending directive, since a plain \"unresolved
-label\" report wouldn't say why this one operand can't wait for pass 2."
+(defun %directive-constant-arg (statement directive address scope constants)
+  "Fold DIRECTIVE's single argument (STATEMENT's one operand) to a constant
+-- used for .ORG and .RES, whose size/address effect must be known in pass
+1, before any label has resolved. ADDRESS is this statement's own address
+(already known in pass 1), resolving a location-counter reference (\"*\",
+#15) in the operand -- e.g. \".org *+16\" pads 16 bytes forward from here.
+SCOPE qualifies a local-label reference (#16) before it's folded, so the
+error below names the qualified form. CONSTANTS (#35) is this pass's table
+of *pure* .EQU bindings -- ones whose own value contains no label and no
+\"*\", so they're already known in pass 1 -- letting e.g. \".equ bufsize, 16\"
+feed \".res bufsize\"; an .EQU that isn't pure is absent from CONSTANTS, so a
+reference to one still falls into the UNRESOLVED-LABEL branch below (#41
+tracks lifting this restriction). Signals ASSEMBLY-ERROR (not the bare
+UNRESOLVED-LABEL EVAL-EXPR itself signals) naming the offending directive,
+since a plain \"unresolved label\" report wouldn't say why this one operand
+can't wait for pass 2."
   (let ((ast (%qualify-locals! (first (%directive-args statement directive))
                                 scope (statement-line statement))))
-    (handler-case (eval-expr-constant ast :pc address)
+    (handler-case (eval-expr ast :symbols constants :pc address)
       (unresolved-label (c)
         (%assembly-error (statement-line statement)
-                          "~A: operand must be a constant expression -- label ~S ~
-is not resolvable here (pass 1 has no symbol table yet)"
+                          "~A: operand must be a constant expression -- ~S ~
+is not resolvable here (pass 1 has no symbol table yet, and only a ~
+label-and-*-free .equ can be used here -- see #41)"
                           (statement-mnemonic statement) (unresolved-label-name c))))))
 
-(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp)
+(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp constants)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
 new-address new-asm-origin): before any statement has occupied an address
 (EMITTED-P NIL), .ORG moves both the address counter and the assembly's own
@@ -260,8 +289,9 @@ layout pass (see %LAYOUT) can turn what was a legal forward pad into an
 apparent backward move, and that must not fail until the widths have
 actually converged -- a trial pass instead clamps forward (MAX VALUE ADDRESS)
 so layout can keep iterating. A \"*\" in the operand (#15) resolves against
-ADDRESS -- the counter's value *before* this .ORG moves it."
-  (let ((value (%directive-constant-arg statement directive address scope)))
+ADDRESS -- the counter's value *before* this .ORG moves it. CONSTANTS is
+%DIRECTIVE-CONSTANT-ARG's pure-.EQU table (#35)."
+  (let ((value (%directive-constant-arg statement directive address scope constants)))
     (cond
       ((not emitted-p) (values value value))
       ((>= value address) (values value asm-origin))
@@ -307,6 +337,17 @@ call made idempotent some other way."
   (dolist (ast asts) (%qualify-locals! ast scope line))
   asts)
 
+(defun %bind-symbol! (symbols name value line)
+  "Bind NAME to VALUE in SYMBOLS, signalling ASSEMBLY-ERROR if NAME is
+already bound -- the one duplicate-symbol check shared by a label
+definition (%BIND-LABEL!) and an .EQU assignment (%APPLY-ASSIGN-DIRECTIVE,
+#35), so \"foo: nop\" followed by \".equ foo, 5\" (or the reverse order)
+signals identically either way: both a label and an .EQU claim a name in
+the same flat table."
+  (when (nth-value 1 (gethash name symbols))
+    (%assembly-error line "Duplicate symbol ~S" name))
+  (setf (gethash name symbols) value))
+
 (defun %bind-label! (statement symbols address scope)
   "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS, qualifying it
 against SCOPE first if it's local (#16). Returns the SCOPE in effect for any
@@ -316,16 +357,66 @@ one, or no label at all, leaves SCOPE unchanged."
     (cond
       ((null label) scope)
       ((statement-label-localp statement)
-       (let ((qualified (%qualify-local scope label (statement-line statement))))
-         (when (nth-value 1 (gethash qualified symbols))
-           (%assembly-error (statement-line statement) "Duplicate label ~S" qualified))
-         (setf (gethash qualified symbols) address))
+       (%bind-symbol! symbols (%qualify-local scope label (statement-line statement))
+                       address (statement-line statement))
        scope)
       (t
-       (when (nth-value 1 (gethash label symbols))
-         (%assembly-error (statement-line statement) "Duplicate label ~S" label))
-       (setf (gethash label symbols) address)
+       (%bind-symbol! symbols label address (statement-line statement))
        label))))
+
+;;; .EQU / symbol assignment (#35) -- a layout-time binding that occupies no
+;;; address, distinct from a label (which always binds to the current
+;;; address, %BIND-LABEL! above).
+
+(defun %purep (ast)
+  "T if AST (an .EQU value, already local-qualified) contains no EXPR-LABEL
+and no EXPR-LOCATION node -- i.e. its value doesn't depend on any address,
+so it's known even before layout has placed anything. Used to decide
+whether an .EQU belongs in %LAYOUT-PASS's CONSTANTS table, the only symbols
+a .ORG/.RES operand may reference (%DIRECTIVE-CONSTANT-ARG) -- an
+address-dependent .EQU's value can change across relaxation passes as
+labels move, which .RES's count (not sticky like an addressing-mode width)
+has no mechanism to accommodate without risking non-convergence (#41 tracks
+lifting this restriction with one)."
+  (etypecase ast
+    (expr-number t)
+    ((or expr-label expr-location) nil)
+    (expr-unary (%purep (expr-unary-operand ast)))
+    (expr-binary (and (%purep (expr-binary-left ast)) (%purep (expr-binary-right ast))))))
+
+(defun %apply-assign-directive (statement directive address symbols constants scope)
+  "Apply an :ASSIGN directive (.EQU, #35) at layout time. STATEMENT's first
+operand must be a bare identifier (the name being bound, qualified against
+SCOPE first if local, #16) and its second the value expression, folded
+against ADDRESS and SYMBOLS -- the flat, incrementally-built table this
+pass has bound so far, so an .EQU sees every label and .EQU defined above
+it and signals ASSEMBLY-ERROR (via the UNRESOLVED-LABEL it converts) on a
+forward reference, exactly like every other directive whose effect must be
+known during layout. Binds NAME in both SYMBOLS (via %BIND-SYMBOL!, so it
+shares one duplicate check with a label) and, when the value is address-
+independent (%PUREP), CONSTANTS -- see %DIRECTIVE-CONSTANT-ARG. Does not
+change SCOPE: unlike a global label, an .EQU never becomes the enclosing
+scope for a later local label."
+  (let* ((line (statement-line statement))
+         (asts (%directive-args statement directive))
+         (name-ast (first asts))
+         (value-ast (%qualify-locals! (second asts) scope line)))
+    (unless (expr-label-p name-ast)
+      (%assembly-error line "~A: first operand must be a symbol name"
+                        (statement-mnemonic statement)))
+    (let ((name (if (expr-label-localp name-ast)
+                     (%qualify-local scope (expr-label-name name-ast) line)
+                     (expr-label-name name-ast)))
+          (value (handler-case (eval-expr value-ast :symbols symbols :pc address)
+                   (unresolved-label (c)
+                     (%assembly-error line
+                                       "~A: operand must be resolvable here -- ~
+label ~S is not yet defined (an .equ can only reference a label or .equ ~
+defined above it)"
+                                       (statement-mnemonic statement) (unresolved-label-name c))))))
+      (%bind-symbol! symbols name value line)
+      (when (%purep value-ast)
+        (setf (gethash name constants) value)))))
 
 (defparameter *max-layout-iterations* 8
   "Safety cap on the number of trial passes %LAYOUT will run while relaxing
@@ -340,9 +431,10 @@ since sticky widening makes it unreachable by construction.")
 (defun %layout-pass (statements machine origin prev-symbols floors finalp)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
 final-address asm-origin new-floors widths). SYMBOLS is a fresh string ->
-address hash table built by this pass alone -- never reused across passes,
-since %BIND-LABEL! signals on a rebind. SIZED-ENTRIES is, in order, one
-tagged entry per mnemonic-bearing statement that occupies address space:
+value hash table built by this pass alone (a label's address, or an .EQU's
+folded value, #35) -- never reused across passes, since %BIND-SYMBOL!
+signals on a rebind. SIZED-ENTRIES is, in order, one tagged entry per
+mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line)
   (:emit        address width asts line)
   (:reserve     address count line)
@@ -373,8 +465,14 @@ SCOPE (the nearest preceding global label's name, #16) is threaded statement
 to statement so %BIND-LABEL! can qualify a local label definition and so a
 statement's own operands (its own label bound first -- \"loop: bne .x\"'s .x
 is scoped to LOOP, not whatever preceded it) can be qualified via
-%QUALIFY-LOCALS!."
+%QUALIFY-LOCALS!.
+
+CONSTANTS (#35) is a second, sparser table -- built alongside SYMBOLS -- of
+only the *pure* .EQU bindings seen so far (%PUREP); it's what
+%DIRECTIVE-CONSTANT-ARG passes to .ORG/.RES, since those must fold before
+addresses are final."
   (let ((symbols (make-hash-table :test 'equal))
+        (constants (make-hash-table :test 'equal))
         (new-floors (copy-seq floors))
         (address origin)
         (asm-origin origin)
@@ -397,9 +495,17 @@ is scoped to LOOP, not whatever preceded it) can be qualified via
                  ((and directive (eq (directive-descriptor-action directive) :set-origin))
                   (multiple-value-bind (new-address new-origin)
                       (%apply-origin-directive statement directive address asm-origin
-                                                emitted-p scope finalp)
+                                                emitted-p scope finalp constants)
                     (setf address new-address asm-origin new-origin))
                   (setf scope (%bind-label! statement symbols address scope)))
+                 ;; .EQU (#35) binds a name to a computed value instead of an
+                 ;; address -- it contributes no SIZED entry and does not
+                 ;; advance ADDRESS or set EMITTED-P, and (unlike a global
+                 ;; label) never becomes SCOPE. Still binds its own line's
+                 ;; label (if any) first, same as every other statement.
+                 ((and directive (eq (directive-descriptor-action directive) :assign))
+                  (setf scope (%bind-label! statement symbols address scope))
+                  (%apply-assign-directive statement directive address symbols constants scope))
                  (t
                   (setf scope (%bind-label! statement symbols address scope))
                   (when mnemonic
@@ -407,7 +513,8 @@ is scoped to LOOP, not whatever preceded it) can be qualified via
                       (directive
                        (ecase (directive-descriptor-action directive)
                          (:reserve
-                          (let ((count (%directive-constant-arg statement directive address scope)))
+                          (let ((count (%directive-constant-arg statement directive address
+                                                                   scope constants)))
                             (when (minusp count)
                               (%assembly-error (statement-line statement)
                                                "~A: count must not be negative" mnemonic))
@@ -561,14 +668,17 @@ ASSEMBLY. Runs EXPAND-MACROS (macro.lisp, #33) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
 blocks collected and every invocation replaced by its substituted body
 before layout ever looks at the statement list. Signals ASSEMBLY-ERROR on a
-duplicate label, an operand matching no addressing mode, a malformed or
-backward-moving directive (#14, e.g. .ORG with a label operand or one that
-moves the address counter backward), MACRO-ERROR on a malformed
-.macro/.endm block or invocation, UNKNOWN-INSTRUCTION on an unregistered
-mnemonic, and UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label
-that is never defined anywhere in STATEMENTS. ORIGIN is the assembly's
-starting address unless a leading .ORG (before any other statement occupies
-an address) moves it -- see ASSEMBLY-ORIGIN."
+duplicate symbol (a label or .EQU name bound twice, #35), an operand
+matching no addressing mode, a malformed or backward-moving directive (#14,
+e.g. .ORG with a label operand or one that moves the address counter
+backward; #35's .EQU has the same label-free/forward-reference-free
+restriction, plus the .ORG/.RES-may-only-reference-a-pure-.EQU restriction
+-- see this file's header comment), MACRO-ERROR on a malformed .macro/.endm
+block or invocation, UNKNOWN-INSTRUCTION on an unregistered mnemonic, and
+UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label that is never
+defined anywhere in STATEMENTS. ORIGIN is the assembly's starting address
+unless a leading .ORG (before any other statement occupies an address)
+moves it -- see ASSEMBLY-ORIGIN."
   (multiple-value-bind (symbols sized final-address asm-origin)
       (%layout (expand-macros statements) machine origin)
     (make-assembly :bytes (%encode sized symbols asm-origin final-address)

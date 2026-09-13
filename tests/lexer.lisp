@@ -84,6 +84,14 @@ sta b"))))
   (let ((toks (%non-eof (tokenize "1<<2>>3"))))
     (fiveam:is (equal '(:shl :shr) (list (token-value (second toks)) (token-value (fourth toks)))))))
 
+(fiveam:test equals-lexes-as-a-punctuation-token
+  ;; "=" (#35, "name = value" sugar for .equ) has no expression-parser
+  ;; meaning -- see parser.lisp's %BINARY-PRECEDENCE/%UNARY-OPS -- so this
+  ;; only checks the lexer hands it back as one punctuator token.
+  (let ((toks (%non-eof (tokenize "x = 5"))))
+    (fiveam:is (eq :equals (token-value (second toks))))
+    (fiveam:is (eq :punctuation (token-type (second toks))))))
+
 (fiveam:test token-line-and-column-tracked
   (let ((toks (remove :newline (%non-eof (tokenize "a
   b")) :key #'token-type)))

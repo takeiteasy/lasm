@@ -10,6 +10,9 @@
 ;;;; - Local-label scoping (docs/assembler.md#local-label-scoping-16) -- a
 ;;;;   ".loop" label is scoped to its nearest preceding global label, so two
 ;;;;   routines can each define their own ".loop" without colliding.
+;;;; - .equ / symbol assignment (docs/directives.md#equ, docs/assembler.md#equ--
+;;;;   symbol-assignment, #35) -- a named constant computed from "*" and a
+;;;;   backward label, occupying no address of its own.
 ;;;;
 ;;;; Run with:  sbcl --script examples/pc-and-scopes.lisp
 
@@ -39,6 +42,10 @@ count_up:                       ; routine 2 -- reuses \".loop\" freely
         ldx #5
 .loop:  dex                     ; -> bound as \"count_up.loop\", no collision
         bne .loop               ; resolves against \"count_up.loop\"
+
+routine1_size = count_up - count_down  ; \"=\" sugar for .equ (#35) -- both
+                                 ; operands are backward labels, already
+                                 ; bound by the time this line folds
 
         hlt                     ; program ends here -- what follows is data,
                                  ; never executed
@@ -93,4 +100,6 @@ self:   .word *                 ; \"*\": this word's own address (a
       (format t "  \"self\" = $~4,'0X, .word * there = $~4,'0X (self-referential -- \"*\" == \"self\")~%"
               self-address
               (logior (mref m 'ram self-address)
-                      (ash (mref m 'ram (1+ self-address)) 8))))))
+                      (ash (mref m 'ram (1+ self-address)) 8)))
+      (format t "  \"routine1_size\" = ~D bytes (an .equ value, not an address)~%"
+              (gethash "routine1_size" (assembly-symbols assembly))))))

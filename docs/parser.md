@@ -25,6 +25,7 @@ constant expressions with no label support at all.
 
 ```
 line      := [label-def] [mnemonic [operands]]
+          |  [label-def] identifier "=" expr-tokens
 label-def := identifier label-suffix
 operands  := operand ("," operand)*
 ```
@@ -32,6 +33,14 @@ operands  := operand ("," operand)*
 One `statement` per source line; blank and comment-only lines produce none.
 A label with no mnemonic is a legal statement (a label on its own line). A
 comma inside a parenthesized group does not split operands.
+
+The second line form — `name = value` (#35) — is pure surface sugar for
+`.equ name, value`: `%parse-line` recognizes an identifier immediately
+followed by a `:equals` token (the lexer's `=` punctuator, [Lexer](lexer.md))
+and rewrites it to a statement whose mnemonic is `.equ` with two operands
+(the name, then everything after `=`), so the assembler has exactly one
+`.equ` code path regardless of which spelling a program uses — see
+[Directives, "`.equ`"](directives.md#equ).
 
 ```lisp
 (defstruct statement label mnemonic operands operand-tokens line)

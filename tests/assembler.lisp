@@ -428,3 +428,123 @@ bra .loop" :machine 'instr-test-machine)))
 (fiveam:test local-label-reference-with-no-enclosing-global-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble "bra .loop" :machine 'instr-test-machine)))
+
+;;; .EQU / symbol assignment (#35) -- both spellings (".equ name, value" and
+;;; "name = value"), layout-time backward-only folding, the same
+;;; duplicate-symbol rule a label uses, and the pure-.EQU restriction on
+;;; .ORG/.RES (#41 tracks lifting it). DEFDIRECTIVE registration and arity
+;;; live in tests/directive.lisp -- these exercise statement-level dispatch,
+;;; the same split that file documents for .ORG/.BYTE/.WORD/.RES.
+
+(fiveam:test equ-binds-a-constant-value-not-an-address
+  (let ((a (assemble ".equ x, 5
+.byte x" :machine 'instr-test-machine)))
+    (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
+    (fiveam:is (equalp #(5) (assembly-bytes a)))))
+
+(fiveam:test equ-contributes-no-bytes-and-does-not-move-the-address-counter
+  (let ((a (assemble "nop
+.equ x, 5
+next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 1 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA #xEA) (assembly-bytes a)))))
+
+(fiveam:test equ-value-may-reference-an-earlier-equ
+  (let ((a (assemble ".equ a, 1
+.equ b, a + 1
+.byte b" :machine 'instr-test-machine)))
+    (fiveam:is (= 2 (gethash "b" (assembly-symbols a))))
+    (fiveam:is (equalp #(2) (assembly-bytes a)))))
+
+(fiveam:test equ-value-may-reference-the-location-counter
+  ;; The ticket's motivating example: a size computed from "*" and a
+  ;; backward label.
+  (let ((a (assemble "start: nop
+nop
+.equ size, * - start
+.byte size" :machine 'instr-test-machine)))
+    (fiveam:is (= 2 (gethash "size" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA #xEA 2) (assembly-bytes a)))))
+
+(fiveam:test equ-forward-reference-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".equ x, y
+.equ y, 1" :machine 'instr-test-machine)))
+
+(fiveam:test equ-duplicate-against-a-label-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "foo: nop
+.equ foo, 5" :machine 'instr-test-machine)))
+
+(fiveam:test label-duplicate-against-an-earlier-equ-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".equ foo, 5
+foo: nop" :machine 'instr-test-machine)))
+
+(fiveam:test equ-duplicate-against-an-earlier-equ-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".equ foo, 1
+.equ foo, 2" :machine 'instr-test-machine)))
+
+(fiveam:test equ-first-operand-must-be-a-bare-identifier
+  (fiveam:signals assembly-error
+    (assemble ".equ 1 + 2, 5" :machine 'instr-test-machine)))
+
+(fiveam:test local-equ-name-is-scoped-like-a-local-label
+  (let ((a (assemble "loop: nop
+.equ .n, 3
+.byte .n" :machine 'instr-test-machine)))
+    (fiveam:is (= 3 (gethash "loop.n" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA 3) (assembly-bytes a)))))
+
+(fiveam:test equ-used-as-instruction-operand-narrows-to-zero-page
+  (let ((a (assemble ".equ addr, $10
+lda addr" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 #x10) (assembly-bytes a)))))
+
+(fiveam:test equ-used-as-instruction-operand-widens-to-absolute-when-it-must
+  (let ((a (assemble ".equ addr, $1000
+lda addr" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 #x00 #x10) (assembly-bytes a)))))
+
+(fiveam:test pure-equ-may-be-referenced-by-res
+  (let ((a (assemble ".equ n, 4
+.res n
+next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(0 0 0 0 #xEA) (assembly-bytes a)))))
+
+(fiveam:test pure-equ-may-be-referenced-by-org
+  (let ((a (assemble ".equ base, $8000
+.org base
+start: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= #x8000 (assembly-origin a)))
+    (fiveam:is (= #x8000 (gethash "start" (assembly-symbols a))))))
+
+(fiveam:test address-dependent-equ-referenced-by-res-signals-assembly-error
+  ;; "n" depends on "*", so it's absent from the pure-.EQU table .RES reads
+  ;; from -- see this file's header and assembler.lisp's #35 paragraph (#41
+  ;; tracks lifting this restriction).
+  (fiveam:signals assembly-error
+    (assemble "start: nop
+.equ n, * - start
+.res n" :machine 'instr-test-machine)))
+
+(fiveam:test address-dependent-equ-referenced-by-org-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "start: nop
+.equ base, * + $100
+.org base" :machine 'instr-test-machine)))
+
+(fiveam:test equals-sugar-is-equivalent-to-equ
+  (let ((a (assemble "x = 5
+.byte x" :machine 'instr-test-machine)))
+    (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
+    (fiveam:is (equalp #(5) (assembly-bytes a)))))
+
+(fiveam:test equals-sugar-keeps-a-label-on-the-same-line
+  (let ((a (assemble "here: x = 5
+.byte x, here" :machine 'instr-test-machine)))
+    (fiveam:is (= 0 (gethash "here" (assembly-symbols a))))
+    (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
+    (fiveam:is (equalp #(5 0) (assembly-bytes a)))))

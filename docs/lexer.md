@@ -67,11 +67,15 @@ their own for a conventional dialect.
 [Statement grammar & expression parser](parser.md) is line-oriented.
 
 Punctuation tokens carry a keyword `value`: `:plus :minus :star :slash :amp
-:pipe :caret :tilde :shl :shr :lparen :rparen :comma :lt :gt :hash`.
+:pipe :caret :tilde :shl :shr :lparen :rparen :comma :lt :gt :hash :equals`.
 Two-character operators (`<<`, `>>`) win maximal munch over their
 single-character prefixes. `#` has no meaning to the lexer itself — it is
 recognized so addressing-mode literal patterns (e.g. 6502-style immediate
-`#expr`) have a token to match against once `defmode` exists (M2).
+`#expr`) have a token to match against once `defmode` exists (M2). `=`
+(`:equals`) likewise has no meaning to the expression parser (it's absent
+from both its binary-operator and unary-operator tables) — it exists only so
+the statement grammar (`parser.md`) can recognize `name = value` as sugar
+for `.equ name, value` (#35, see [Directives](directives.md#equ)).
 
 ## Conditions
 

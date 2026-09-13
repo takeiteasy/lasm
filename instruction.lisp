@@ -89,12 +89,13 @@ a no-operand instruction."
 
 (defun eval-expr (ast &key symbols pc)
   "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when
-given, is a hash table (string -> address) resolving EXPR-LABEL nodes --
-the assembler pass (assembler.lisp) calls this with its completed layout
-symbol table. PC, when given, is the integer address EXPR-LOCATION (the
-\"*\" location-counter symbol, #15) folds to. Signals UNRESOLVED-LABEL on an
-EXPR-LABEL whose name is not in SYMBOLS (or when SYMBOLS is NIL), and
-UNRESOLVED-LOCATION on an EXPR-LOCATION when PC is NIL."
+given, is a hash table (string -> value -- a label's address, or an .EQU's
+folded value, #35) resolving EXPR-LABEL nodes -- the assembler pass
+(assembler.lisp) calls this with its completed layout symbol table. PC, when
+given, is the integer address EXPR-LOCATION (the \"*\" location-counter
+symbol, #15) folds to. Signals UNRESOLVED-LABEL on an EXPR-LABEL whose name
+is not in SYMBOLS (or when SYMBOLS is NIL), and UNRESOLVED-LOCATION on an
+EXPR-LOCATION when PC is NIL."
   (etypecase ast
     (expr-number (expr-number-value ast))
     (expr-label

@@ -58,6 +58,37 @@ jmp start")))
 (fiveam:test empty-operand-signals-parse-failure
   (fiveam:signals parse-failure (parse "lda a,,b")))
 
+;;; "name = value" sugar for ".equ name, value" (#35)
+
+(fiveam:test equals-sugar-rewrites-to-equ-mnemonic
+  (let ((stmts (parse "x = 5")))
+    (fiveam:is (= 1 (length stmts)))
+    (let ((s (first stmts)))
+      (fiveam:is (equal +assignment-directive-name+ (statement-mnemonic s)))
+      (fiveam:is (= 2 (length (statement-operands s))))
+      (fiveam:is (equalp #("x") (map 'vector #'token-value (operand-tokens (first (statement-operands s))))))
+      (fiveam:is (equalp #(5) (map 'vector #'token-value (operand-tokens (second (statement-operands s)))))))))
+
+(fiveam:test equals-sugar-parses-a-label-on-the-same-line
+  ;; Named distinctly from tests/assembler.lisp's
+  ;; EQUALS-SUGAR-KEEPS-A-LABEL-ON-THE-SAME-LINE (a behavior-level test
+  ;; against ASSEMBLE) -- FiveAM test names are one flat, package-wide
+  ;; table, so a repeated name silently shadows the earlier definition
+  ;; instead of running both.
+  (let ((stmts (parse "here: x = 5")))
+    (fiveam:is (= 1 (length stmts)))
+    (let ((s (first stmts)))
+      (fiveam:is (equal "here" (statement-label s)))
+      (fiveam:is (equal +assignment-directive-name+ (statement-mnemonic s))))))
+
+(fiveam:test equals-sugar-value-may-be-a-full-expression
+  (let* ((stmts (parse "x = 1 + 2"))
+         (value-operand (second (statement-operands (first stmts)))))
+    (fiveam:is (= 3 (length (operand-tokens value-operand))))))
+
+(fiveam:test equals-with-nothing-after-it-signals-parse-failure
+  (fiveam:signals parse-failure (parse "x =")))
+
 ;;; Expression parser: precedence & associativity
 
 (fiveam:test precedence-arithmetic

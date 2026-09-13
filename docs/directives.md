@@ -1,10 +1,10 @@
 # Directives
 
 `defdirective` declares an assembler directive: a named-parameter list plus
-exactly one action form from a small fixed vocabulary. LASM ships four
-built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.res`.
-The assembler (see [Assembler](assembler.md)) dispatches a statement to a
-directive by mnemonic, the same way it dispatches to an instruction's
+exactly one action form from a small fixed vocabulary. LASM ships five
+built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.res`,
+`.equ`. The assembler (see [Assembler](assembler.md)) dispatches a statement
+to a directive by mnemonic, the same way it dispatches to an instruction's
 addressing-mode variants — a directive statement is otherwise an ordinary
 `statement` (see [Statement grammar & expression parser](parser.md)), just
 one whose mnemonic happens to start with `.` under the default lexer's
@@ -15,6 +15,7 @@ one whose mnemonic happens to start with `.` under the default lexer's
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
 (defdirective ".res"  (count)        (reserve count))
+(defdirective ".equ"  (name value)   (assign name value))
 ```
 
 ## `defdirective`
@@ -24,7 +25,8 @@ one whose mnemonic happens to start with `.` under the default lexer's
 ```
 
 `name` is a string (e.g. `".org"`), matched case-insensitively. `params` is
-either `(value-name)` — a directive taking exactly one operand — or `(&rest
+`(value-name)` — a directive taking exactly one operand — `(name-name
+value-name)` — one taking exactly two (`.equ`'s own shape) — or `(&rest
 values-name)` — a variadic directive taking any number of operands,
 including zero. `action-form` must be exactly one of:
 
@@ -36,6 +38,9 @@ including zero. `action-form` must be exactly one of:
 - `(emit width values-name)` — lay down `(length values-name)` little-endian
   `width`-byte fields, one per value. Layout size is `width * (length
   values-name)`.
+- `(assign name-name value-name)` — bind `name-name` (an identifier operand,
+  not an expression) to `value-name` in the symbol table, without occupying
+  any address (`.equ` below).
 
 `action-form` must reference the directive's own parameter name — this
 (along with restricting the body to one recognized action, not arbitrary
@@ -130,6 +135,70 @@ the core semantics vocabulary), a `.res` run belongs in a data area the
 program's control flow doesn't traverse — see
 [`examples/directives.lisp`](../examples/directives.lisp).
 
+## `.equ`
+
+```lisp
+.equ size, 16       ; "size" -> 16, no address occupied
+count = 4           ; sugar for ".equ count, 4"
+```
+
+Binds its first operand — a bare identifier, not an expression — to its
+second operand's value in the symbol table, occupying no address (#35).
+`name = value` is accepted as sugar for `.equ name, value`: the lexer's `=`
+punctuator (`lexer.lisp`) has no meaning to the expression parser, so it only
+ever appears here; the parser (`parser.lisp`, `%parse-line`) rewrites the
+sugar to an ordinary `.equ` statement before the assembler ever sees it,
+so there is exactly one code path for both spellings.
+
+An `.equ`'s value folds during the layout pass that reaches it, against that
+pass's symbol table *as built so far* — so it can reference any label or
+`.equ` bound above it (`* - start` included, once `start:` precedes it), but
+never one below; a forward reference is `assembly-error`, the same
+"must-fold-now" rule `.org`/`.res`'s own operand already follows. Rebinding
+an already-bound name — a label redefined as an `.equ`, an `.equ` redefined
+as a label, or a repeated `.equ` — signals the same duplicate-symbol
+`assembly-error` a repeated label does; the symbol table is one flat
+name → value map regardless of which bound a given name.
+
+```lisp
+.equ a, 1
+.equ b, a + 1     ; chains off an earlier .equ
+start: nop
+nop
+.equ size, * - start   ; size == 2
+```
+
+A label on an `.equ`/`=` line binds as usual, to the statement's own address
+— unrelated to the name the `.equ` itself binds:
+
+```lisp
+here: count = 4   ; here == this line's address; count == 4
+```
+
+A local name (the lexer's `local-label-prefix`, e.g. `.n`) is scoped to its
+nearest preceding global label exactly like a local label — see
+[Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16).
+
+Because `.org`/`.res` must fold their own operand in pass 1, before any
+address is final, they may reference an `.equ` only when it's **pure** — its
+value contains no label and no `"*"`, so it can't change across relaxation
+passes:
+
+```lisp
+.equ bufsize, 16
+.res bufsize        ; fine
+
+start: nop
+.equ size, * - start
+.res size           ; assembly-error -- size depends on start's address
+```
+
+An ordinary instruction operand or `.byte`/`.word` value has no such
+restriction, since those fold at encode time against the completed table
+like any label reference. See [Assembler, "`.equ` / symbol
+assignment"](assembler.md#equ--symbol-assignment) for why (#41 tracks
+lifting it).
+
 ## Scope: `.macro` is not a directive
 
 `.macro`/`.endm` is deliberately **not** built on `defdirective`. A directive
@@ -140,14 +209,22 @@ action form in `defdirective`'s vocabulary that could express "collect
 everything up to the matching `.endm`". It lives in its own statement-
 expansion pass instead, `expand-macros` (`macro.lisp`), which
 `assemble-statements` ([Assembler](assembler.md)) runs before layout ever
-sees the statement list — see [Macros](macros.md).
+sees the statement list — see [Macros](macros.md). `.equ`, by contrast, fits
+`defdirective` just fine even though it binds a *name* rather than sizing
+anything: its layout size is statically zero (like `.org`'s), and its
+address effect — none at all — is exactly as computable without evaluation
+as every other directive's, which is the only thing `defdirective`'s
+restricted vocabulary actually requires.
 
 ## Conditions
 
 - `assembly-error` — wrong operand count for a directive's declared arity, a
-  non-constant `.org`/`.res` operand (a label reference, which must fold
-  before layout can compute addresses at all), a backward-moving `.org`, or
-  a negative `.res` count.
+  non-constant `.org`/`.res` operand (a label reference, or a non-pure
+  `.equ` reference, which must fold before layout can compute addresses at
+  all — see "`.equ`" above), a backward-moving `.org`, a negative `.res`
+  count, an `.equ`'s first operand not a bare identifier, an `.equ` value
+  referencing a symbol not yet bound (forward reference), or a duplicate
+  symbol (a label or `.equ` name bound twice, in any combination).
 - `unresolved-label` — a `.byte`/`.word` operand referencing a label never
   bound anywhere in the program (from `eval-expr` at encode time, same as an
   instruction operand).
@@ -157,8 +234,8 @@ sees the statement list — see [Macros](macros.md).
 - `.ascii`/`.asciz` — needs a string node in the expression parser
   (`parse-expression`, [Statement grammar & expression parser](parser.md)),
   which has none today.
-- `.equ` / symbol assignment — an expression (now that `*`, the location
-  counter, is available too — see [Assembler](assembler.md#location-counter))
-  bound to a name outside the address-counter sequence.
+- `.set` / redefinable assignment — a rebinding counterpart to `.equ`, which
+  signals `assembly-error` on any rebind (see "`.equ`" above).
+- Lifting `.org`/`.res`'s pure-`.equ`-only restriction (#41).
 
 See the tracker for these.

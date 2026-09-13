@@ -15,9 +15,17 @@
 ;;;;
 ;;;; Grammar (one STATEMENT per source line):
 ;;;;   line      := [label-def] [mnemonic [operands]]
+;;;;             |  [label-def] identifier "=" expr-tokens
 ;;;;   label-def := identifier label-suffix
 ;;;;   operands  := operand ("," operand)*
 ;;;; Blank and comment-only lines produce no statement.
+;;;;
+;;;; The second line form ("name = value", #35) is pure surface sugar for
+;;;; ".equ name, value" -- %PARSE-LINE below recognizes an identifier
+;;;; followed by "=" and rewrites it to a statement whose mnemonic is
+;;;; +ASSIGNMENT-DIRECTIVE-NAME+ with two operands (the name, then whatever
+;;;; follows "="), so the assembler (assembler.lisp, #35) has exactly one
+;;;; .EQU code path regardless of which spelling a program uses.
 
 (in-package #:lasm)
 
@@ -147,6 +155,14 @@ malformed input."
 
 ;;; Statement grammar
 
+(defparameter +assignment-directive-name+ ".equ"
+  "The directive mnemonic %PARSE-LINE rewrites \"name = value\" (#35) to --
+kept as its own name (rather than a literal string at the call site) so the
+one place that couples the \"=\" sugar to the .EQU directive is visible from
+its name. Matched case-insensitively by FIND-DIRECTIVE-DESCRIPTOR
+(directive.lisp) like any other mnemonic, so this need not match whatever
+case a program's own \".equ\" spelling uses.")
+
 (defun %split-operands (tokens)
   "Split a list of TOKENS on top-level commas (commas nested inside
 parentheses do not split) into a list of token-lists, one per operand."
@@ -172,17 +188,32 @@ parentheses do not split) into a list of token-lists, one per operand."
       (setf label (token-value (aref tokens pos))
             label-localp (token-localp (aref tokens pos)))
       (incf pos 2))
-    (when (and (< pos len) (eq (token-type (aref tokens pos)) :identifier))
-      (setf mnemonic (token-value (aref tokens pos)))
-      (incf pos 1)
-      (when (< pos len)
-        (setf operand-tokens (subseq tokens pos len))
-        (setf operands
-              (mapcar (lambda (group)
-                        (when (null group)
-                          (%parse-error nil "Empty operand"))
-                        (make-operand :tokens (coerce group 'simple-vector)))
-                      (%split-operands (coerce (subseq tokens pos len) 'list))))))
+    (cond
+      ;; "name = value" (#35): sugar for ".equ name, value" -- checked before
+      ;; the ordinary mnemonic case below, since an identifier followed by
+      ;; "=" would otherwise be read as a bare mnemonic with a stray "="
+      ;; operand token.
+      ((and (< (1+ pos) len)
+            (eq (token-type (aref tokens pos)) :identifier)
+            (eq (%punct-value (aref tokens (1+ pos))) :equals))
+       (let ((name-tok (aref tokens pos)))
+         (when (= (+ pos 2) len)
+           (%parse-error (aref tokens (1+ pos)) "Expected expression after \"=\""))
+         (setf mnemonic +assignment-directive-name+
+               operand-tokens (subseq tokens pos len)
+               operands (list (make-operand :tokens (vector name-tok))
+                               (make-operand :tokens (subseq tokens (+ pos 2) len))))))
+      ((and (< pos len) (eq (token-type (aref tokens pos)) :identifier))
+       (setf mnemonic (token-value (aref tokens pos)))
+       (incf pos 1)
+       (when (< pos len)
+         (setf operand-tokens (subseq tokens pos len))
+         (setf operands
+               (mapcar (lambda (group)
+                         (when (null group)
+                           (%parse-error nil "Empty operand"))
+                         (make-operand :tokens (coerce group 'simple-vector)))
+                       (%split-operands (coerce (subseq tokens pos len) 'list)))))))
     (when (and (< pos len) (null mnemonic))
       (%parse-error (aref tokens pos) "Expected mnemonic"))
     (make-statement :label label :label-localp label-localp
