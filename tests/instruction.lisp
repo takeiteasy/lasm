@@ -129,6 +129,20 @@
     (encoding (opcode #xA2) (operand :mode))
     (semantics (set! x operand))))
 
+;; #26: a different mnemonic claiming an already-registered opcode must
+;; error rather than silently clobbering the earlier mnemonic's table entry.
+(fiveam:test definstruction-opcode-conflict-with-other-mnemonic-signals-error
+  (fiveam:signals opcode-conflict
+    (definstruction instr-test-machine ldx-conflict
+      (modes immediate)
+      (encoding (opcode #xA2) (operand :mode))
+      (semantics (set! x operand))))
+  ;; the conflicting registration must not have gone through -- LDX (#xA2)
+  ;; still resolves to itself, not to the rejected LDX-CONFLICT descriptor
+  (let ((ldx (find-instruction 'instr-test-machine 'ldx)))
+    (fiveam:is (string= "LDX" (instruction-descriptor-name ldx)))
+    (fiveam:is (eq ldx (find-instruction-by-opcode 'instr-test-machine #xA2)))))
+
 (fiveam:test no-operand-instruction
   (let ((nop (find-instruction 'instr-test-machine 'nop)))
     (fiveam:is (null (instruction-descriptor-mode nop)))

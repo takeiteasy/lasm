@@ -55,6 +55,21 @@ error.")
                  (format s "No instruction with opcode ~S registered on machine ~S"
                          (unknown-instruction-opcode c) (unknown-instruction-machine c))))))
 
+(define-condition opcode-conflict (lasm-error)
+  ((machine :initarg :machine :reader opcode-conflict-machine)
+   (opcode :initarg :opcode :reader opcode-conflict-opcode)
+   (mnemonic :initarg :mnemonic :reader opcode-conflict-mnemonic)
+   (other-mnemonic :initarg :other-mnemonic :reader opcode-conflict-other-mnemonic))
+  (:documentation "Signalled by REGISTER-INSTRUCTION-VARIANTS! when a
+descriptor's opcode is already claimed by a *different* mnemonic on the same
+machine (#26) -- without this check the later DEFINSTRUCTION silently wins
+the opcode-table entry, and a later redefinition of the earlier mnemonic can
+then delete the winner's entry outright as an apparently orphaned opcode.")
+  (:report (lambda (c s)
+             (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S"
+                     (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                     (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))))
+
 ;;; Instruction descriptor
 
 (defstruct instruction-descriptor
@@ -155,6 +170,13 @@ resolving it to a now-stale descriptor."
          (name (instruction-descriptor-name (first descriptors)))
          (old (gethash name (machine-descriptor-instructions md)))
          (new-opcodes (mapcar #'instruction-descriptor-opcode descriptors)))
+    (dolist (descriptor descriptors)
+      (let ((claimant (gethash (instruction-descriptor-opcode descriptor) (machine-descriptor-opcodes md))))
+        (when (and claimant (not (string= (instruction-descriptor-name claimant) name)))
+          (error 'opcode-conflict :machine machine-name
+                                   :opcode (instruction-descriptor-opcode descriptor)
+                                   :mnemonic name
+                                   :other-mnemonic (instruction-descriptor-name claimant)))))
     (dolist (old-descriptor old)
       (unless (member (instruction-descriptor-opcode old-descriptor) new-opcodes)
         (remhash (instruction-descriptor-opcode old-descriptor) (machine-descriptor-opcodes md))))
