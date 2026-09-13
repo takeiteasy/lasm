@@ -139,6 +139,23 @@ rather than a hard boundary.
 - Example gallery: a small library of fully worked fantasy CPUs
   (register, stack, hybrid, CHIP8-alike, DCPU-16-alike) as both
   documentation and regression tests.
+- A gdb-like interactive debugger built on the emulator's existing step
+  primitive: breakpoints, step/continue, and register/memory/flag
+  inspection driven off a machine's own declared storage elements,
+  plus a reference command-line front end.
+- Per-instruction cycle costs (`(cycles n)`, already accepted by
+  `definstruction` but unused), an optional `:clock-speed` on
+  `defmachine`, and cycle-accurate execution in the emulator step loop
+  (running for N cycles or a wall-time-equivalent duration).
+- File-based source loading (`assemble-file`, `.asm`/`.s` source files)
+  and an `.include` directive for splitting a program across files, so
+  a program's source no longer has to live as a Lisp string literal
+  embedded in a `.lisp` script.
+- Binary output formats (raw binary, Intel HEX) for assembled output.
+- A standalone CLI tool (built with Roswell) that assembles, runs, and
+  (once #21/#25 land) disassembles/lists a program from the shell,
+  loading a machine definition from a `.lasm` file — the first way to
+  use LASM without hand-writing a Lisp harness per program.
 
 ### Stretch — Real architectures ("unlikely but doable")
 - Treated as a separate, larger layer reusing the encoding/semantics
