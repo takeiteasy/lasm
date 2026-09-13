@@ -57,10 +57,10 @@ or a decodable-as-data byte is the caller's own policy.
 ## `disassemble-cells` / `disassemble-assembly` / `disassemble-memory`
 
 ```lisp
-(disassemble-cells cells &key machine (origin 0) end symbols
+(disassemble-cells cells &key machine (origin 0) end symbols symbol-info
                               (lexer 'default) (labels t) (suffixes t) memory)
 (disassemble-assembly assembly &key machine (lexer 'default) (labels t) (suffixes t) memory)
-(disassemble-memory machine &key memory start count symbols
+(disassemble-memory machine &key memory start count symbols symbol-info
                                  (lexer 'default) (labels t) (suffixes t))
 ```
 
@@ -69,12 +69,14 @@ All three return a list of `disassembly-line`, ascending by address.
 (e.g. an `assembly`'s own `assembly-cells`) from `origin` through `end`
 (exclusive, default the whole sequence). `disassemble-assembly` is the
 natural way to round-trip `assemble`'s own output — it pulls `cells`,
-`origin`, and `symbols` off an `assembly` directly, and signals if the
-assembly's own cell width doesn't match `machine`'s declared one (mirroring
-[`load-program`'s own check](emulator.md#load-program)). `disassemble-memory`
-reads a live `machine`'s memory instead; unlike `disassemble-cells`' `end`,
-`start` and `count` are both **required** — there is no sane default for "the
-whole address space" of a live machine.
+`origin`, `symbols`, and `symbol-info` (#37) off an `assembly` directly, and
+signals if the assembly's own cell width doesn't match `machine`'s declared
+one (mirroring [`load-program`'s own check](emulator.md#load-program)).
+`disassemble-memory` reads a live `machine`'s memory instead; unlike
+`disassemble-cells`' `end`, `start` and `count` are both **required** —
+there is no sane default for "the whole address space" of a live machine.
+`symbol-info`, when given (e.g. from the `assembly` that produced this
+memory's contents), gets the same fix described under "Rendering" below.
 
 `machine` is a machine name (a symbol), same convention as `assemble`'s own
 `:machine`; `disassemble-memory`'s first argument, `machine`, is instead a
@@ -89,7 +91,7 @@ whole address space" of a live machine.
 | `cells` | The raw cells consumed, in address order. |
 | `descriptor` | The matched `instruction-descriptor`, or `nil` for an undecodable data line. |
 | `values` | Decoded operand values, in the mode's hole order. |
-| `label` | A symbol name bound to this line's own address (only when `:symbols` names it and `:labels` is true), or `nil`. |
+| `label` | A symbol name bound to this line's own address (only when `:symbols`/`:symbol-info` names it and `:labels` is true), or `nil`. |
 | `text` | The rendered source line, not including its label. |
 
 ### Decode failure, mid-stream
@@ -135,14 +137,22 @@ renders as the absolute target address, `address + size + value` — what a
 `relative` mode's own bare-`expr` operand syntax expects to see on
 re-assembly, not merely a convenience.
 
-`:labels t` (the default) substitutes a symbol name for an operand value
-only when that value is the address of another line's *start* in the same
-disassembly. `assembly-symbols` (see [Assembler](assembler.md)) cannot
-distinguish a label's address from an `.equ`'s folded value — its own
-docstring says as much — so without this restriction an `.equ` whose value
-happened to equal some non-instruction address would wrongly render as a
-label there. Several names bound to one address (unusual, but not prevented
-by the assembler) break ties alphabetically for a deterministic choice.
+`:labels t` (the default) substitutes a symbol name for an operand value.
+With `symbol-info` (#37, e.g. via `disassemble-assembly`, which passes it
+automatically) this substitutes any real label, whether or not its address
+happens to start a decoded line, and never an `.equ`'s folded value — the
+`:label`/`:equ` tag on each `symbol-info` entry (see [Listing and source
+map](listing.md#symbol-table)) settles the question directly, at the
+source. Without `symbol-info` (a bare `symbols` table, or none), the
+discriminator doesn't exist, and this falls back to the pre-#37 mitigation:
+substitute a value only when it is the address of another line's *start* in
+the same disassembly, since `assembly-symbols` alone cannot distinguish a
+label's address from an `.equ`'s folded value. That fallback avoids the
+worst case (an `.equ` colliding with an unrelated instruction address) but
+still cannot render a real label whose address isn't itself a decoded
+line's start — `symbol-info` fixes both. Several names bound to one address
+(unusual, but not prevented by the assembler) break ties alphabetically for
+a deterministic choice.
 
 `:suffixes t` (the default) renders a gas-style forced mode suffix
 ([Addressing modes, "Forcing a mode with a mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)), e.g.

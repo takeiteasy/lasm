@@ -206,6 +206,7 @@
    #:assembly-cell-width
    #:assembly-origin
    #:assembly-symbols
+   #:assembly-symbol-info
    #:assembly-listing
    #:assembly-source
    #:assembly-error
@@ -216,6 +217,15 @@
    #:listing-line-line
    #:listing-line-kind
    #:listing-line-descriptor
+   #:symbol-info
+   #:symbol-info-p
+   #:symbol-info-name
+   #:symbol-info-qualified-name
+   #:symbol-info-scope
+   #:symbol-info-kind
+   #:symbol-info-localp
+   #:symbol-info-value
+   #:symbol-info-line
 
    ;; Emulator
    #:load-program
@@ -248,4 +258,11 @@
    #:print-listing
    #:listing-line-at
    #:listing-lines-for-source-line
-   #:*listing-max-cells-shown*))
+   #:*listing-max-cells-shown*
+
+   ;; Symbol table (#37)
+   #:assembly-symbol
+   #:assembly-symbols-list
+   #:assembly-symbol-groups
+   #:symbols-text
+   #:print-symbols))

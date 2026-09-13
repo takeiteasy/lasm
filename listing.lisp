@@ -171,3 +171,143 @@ ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
 PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
   (listing-text assembly :stream stream)
   assembly)
+
+;;; Symbol table (#37) -- scope- and kind-aware lookup and listing over
+;;; ASSEMBLY-SYMBOL-INFO, built alongside ASSEMBLY-SYMBOLS by the assembler
+;;; (assembler.lisp) to answer "what's defined in this scope, and is it a
+;;; label or an .EQU" without ASSEMBLY-SYMBOLS itself having to stop being a
+;;; flat string -> value table (EVAL-EXPR's documented contract). See
+;;; SYMBOL-INFO's docstring (assembler.lisp) for why this metadata is
+;;; captured at bind time rather than recovered from a qualified name by
+;;; splitting on LOCAL-LABEL-PREFIX (#36: a global literally spelled
+;;; "loop.next" is otherwise indistinguishable from local ".next" under
+;;; scope "loop").
+;;;
+;;; Every function below degrades gracefully (returns NIL or an empty
+;;; result) when ASSEMBLY-SYMBOL-INFO is itself NIL -- callers assembling by
+;;; hand or from an older code path never crash on a missing table.
+;;;
+;;; ORDERING -- ASSEMBLY-SYMBOLS-LIST and ASSEMBLY-SYMBOL-GROUPS both sort
+;;; by SYMBOL-INFO-LINE, not by VALUE/address: an .EQU's value is not an
+;;; address, so address order is undefined for it, and a hash table
+;;; preserves no declaration order of its own. SYMBOL-INFO-LINE inherits
+;;; #89's caveat (a macro-expanded statement's line is its body's own
+;;; definition line, not the call site's), so ordering among several
+;;; invocations of the same macro is not guaranteed either -- a pre-existing
+;;; limitation, not fixed here.
+;;;
+;;; PERFORMANCE -- ASSEMBLY-SYMBOLS-LIST is a full MAPHASH-and-sort per call,
+;;; and ASSEMBLY-SYMBOL-GROUPS additionally calls ASSEMBLY-SYMBOL (itself a
+;;; hash lookup) once per scope from inside a SORT key function -- fine at
+;;; the program sizes LASM currently targets, same tradeoff LISTING-LINE-AT
+;;; already makes (#88) and no worse; a follow-up ticket tracks an
+;;; address/scope-indexed structure if either ever shows up as a hot path.
+
+(defun assembly-symbol (assembly name &key scope)
+  "The SYMBOL-INFO for NAME in ASSEMBLY, or NIL if unbound. With SCOPE (an
+enclosing global label's name), NAME is qualified against it first exactly
+as the assembler would (%QUALIFY-LOCAL, assembler.lisp) -- e.g. SCOPE
+\"loop\" and NAME \".next\" look up \"loop.next\". Without SCOPE, NAME is
+looked up as-is, so a global name or an already-qualified name both work
+directly."
+  (let ((info (assembly-symbol-info assembly)))
+    (and info (gethash (if scope (concatenate 'string scope name) name) info))))
+
+(defun assembly-symbols-list (assembly &key kind (scope :any scope-given-p))
+  "Every SYMBOL-INFO in ASSEMBLY, in SYMBOL-INFO-LINE order (see this file's
+header comment on why line order, not address order). KIND, when given
+(:LABEL or :EQU), restricts to that kind. SCOPE, when given, restricts to
+symbols whose SYMBOL-INFO-SCOPE is SCOPE -- pass SCOPE NIL for top-level
+symbols (globals and top-level .EQUs); omitting SCOPE entirely means no
+scope filter at all. Empty (not NIL-as-absent) when ASSEMBLY-SYMBOL-INFO is
+NIL or nothing matches."
+  (let ((info (assembly-symbol-info assembly))
+        result)
+    (when info
+      (maphash (lambda (k v)
+                 (declare (ignore k))
+                 (when (and (or (null kind) (eq kind (symbol-info-kind v)))
+                            (or (not scope-given-p)
+                                (equal (symbol-info-scope v) scope)))
+                   (cl:push v result)))
+               info))
+    (sort result #'< :key #'symbol-info-line)))
+
+(defun assembly-symbol-groups (assembly)
+  "ASSEMBLY's symbols (#37) grouped by enclosing scope, as an alist of
+(GLOBAL-NAME . SYMBOL-INFO-LIST) -- the ticket's ask: a listing / source-map
+pass can group locals under their enclosing global label rather than print
+a flat, ambiguous list. One entry per global label that has at least one
+local (or itself), the global's own SYMBOL-INFO heading its list followed
+by its locals (SYMBOL-INFO-LINE order); a leading (NIL . ...) entry holds
+every top-level symbol (a global with no locals still appears here via its
+own binding, plus every top-level .EQU) -- present, though possibly empty,
+even when ASSEMBLY-SYMBOL-INFO is NIL. Entries after the leading NIL bucket
+are ordered by their global's own SYMBOL-INFO-LINE."
+  (let ((all (assembly-symbols-list assembly))
+        (top nil)
+        (by-scope (make-hash-table :test 'equal))
+        scopes)
+    (dolist (s all)
+      (when (and (symbol-info-scope s)
+                 (not (nth-value 1 (gethash (symbol-info-scope s) by-scope))))
+        (cl:push (symbol-info-scope s) scopes))
+      (if (symbol-info-scope s)
+          (cl:push s (gethash (symbol-info-scope s) by-scope))
+          (cl:push s top)))
+    ;; A global that heads a scope (i.e. has at least one local) belongs in
+    ;; that scope's own entry, not the top-level bucket, even though its own
+    ;; SYMBOL-INFO-SCOPE is NIL like any other top-level symbol -- matched by
+    ;; NAME against SCOPES (a list of global names with at least one local).
+    ;; Safe against a same-named top-level .EQU shadowing this filter: a
+    ;; top-level .EQU and a global share one flat unqualified namespace
+    ;; (%BIND-SYMBOL!'s duplicate check), so an .EQU can never have the same
+    ;; NAME as a global that also has locals -- one or the other would
+    ;; already have signalled ASSEMBLY-ERROR at bind time.
+    (setf top (remove-if (lambda (s) (member (symbol-info-name s) scopes :test #'string=)) top))
+    (cons (cons nil (nreverse top))
+          (mapcar (lambda (scope)
+                    (let ((global (assembly-symbol assembly scope)))
+                      (cons scope
+                            (append (and global (list global))
+                                    (sort (nreverse (gethash scope by-scope))
+                                          #'< :key #'symbol-info-line)))))
+                  (sort scopes #'<
+                        :key (lambda (scope)
+                               (let ((g (assembly-symbol assembly scope)))
+                                 (if g (symbol-info-line g) 0))))))))
+
+(defun %symbol-value-text (info digits)
+  "INFO's VALUE rendered DIGITS-wide hex for a :LABEL (an address, matching
+LISTING-TEXT's own address rendering), or plain decimal for an :EQU (not an
+address, so hex width has no natural meaning)."
+  (if (eq (symbol-info-kind info) :label)
+      (format nil "~V,'0X" digits (symbol-info-value info))
+      (format nil "~D" (symbol-info-value info))))
+
+(defun symbols-text (assembly &key stream)
+  "Render ASSEMBLY's symbol table (#37), grouped by scope
+(ASSEMBLY-SYMBOL-GROUPS): top-level symbols first, then each global label
+with its locals indented underneath, each row naming a symbol, its value
+(hex for a :LABEL, decimal for an :EQU), and its KIND. Returns the text as a
+string when STREAM is NIL (default); otherwise writes to STREAM and returns
+NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
+  (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
+         (groups (assembly-symbol-groups assembly))
+         (body (with-output-to-string (s)
+                 (dolist (group groups)
+                   (destructuring-bind (scope . symbols) group
+                     (declare (ignore scope))
+                     (dolist (sym symbols)
+                       (format s "~:[  ~;~]~A~24T~A~30T~(~A~)~%"
+                               (null (symbol-info-scope sym))
+                               (symbol-info-name sym)
+                               (%symbol-value-text sym digits)
+                               (symbol-info-kind sym))))))))
+    (if stream (progn (write-string body stream) nil) body)))
+
+(defun print-symbols (assembly &key (stream *standard-output*))
+  "SYMBOLS-TEXT written to STREAM (default *STANDARD-OUTPUT*) -- parallel to
+PRINT-LISTING/PRINT-DISASSEMBLY. Returns ASSEMBLY."
+  (symbols-text assembly :stream stream)
+  assembly)

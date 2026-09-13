@@ -111,20 +111,42 @@ left NIL; %RENDER-LINES! fills them in once every line's address is known."
     (dolist (l lines) (setf (gethash (disassembly-line-address l) h) t))
     h))
 
-(defun %reverse-symbols (symbols line-starts)
-  "SYMBOLS (an ASSEMBLY-SYMBOLS table, string -> value) reversed to value ->
-name, restricted to values that are LINE-STARTS -- ASSEMBLY-SYMBOLS cannot
-distinguish a label's address from an .EQU's folded value (its own
-docstring says so), so without this restriction an .EQU whose value happens
-to equal some non-instruction address would wrongly alias onto it. Several
-names sharing one address (unusual, but not prevented by the assembler)
-break ties by STRING< for a deterministic choice."
+(defun %reverse-symbols (symbols line-starts &optional symbol-info)
+  "Value -> name, for substituting a symbol name into rendered output.
+
+When SYMBOL-INFO (an ASSEMBLY-SYMBOL-INFO table, #37) is given, it alone is
+reversed -- each entry already carries its own QUALIFIED-NAME and VALUE, so
+SYMBOLS is not even consulted here, and a caller may pass SYMBOL-INFO with
+SYMBOLS NIL and still get every real label. Only entries whose
+SYMBOL-INFO-KIND is :LABEL are reversed, so an .EQU's folded value never
+aliases onto an instruction address that happens to equal it (#81) --
+LINE-STARTS is not consulted in this case either, since a real label's
+address is correct to render regardless of whether it starts a decoded
+line.
+
+Without SYMBOL-INFO (the legacy path, for a caller that only has a bare
+ASSEMBLY-SYMBOLS table, string -> value), the discriminator doesn't exist,
+so this falls back to the original mitigation: SYMBOLS is reversed
+restricted to values that are LINE-STARTS, limiting the worst case (an
+.EQU colliding with an unrelated instruction address) without eliminating
+it, and unable to render a real label whose own address isn't itself a
+decoded line's start.
+
+Several names sharing one address (unusual, but not prevented by the
+assembler) break ties by STRING< for a deterministic choice."
   (let ((by-value (make-hash-table)))
-    (when symbols
-      (maphash (lambda (name value)
-                 (when (and (integerp value) (gethash value line-starts))
-                   (cl:push name (gethash value by-value))))
-               symbols))
+    (if symbol-info
+        (maphash (lambda (name info)
+                   (declare (ignore name))
+                   (when (eq :label (symbol-info-kind info))
+                     (cl:push (symbol-info-qualified-name info)
+                              (gethash (symbol-info-value info) by-value))))
+                 symbol-info)
+        (when symbols
+          (maphash (lambda (name value)
+                     (when (and (integerp value) (gethash value line-starts))
+                       (cl:push name (gethash value by-value))))
+                   symbols)))
     (let ((result (make-hash-table)))
       (maphash (lambda (value names)
                  (setf (gethash value result) (first (sort (copy-list names) #'string<))))
@@ -213,12 +235,15 @@ MODE-SUFFIX-SEPARATOR to write it with."
 (defun %data-line-text (cell lexer)
   (format nil ".byte ~A" (%render-value cell lexer)))
 
-(defun %render-lines! (lines lexer labels suffixes symbols)
+(defun %render-lines! (lines lexer labels suffixes symbols &optional symbol-info)
   "Destructively fill in each of LINES' TEXT (always) and LABEL (only when
-LABELS is true and SYMBOLS names this line's address, restricted to
-%REVERSE-SYMBOLS' line-start rule). Returns LINES."
+LABELS is true and SYMBOLS names this line's address -- restricted to
+%REVERSE-SYMBOLS' line-start rule unless SYMBOL-INFO (#37) is given, in
+which case only real :LABEL entries are reversed and the line-start
+restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
   (let* ((line-starts (%line-starts lines))
-         (reverse-symbols (if (and labels symbols) (%reverse-symbols symbols line-starts)
+         (reverse-symbols (if (and labels (or symbols symbol-info))
+                               (%reverse-symbols symbols line-starts symbol-info)
                                (make-hash-table))))
     (dolist (l lines)
       (let ((name (gethash (disassembly-line-address l) reverse-symbols)))
@@ -233,7 +258,7 @@ LABELS is true and SYMBOLS names this line's address, restricted to
 
 ;;; Entry points
 
-(defun disassemble-cells (cells &key machine (origin 0) end symbols (lexer 'default)
+(defun disassemble-cells (cells &key machine (origin 0) end symbols symbol-info (lexer 'default)
                                      (labels t) (suffixes t) memory)
   "Disassemble a bare sequence CELLS (e.g. an ASSEMBLY-CELLS vector) as if
 mapped into address space starting at ORIGIN, through address END (exclusive,
@@ -244,9 +269,15 @@ element, MEMORY selects which one's word layout/cell width apply.
 SYMBOLS, when given (e.g. an ASSEMBLY-SYMBOLS table), supplies label names
 for LABELS (default T) to substitute into a line's own label and into any
 operand value that names another line's address -- see %REVERSE-SYMBOLS.
-SUFFIXES (default T) renders a gas-style forced mode suffix (e.g. \"lda.w\")
-when needed for re-assembly fidelity; LEXER (default 'DEFAULT) selects the
-surface syntax operand numbers and suffixes render in.
+SYMBOL-INFO, when given (an ASSEMBLY-SYMBOL-INFO table, #37), is self-
+sufficient -- SYMBOLS need not be passed alongside it -- and resolves the
+label/.EQU ambiguity SYMBOLS alone cannot: only real :LABEL entries
+substitute, and the line-start restriction %REVERSE-SYMBOLS otherwise
+applies is dropped, since a real label's address is always correct to
+render (#81). Pass it whenever available; DISASSEMBLE-ASSEMBLY does so
+automatically. SUFFIXES (default T) renders a gas-style forced mode suffix
+(e.g. \"lda.w\") when needed for re-assembly fidelity; LEXER (default
+'DEFAULT) selects the surface syntax operand numbers and suffixes render in.
 
 Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
@@ -255,13 +286,15 @@ of round-trip fidelity."
   (let* ((end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
          (lines (%disassemble-raw-lines read-cell origin end machine memory)))
-    (%render-lines! lines lexer labels suffixes symbols)))
+    (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
 (defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory)
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
-ORIGIN, and SYMBOLS off it directly -- the natural way to round-trip
-ASSEMBLE's own output. Signals if ASSEMBLY's own ASSEMBLY-CELL-WIDTH does
-not match MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
+ORIGIN, SYMBOLS, and SYMBOL-INFO (#37) off it directly -- the natural way to
+round-trip ASSEMBLE's own output, and the reason its label substitution
+never suffers the .EQU-aliasing ambiguity #81 tracks for a bare-SYMBOLS
+caller. Signals if ASSEMBLY's own ASSEMBLY-CELL-WIDTH does not match
+MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
 (emulator.lisp) for the same mismatch."
   (unless machine (error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
   (let ((target-width (%machine-cell-width machine memory))
@@ -272,15 +305,19 @@ match the machine's cell width (~D)" machine source-width target-width)))
   (disassemble-cells (assembly-cells assembly)
                       :machine machine :origin (assembly-origin assembly)
                       :symbols (assembly-symbols assembly)
+                      :symbol-info (assembly-symbol-info assembly)
                       :lexer lexer :labels labels :suffixes suffixes :memory memory))
 
-(defun disassemble-memory (machine &key memory start count symbols (lexer 'default)
+(defun disassemble-memory (machine &key memory start count symbols symbol-info (lexer 'default)
                                         (labels t) (suffixes t))
   "DISASSEMBLE-CELLS over MACHINE's live MEMORY (a MACHINE runtime instance,
 storage.lisp) from address START through START + COUNT (exclusive). START
 and COUNT are both required -- unlike DISASSEMBLE-CELLS' END, there is no
 sane default for \"the whole address space\" of a live machine. MEMORY
-defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE."
+defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE.
+SYMBOL-INFO (#37), when available (e.g. from the ASSEMBLY that produced this
+memory's contents), resolves the label/.EQU ambiguity and works standalone,
+without SYMBOLS -- see DISASSEMBLE-CELLS."
   (unless (and start count)
     (error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
@@ -288,7 +325,7 @@ defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE."
          (read-cell (machine-cell-reader machine memory))
          (end (+ start count))
          (lines (%disassemble-raw-lines read-cell start end machine-name memory)))
-    (%render-lines! lines lexer labels suffixes symbols)))
+    (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
 ;;; Text output
 

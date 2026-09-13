@@ -287,6 +287,47 @@ ldx #5" :machine 'disasm-test-machine))
          (lines (disassemble-assembly a :machine 'disasm-test-machine :labels t)))
     (fiveam:is (string= "ldx #$5" (disassembly-line-text (first lines))))))
 
+(fiveam:test disassemble-symbol-info-fixes-equ-aliasing-and-trailing-label
+  ;; #37/#81: X (.EQU, folded to 1) happens to equal the first BRA's own address --
+  ;; an instruction start (a "line start"), exactly the ambiguous case
+  ;; %REVERSE-SYMBOLS' pre-#37 line-start restriction could not resolve.
+  ;; END is a real label bound *after* the last instruction, an address no
+  ;; LISTING-LINE/DISASSEMBLY-LINE starts at -- exactly the case that same
+  ;; restriction dropped even though the label is perfectly real.
+  (let* ((a (assemble ".equ x, 1
+hlt
+bra x
+bra end
+end:" :machine 'disasm-test-machine))
+         ;; Legacy path: a bare ASSEMBLY-SYMBOLS table, no SYMBOL-INFO --
+         ;; the discriminator doesn't exist, so the pre-#81 line-start
+         ;; mitigation is all that's left, unchanged.
+         (legacy (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine
+                                     :symbols (assembly-symbols a) :labels t))
+         ;; Fixed path: DISASSEMBLE-ASSEMBLY passes SYMBOL-INFO automatically.
+         (fixed (disassemble-assembly a :machine 'disasm-test-machine :labels t)))
+    ;; Legacy: X's value (1) is a line start, so it's wrongly substituted --
+    ;; the #81 bug, demonstrated here rather than fixed (no SYMBOL-INFO given).
+    (fiveam:is (string= "bra x" (disassembly-line-text (second legacy))))
+    ;; Legacy: END's value (5) is not a line start, so a real label is missed.
+    (fiveam:is (string= "bra $5" (disassembly-line-text (third legacy))))
+    ;; Fixed: X is tagged :EQU, so it's never substituted, line-start or not.
+    (fiveam:is (string= "bra $1" (disassembly-line-text (second fixed))))
+    (fiveam:is (null (disassembly-line-label (second fixed))))
+    ;; Fixed: END is tagged :LABEL, so it substitutes despite not being a
+    ;; line start -- the real fix #81 asked for.
+    (fiveam:is (string= "bra end" (disassembly-line-text (third fixed))))))
+
+(fiveam:test disassemble-symbol-info-works-standalone-without-symbols
+  ;; SYMBOL-INFO carries its own QUALIFIED-NAME/VALUE (assembler.lisp) -- a
+  ;; caller may pass it with :SYMBOLS NIL and still get every real label.
+  (let* ((a (assemble "start:
+bra start" :machine 'disasm-test-machine))
+         (lines (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine
+                                    :symbol-info (assembly-symbol-info a) :labels t)))
+    (fiveam:is (string= "start" (disassembly-line-label (first lines))))
+    (fiveam:is (string= "bra start" (disassembly-line-text (first lines))))))
+
 ;;; Failure and bounds
 
 (fiveam:test disassemble-unknown-opcode-emits-data

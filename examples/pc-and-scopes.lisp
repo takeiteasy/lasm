@@ -13,6 +13,9 @@
 ;;;; - .equ / symbol assignment (docs/directives.md#equ, docs/assembler.md#equ--
 ;;;;   symbol-assignment, #35) -- a named constant computed from "*" and a
 ;;;;   backward label, occupying no address of its own.
+;;;; - Scope-aware symbol listing (docs/listing.md#symbol-table, #37) --
+;;;;   PRINT-SYMBOLS groups COUNT_DOWN.LOOP/COUNT_UP.LOOP under their own
+;;;;   enclosing global and tags ROUTINE1_SIZE as an .equ, not a label.
 ;;;;
 ;;;; Run with:  sbcl --script examples/pc-and-scopes.lisp
 
@@ -89,6 +92,9 @@ self:   .word *                 ; \"*\": this word's own address (a
           (loop for k being the hash-keys of (assembly-symbols assembly)
                   using (hash-value v)
                 collect k collect v))
+
+  (format t "~%Symbol table, grouped by scope (#37):~%")
+  (print-symbols assembly)
 
   (format t "~%Running:~%")
   (let* ((m (make-machine 'sixtyfoo-scopes))

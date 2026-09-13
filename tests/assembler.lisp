@@ -549,6 +549,91 @@ start: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5 0) (assembly-cells a)))))
 
+;;; Scope-aware symbol metadata (#37) -- ASSEMBLY-SYMBOL-INFO tags every
+;;; ASSEMBLY-SYMBOLS entry with its unqualified name, enclosing scope, and
+;;; kind (:LABEL or :EQU), captured at bind time rather than recovered later
+;;; by splitting the qualified name (#36).
+
+(fiveam:test symbol-info-tags-a-global-label
+  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+         (info (gethash "start" (assembly-symbol-info a))))
+    (fiveam:is (string= "start" (symbol-info-name info)))
+    (fiveam:is (string= "start" (symbol-info-qualified-name info)))
+    (fiveam:is (null (symbol-info-scope info)))
+    (fiveam:is (eq :label (symbol-info-kind info)))
+    (fiveam:is (not (symbol-info-localp info)))
+    (fiveam:is (= 0 (symbol-info-value info)))))
+
+(fiveam:test symbol-info-tags-a-local-label-with-its-enclosing-scope
+  (let* ((a (assemble "loop: nop
+.next: nop" :machine 'instr-test-machine))
+         (info (gethash "loop.next" (assembly-symbol-info a))))
+    (fiveam:is (string= ".next" (symbol-info-name info)))
+    (fiveam:is (string= "loop.next" (symbol-info-qualified-name info)))
+    (fiveam:is (string= "loop" (symbol-info-scope info)))
+    (fiveam:is (eq :label (symbol-info-kind info)))
+    (fiveam:is (symbol-info-localp info))
+    (fiveam:is (= 1 (symbol-info-value info)))))
+
+(fiveam:test symbol-info-tags-a-top-level-equ
+  (let* ((a (assemble ".equ bufsize, 16" :machine 'instr-test-machine))
+         (info (gethash "bufsize" (assembly-symbol-info a))))
+    (fiveam:is (string= "bufsize" (symbol-info-name info)))
+    (fiveam:is (null (symbol-info-scope info)))
+    (fiveam:is (eq :equ (symbol-info-kind info)))
+    (fiveam:is (not (symbol-info-localp info)))
+    (fiveam:is (= 16 (symbol-info-value info)))))
+
+(fiveam:test symbol-info-tags-a-local-equ-with-its-enclosing-scope
+  (let* ((a (assemble "loop: nop
+.equ .n, 3" :machine 'instr-test-machine))
+         (info (gethash "loop.n" (assembly-symbol-info a))))
+    (fiveam:is (string= ".n" (symbol-info-name info)))
+    (fiveam:is (string= "loop" (symbol-info-scope info)))
+    (fiveam:is (eq :equ (symbol-info-kind info)))
+    (fiveam:is (symbol-info-localp info))
+    (fiveam:is (= 3 (symbol-info-value info)))))
+
+(fiveam:test symbol-info-equ-does-not-become-the-scope-of-a-later-local-label
+  ;; An .EQU on its own never becomes SCOPE (assembler.lisp) -- a local
+  ;; label after a top-level .EQU still has no enclosing global.
+  (fiveam:signals assembly-error
+    (assemble ".equ x, 1
+.loop: nop" :machine 'instr-test-machine)))
+
+(fiveam:test symbol-info-distinguishes-a-same-spelled-global-from-a-qualified-local
+  ;; #36's hazard: a global literally named "loop.next" and a local ".next"
+  ;; under a *different* global "loop" both produce the ASSEMBLY-SYMBOLS key
+  ;; "loop.next" -- but they must remain distinguishable via SYMBOL-INFO's
+  ;; SCOPE, which string-splitting the key alone could never recover (the
+  ;; global's own SCOPE is NIL; the local's is "loop").
+  (fiveam:signals assembly-error
+    ;; Both would bind the literal key "loop.next" -- this is the pre-
+    ;; existing #36 collision, still a duplicate-symbol error today.
+    (assemble "loop: nop
+.next: nop
+loop.next: nop" :machine 'instr-test-machine))
+  ;; With no collision, the discriminator works as intended: a real global
+  ;; spelled with a dot in it is recorded with SCOPE NIL, not confused for
+  ;; anyone's local.
+  (let* ((a (assemble "loop.next: nop" :machine 'instr-test-machine))
+         (info (gethash "loop.next" (assembly-symbol-info a))))
+    (fiveam:is (null (symbol-info-scope info)))
+    (fiveam:is (not (symbol-info-localp info)))))
+
+(fiveam:test assembly-symbols-shape-is-unchanged-by-symbol-info
+  ;; ASSEMBLY-SYMBOLS itself stays a flat string -> integer table -- adding
+  ;; ASSEMBLY-SYMBOL-INFO must not change its shape or values.
+  (let ((a (assemble "loop: nop
+.next: nop
+.equ .n, 3" :machine 'instr-test-machine)))
+    (maphash (lambda (k v)
+               (declare (ignore k))
+               (fiveam:is (integerp v)))
+             (assembly-symbols a))
+    (fiveam:is (= 3 (hash-table-count (assembly-symbols a))))
+    (fiveam:is (= 3 (hash-table-count (assembly-symbol-info a))))))
+
 ;;; Forced addressing-mode suffix (#40, e.g. "lda.w"/"lda.z") -- LDA's three
 ;;; variants (immediate #x10, zero-page #x11, absolute #x12) share bare-expr
 ;;; syntax between zero-page/absolute, so they're the pair a forced suffix

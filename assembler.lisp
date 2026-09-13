@@ -128,6 +128,33 @@ ever non-NIL for :INSTRUCTION."
   (kind :instruction :type keyword)
   (descriptor nil :type (or null instruction-descriptor)))
 
+(defstruct symbol-info
+  "One ASSEMBLY-SYMBOL-INFO entry (#37) -- the scope and kind metadata
+ASSEMBLY-SYMBOLS itself cannot carry, since that table must stay a flat
+string -> value map (EVAL-EXPR's documented contract, and every caller that
+folds an expr-label against it). Captured at bind time (%BIND-SYMBOL!) rather
+than recovered later by splitting QUALIFIED-NAME on LOCAL-LABEL-PREFIX -- a
+global literally spelled \"loop.next\" is indistinguishable from local
+\".next\" under scope \"loop\" by string-splitting alone (#36), but not by
+this struct, since SCOPE is recorded, not inferred.
+NAME is the unqualified spelling as written (e.g. \".next\", or \"loop\" for
+a global); QUALIFIED-NAME is NAME's ASSEMBLY-SYMBOLS key (e.g. \"loop.next\",
+or just \"loop\" for a global -- global names are never qualified). SCOPE is
+the enclosing global label's name, or NIL for a global (or a top-level
+.EQU). KIND is :LABEL (bound to an address, %BIND-LABEL!) or :EQU (bound to
+a computed value with no address meaning, %APPLY-ASSIGN-DIRECTIVE, #35).
+LOCALP mirrors STATEMENT-LABEL-LOCALP/EXPR-LABEL-LOCALP. VALUE duplicates
+the ASSEMBLY-SYMBOLS entry so a caller need not look twice. LINE is the
+statement's line; inherits #89's caveat that a macro-expanded statement's
+line is the body's own definition line, not the call site's."
+  (name "" :type string)
+  (qualified-name "" :type string)
+  (scope nil :type (or null string))
+  (kind :label :type keyword)
+  (localp nil :type boolean)
+  (value 0 :type integer)
+  (line 0 :type (integer 0)))
+
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
                                        ; machine's own code cell width (#53)
@@ -143,6 +170,11 @@ ever non-NIL for :INSTRUCTION."
   (symbols nil :type (or null hash-table))  ; string -> value (a label's
                                              ; address, or an .EQU's folded
                                              ; value, #35)
+  (symbol-info nil :type (or null hash-table))  ; qualified name -> SYMBOL-INFO
+                                                 ; (#37) -- scope/kind metadata
+                                                 ; for every ASSEMBLY-SYMBOLS
+                                                 ; entry, built alongside it
+                                                 ; and keyed the same way
   (listing nil :type list)            ; LISTING-LINE list, ascending by
                                        ; address (#25) -- see listing.lisp
   (source nil :type (or null string)))  ; the original source text, or NIL
@@ -459,31 +491,39 @@ call made idempotent some other way."
   (dolist (ast asts) (%qualify-locals! ast scope line))
   asts)
 
-(defun %bind-symbol! (symbols name value line)
-  "Bind NAME to VALUE in SYMBOLS, signalling ASSEMBLY-ERROR if NAME is
-already bound -- the one duplicate-symbol check shared by a label
+(defun %bind-symbol! (symbols info qualified-name name value line kind scope localp)
+  "Bind QUALIFIED-NAME to VALUE in SYMBOLS, signalling ASSEMBLY-ERROR if it
+is already bound -- the one duplicate-symbol check shared by a label
 definition (%BIND-LABEL!) and an .EQU assignment (%APPLY-ASSIGN-DIRECTIVE,
 #35), so \"foo: nop\" followed by \".equ foo, 5\" (or the reverse order)
 signals identically either way: both a label and an .EQU claim a name in
-the same flat table."
-  (when (nth-value 1 (gethash name symbols))
-    (%assembly-error line "Duplicate symbol ~S" name))
-  (setf (gethash name symbols) value))
+the same flat table. Also records a SYMBOL-INFO (#37) under the same key in
+INFO, capturing NAME (the unqualified spelling), KIND (:LABEL or :EQU),
+SCOPE (the enclosing global, or NIL), and LOCALP -- at bind time, so this
+metadata never has to be recovered later by splitting QUALIFIED-NAME (#36)."
+  (when (nth-value 1 (gethash qualified-name symbols))
+    (%assembly-error line "Duplicate symbol ~S" qualified-name))
+  (setf (gethash qualified-name symbols) value)
+  (setf (gethash qualified-name info)
+        (make-symbol-info :name name :qualified-name qualified-name :scope scope
+                           :kind kind :localp localp :value value :line line)))
 
-(defun %bind-label! (statement symbols address scope)
-  "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS, qualifying it
-against SCOPE first if it's local (#16). Returns the SCOPE in effect for any
-later statement: a global label definition becomes the new scope; a local
-one, or no label at all, leaves SCOPE unchanged."
-  (let ((label (statement-label statement)))
+(defun %bind-label! (statement symbols info address scope)
+  "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS (and its
+SYMBOL-INFO in INFO, #37), qualifying it against SCOPE first if it's local
+(#16). Returns the SCOPE in effect for any later statement: a global label
+definition becomes the new scope; a local one, or no label at all, leaves
+SCOPE unchanged."
+  (let ((label (statement-label statement))
+        (line (statement-line statement)))
     (cond
       ((null label) scope)
       ((statement-label-localp statement)
-       (%bind-symbol! symbols (%qualify-local scope label (statement-line statement))
-                       address (statement-line statement))
+       (%bind-symbol! symbols info (%qualify-local scope label line) label address line
+                       :label scope t)
        scope)
       (t
-       (%bind-symbol! symbols label address (statement-line statement))
+       (%bind-symbol! symbols info label label address line :label nil nil)
        label))))
 
 ;;; .EQU / symbol assignment (#35) -- a layout-time binding that occupies no
@@ -506,7 +546,7 @@ lifting this restriction with one)."
     (expr-unary (%purep (expr-unary-operand ast)))
     (expr-binary (and (%purep (expr-binary-left ast)) (%purep (expr-binary-right ast))))))
 
-(defun %apply-assign-directive (statement directive address symbols constants scope)
+(defun %apply-assign-directive (statement directive address symbols info constants scope)
   "Apply an :ASSIGN directive (.EQU, #35) at layout time. STATEMENT's first
 operand must be a bare identifier (the name being bound, qualified against
 SCOPE first if local, #16) and its second the value expression, folded
@@ -514,11 +554,11 @@ against ADDRESS and SYMBOLS -- the flat, incrementally-built table this
 pass has bound so far, so an .EQU sees every label and .EQU defined above
 it and signals ASSEMBLY-ERROR (via the UNRESOLVED-LABEL it converts) on a
 forward reference, exactly like every other directive whose effect must be
-known during layout. Binds NAME in both SYMBOLS (via %BIND-SYMBOL!, so it
-shares one duplicate check with a label) and, when the value is address-
-independent (%PUREP), CONSTANTS -- see %DIRECTIVE-CONSTANT-ARG. Does not
-change SCOPE: unlike a global label, an .EQU never becomes the enclosing
-scope for a later local label."
+known during layout. Binds NAME in both SYMBOLS and INFO (via %BIND-SYMBOL!,
+tagged :KIND :EQU, #37, so it shares one duplicate check with a label) and,
+when the value is address-independent (%PUREP), CONSTANTS -- see
+%DIRECTIVE-CONSTANT-ARG. Does not change SCOPE: unlike a global label, an
+.EQU never becomes the enclosing scope for a later local label."
   (let* ((line (statement-line statement))
          (asts (%directive-args statement directive))
          (name-ast (first asts))
@@ -526,17 +566,20 @@ scope for a later local label."
     (unless (expr-label-p name-ast)
       (%assembly-error line "~A: first operand must be a symbol name"
                         (statement-mnemonic statement)))
-    (let ((name (if (expr-label-localp name-ast)
-                     (%qualify-local scope (expr-label-name name-ast) line)
-                     (expr-label-name name-ast)))
-          (value (handler-case (eval-expr value-ast :symbols symbols :pc address)
-                   (unresolved-label (c)
-                     (%assembly-error line
-                                       "~A: operand must be resolvable here -- ~
+    (let* ((localp (expr-label-localp name-ast))
+           (unqualified-name (expr-label-name name-ast))
+           (name (if localp
+                     (%qualify-local scope unqualified-name line)
+                     unqualified-name))
+           (value (handler-case (eval-expr value-ast :symbols symbols :pc address)
+                    (unresolved-label (c)
+                      (%assembly-error line
+                                        "~A: operand must be resolvable here -- ~
 label ~S is not yet defined (an .equ can only reference a label or .equ ~
 defined above it)"
-                                       (statement-mnemonic statement) (unresolved-label-name c))))))
-      (%bind-symbol! symbols name value line)
+                                        (statement-mnemonic statement) (unresolved-label-name c))))))
+      (%bind-symbol! symbols info name unqualified-name value line :equ
+                      (and localp scope) localp)
       (when (%purep value-ast)
         (setf (gethash name constants) value)))))
 
@@ -552,10 +595,14 @@ since sticky widening makes it unreachable by construction.")
 
 (defun %layout-pass (statements machine origin prev-symbols floors finalp cell-width)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
-final-address asm-origin new-floors widths). SYMBOLS is a fresh string ->
+final-address asm-origin new-floors widths info). SYMBOLS is a fresh string ->
 value hash table built by this pass alone (a label's address, or an .EQU's
 folded value, #35) -- never reused across passes, since %BIND-SYMBOL!
-signals on a rebind. SIZED-ENTRIES is, in order, one tagged entry per
+signals on a rebind. INFO is a fresh, parallel qualified-name -> SYMBOL-INFO
+table (#37), built and keyed the same way, carrying the scope/kind metadata
+SYMBOLS itself cannot -- returned last so existing positional callers of the
+other five values are unaffected. SIZED-ENTRIES is, in order, one tagged
+entry per
 mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line)
   (:emit        address width asts line)
@@ -598,6 +645,7 @@ CELL-WIDTH is MACHINE's own code cell width (#53, %MACHINE-CELL-WIDTH) --
 every operand-width fit check below (%CHOOSE-VARIANT) is counted in cells of
 this width, resolved once by %LAYOUT rather than per pass or per statement."
   (let ((symbols (make-hash-table :test 'equal))
+        (info (make-hash-table :test 'equal))
         (constants (make-hash-table :test 'equal))
         (new-floors (copy-seq floors))
         (address origin)
@@ -628,17 +676,17 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                       (%apply-origin-directive statement directive address asm-origin
                                                 emitted-p scope finalp constants)
                     (setf address new-address asm-origin new-origin))
-                  (setf scope (%bind-label! statement symbols address scope)))
+                  (setf scope (%bind-label! statement symbols info address scope)))
                  ;; .EQU (#35) binds a name to a computed value instead of an
                  ;; address -- it contributes no SIZED entry and does not
                  ;; advance ADDRESS or set EMITTED-P, and (unlike a global
                  ;; label) never becomes SCOPE. Still binds its own line's
                  ;; label (if any) first, same as every other statement.
                  ((and directive (eq (directive-descriptor-action directive) :assign))
-                  (setf scope (%bind-label! statement symbols address scope))
-                  (%apply-assign-directive statement directive address symbols constants scope))
+                  (setf scope (%bind-label! statement symbols info address scope))
+                  (%apply-assign-directive statement directive address symbols info constants scope))
                  (t
-                  (setf scope (%bind-label! statement symbols address scope))
+                  (setf scope (%bind-label! statement symbols info address scope))
                   (when mnemonic
                     (cond
                       (directive
@@ -673,22 +721,22 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                              (cl:push size widths)
                              (incf address size))
                            (setf emitted-p t))))))))))
-    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths))))
+    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths) info)))
 
 (defun %layout (statements machine origin cell-width)
-  "Returns (VALUES symbols sized-entries final-address asm-origin) -- see
-%LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES. A label-bearing (or
-RELATIVE-mode) operand's addressing-mode width can't be decided in one walk
-over STATEMENTS, since it depends on an address that isn't known until
-layout has placed it -- so %LAYOUT-PASS runs repeatedly, re-choosing every
-statement's variant against the previous pass's complete symbol table, each
-pass only ever widening (never re-narrowing) a statement that no longer
-fits, until the vector of chosen widths stops changing. Once two consecutive
-passes agree, one more pass runs with FINALP T -- surfacing the two checks
-%LAYOUT-PASS defers until relaxation has settled -- and its result, checked
-against the same width vector as an assertion, is returned. CELL-WIDTH is
-MACHINE's own code cell width (#53), resolved once here and threaded through
-every pass."
+  "Returns (VALUES symbols sized-entries final-address asm-origin info) --
+see %LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES/INFO (#37). A
+label-bearing (or RELATIVE-mode) operand's addressing-mode width can't be
+decided in one walk over STATEMENTS, since it depends on an address that
+isn't known until layout has placed it -- so %LAYOUT-PASS runs repeatedly,
+re-choosing every statement's variant against the previous pass's complete
+symbol table, each pass only ever widening (never re-narrowing) a statement
+that no longer fits, until the vector of chosen widths stops changing. Once
+two consecutive passes agree, one more pass runs with FINALP T -- surfacing
+the two checks %LAYOUT-PASS defers until relaxation has settled -- and its
+result, checked against the same width vector as an assertion, is returned.
+CELL-WIDTH is MACHINE's own code cell width (#53), resolved once here and
+threaded through every pass."
   (let ((floors (make-array (length statements) :initial-element 0))
         (widths :none)
         (symbols nil))
@@ -700,13 +748,13 @@ every pass."
         (when (equal new-widths widths)
           (return-from %layout
             (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
-                                   final-floors final-widths)
+                                   final-floors final-widths final-info)
                 (%layout-pass statements machine origin new-symbols new-floors t cell-width)
               (declare (ignore final-floors))
               (unless (equal final-widths new-widths)
                 (%assembly-error nil "addressing-mode layout did not converge -- the final ~
 pass chose different widths than the trial pass it followed"))
-              (values final-symbols final-sized final-address final-asm-origin))))
+              (values final-symbols final-sized final-address final-asm-origin final-info))))
         (setf symbols new-symbols floors new-floors widths new-widths)))
     (%assembly-error nil "addressing-mode layout failed to converge after ~D iterations"
                       *max-layout-iterations*)))
@@ -856,13 +904,14 @@ still complete but ASSEMBLY-SOURCE is NIL and LISTING-TEXT (listing.lisp)
 renders without a source column. Retains the address<->statement mapping
 %LAYOUT computes -- discarded before #25 -- as ASSEMBLY-LISTING, a
 LISTING-LINE list in address order; see listing.lisp for how it's rendered
-and looked up."
+and looked up. Also retains %LAYOUT's scope/kind metadata (#37) as
+ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
   (let ((cell-width (%machine-cell-width machine memory)))
-    (multiple-value-bind (symbols sized final-address asm-origin)
+    (multiple-value-bind (symbols sized final-address asm-origin info)
         (%layout (expand-macros statements) machine origin cell-width)
       (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
                      :cell-width cell-width
-                     :origin asm-origin :symbols symbols
+                     :origin asm-origin :symbols symbols :symbol-info info
                      :listing (%build-listing sized) :source source))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory)

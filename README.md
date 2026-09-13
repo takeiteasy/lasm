@@ -19,7 +19,7 @@ architectures, not real silicon.
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity
-- [Listing and source map](docs/listing.md) — retained address/statement mapping, `print-listing`
+- [Listing and source map](docs/listing.md) — retained address/statement mapping, `print-listing`, scope-aware symbol table
 - [Getting started](docs/getting-started.md) — install, run, test
 - [Design & roadmap draft](LASM-plan.md)
 

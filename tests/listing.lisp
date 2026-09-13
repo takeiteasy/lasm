@@ -179,3 +179,85 @@ nop" :machine 'instr-test-machine))
           for d in disasm
           do (fiveam:is (= (listing-line-address l) (disassembly-line-address d)))
              (fiveam:is (= (listing-line-size l) (disassembly-line-size d))))))
+
+;;; Symbol table (#37) -- scope-aware lookup, filtering, grouping, and
+;;; rendering over ASSEMBLY-SYMBOL-INFO.
+
+(fiveam:test assembly-symbol-looks-up-a-global-and-a-scoped-local
+  (let ((a (assemble "loop: nop
+.next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (string= "loop" (symbol-info-name (assembly-symbol a "loop"))))
+    (fiveam:is (null (assembly-symbol a ".next")))  ; unscoped, not found
+    (fiveam:is (string= ".next" (symbol-info-name (assembly-symbol a ".next" :scope "loop"))))
+    (fiveam:is (null (assembly-symbol a ".missing" :scope "loop")))
+    (fiveam:is (null (assembly-symbol a "nonexistent")))))
+
+(fiveam:test assembly-symbols-list-filters-by-kind-and-scope
+  (let* ((a (assemble ".equ top, 1
+loop: nop
+.equ .n, 2
+.next: nop" :machine 'instr-test-machine))
+         (labels (assembly-symbols-list a :kind :label))
+         (equs (assembly-symbols-list a :kind :equ))
+         (top-level (assembly-symbols-list a :scope nil))
+         (under-loop (assembly-symbols-list a :scope "loop")))
+    (fiveam:is (= 2 (length labels)))
+    (fiveam:is (every (lambda (s) (eq :label (symbol-info-kind s))) labels))
+    (fiveam:is (= 2 (length equs)))
+    (fiveam:is (every (lambda (s) (eq :equ (symbol-info-kind s))) equs))
+    (fiveam:is (= 2 (length top-level)))  ; "top" and "loop"
+    (fiveam:is (every (lambda (s) (null (symbol-info-scope s))) top-level))
+    (fiveam:is (= 2 (length under-loop)))  ; ".n" and ".next"
+    (fiveam:is (every (lambda (s) (string= "loop" (symbol-info-scope s))) under-loop))))
+
+(fiveam:test assembly-symbols-list-with-no-filter-returns-every-symbol
+  (let ((a (assemble ".equ top, 1
+loop: nop
+.next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 3 (length (assembly-symbols-list a))))))
+
+(fiveam:test assembly-symbol-groups-buckets-locals-under-their-global
+  (let* ((a (assemble ".equ bufsize, 16
+start: nop
+.loop: nop
+delay: nop
+.loop: nop" :machine 'instr-test-machine))
+         (groups (assembly-symbol-groups a))
+         (top (cdr (assoc nil groups)))
+         (start-group (cdr (assoc "start" groups :test #'equal)))
+         (delay-group (cdr (assoc "delay" groups :test #'equal))))
+    (fiveam:is (= 3 (length groups)))  ; nil, "start", "delay"
+    (fiveam:is (= 1 (length top)))
+    (fiveam:is (string= "bufsize" (symbol-info-name (first top))))
+    (fiveam:is (= 2 (length start-group)))
+    (fiveam:is (string= "start" (symbol-info-name (first start-group))))
+    (fiveam:is (string= ".loop" (symbol-info-name (second start-group))))
+    (fiveam:is (= 2 (length delay-group)))
+    (fiveam:is (string= "delay" (symbol-info-name (first delay-group))))
+    (fiveam:is (string= ".loop" (symbol-info-name (second delay-group))))))
+
+(fiveam:test assembly-symbol-groups-empty-when-no-symbol-info
+  ;; An ASSEMBLY built without going through the layout pass at all (or any
+  ;; caller that never populated SYMBOL-INFO) still degrades to an empty --
+  ;; not erroring -- leading NIL bucket.
+  (let ((a (make-assembly :cells #() :symbols (make-hash-table :test 'equal))))
+    (fiveam:is (equal '((nil)) (assembly-symbol-groups a)))
+    (fiveam:is (null (assembly-symbols-list a)))
+    (fiveam:is (null (assembly-symbol a "anything")))))
+
+(fiveam:test symbols-text-renders-every-symbol-grouped
+  (let* ((a (assemble ".equ bufsize, 16
+start: nop
+.loop: nop" :machine 'instr-test-machine))
+         (text (symbols-text a)))
+    (fiveam:is (search "bufsize" text))
+    (fiveam:is (search "start" text))
+    (fiveam:is (search ".loop" text))
+    (fiveam:is (search "equ" text))
+    (fiveam:is (search "label" text))))
+
+(fiveam:test print-symbols-writes-to-stream-and-returns-the-assembly
+  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+         (out (with-output-to-string (s)
+                (fiveam:is (eq a (print-symbols a :stream s))))))
+    (fiveam:is (search "start" out))))

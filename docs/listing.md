@@ -108,10 +108,86 @@ renders full 4-digit cells rather than truncating to 2. A long cell run (a
 sizeable `.res`) is elided to `... ` after the first several cells, to keep
 one entry to one line.
 
+## Symbol table
+
+`#37`: `assembly-symbols` (a flat name → value table, see
+[Assembler](assembler.md)) mixes plain global names and qualified
+`"global.local"` local names in one namespace, and — since `.equ` — plain
+labels and computed constants in one set of values, with no way to tell
+either apart except guessing from the string or the value. `assembly-symbol-
+info` (also on `assembly`, built alongside `assembly-symbols`) tags every
+entry with the metadata `assembly-symbols` can't carry, captured once at
+bind time rather than recovered afterward:
+
+```lisp
+(defstruct symbol-info
+  name            ; unqualified spelling, e.g. ".next"
+  qualified-name  ; assembly-symbols key, e.g. "loop.next"
+  scope           ; enclosing global label's name, or NIL
+  kind            ; :label | :equ
+  localp
+  value           ; same value as assembly-symbols' entry
+  line)           ; defining statement's source line
+```
+
+Query functions built on it:
+
+```lisp
+(assembly-symbol assembly name &key scope)       ; => symbol-info, or NIL
+(assembly-symbols-list assembly &key kind scope) ; => list of symbol-info
+(assembly-symbol-groups assembly)                ; => ((global . locals) ...)
+```
+
+`assembly-symbol` looks up a single name, qualifying it against `scope` the
+same way the assembler would (so `(assembly-symbol a ".next" :scope "loop")`
+finds what `loop: .next:` bound). `assembly-symbols-list` returns every
+symbol, optionally filtered to one `kind` (`:label`/`:equ`) and/or one
+`scope` (pass `nil` for top-level symbols — globals and top-level `.equ`s).
+`assembly-symbol-groups` is the grouped view a listing wants: a leading
+`(nil . symbols)` bucket for every top-level symbol, then one
+`(global-name . symbols)` entry per global that has at least one local, the
+global's own `symbol-info` heading its list:
+
+```lisp
+(assembly-symbol-groups a)
+=> ((nil       . (#<equ bufsize=16>))
+    ("start"  . (#<label start=$8000> #<label start.loop=$8003>))
+    ("delay"  . (#<label delay=$800a> #<label delay.loop=$800c>)))
+```
+
+Both `assembly-symbols-list` and `assembly-symbol-groups` order symbols by
+their defining `symbol-info-line`, not by value — an `.equ`'s value isn't an
+address, so address order has no meaning for it, and a hash table has no
+declaration order of its own. (`symbol-info-line` inherits the same macro
+call-site/body-line quirk `listing-lines-for-source-line` documents above —
+a body-defined symbol's line is the macro body's own, not the invocation's.)
+
+Every function above degrades to `NIL`/empty rather than erroring when
+`assembly-symbol-info` itself is `NIL` (e.g. an `assembly` built by some
+other path that never populated it).
+
+### Rendering: `symbols-text` / `print-symbols`
+
+```lisp
+(symbols-text assembly &key stream)  ; => string, or writes to STREAM
+(print-symbols assembly &key stream) ; symbols-text to *standard-output* by default
+```
+
+A grouped dump, parallel to `listing-text`/`print-listing`: top-level symbols
+first, then each global with its locals indented underneath, each row naming
+the symbol, its value (hex for a label, decimal for an `.equ`), and its kind.
+See [`examples/pc-and-scopes.lisp`](../examples/pc-and-scopes.lisp) for a
+runnable version.
+
+This same tagging is what lets the disassembler (see
+[Disassembler](disassembler.md)) substitute a real label even when an `.equ`
+happens to share its value, instead of the line-start-restricted mitigation
+it used before `symbol-info` existed.
+
 ## Scope
 
 This covers retaining and rendering the mapping `assemble` already computes
-internally. It does not cover:
+internally, plus the scope/kind-tagged symbol table above. It does not cover:
 
 - **Runtime diagnostics naming a source line** (e.g. a trap or an
   out-of-range access reporting "line 12") — the emulator holds no

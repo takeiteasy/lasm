@@ -35,7 +35,7 @@ holding a `statement` list (e.g. from its own preprocessing) can call the
 latter directly. Both return an `assembly`:
 
 ```lisp
-(defstruct assembly cells cell-width origin symbols listing source)
+(defstruct assembly cells cell-width origin symbols symbol-info listing source)
 ```
 
 - `cells` — a `(vector (unsigned-byte cell-width))` of the encoded program,
@@ -52,7 +52,14 @@ latter directly. Both return an `assembly`:
   assembling, forward or backward: a label's address, or an `.equ`'s folded
   value (see "`.equ` / symbol assignment" below) — the two share one flat
   table and one duplicate check, so a program can't bind the same name both
-  ways.
+  ways. This table's shape is deliberately kept flat and untagged (`eval-expr`
+  reads it as a plain name → value map) — see `symbol-info` below for the
+  scope/kind metadata this can't carry.
+- `symbol-info` — a hash table (qualified name string → `symbol-info`), built
+  alongside `symbols` and keyed the same way, carrying what `symbols` alone
+  cannot: whether an entry is a label or an `.equ`, and its enclosing scope
+  for a local name. See [Listing and source map](listing.md#symbol-table) for
+  the query/render API built on it.
 - `listing` / `source` (#25) — the retained address↔statement mapping
   layout computes, and the source text it came from (when known); see
   [Listing and source map](listing.md) for how it's rendered and looked up.
@@ -420,6 +427,15 @@ identically-spelled global (a global literally named `loop.next` alongside a
 reserved separator that rules this out entirely. An `.equ` name (below) is
 qualified the same way if it's local, and shares this collision hazard.
 
+Alongside `symbols`, `%bind-symbol!` records each entry's unqualified name,
+enclosing scope, and kind (label vs. `.equ`, below) in `symbol-info` (#37) —
+captured once, at the moment a name is bound, rather than recovered later by
+splitting the qualified string on `local-label-prefix`. Splitting couldn't
+tell a real global named `loop.next` apart from local `.next` under `loop`
+(the same collision hazard just above); recording scope at bind time can. See
+[Listing and source map](listing.md#symbol-table) for the scope-aware lookup
+and grouped listing built on `symbol-info`.
+
 ## `.equ` / symbol assignment
 
 ```lisp
@@ -458,6 +474,12 @@ or `.byte`/`.word` value may reference any `.equ`, pure or not, since those
 fold at encode time against the completed table like any label reference. A
 follow-up ticket (#41) tracks lifting the restriction with a purity check
 strong enough to still guarantee `%layout` converges.
+
+An `.equ`'s `symbol-info` entry (#37, above) is tagged kind `:equ`, distinct
+from a label's `:label` — the discriminator a plain `symbols` lookup can't
+give you (its value is just an integer either way), and what fixes the
+disassembler's own label/`.equ` ambiguity (see
+[Disassembler](disassembler.md)).
 
 ## `:origin`
 
