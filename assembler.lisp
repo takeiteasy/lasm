@@ -142,10 +142,27 @@ way %RELATIVE-OFFSET (below) will at encode time: relative to the address of
 the *next* instruction, not this one's own. Used by %CHOOSE-VARIANT's value
 filter so a RELATIVE candidate can compete on width like any other once an
 address is available to compute its offset from, rather than always winning
-by default as the widest candidate."
+by default as the widest candidate. :RELATIVE is rejected on a word-encoded
+machine (instruction.lisp's %CHECK-WORD-RELATIVE, #20), so DESCRIPTOR here
+is always byte-encoded and WIDTH is its operand byte width."
   (let* ((width (instruction-descriptor-total-operand-width descriptor))
-         (next-address (+ address 1 width)))
+         (next-address (+ address (instruction-descriptor-size descriptor))))
     (%fits-signed-width-p (- value next-address) width)))
+
+(defun %word-variant-fits-p (values descriptor)
+  "T if VALUES -- one already-evaluated operand value per DESCRIPTOR's
+WORD-FIELDS entry, in order (#20) -- fits this word-field combo: an
+:EXTRA-WORD field always fits (any value there is spilled into its own
+word); an :INLINE field fits only when VALUE falls in that field's declared
+(pre-bias) RANGE. Parallel to %FITS-WIDTH-P/%FITS-SIGNED-WIDTH-P for the
+byte-encoded case, used by %CHOOSE-VARIANT's value filter to pick the
+narrowest (fewest extra words) combo a value actually fits."
+  (every (lambda (value choice)
+           (ecase (word-field-choice-kind choice)
+             (:extra-word t)
+             (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
+                        (<= lo value hi)))))
+         values (instruction-descriptor-word-fields descriptor)))
 
 (defun %choose-forced-variant (statement variants)
   "STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
@@ -243,15 +260,15 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                     (if mode
                                         (try-match-operand-mode tokens mode)
                                         (values nil (zerop (length tokens)))))
-                 when (and okp (>= (instruction-descriptor-total-operand-width v) floor))
+                 when (and okp (>= (instruction-descriptor-size v) floor))
                    collect (list v asts))))
     (when (null candidates)
       (%assembly-error (statement-line statement)
                         "~A: no addressing mode matches this operand"
                         (statement-mnemonic statement)))
-    ;; STABLE-SORT, not SORT: ties (equal total width) must keep declaration
+    ;; STABLE-SORT, not SORT: ties (equal total size) must keep declaration
     ;; order.
-    (let* ((width-key (lambda (c) (instruction-descriptor-total-operand-width (first c))))
+    (let* ((width-key (lambda (c) (instruction-descriptor-size (first c))))
            ;; STABLE-SORT twice, not once-and-REVERSE: reversing a stable
            ;; descending sort breaks ties in the *wrong* order (last
            ;; declared, not first), which would silently contradict the
@@ -260,14 +277,21 @@ Returns (VALUES chosen-descriptor hole-asts)."
            (widest (first (stable-sort (copy-list candidates) #'> :key width-key)))
            (narrowest (first (stable-sort (copy-list candidates) #'< :key width-key)))
            (resolvedp (lambda (c)
-                        (let ((descriptor (first c))
-                              (mode (instruction-descriptor-mode (first c))))
+                        (let* ((descriptor (first c))
+                               (mode (instruction-descriptor-mode descriptor))
+                               (word-fields (instruction-descriptor-word-fields descriptor)))
                           (handler-case
                               (let ((widths (instruction-descriptor-operand-widths descriptor))
                                     (vals (mapcar (lambda (ast)
                                                     (eval-expr ast :symbols symbols :pc address))
                                                   (second c))))
                                 (cond
+                                  ;; #20: a word-encoded descriptor's fit test
+                                  ;; is per-field range membership, not a
+                                  ;; byte width -- OPERAND-WIDTHS is NIL for
+                                  ;; these, so none of the byte-encoded
+                                  ;; branches below apply.
+                                  (word-fields (%word-variant-fits-p vals descriptor))
                                   ((and mode (mode-descriptor-relativep mode))
                                    (%relative-fits-p (first vals) address descriptor))
                                   ((and mode (mode-descriptor-signedp mode))
@@ -598,10 +622,10 @@ addresses are final."
                            (%qualify-locals-in-asts! asts scope line)
                            (cl:push (list :instruction address descriptor asts (statement-line statement))
                                     sized)
-                           (let ((width (instruction-descriptor-total-operand-width descriptor)))
-                             (setf (aref new-floors i) width)
-                             (cl:push width widths)
-                             (incf address (1+ width)))
+                           (let ((size (instruction-descriptor-size descriptor)))
+                             (setf (aref new-floors i) size)
+                             (cl:push size widths)
+                             (incf address size))
                            (setf emitted-p t))))))))))
     (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths))))
 
@@ -651,7 +675,7 @@ is the base a branch's own (set! pc (+ pc operand)) actually adds to.
 Signals ASSEMBLY-ERROR if the offset doesn't fit the operand's width, rather
 than silently wrapping to a branch at the wrong address (#23)."
   (let* ((width (instruction-descriptor-total-operand-width descriptor))
-         (next-address (+ address 1 width))
+         (next-address (+ address (instruction-descriptor-size descriptor)))
          (offset (- value next-address)))
     (unless (%fits-signed-width-p offset width)
       (%assembly-error line

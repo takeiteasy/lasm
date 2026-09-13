@@ -221,17 +221,43 @@ rather than a hard boundary.
 ```
 
 ### 3.8 Word-addressed memory + variant encoding (DCPU-16-style)
-```lisp
-(defmachine WORDMACHINE
-  (memory RAM :cell-width 16 :addr-width 16))
 
-(definstruction SET
+Implemented as two separate pieces: the bitfield/variant encoding below
+(bitfield/variant encoding for value-dependent instruction length), and
+word-addressed memory (assembler/encoder pipeline hardcoded to byte-addressed
+output), which is still open — the DCPU-16 example below needs both.
+
+Field widths are declared once, machine-level, in `defmachine`'s
+`instruction-word` clause — not per instruction, since decode has to split
+the word into fields *before* it knows which instruction it is. `(opcode n)`
+keeps its established meaning everywhere else in LASM (the opcode's *value*,
+not a field width). An `extra-word` variant's escape value is spelled out
+explicitly (`:escape n`), rather than an implicit "highest field value is
+reserved" convention, so a machine wanting more than one escape form isn't
+blocked and the reserved value is visible in the source:
+
+```lisp
+(defmachine wordmachine
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field a 6)
+    (field b 6)))
+
+(definstruction wordmachine set
+  (modes some-mode)
   (encoding
     (opcode 4)
-    (operand-a (bitfield 6
-                 (variant (range -1 30) inline)
-                 (variant :else (extra-word))))))
+    (operand value :field a
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3f))))
+  (semantics (set! ... operand)))
 ```
+
+See [docs/instructions.md](docs/instructions.md#word-encoded-instructions-20)
+and [`examples/word.lisp`](examples/word.lisp) for the implemented mechanism
+end to end (on a byte-addressed machine — the memory model half above is
+still separate).
 
 ### 3.9 Memory regions & MMIO
 ```lisp

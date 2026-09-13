@@ -46,6 +46,13 @@
    #:storage-element-depth
    #:storage-element-addr-width
    #:storage-element-cell-width
+   #:machine-descriptor-instruction-word
+   #:instruction-word-layout
+   #:instruction-word-layout-p
+   #:instruction-word-layout-width
+   #:instruction-word-layout-width-bytes
+   #:instruction-word-layout-fields
+   #:instruction-word-field
 
    ;; Storage accessors
    #:sref
@@ -175,6 +182,19 @@
    #:instruction-descriptor-total-operand-width
    #:instruction-descriptor-semantics-fn
    #:instruction-descriptor-cycles
+   #:instruction-descriptor-word-fields
+   #:instruction-descriptor-word-alternatives
+   #:instruction-descriptor-extra-words
+   #:instruction-descriptor-word-layout
+   #:instruction-descriptor-size
+   #:word-field-choice
+   #:word-field-choice-p
+   #:word-field-choice-width
+   #:word-field-choice-shift
+   #:word-field-choice-kind
+   #:word-field-choice-bias
+   #:word-field-choice-range
+   #:word-field-choice-escape
    #:eval-expr
 
    ;; Assembler

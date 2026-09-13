@@ -61,9 +61,19 @@ widths against a machine defined earlier in the same file.
   so a later region-mapped/sparse backend (ROM/RAM/MMIO, banking) can
   replace it without changing `mref`/`(setf mref)` call sites.
 - `(flags NAME...)` — one or more single-bit flags.
+- `(instruction-word :width n (field NAME width)...)` — a fixed-width
+  instruction word split into named bit fields, MSB-first as declared, one
+  of them named `opcode`. Optional; a machine with no such clause keeps the
+  default opcode-byte-plus-operand-bytes encoding every earlier milestone
+  uses. See [Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
+  for how `definstruction` fills a field, and
+  [`examples/word.lisp`](../examples/word.lisp) for a complete machine.
 
 Widths and depths must be positive integers; duplicate element names and
-unknown clause heads are compile-time errors.
+unknown clause heads are compile-time errors. `instruction-word`'s field
+widths must sum exactly to its own `:width`, which must itself be a whole
+number of bytes (the word is still emitted as little-endian bytes — see
+"Byte- vs. word-encoded instructions" below).
 
 ### Deviation from the design draft
 
@@ -113,3 +123,25 @@ None of these storage conditions are currently a `run` stop reason (see
 overflows or underflows a stack, or addresses memory out of range, escapes
 `run` as a raw Lisp condition rather than returning `:trap`,
 `:decode-failure`, or `:max-steps`.
+
+## Byte- vs. word-encoded instructions
+
+Every machine before `instruction-word` (M1–M3) encodes one instruction as an
+opcode byte followed by fixed-width operand bytes chosen by addressing mode —
+`instruction-descriptor-total-operand-width` is the byte count that encoding
+occupies. A machine declaring `instruction-word` instead encodes one
+instruction as a single fixed-width word whose bits are split into named
+fields (a DCPU-16-shaped machine, #20) — see
+[Instructions](instructions.md#word-encoded-instructions-20) for how
+`definstruction` fills those fields, including operand values that pack
+inline for a small range or escape to their own following word depending on
+the *value* being encoded, not just its addressing-mode syntax.
+
+`instruction-descriptor-size` is the one accessor that covers both schemes —
+the total encoded byte count for one use of an instruction, byte-encoded or
+word-encoded alike. The instruction word itself (and any extra word an
+escaped operand needs) is still emitted as ordinary little-endian bytes, so
+`assembly-bytes` stays `(vector (unsigned-byte 8))` regardless of which
+scheme a machine uses — a fully word-*addressed* memory pipeline (assembler
+output typed to a machine's own cell width) is a separate, larger piece of
+work than this ticket covers.

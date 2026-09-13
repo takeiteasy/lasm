@@ -87,6 +87,26 @@
   (addr-width nil :type (or null (integer 1)))  ; memory
   (cell-width nil :type (or null (integer 1)))) ; memory, defaults to width
 
+;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
+;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
+;; (machine.lisp) for a DCPU-16-shaped machine whose whole instruction is one
+;; WIDTH-bit word split into named bit fields rather than a byte-per-operand
+;; stream. FIELDS is a list of (name width shift) in *declared* (most-
+;; significant-first) order -- SHIFT is each field's bit offset from the
+;; word's LSB, derived once here so encode/decode never recompute it.
+;; WIDTH-BYTES is WIDTH/8, checked to be a whole number at parse time
+;; (machine.lisp) since the word is still emitted as little-endian bytes
+;; (#53 -- the assembler pipeline stays byte-typed; this only adds a way to
+;; pack sub-byte fields into those bytes before they're written).
+(defstruct instruction-word-layout
+  (width nil :type (integer 1))
+  (width-bytes nil :type (integer 1))
+  (fields nil :type list))          ; (name width shift), MSB-first as declared
+
+(defun instruction-word-field (layout name)
+  "The (name width shift) entry in LAYOUT's FIELDS named NAME, or NIL."
+  (find name (instruction-word-layout-fields layout) :key #'first))
+
 (defstruct machine-descriptor
   (name nil :type symbol)
   (elements nil :type list)               ; ordered list of storage-element
@@ -99,7 +119,11 @@
   ;; mode the mnemonic accepts (mode.lisp/M2); a no-operand or single-mode
   ;; mnemonic's list has exactly one element.
   (instructions (make-hash-table :test 'equal))
-  (opcodes (make-hash-table :test 'eql)))         ; opcode -> instruction-descriptor
+  (opcodes (make-hash-table :test 'eql))          ; opcode -> instruction-descriptor
+  ;; NIL for an ordinary byte-encoded machine (every machine before #20) --
+  ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
+  ;; vs. an INSTRUCTION-WORD-LAYOUT to pick between the two encoding schemes.
+  (instruction-word nil :type (or null instruction-word-layout)))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))

@@ -626,3 +626,69 @@ double: iny
       (fiveam:is (= 8 (mref m 'ram #x1000)))
       (fiveam:is (= 3 (mref m 'ram #x1001)))
       (fiveam:is (= 0 (stack-depth m 's))))))
+
+;;; Word-encoded emulation (#20) -- reuses WORD-TEST-MACHINE/SET/HLT
+;;; (tests/instruction.lisp). The acceptance test for the whole ticket:
+;;; assemble -> LOAD-PROGRAM -> STEP-MACHINE must recover the same operand
+;;; value regardless of which variant (inline or extra-word) the assembler
+;;; picked, and PC must advance by the actual number of words consumed.
+
+(fiveam:test step-machine-word-encoded-inline-round-trip
+  ;; STEP-MACHINE's returned descriptor need not be EQ to whichever variant
+  ;; FIND-INSTRUCTION returns -- REGISTER-INSTRUCTION-VARIANTS! (instruction
+  ;; .lisp) lets any sibling combo occupy the shared opcode slot, since every
+  ;; sibling's WORD-ALTERNATIVES decodes identically -- so this checks name
+  ;; and the actually-executed effect, not descriptor identity.
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "set #5
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SET" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 2 (sref m 'pc)))))    ; one word consumed
+
+(fiveam:test step-machine-word-encoded-extra-word-round-trip
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "set #1000
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SET" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 1000 (sref m 'a)))
+    (fiveam:is (= 4 (sref m 'pc)))))    ; instruction word + one extra word
+
+(fiveam:test step-machine-word-encoded-negative-inline-round-trip
+  ;; Exercises the :BIAS mechanism's actual reason for existing: -1 packs
+  ;; into an unsigned field via bias +1, decoded back to -1, not treated as
+  ;; a sign-extended two's-complement quantity the way a byte-encoded SIGNED
+  ;; mode would (#20 restriction -- word-encoded fields have no SIGNED
+  ;; sign-extension of their own; a negative inline value's sign is carried
+  ;; entirely by its variant's bias).
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "set #-1
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (step-machine m)
+    ;; A's own :SET! stores the decoded value through WRAP-VALUE like any
+    ;; other register write, so -1 reads back as 16-bit 65535, not -1 --
+    ;; SIGNED-VALUE recovers the two's-complement reading a semantics body
+    ;; wanting a real negative would apply itself.
+    (fiveam:is (= 65535 (sref m 'a)))
+    (fiveam:is (= -1 (signed-value (sref m 'a) 16)))))
+
+(fiveam:test run-word-encoded-machine-round-trip-end-to-end
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "set #5
+set #1000
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 3 steps))
+      (fiveam:is (= 1000 (sref m 'a))))))
+
+(fiveam:test step-machine-word-encoded-decode-failure-on-unregistered-opcode
+  (let ((m (make-machine 'word-test-machine)))
+    (setf (mref m 'ram 0) 0)
+    (setf (mref m 'ram 1) #xf0)         ; opcode #xf, unregistered
+    (fiveam:is (eq :decode-failure (step-machine m)))
+    (fiveam:is (= 0 (sref m 'pc)))))    ; PC not advanced on decode failure

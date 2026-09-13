@@ -628,3 +628,52 @@ a: nop" :machine 'instr-test-machine)))
     (assemble "brxs.r target
 .res 200
 target: nop" :machine 'instr-test-machine)))
+
+;;; Word-encoded relaxation (#20) -- reuses WORD-TEST-MACHINE and its SET/HLT
+;;; instructions from tests/instruction.lisp. SET's operand packs into a
+;;; 10-bit SRC field inline for -1..30 (biased +1), or escapes to its own
+;;; following word otherwise -- %CHOOSE-VARIANT (assembler.lisp) picks
+;;; between the two exactly like it picks between two addressing-mode
+;;; widths, generalized via INSTRUCTION-DESCRIPTOR-SIZE.
+
+(fiveam:test word-instruction-picks-inline-variant-for-small-value
+  (let ((a (assemble "set #5" :machine 'word-test-machine)))
+    (fiveam:is (= 2 (length (assembly-bytes a))))
+    (fiveam:is (equalp #(#x06 #x10) (assembly-bytes a)))))
+
+(fiveam:test word-instruction-picks-extra-word-variant-for-large-value
+  (let ((a (assemble "set #1000" :machine 'word-test-machine)))
+    (fiveam:is (= 4 (length (assembly-bytes a))))
+    (fiveam:is (equalp #(#xff #x13 #xe8 #x03) (assembly-bytes a)))))
+
+(fiveam:test word-instruction-picks-extra-word-variant-for-negative-out-of-range-value
+  (let ((a (assemble "set #-5" :machine 'word-test-machine)))
+    (fiveam:is (= 4 (length (assembly-bytes a))))))
+
+(fiveam:test word-instruction-with-small-forward-label-stays-inline
+  ;; TARGET's address (2, right after SET's own inline-sized instruction)
+  ;; fits SET's -1..30 inline range, so relaxation's narrowest first guess
+  ;; (SET always starts inline when the operand doesn't resolve yet) turns
+  ;; out to already be correct -- no widening pass needed.
+  (let ((a (assemble "set #target
+target: hlt" :machine 'word-test-machine)))
+    (fiveam:is (= 4 (length (assembly-bytes a))))
+    (fiveam:is (= 2 (gethash "target" (assembly-symbols a))))
+    (fiveam:is (equalp #(#x03 #x10 #x00 #x20) (assembly-bytes a)))))
+
+(fiveam:test word-instruction-with-large-forward-label-widens-across-passes
+  ;; TARGET's address (44, well past the -1..30 inline range) doesn't fit --
+  ;; relaxation's first pass still guesses inline (TARGET is unresolved on
+  ;; pass 1), then widens to the extra-word variant once TARGET's real
+  ;; address is known, growing SET from 2 bytes to 4 and shifting TARGET by
+  ;; 2 -- exercising the same sticky-widening fixpoint as the byte-encoded
+  ;; addressing-mode case, generalized to extra-word count.
+  (let ((a (assemble "set #target
+.res 40
+target: hlt" :machine 'word-test-machine)))
+    (fiveam:is (= (+ 4 40 2) (length (assembly-bytes a))))
+    (fiveam:is (= 44 (gethash "target" (assembly-symbols a))))))
+
+(fiveam:test word-instruction-no-operand-hlt-encodes-as-single-word
+  (let ((a (assemble "hlt" :machine 'word-test-machine)))
+    (fiveam:is (equalp #(#x00 #x20) (assembly-bytes a)))))

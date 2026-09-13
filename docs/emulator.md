@@ -86,6 +86,33 @@ Returns the executed `instruction-descriptor`, or the keyword
 `:decode-failure` (without advancing `pc` or executing anything) if the byte
 at `pc` isn't a registered opcode on this machine.
 
+### Word-encoded machines (#20)
+
+On a machine declaring an `instruction-word` clause ([Machine
+model](machine-model.md)), `step-machine` instead fetches one whole
+instruction word (little-endian, `instruction-word-layout-width-bytes`
+bytes), extracts its `opcode` field to find the `instruction-descriptor`
+(`find-instruction-by-opcode`, same as the byte-encoded path — a
+word-encoded family's several sibling descriptors, one per operand-field
+variant, all share one opcode value, so *whichever* sibling occupies the
+opcode table works equally well here), then decodes each operand field
+against that descriptor's `word-alternatives` — every variant its
+`definstruction` declared, not just the one combo the opcode table happens
+to hold: a fetched field value equal to some alternative's `:escape` means
+the real value follows in its own word (fetched and consumed in turn); a
+value inside some alternative's biased inline range means the value *is*
+the field, debiased. A raw value matching no declared alternative at all is
+`:decode-failure`, the same as an unregistered opcode. `pc` advances by the
+actual number of words consumed — the instruction word plus one per
+`extra-word` field decoded, which need not match the registered sibling's
+own `extra-words` count, since decode reconstructs the real encoding from
+the fetched bits rather than trusting which combo it happened to look up.
+
+No `:signed`-mode sign extension happens on this path — a word-encoded
+field's negative-value handling is entirely its variant's `:bias` (see
+[Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)),
+already undone by the debiasing above.
+
 ## `run`
 
 ```lisp

@@ -92,13 +92,53 @@ then delete the winner's entry outright as an apparently orphaned opcode.")
   ;; Parsed and stored, not used (#19) -- there is no timing model yet.
   ;; Accepted because users will copy LASM-plan.md sec. 3.2's (cycles n)
   ;; verbatim.
-  (cycles nil :type (or null (integer 0))))
+  (cycles nil :type (or null (integer 0)))
+  ;; #20 (M4): non-NIL only on a word-encoded machine (MACHINE-DESCRIPTOR-
+  ;; INSTRUCTION-WORD non-NIL, storage.lisp). WORD-FIELDS is *this*
+  ;; descriptor's chosen field encoding -- one WORD-FIELD-CHOICE per operand,
+  ;; parallel to OPERAND-NAMES, in hole order -- which ENCODE-INSTRUCTION
+  ;; uses directly to build the instruction word.
+  (word-fields nil :type list)
+  ;; The full per-operand variant menu -- one list of WORD-FIELD-CHOICE per
+  ;; operand, in hole order -- shared by every sibling descriptor expanded
+  ;; from the same DEFINSTRUCTION variant clause (#20). Decode (emulator.lisp)
+  ;; needs every alternative, not just the one combo that happens to occupy
+  ;; the opcode table, to tell an inline value from an escaped extra-word
+  ;; marker apart by comparing against the actually fetched bits.
+  (word-alternatives nil :type list)
+  ;; Count of :EXTRA-WORD fields in WORD-FIELDS -- this combo's extra encoded
+  ;; words, each one INSTRUCTION-WORD-LAYOUT-WIDTH-BYTES wide. 0 for a
+  ;; byte-encoded descriptor and for an all-inline word combo alike.
+  (extra-words 0 :type (integer 0)))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the byte count its operand encoding
 occupies as a whole, regardless of how many fields it's split across. 0 for
-a no-operand instruction."
+a no-operand instruction, and always 0 for a word-encoded descriptor (#20),
+whose OPERAND-WIDTHS is NIL by construction -- see INSTRUCTION-DESCRIPTOR-SIZE
+for the accessor that covers both encoding schemes."
   (reduce #'+ (instruction-descriptor-operand-widths descriptor) :initial-value 0))
+
+(defun instruction-descriptor-word-layout (descriptor)
+  "DESCRIPTOR's machine's INSTRUCTION-WORD-LAYOUT (storage.lisp), or NIL on
+an ordinary byte-encoded machine. Looked up via DESCRIPTOR's own MACHINE
+slot rather than cached on the descriptor, so it can't drift from the
+machine descriptor it names."
+  (machine-descriptor-instruction-word (find-machine-descriptor (instruction-descriptor-machine descriptor))))
+
+(defun instruction-descriptor-size (descriptor)
+  "Total encoded bytes for one use of DESCRIPTOR -- 1 (opcode byte) plus
+operand byte widths on an ordinary byte-encoded machine, or
+INSTRUCTION-WORD-LAYOUT-WIDTH-BYTES * (1 + EXTRA-WORDS) on a word-encoded one
+(#20). Centralizes what used to be five separate \"1 + operand width\"
+computations scattered across the assembler's layout/relaxation, its
+relative-branch offset arithmetic, and the emulator's fetch loop, so a
+word-encoded descriptor's size is computed identically everywhere rather than
+each caller assuming a byte opcode."
+  (let ((layout (instruction-descriptor-word-layout descriptor)))
+    (if layout
+        (* (instruction-word-layout-width-bytes layout) (1+ (instruction-descriptor-extra-words descriptor)))
+        (1+ (instruction-descriptor-total-operand-width descriptor)))))
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
@@ -165,7 +205,16 @@ mnemonic -- on machine MACHINE-NAME, replacing any previous registration
 under that mnemonic. Every old opcode not reused by DESCRIPTORS is dropped
 from the opcode table first, so a redefinition that drops a mode's opcode
 does not leave FIND-INSTRUCTION-BY-OPCODE (an emulator's decode step)
-resolving it to a now-stale descriptor."
+resolving it to a now-stale descriptor.
+
+A word-encoded machine's variant expansion (#20, instruction.lisp's
+%EXPAND-WORD-COMBOS) can hand this several sibling DESCRIPTORS that all
+share one opcode value (one mnemonic, encoded differently by operand size,
+not by opcode) -- whichever ends up in the opcode table below (the last one
+processed wins, same as any other same-opcode overwrite here) is fine for
+decode: every sibling carries an equivalent WORD-ALTERNATIVES menu, so
+%STEP-WORD-MACHINE (emulator.lisp) reconstructs the actual encoding from the
+fetched bits regardless of which specific combo it's looking at."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
          (old (gethash name (machine-descriptor-instructions md)))
@@ -394,30 +443,303 @@ SUBCLAUSES)."
 -- an (operand ...) subclause is required per hole" machine name mode-name
                  (%mode-hole-count mode)))))
 
-(defun %parse-mode-variant-clause (variant-form machine name default-semantics-forms cycles-form)
+;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
+;;; operand encoding, kept as its own code path parallel to the byte-encoded
+;;; (operand :mode)/(operand :width n) machinery above rather than threaded
+;;; through it: a word-encoded operand can expand into *several*
+;;; INSTRUCTION-DESCRIPTORs sharing one mnemonic, mode, and opcode value (one
+;;; per value-range variant, e.g. "fits inline" vs. "needs an extra word"),
+;;; which the byte path's "exactly one descriptor per mode use" shape has no
+;;; room for. Selecting between them per statement is still %CHOOSE-VARIANT's
+;;; job (assembler.lisp) -- these descriptors just give it more to choose
+;;; from, via the same syntax/floor/value filter pipeline, generalized to
+;;; INSTRUCTION-DESCRIPTOR-SIZE (below) instead of assuming byte widths.
+
+(defstruct word-variant
+  (kind nil :type (member :inline :extra-word))
+  (bias 0 :type integer)                 ; :inline only
+  (range nil :type (or null cons))       ; :inline only, pre-bias (lo . hi)
+  (escape nil :type (or null integer)))  ; :extra-word only
+
+(defstruct word-operand-spec
+  (name nil)                  ; operand field name, or NIL for unnamed
+  (field nil :type symbol)    ; instruction-word field name
+  (width nil :type (integer 1))
+  (shift nil :type (integer 0))
+  (variants nil :type list))  ; list of WORD-VARIANT, declaration order
+
+;; One operand's *chosen* (or, in an INSTRUCTION-DESCRIPTOR's WORD-ALTERNATIVES,
+;; one *candidate*) field encoding -- WIDTH/SHIFT locate its bits in the
+;; instruction word; KIND says whether VALUE packs in biased by BIAS or is
+;; replaced by ESCAPE with VALUE following in its own word. RANGE (pre-bias)
+;; is kept alongside BIAS so decode (emulator.lisp) can test a fetched raw
+;; field value for membership without redoing DEFINSTRUCTION-time arithmetic.
+(defstruct word-field-choice
+  (width nil :type (integer 1))
+  (shift nil :type (integer 0))
+  (kind nil :type (member :inline :extra-word))
+  (bias 0 :type integer)
+  (range nil :type (or null cons))
+  (escape nil :type (or null integer)))
+
+(defun %word-machine-p (machine-name)
+  "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
+(machine.lisp, #20) -- DEFINSTRUCTION branches on this to pick the
+word-field/variant encoding path below instead of the byte-encoded
+(operand :mode)/(operand :width n) one."
+  (and (machine-descriptor-instruction-word (find-machine-descriptor machine-name)) t))
+
+(defun %parse-word-variant-form (form field-name)
+  "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
+into a WORD-VARIANT. SELECTOR is (range LO HI) for an :INLINE variant
+(optionally :BIAS N, default 0) or :ELSE for the :EXTRA-WORD fallback, whose
+kind form is (extra-word :escape n)."
+  (destructuring-bind (head selector &rest tail) form
+    (unless (eq head 'variant)
+      (error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
+(variant selector kind)" field-name form))
+    (cond
+      ((and (consp selector) (eq (first selector) 'range))
+       (destructuring-bind (range-kw lo hi) selector
+         (declare (ignore range-kw))
+         (unless (eq (first tail) 'inline)
+           (error "DEFINSTRUCTION: field ~S: a (range ...) variant must be ~
+INLINE, got ~S" field-name tail))
+         (destructuring-bind (inline-sym &key (bias 0)) tail
+           (declare (ignore inline-sym))
+           (make-word-variant :kind :inline :bias bias :range (cons lo hi)))))
+      ((eq selector :else)
+       (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
+         (error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
+(extra-word :escape n), got ~S" field-name tail))
+       (destructuring-bind (extra-word-kw &key escape) (first tail)
+         (declare (ignore extra-word-kw))
+         (unless escape
+           (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
+         (make-word-variant :kind :extra-word :escape escape)))
+      (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi) ~
+or :else, got ~S" field-name selector)))))
+
+(defun %check-word-variants (variants field-width field-name)
+  "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
+variant list, already parsed) doesn't fit FIELD-WIDTH bits, or if an
+:EXTRA-WORD variant's escape value falls inside another variant's biased
+inline range -- the ambiguity #20's own mockup leaves unresolved: a decoder
+reading that raw field value could never tell a genuine inline value from
+the escape marker apart."
+  (let ((max (1- (ash 1 field-width))) inline-ranges escapes)
+    (dolist (v variants)
+      (ecase (word-variant-kind v)
+        (:inline
+         (let* ((lo (+ (car (word-variant-range v)) (word-variant-bias v)))
+                (hi (+ (cdr (word-variant-range v)) (word-variant-bias v))))
+           (when (or (< lo 0) (> hi max))
+             (error "DEFINSTRUCTION: field ~S: biased inline range ~D..~D does ~
+not fit its ~D-bit field" field-name lo hi field-width))
+           (cl:push (cons lo hi) inline-ranges)))
+        (:extra-word
+         (let ((e (word-variant-escape v)))
+           (when (or (< e 0) (> e max))
+             (error "DEFINSTRUCTION: field ~S: escape ~D does not fit its ~D-bit field"
+                    field-name e field-width))
+           (cl:push e escapes)))))
+    (dolist (e escapes)
+      (dolist (r inline-ranges)
+        (when (<= (car r) e (cdr r))
+          (error "DEFINSTRUCTION: field ~S: escape value ~D is inside inline ~
+range ~D..~D -- an encoded field value of ~D can never be told apart from a ~
+genuine inline value" field-name e (car r) (cdr r) e))))))
+
+(defun %parse-word-operand-subclause (subclause machine-name)
+  "SUBCLAUSE is one whole (operand [NAME] :field FIELD-NAME (variant ...)*)
+form on a word-encoded machine. Returns a WORD-OPERAND-SPEC. With no
+(variant ...) forms at all, the operand is plain inline over the field's
+full unsigned range (bias 0) -- the word-encoded equivalent of a byte-encoded
+(operand :mode)'s implicit default."
+  (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
+    (destructuring-bind (field-kw field-name &rest variant-forms) spec
+      (unless (eq field-kw :field)
+        (error "DEFINSTRUCTION: malformed word operand spec ~S -- expected ~
+(operand [name] :field f ...)" subclause))
+      (let ((field (instruction-word-field
+                    (machine-descriptor-instruction-word (find-machine-descriptor machine-name))
+                    field-name)))
+        (unless field
+          (error "DEFINSTRUCTION: no instruction-word field named ~S on machine ~S"
+                 field-name machine-name))
+        (destructuring-bind (fname fwidth fshift) field
+          (declare (ignore fname))
+          (let ((variants (if variant-forms
+                               (mapcar (lambda (f) (%parse-word-variant-form f field-name)) variant-forms)
+                               (list (make-word-variant :kind :inline :bias 0
+                                                         :range (cons 0 (1- (ash 1 fwidth))))))))
+            (%check-word-variants variants fwidth field-name)
+            (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
+                                     :variants variants)))))))
+
+(defun %parse-word-operand-subclauses (mode subclauses machine name mode-name machine-name)
+  "Like %PARSE-OPERAND-SUBCLAUSES but for a word-encoded machine -- one
+WORD-OPERAND-SPEC per MODE hole, in hole order."
+  (let ((holes (%mode-hole-count mode)) (n (length subclauses)))
+    (unless (= holes n)
+      (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
+but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
+per hole" machine name mode-name holes n (= n 1))))
+  (let ((specs (mapcar (lambda (s) (%parse-word-operand-subclause s machine-name)) subclauses)))
+    (%check-operand-names (mapcar #'word-operand-spec-name specs) machine name mode-name)
+    specs))
+
+(defun %word-variant-extra-p (v) (eq (word-variant-kind v) :extra-word))
+
+(defun %expand-word-combos (specs)
+  "Cartesian product of SPECS' (WORD-OPERAND-SPEC) variant lists -- one combo
+per element, each a list of (SPEC . VARIANT) pairs parallel to SPECS. Ordered
+by ascending total :EXTRA-WORD count, ties in declaration order -- matching
+%CHOOSE-VARIANT's documented \"narrower before wider\" convention
+(assembler.lisp) so an all-inline combo is always tried before one needing an
+extra word."
+  (let ((combos (list nil)))
+    (dolist (spec specs)
+      (setf combos
+            (loop for combo in combos
+                  append (loop for variant in (word-operand-spec-variants spec)
+                               collect (append combo (list (cons spec variant)))))))
+    (stable-sort combos #'<
+                 :key (lambda (combo) (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))))
+
+(defun %word-field-choice-form (spec variant)
+  `(make-word-field-choice
+    :width ,(word-operand-spec-width spec)
+    :shift ,(word-operand-spec-shift spec)
+    :kind ,(word-variant-kind variant)
+    :bias ,(word-variant-bias variant)
+    :range ',(word-variant-range variant)
+    :escape ,(word-variant-escape variant)))
+
+(defun %word-alternatives-form (specs)
+  "One (quoted) form building SPECS' full per-operand variant menu -- shared
+by every sibling combo of one word-field operand list, since decode
+(emulator.lisp's %STEP-WORD-MACHINE) needs every alternative, not just
+whichever combo happens to occupy the opcode table, to tell an inline value
+from an escaped extra-word marker apart by comparing against the actually
+fetched bits."
+  `(list ,@(mapcar (lambda (spec)
+                      `(list ,@(mapcar (lambda (variant) (%word-field-choice-form spec variant))
+                                       (word-operand-spec-variants spec))))
+                    specs)))
+
+(defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms)
+  "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
+. VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order)."
+  (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
+         (word-fields-form `(list ,@(mapcar (lambda (p) (%word-field-choice-form (car p) (cdr p))) combo)))
+         (extra-words (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))
+    `(make-instruction-descriptor
+      :name ,(string-upcase (symbol-name name))
+      :machine ',machine
+      :mode ,mode-form
+      :opcode ,opcode
+      :operand-widths nil
+      :operand-names ',operand-names
+      :word-fields ,word-fields-form
+      :word-alternatives ,alternatives-form
+      :extra-words ,extra-words
+      :cycles ,cycles
+      :semantics-fn ,(%semantics-fn-form semantics-forms machine operand-names))))
+
+(defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
+                                     cycles semantics-forms)
+  "Every INSTRUCTION-DESCRIPTOR form for one word-encoded addressing-mode
+use -- one per %EXPAND-WORD-COMBOS combo, or a single no-operand descriptor
+if OPERAND-SUBCLAUSES is empty and MODE has no holes. Unlike the byte-encoded
+multi-mode form, a single-hole MODE may NOT omit (operand ...) here even
+though the mode itself has only one hole to fill -- there is no
+\"default field\" a word-encoded operand could fall back to the way a
+byte-encoded one falls back to %MODE-OPERAND-WIDTH, so silently accepting
+zero subclauses against a mode with holes would drop that hole's value on
+the floor instead of encoding it anywhere."
+  (when (and (null operand-subclauses) (plusp (%mode-hole-count mode)))
+    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
+(operand ...) subclause was given -- a word-encoded operand has no default ~
+field to fall back to" machine name mode-name (%mode-hole-count mode)))
+  (if (null operand-subclauses)
+      (list `(make-instruction-descriptor
+              :name ,(string-upcase (symbol-name name))
+              :machine ',machine
+              :mode ,mode-form
+              :opcode ,opcode
+              :operand-widths nil
+              :operand-names nil
+              :word-fields nil
+              :word-alternatives nil
+              :extra-words 0
+              :cycles ,cycles
+              :semantics-fn ,(%semantics-fn-form semantics-forms machine nil)))
+      (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name))
+             (alternatives-form (%word-alternatives-form specs))
+             (combos (%expand-word-combos specs)))
+        (mapcar (lambda (combo)
+                  (%word-descriptor-form machine name mode-form opcode alternatives-form combo
+                                          cycles semantics-forms))
+                combos))))
+
+(defun %check-word-opcode (machine name opcode)
+  "Signal an error if OPCODE doesn't fit MACHINE's instruction-word OPCODE
+field. Registration keys the opcode table by this *declared* value
+(REGISTER-INSTRUCTION-VARIANTS!), while %ENCODE-WORD-INSTRUCTION writes it
+through WRAP-VALUE against the field's own width -- without this check, an
+opcode too wide for its field would register under one value but encode (and
+so decode) as a different, silently wrapped one, an ambiguity of exactly the
+kind %CHECK-WORD-VARIANTS already guards against for operand fields."
+  (when (%word-machine-p machine)
+    (let ((width (second (instruction-word-field (machine-descriptor-instruction-word
+                                                    (find-machine-descriptor machine))
+                                                  'opcode))))
+      (when (or (minusp opcode) (>= opcode (ash 1 width)))
+        (error "DEFINSTRUCTION ~S ~S: opcode ~D does not fit the ~D-bit OPCODE field"
+               machine name opcode width)))))
+
+(defun %check-word-relative (mode machine name machine-name)
+  "A :RELATIVE mode's offset arithmetic (%RELATIVE-OFFSET, assembler.lisp)
+assumes a byte operand width -- rejected outright on a word-encoded machine
+rather than silently computing nonsense; a follow-up ticket tracks lifting
+this once relative branching on a word machine has a design."
+  (when (and (mode-descriptor-relativep mode) (%word-machine-p machine-name))
+    (error "DEFINSTRUCTION ~S ~S: a :RELATIVE addressing mode is not yet ~
+supported on word-encoded machine ~S" machine name machine-name)))
+
+(defun %parse-mode-variant-clause-forms (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
-(MODE-NAME (opcode n) (operand ...)* [(semantics form...)]). Returns a
-%DESCRIPTOR-FORM for this variant."
+(MODE-NAME (opcode n) (operand ...)* [(semantics form...)]). Returns a list
+of INSTRUCTION-DESCRIPTOR forms for this variant -- more than one only on a
+word-encoded machine (#20), where a variant-bearing operand field expands
+into several descriptors sharing this one mode/opcode."
   (destructuring-bind (mode-sym &rest body) variant-form
     (let* ((mode (find-mode-descriptor mode-sym))
            (opcode-subclause (find 'opcode body :key #'first))
            (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand)) body))
            (semantics-subclause (find 'semantics body :key #'first)))
       (%check-relative-mode-holes mode machine name)
+      (%check-word-relative mode machine name machine)
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
-      (multiple-value-bind (operand-widths operand-names)
-          (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
-        (let ((opcode (second opcode-subclause))
-              (semantics-forms (cond
-                                  (semantics-subclause (rest semantics-subclause))
-                                  (default-semantics-forms default-semantics-forms)
-                                  (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
+      (let ((opcode (second opcode-subclause))
+            (semantics-forms (cond
+                                (semantics-subclause (rest semantics-subclause))
+                                (default-semantics-forms default-semantics-forms)
+                                (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
 (semantics ...) of its own and no shared top-level (semantics ...) default"
-                                            machine name mode-sym)))))
-          (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                             opcode operand-widths operand-names cycles-form semantics-forms))))))
+                                          machine name mode-sym)))))
+        (%check-word-opcode machine name opcode)
+        (if (%word-machine-p machine)
+            (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                          opcode operand-subclauses mode mode-sym machine
+                                          cycles-form semantics-forms)
+            (multiple-value-bind (operand-widths operand-names)
+                (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
+              (list (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                       opcode operand-widths operand-names cycles-form semantics-forms))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -466,7 +788,29 @@ MODE names are resolved against DEFMODE's registry (mode.lisp) at
 macroexpansion time, like MACHINE is resolved against DEFMACHINE's.
 Registers the resulting variant(s) on MACHINE's descriptor, by mnemonic and
 by opcode, inside an EVAL-WHEN so they are available at macroexpansion time
-like DEFMACHINE itself."
+like DEFMACHINE itself.
+
+On a machine declaring an (instruction-word ...) clause (machine.lisp, #20),
+every (operand ...) subclause above instead reads
+  (operand [NAME] :field FIELD-NAME
+    [(variant (range LO HI) inline [:bias N])
+     (variant :else (extra-word :escape N))]*)
+binding NAME's value to instruction-word field FIELD-NAME rather than to a
+byte-width encoding. With no (variant ...) forms, the field holds the value
+directly (biased by 0) over its full unsigned range. With one or more, a
+value in an INLINE variant's (biased) range packs straight into the field; an
+:ELSE (extra-word :escape N) variant instead writes N into the field and the
+value into its own following word. Declaring this makes DEFINSTRUCTION
+register one INSTRUCTION-DESCRIPTOR per combination of variants across all of
+a mode's fields, sharing one mnemonic, mode, and opcode value -- the
+assembler's existing relaxation (%CHOOSE-VARIANT, assembler.lisp) picks
+between them per statement exactly like it picks between addressing-mode
+widths, all-inline tried before any needing an extra word. Every variant of a
+field's range and every :ELSE escape value must fit FIELD-NAME's declared bit
+width, and an escape value may not fall inside any inline variant's biased
+range (that ambiguity would make the field undecodable) -- both checked here,
+at DEFINSTRUCTION time. A :RELATIVE addressing mode is not supported on a
+word-encoded machine."
   (let (modes-clause encoding-clause semantics-clause cycles-clause)
     (dolist (clause clauses)
       (case (first clause)
@@ -492,6 +836,7 @@ like DEFMACHINE itself."
            (when operand-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
 but no (modes ...) clause declares an addressing mode" machine name))
+           (%check-word-opcode machine name (second opcode-subclause))
            `(eval-when (:compile-toplevel :load-toplevel :execute)
               (register-instruction-variants!
                ',machine
@@ -511,9 +856,9 @@ at least two modes -- use (modes MODE) with (encoding ...) for just one" machine
            `(eval-when (:compile-toplevel :load-toplevel :execute)
               (register-instruction-variants!
                ',machine
-               (list ,@(mapcar (lambda (variant-form)
-                                  (%parse-mode-variant-clause variant-form machine name
-                                                              default-semantics-forms cycles-form))
+               (list ,@(mapcan (lambda (variant-form)
+                                  (%parse-mode-variant-clause-forms variant-form machine name
+                                                                     default-semantics-forms cycles-form))
                                 mode-forms)))
               ',name)))
         ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
@@ -533,22 +878,33 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                 (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
                                                     (rest encoding-clause))))
            (%check-relative-mode-holes mode machine name)
+           (%check-word-relative mode machine name machine)
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                     machine name))
            (unless operand-subclauses
              (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
 (encoding ...) has no (operand ...) subclause" machine name mode-sym))
-           (multiple-value-bind (operand-widths operand-names)
-               (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
-             `(eval-when (:compile-toplevel :load-toplevel :execute)
-                (register-instruction-variants!
-                 ',machine
-                 (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                           (second opcode-subclause)
-                                           operand-widths operand-names
-                                           cycles-form (rest semantics-clause))))
-                ',name))))))))
+           (%check-word-opcode machine name (second opcode-subclause))
+           (if (%word-machine-p machine)
+               `(eval-when (:compile-toplevel :load-toplevel :execute)
+                  (register-instruction-variants!
+                   ',machine
+                   (list ,@(%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                         (second opcode-subclause) operand-subclauses
+                                                         mode mode-sym machine
+                                                         cycles-form (rest semantics-clause))))
+                  ',name)
+               (multiple-value-bind (operand-widths operand-names)
+                   (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
+                 `(eval-when (:compile-toplevel :load-toplevel :execute)
+                    (register-instruction-variants!
+                     ',machine
+                     (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                               (second opcode-subclause)
+                                               operand-widths operand-names
+                                               cycles-form (rest semantics-clause))))
+                    ',name)))))))))
 
 ;;; Encoding / execution
 
@@ -561,20 +917,53 @@ below and the assembler's .BYTE/.WORD directive encoding (assembler.lisp,
 they lay bytes down."
   (loop for i below width collect (wrap-value (ash value (* -8 i)) 8)))
 
+(defun %encode-word-instruction (descriptor layout values)
+  "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode and
+each operand's chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES)
+into one LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
+(%ENCODE-VALUE-BYTES) followed by each :EXTRA-WORD operand's own value, also
+little-endian, in operand declaration order."
+  (let ((word 0) extra-word-values)
+    (destructuring-bind (opcode-width opcode-shift)
+        (rest (instruction-word-field layout 'opcode))
+      (setf word (ash (wrap-value (instruction-descriptor-opcode descriptor) opcode-width) opcode-shift)))
+    (loop for choice in (instruction-descriptor-word-fields descriptor)
+          for value in values
+          do (ecase (word-field-choice-kind choice)
+               (:inline
+                (setf word (logior word (ash (wrap-value (+ value (word-field-choice-bias choice))
+                                                          (word-field-choice-width choice))
+                                              (word-field-choice-shift choice)))))
+               (:extra-word
+                (setf word (logior word (ash (word-field-choice-escape choice)
+                                              (word-field-choice-shift choice))))
+                (cl:push value extra-word-values))))
+    (append (%encode-value-bytes word (instruction-word-layout-width-bytes layout))
+            (loop for value in (nreverse extra-word-values)
+                  append (%encode-value-bytes value (instruction-word-layout-width-bytes layout))))))
+
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
-already-evaluated integers, one per DESCRIPTOR's OPERAND-WIDTHS entry, in
-the same order -- NIL for a no-operand instruction) into a list of
-(unsigned-byte 8) bytes: the opcode, followed by each value's bytes
-little-endian in turn. VALUES shorter than OPERAND-WIDTHS silently encodes
-fewer fields than DESCRIPTOR declares, rather than erroring -- every caller
-in this codebase (%ENCODE, assembler.lisp) always supplies exactly one
-value per width, so this is unreachable internally, but a caller of this
-exported function on its own should supply the same."
-  (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
-        (loop for value in values
-              for width in (instruction-descriptor-operand-widths descriptor)
-              append (%encode-value-bytes value width))))
+already-evaluated integers, one per operand encoding field, in the same
+order -- NIL for a no-operand instruction) into a list of (unsigned-byte 8)
+bytes. On an ordinary byte-encoded machine: the opcode, followed by each
+value's bytes little-endian in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a
+word-encoded machine (#20, INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one
+instruction word packing the opcode and every inline operand's biased value
+or extra-word escape by bit field, little-endian, followed by each
+extra-word operand's own value, also little-endian, in declaration order
+(%ENCODE-WORD-INSTRUCTION). VALUES shorter than DESCRIPTOR declares silently
+encodes fewer fields, rather than erroring -- every caller in this codebase
+(%ENCODE, assembler.lisp) always supplies exactly one value per field, so
+this is unreachable internally, but a caller of this exported function on
+its own should supply the same."
+  (let ((layout (instruction-descriptor-word-layout descriptor)))
+    (if layout
+        (%encode-word-instruction descriptor layout values)
+        (cons (wrap-value (instruction-descriptor-opcode descriptor) 8)
+              (loop for value in values
+                    for width in (instruction-descriptor-operand-widths descriptor)
+                    append (%encode-value-bytes value width))))))
 
 (defun execute-instruction (descriptor machine values)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing

@@ -285,13 +285,109 @@ and turning it into bytes or an executed effect:
   [Assembler](assembler.md) calls with its completed label table;
   `eval-expr-constant` is just `eval-expr` with `symbols` omitted.
 - `(encode-instruction descriptor values)` returns a list of
-  `(unsigned-byte 8)` bytes (opcode, then each operand field's bytes
-  little-endian in turn) for one use of instruction `descriptor` with
-  operand field values `values` — a list, one per `descriptor`'s
-  `operand-widths` entry, or `nil` for a no-operand instruction.
+  `(unsigned-byte 8)` bytes for one use of instruction `descriptor` with
+  operand field values `values` (a list, one per operand encoding field, or
+  `nil` for a no-operand instruction): on an ordinary byte-encoded machine,
+  the opcode followed by each field's bytes little-endian in turn; on a
+  word-encoded one (#20), the instruction word (opcode and every field
+  packed in by bit shift) followed by each `:extra-word` field's own value,
+  also little-endian.
+- `(instruction-descriptor-size descriptor)` — total encoded bytes for one
+  use of `descriptor`, covering both encoding schemes: `1 +` operand byte
+  widths on a byte-encoded machine, or the instruction-word's own byte
+  width times `1 +` its extra-word count on a word-encoded one. This is what
+  the assembler's layout/relaxation and the emulator's fetch loop use
+  instead of assuming a one-byte opcode.
 - `(execute-instruction descriptor machine values)` runs `descriptor`'s
   semantics against a live `machine`, the same list `values` bound as
   `operand` (and any named fields) in the semantics body.
+
+## Word-encoded instructions (#20)
+
+Everything above assumes a byte-encoded machine (opcode byte + fixed-width
+operand bytes). A machine declaring an `instruction-word` clause (see
+[Machine model](machine-model.md)) instead encodes one instruction as a
+single fixed-width word split into named bit fields, and `(operand ...)`
+reads differently:
+
+```lisp
+(operand [NAME] :field FIELD-NAME
+  [(variant (range LO HI) inline [:bias N])
+   (variant :else (extra-word :escape N))]*)
+```
+
+`NAME` binds as before; `FIELD-NAME` names one of the machine's declared
+`instruction-word` fields instead of giving a byte width. With no
+`(variant ...)` forms at all, the field just holds the value directly
+(biased by 0) over its own full unsigned range — the word-encoded
+equivalent of `(operand :mode)`'s implicit default. With one or more:
+
+- `(variant (range LO HI) inline [:bias N])` — a value in `LO..HI` (before
+  biasing) packs straight into the field as `value + N` (default bias 0).
+  `:bias` is what lets a small *negative* value (DCPU-16's own `-1..30`) pack
+  into a field with no sign bit of its own — `-1` biased by `+1` is `0`,
+  decoded back by subtracting the same bias.
+- `(variant :else (extra-word :escape N))` — the fallback: instead of
+  packing the value, the field holds the literal `N` and the real value
+  follows in its own word, immediately after the instruction word.
+
+```lisp
+(defmachine wordfoo
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(defmode wimm "#" expr)
+
+(definstruction wordfoo seta
+  (modes wimm)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff))))
+  (semantics (set! a operand)))
+```
+
+Declaring this expands `seta` into **two** `instruction-descriptor`s sharing
+one mnemonic, mode, and opcode value — one all-inline, one needing an extra
+word — the same way a multi-mode `(modes (MODE ...) ...)` clause expands
+into one descriptor per mode. Choosing between them per statement is
+`%choose-variant`'s job (see [Assembler](assembler.md#choosing-a-mode)):
+exactly the same syntax → floor → value filter pipeline that picks between
+two addressing-mode widths, generalized to pick between extra-word counts
+instead, all-inline tried before any variant needing an extra word.
+
+Both a variant's biased inline range and any `:else` escape value must fit
+`FIELD-NAME`'s declared bit width, and an escape value may never fall inside
+an inline variant's biased range — that ambiguity would leave a decoder
+unable to tell a genuine inline value from the escape marker apart reading
+the same raw bits. Both are checked at `definstruction`'s macroexpansion
+time, not left as an encode- or decode-time surprise. The `opcode` value
+itself is checked the same way, against the `opcode` field's own width.
+
+A `:relative` addressing mode is not supported on a word-encoded machine —
+its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
+assumes a byte operand width. A word-encoded field also has no `:signed`
+mode of its own to sign-extend on decode the way a byte-encoded operand
+does — a negative inline value's sign is carried entirely by its variant's
+`:bias`, decoded back by subtracting the same bias, not by two's-complement
+reinterpretation.
+
+Unlike the byte-encoded multi-mode form, a single-hole mode may **not** omit
+`(operand ...)` here even though the mode itself has only one hole — there
+is no "default field" a word-encoded operand could fall back to the way a
+byte-encoded one falls back to the machine's address width, so an omitted
+subclause against a mode with holes is an error rather than silently
+dropping that hole's value.
+
+See [`examples/word.lisp`](../examples/word.lisp) for a complete machine
+assembled and run end to end, both packing a value inline and escaping one
+to its own extra word.
 
 ## Scope
 

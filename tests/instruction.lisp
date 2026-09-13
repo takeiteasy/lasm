@@ -477,3 +477,156 @@
     (setf (flag m 'z) nil)
     (execute-instruction bne m (list #x2000))
     (fiveam:is (= #x2000 (sref m 'pc)))))   ; branch taken
+
+;;; Word-encoded instructions (#20, M4) -- bitfield/variant operand encoding
+;;; on a machine declaring an (instruction-word ...) layout, DCPU-16-shaped.
+;;; 16-bit word: a 4-bit OPCODE field, a 2-bit DST field, and a 10-bit SRC
+;;; field an operand can pack into inline (a small biased range) or escape
+;;; out of into its own following word.
+
+(defmachine word-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(defmode word-imm "#" expr)
+(defmode word-abs expr)
+
+(definstruction word-test-machine set
+  (modes word-imm)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff))))
+  (semantics (set! a operand)))
+
+(definstruction word-test-machine hlt
+  (encoding (opcode 2))
+  (semantics (trap :halt)))
+
+;;; instruction-word layout parsing (machine.lisp)
+
+(fiveam:test instruction-word-clause-requires-width
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine
+             (instruction-word (field opcode 4))))))
+
+(fiveam:test instruction-word-clause-requires-whole-byte-width
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine
+             (instruction-word :width 12 (field opcode 12))))))
+
+(fiveam:test instruction-word-clause-requires-opcode-field
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine
+             (instruction-word :width 16 (field a 16))))))
+
+(fiveam:test instruction-word-clause-rejects-duplicate-field-names
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine
+             (instruction-word :width 16 (field opcode 8) (field opcode 8))))))
+
+(fiveam:test instruction-word-clause-field-widths-must-sum-to-word-width
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-machine
+             (instruction-word :width 16 (field opcode 4) (field a 4))))))
+
+(fiveam:test instruction-word-clause-fields-are-msb-first
+  (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor 'word-test-machine))))
+    (fiveam:is (= 16 (instruction-word-layout-width layout)))
+    (fiveam:is (= 2 (instruction-word-layout-width-bytes layout)))
+    (fiveam:is (equal '(opcode 4 12) (instruction-word-field layout 'opcode)))
+    (fiveam:is (equal '(dst 2 10) (instruction-word-field layout 'dst)))
+    (fiveam:is (equal '(src 10 0) (instruction-word-field layout 'src)))))
+
+;;; Variant expansion / registration
+
+(fiveam:test word-instruction-expands-into-one-descriptor-per-variant
+  (let ((variants (find-instruction-variants 'word-test-machine "SET")))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (equal '(0 1) (mapcar #'instruction-descriptor-extra-words variants)))
+    (fiveam:is (every (lambda (d) (= 1 (instruction-descriptor-opcode d))) variants))))
+
+(fiveam:test word-instruction-no-operand-descriptor
+  (let ((hlt (find-instruction 'word-test-machine 'hlt)))
+    (fiveam:is (null (instruction-descriptor-word-fields hlt)))
+    (fiveam:is (= 0 (instruction-descriptor-extra-words hlt)))))
+
+;;; Decodability checks (#20's own ambiguity, %CHECK-WORD-VARIANTS)
+
+(fiveam:test word-variant-inline-range-overflowing-field-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 3)
+                       (operand value :field src
+                         (variant (range 0 2000) inline)
+                         (variant :else (extra-word :escape #x3ff))))
+             (semantics nil)))))
+
+(fiveam:test word-variant-escape-overflowing-field-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 3)
+                       (operand value :field src
+                         (variant (range 0 10) inline)
+                         (variant :else (extra-word :escape 2000))))
+             (semantics nil)))))
+
+(fiveam:test word-variant-escape-colliding-with-inline-range-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 3)
+                       (operand value :field src
+                         (variant (range 0 30) inline)
+                         (variant :else (extra-word :escape 30))))
+             (semantics nil)))))
+
+(fiveam:test word-opcode-overflowing-opcode-field-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (encoding (opcode 16))
+             (semantics nil)))))
+
+(fiveam:test word-relative-mode-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes relative)
+             (encoding (opcode 3) (operand value :field src))
+             (semantics nil)))))
+
+(fiveam:test word-multi-mode-single-hole-without-operand-subclause-signals-error
+  ;; unlike the byte-encoded multi-mode form, a word-encoded single-hole mode
+  ;; still requires an explicit (operand ...) subclause -- there is no
+  ;; default field to fall back to
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes (word-imm (opcode 3)) (word-abs (opcode 4) (operand value :field src)))
+             (semantics nil)))))
+
+;;; encode-instruction (word path)
+
+(fiveam:test encode-word-instruction-inline-variant
+  (let ((inline-d (first (find-instruction-variants 'word-test-machine "SET"))))
+    ;; value 5, biased by 1 -> field value 6; word = (1 << 12) | 6 = #x1006,
+    ;; little-endian: low byte #x06, high byte #x10
+    (fiveam:is (equal (list #x06 #x10) (encode-instruction inline-d (list 5))))))
+
+(fiveam:test encode-word-instruction-extra-word-variant
+  (let ((extra-d (second (find-instruction-variants 'word-test-machine "SET"))))
+    ;; escape #x3ff in SRC -> word = (1 << 12) | #x3ff = #x13ff, followed by
+    ;; the value's own little-endian word
+    (fiveam:is (equal (list #xff #x13 #xe8 #x03) (encode-instruction extra-d (list 1000))))))
+
+(fiveam:test encode-word-instruction-no-operand
+  (let ((hlt (find-instruction 'word-test-machine 'hlt)))
+    ;; word = (2 << 12) = #x2000
+    (fiveam:is (equal (list #x00 #x20) (encode-instruction hlt nil)))))

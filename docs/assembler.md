@@ -64,10 +64,13 @@ reaches `assemble-statements` after parsing.
    see [Directives](directives.md)) and, if it isn't one, as its mnemonic's
    addressing-mode variants (`find-instruction-variants`,
    [Instructions](instructions.md)), which **chooses one** (see "Choosing a
-   mode" below) and advances the counter by `1 +` the sum of that variant's
-   operand field widths (its `instruction-descriptor-total-operand-width` —
-   a variant may wire up more than one field, one per hole of its mode; see
-   "Multi-operand instructions" below). Directive lookup has to come first:
+   mode" below) and advances the counter by that variant's encoded size
+   (`instruction-descriptor-size` — `1 +` the sum of its operand field
+   widths on an ordinary byte-encoded machine, or a word-encoded one's own
+   word size times `1 +` its extra-word count, #20; see "Word-encoded
+   instructions" below). A variant may wire up more than one field, one per
+   hole of its mode; see "Multi-operand instructions" below. Directive lookup
+   has to come first:
    `find-instruction-variants` signals on an unregistered name, so it can't
    be tried first and fallen back from. This is what resolves *forward*
    references (`jmp end` before `end:` appears) — a caller doesn't have to
@@ -107,12 +110,12 @@ declared in `(modes ...)`:
    statement's operand tokens (`try-match-operand-mode`,
    [Addressing modes](modes.md)) — a no-operand variant's "pattern" is
    simply an empty token run. No match at all is an `assembly-error`.
-2. **Floor.** Drop any variant narrower than this statement's current floor
-   — the total operand width it committed to on an earlier pass (0 on the
-   first pass, when nothing has committed to anything yet). This is the
-   sticky-widening rule: once a statement has chosen a width, it is never
-   offered a narrower one again, which is what keeps the pass-to-pass width
-   vector monotone and bounds the number of passes.
+2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
+   than this statement's current floor — the size it committed to on an
+   earlier pass (0 on the first pass, when nothing has committed to anything
+   yet). This is the sticky-widening rule: once a statement has chosen a
+   size, it is never offered a smaller one again, which is what keeps the
+   pass-to-pass size vector monotone and bounds the number of passes.
 3. **Value**, checked independently for each syntax-and-floor-matching
    candidate — candidates of one mnemonic can have different hole counts
    (e.g. a two-register mode alongside a one-immediate mode), so whether a
@@ -142,6 +145,13 @@ declared in `(modes ...)`:
      of the same width. Only `relative` errors instead of falling back at
      encode time (see "PC-relative offsets" below); a `:signed` operand that
      doesn't fit any candidate falls back and wraps like any other mode.
+   - A **word-encoded** candidate (#20, `instruction-descriptor-word-fields`
+     non-`nil` — see "Word-encoded instructions" below) fits by a different
+     rule entirely: each hole's value must fall inside that candidate's own
+     declared `(range LO HI)` for an inline field, while an `extra-word`
+     field always fits (any value spills into its own word) — `operand-
+     widths` is `nil` for these descriptors, so none of the byte-width
+     branches above apply.
    - If **no** candidate fits — `ldx #300` on a one-byte `immediate` — fall
      back to the **widest** syntax-and-floor-matching candidate (by total
      operand width) and let `encode-instruction`'s existing `wrap-value`
@@ -225,6 +235,41 @@ a later hole, not just the first — and hands the whole list of values to
 mov $20, target   ; DST ($20) and SRC (target's resolved address) both
 target: nop       ; encode, little-endian, one after the other
 ```
+
+## Word-encoded instructions (#20)
+
+A machine declaring an `instruction-word` clause ([Machine
+model](machine-model.md)) encodes one instruction as a single fixed-width
+word rather than an opcode byte plus operand bytes — see [Instructions,
+"Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
+for how `definstruction` declares it. Sizing and relaxation still go through
+the same `%choose-variant` pipeline described above, generalized via
+`instruction-descriptor-size` instead of assuming a byte opcode:
+
+- A variant-bearing operand field expands `definstruction` into several
+  `instruction-descriptor`s sharing one mnemonic, mode, and opcode
+  value — one all-inline, one (or more) needing an extra word — ordered
+  all-inline first, exactly the "declare narrower modes before wider ones"
+  convention above, generalized from addressing-mode width to extra-word
+  count.
+- The value filter's word-encoded branch (above) checks each field's value
+  against its own declared inline range rather than a byte width; an
+  `extra-word` field always fits, since any value can spill into its own
+  word.
+- `instruction-descriptor-size` — a word-encoded machine's own word byte
+  width times `1 +` its chosen variant's extra-word count — replaces `1 +
+  total-operand-width` everywhere layout and relative-offset arithmetic used
+  to assume a byte opcode.
+- A `:relative` addressing mode is rejected at `definstruction` time on a
+  word-encoded machine (see [Instructions](instructions.md#word-encoded-instructions-20)),
+  so "PC-relative offsets" below never applies to one.
+
+`encode-instruction` packs the opcode and every inline field's (biased)
+value into one instruction word by bit shift, then appends each
+`extra-word` field's own value as a separate little-endian word — see
+[Instructions](instructions.md#operand-pipeline). See
+[`examples/word.lisp`](../examples/word.lisp) for a complete program
+assembled and run end to end.
 
 ## PC-relative offsets
 
