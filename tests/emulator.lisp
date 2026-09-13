@@ -341,6 +341,15 @@ loop:   dex
   (semantics (let ((b (pop ds)) (a (pop ds)))
                (push (wrap-value (- a b) 8) ds))))
 
+;; #57: STACK-TEST-MACHINE declares exactly one stack (DS), so its semantics
+;; can also use PUSH/POP's sole-stack default -- ADX is ADD via the design
+;; draft's own bare form, (push (+ (pop) (pop))), proving it compiles and
+;; runs against a real instruction rather than only a standalone WITH-MACHINE
+;; body.
+(definstruction stack-test-machine adx
+  (encoding (opcode #x08))
+  (semantics (push (wrap-value (+ (pop) (pop)) 8))))
+
 (definstruction stack-test-machine jz
   (modes relative)
   (encoding (opcode #x06) (operand :mode))
@@ -429,6 +438,23 @@ end:    hlt" :machine 'stack-test-machine)))
       ;; through: 4 setup + 5*(11 loop-body steps) + 1 final jz + 1 hlt.
       (fiveam:is (= 62 steps))
       (fiveam:is (= 15 (mref m 'ram #x1000)))
+      (fiveam:is (= 0 (stack-depth m 'ds))))))
+
+(fiveam:test stack-machine-implicit-stack-instruction
+  ;; #57: ADX's semantics use PUSH/POP with no stack name at all, resolving
+  ;; to STACK-TEST-MACHINE's sole stack DS -- commutative here, so operand
+  ;; order doesn't matter for the result (unlike SUB above).
+  (let* ((m (make-machine 'stack-test-machine))
+         (a (assemble "psh #2
+psh #5
+adx
+sto $2000
+hlt" :machine 'stack-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 5 steps))
+      (fiveam:is (= 7 (mref m 'ram #x2000)))
       (fiveam:is (= 0 (stack-depth m 'ds))))))
 
 ;; #51 finding: stack over/underflow are STORAGE-ERROR conditions

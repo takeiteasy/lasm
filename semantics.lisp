@@ -20,13 +20,19 @@ MACHINE-NAME. This is the piece DEFINSTRUCTION's (semantics ...) clause
 expands into (see instruction.lisp), since instruction semantics run against
 a machine instance the emulator already owns rather than a fresh one.
 
+PUSH/POP's STACK-NAME argument is optional: when omitted, it resolves to the
+machine's sole :stack element, mirroring emulator.lisp's %RESOLVE-MEMORY
+convention for the sole :memory element -- a machine declaring more than one
+stack (or none) signals an error at macroexpansion time, since the descriptor
+is already known here.
+
 Storage elements with :count > 1 (banked registers) are not bound here --
 symbol-macrolet can't express indexed access like (V 3); see the
 storage-element :count docstring in storage.lisp. This applies equally to
 instruction semantics expanded through this macro -- see the M1/M4 backlog
 ticket for indexed access."
   (let ((descriptor (find-machine-descriptor machine-name)))
-    (let (symbol-macros)
+    (let (symbol-macros stack-names)
       (dolist (element (machine-descriptor-elements descriptor))
         (case (storage-element-kind element)
           (:register
@@ -36,24 +42,38 @@ ticket for indexed access."
           (:flag
            (let ((name (storage-element-name element)))
              (cl:push `(,name (flag ,machine-var ',name)) symbol-macros)))
-          ;; :stack and :memory elements are accessed through STACK-PUSH/
-          ;; STACK-POP/MREF directly by name (as a quoted symbol), not bound
-          ;; as symbol-macros, since they take an explicit operand.
-          ((:stack :memory))))
-      `(symbol-macrolet ,(nreverse symbol-macros)
-         (macrolet ((set! (place value)
-                      `(setf ,place ,value))
-                    (push (value stack-name)
-                      `(stack-push ,',machine-var ',stack-name ,value))
-                    (pop (stack-name)
-                      `(stack-pop ,',machine-var ',stack-name))
-                    (set-flags! (&rest assignments)
-                      `(progn ,@(mapcar (lambda (a)
-                                           `(setf (flag ,',machine-var ',(first a)) ,(second a)))
-                                         assignments)))
-                    (trap (tag &optional data)
-                      `(error 'lasm-trap :tag ,tag :data ,data)))
-           ,@body)))))
+          (:stack (cl:push (storage-element-name element) stack-names))
+          ;; :memory elements are accessed through MREF directly by name (as
+          ;; a quoted symbol), not bound as a symbol-macro, since it takes an
+          ;; explicit address operand.
+          ((:memory))))
+      (setf stack-names (nreverse stack-names))
+      (let ((sole-stack (when (= (length stack-names) 1) (first stack-names)))
+            (stack-error (cond
+                           ((null stack-names)
+                            (format nil "PUSH/POP on machine ~S: no stack element declared"
+                                    machine-name))
+                           ((> (length stack-names) 1)
+                            (format nil "PUSH/POP on machine ~S: more than one stack element ~
+declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names)))))
+        `(symbol-macrolet ,(nreverse symbol-macros)
+           (macrolet ((set! (place value)
+                        `(setf ,place ,value))
+                      (push (value &optional (stack-name nil supplied-p))
+                        (let ((target (if supplied-p stack-name ',sole-stack)))
+                          (unless target (error ',stack-error))
+                          `(stack-push ,',machine-var ',target ,value)))
+                      (pop (&optional (stack-name nil supplied-p))
+                        (let ((target (if supplied-p stack-name ',sole-stack)))
+                          (unless target (error ',stack-error))
+                          `(stack-pop ,',machine-var ',target)))
+                      (set-flags! (&rest assignments)
+                        `(progn ,@(mapcar (lambda (a)
+                                             `(setf (flag ,',machine-var ',(first a)) ,(second a)))
+                                           assignments)))
+                      (trap (tag &optional data)
+                        `(error 'lasm-trap :tag ,tag :data ,data)))
+             ,@body))))))
 
 (defmacro with-machine ((machine-var machine-name) &body body)
   "Evaluate BODY with a fresh runtime MACHINE instance for MACHINE-NAME bound

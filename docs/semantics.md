@@ -20,15 +20,23 @@ evaluates `body` with:
   `(set! a (+ a 1))` and plain `a` both work). Banked registers (`:count >
   1`) are not bound this way — see [Machine model](machine-model.md).
 - the operators below, available as local macros for the extent of `body`.
-- stacks and memory accessed by name through the operators/accessors
-  directly (`push`/`pop` and `mref`), since they take an explicit operand.
+- memory accessed by name through the `mref` accessor, since it takes an
+  explicit address operand. Stacks are accessed through `push`/`pop` by
+  name too, though the name may be omitted on a single-stack machine — see
+  below.
 
 ## Operators
 
 - `(set! place value)` — `(setf place value)`. Works on any bound register/
   flag symbol, or any other `setf`-able place (e.g. `(mref m 'ram addr)`).
-- `(push value stack-name)` — push `value` onto the named stack.
-- `(pop stack-name)` — pop and return the top of the named stack.
+- `(push value &optional stack-name)` — push `value` onto the named stack.
+- `(pop &optional stack-name)` — pop and return the top of the named stack.
+
+When `stack-name` is omitted, it resolves to the machine's sole `stack`
+element, mirroring `emulator.lisp`'s `%resolve-memory` convention for the
+sole `memory` element. A machine declaring no stack, or more than one,
+signals an error when the `push`/`pop` form is macroexpanded (not merely
+when it runs) if the name is left out — name one explicitly in that case.
 - `(set-flags! (flag-name form)...)` — set each named flag to the result of
   evaluating `form`, e.g. `(set-flags! (c (> r 255)) (z (zero? a)))`.
 - `(trap tag &optional data)` — signal a `lasm-trap` condition carrying
@@ -58,11 +66,13 @@ list operations.
 The design draft ([`LASM-plan.md`](../LASM-plan.md) §3.2–3.3) shows `push`/
 `pop` taking no stack argument (`(push (+ (pop) (pop)))`), implying a single
 implicit stack, and a `flags` operator that collides with the `defmachine`
-clause of the same name. LASM's `push`/`pop` take an explicit stack name
-(since a machine can declare more than one stack), and the flag-setting
-operator is named `set-flags!` instead of `flags`. The draft is left
-unedited as a rough plan; this document reflects what's actually
-implemented.
+clause of the same name. For a single-stack machine, the draft's form
+compiles and runs as written — `push`/`pop`'s stack name is optional and
+defaults to the machine's sole stack. The remaining deviations: a machine
+declaring more than one stack still needs the name spelled out explicitly
+(there being no single stack to default to), and the flag-setting operator
+is named `set-flags!` instead of `flags`. The draft is left unedited as a
+rough plan; this document reflects what's actually implemented.
 
 ## `with-machine-bindings`
 
