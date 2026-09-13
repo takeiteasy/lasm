@@ -716,3 +716,95 @@
   ;; mask but fits 16 bits must round-trip unchanged.
   (let ((nop (find-instruction 'wordaddr-test-machine 'nop)))
     (fiveam:is (equal (list 0) (encode-instruction nop nil)))))
+
+;;; Non-uniform register widths + banked registers (#54, M4) -- CHIP8FOO
+;;; mirrors examples/chip8.lisp: an 8-bit banked V register (#13's REGREF)
+;;; and a 12-bit I register on the same machine, ordinary opcode-plus-
+;;; operand-cells encoding (not #20's INSTRUCTION-WORD).
+
+(defmachine chip8-test-machine
+  (register pc :width 12)
+  (register v :width 8 :count 16)
+  (register i :width 12)
+  (memory ram :width 8 :addr-width 12))
+
+(defmode chip8-v-imm "V" expr "," "#" expr)
+(defmode chip8-v-only "V" expr)
+
+(definstruction chip8-test-machine ldv
+  (modes chip8-v-imm)
+  (encoding (opcode 1) (operand x :width 1) (operand nn :width 1))
+  (semantics (set! (v x) nn)))
+
+(definstruction chip8-test-machine addv
+  (modes chip8-v-imm)
+  (encoding (opcode 2) (operand x :width 1) (operand nn :width 1))
+  (semantics (set! (v x) (wrap-value (+ (v x) nn) 8))))
+
+(definstruction chip8-test-machine ldi
+  (modes immediate)
+  (encoding (opcode 3) (operand :width 2))
+  (semantics (set! i operand)))
+
+(definstruction chip8-test-machine addi
+  (modes chip8-v-only)
+  (encoding (opcode 4) (operand x :width 1))
+  (semantics (set! i (wrap-value (+ i (v x)) 12))))
+
+(definstruction chip8-test-machine jp
+  (modes absolute)
+  (encoding (opcode 5) (operand :mode))
+  (semantics (set! pc operand)))
+
+(definstruction chip8-test-machine hlt
+  (encoding (opcode 6))
+  (semantics (trap :halt)))
+
+(fiveam:test chip8-ldv-writes-independent-bank-cells
+  (let ((m (make-machine 'chip8-test-machine))
+        (ldv (find-instruction 'chip8-test-machine 'ldv)))
+    (execute-instruction ldv m (list 0 10))
+    (execute-instruction ldv m (list 1 20))
+    (fiveam:is (= 10 (regref m 'v 0)))
+    (fiveam:is (= 20 (regref m 'v 1)))))
+
+(fiveam:test chip8-addv-wraps-at-v-own-8-bit-width
+  (let ((m (make-machine 'chip8-test-machine))
+        (ldv (find-instruction 'chip8-test-machine 'ldv))
+        (addv (find-instruction 'chip8-test-machine 'addv)))
+    (execute-instruction ldv m (list 0 250))
+    (execute-instruction addv m (list 0 10))
+    (fiveam:is (= 4 (regref m 'v 0)))))     ; 260 mod 256
+
+(fiveam:test chip8-addi-wraps-at-i-own-12-bit-width-not-v-8-bit
+  ;; The discriminating case: an 8-bit V source added into a 12-bit I
+  ;; destination must wrap at 12 bits, not 8.
+  (let ((m (make-machine 'chip8-test-machine))
+        (ldv (find-instruction 'chip8-test-machine 'ldv))
+        (ldi (find-instruction 'chip8-test-machine 'ldi))
+        (addi (find-instruction 'chip8-test-machine 'addi)))
+    (execute-instruction ldv m (list 1 5))
+    (execute-instruction ldi m (list 4094))
+    (execute-instruction addi m (list 1))
+    (fiveam:is (= 3 (sref m 'i)))))         ; 4099 mod 4096
+
+(fiveam:test chip8-machine-end-to-end
+  ;; Mirrors examples/chip8.lisp's *SOURCE* verbatim.
+  (let ((a (assemble "ldv V 0, #$fa
+ldv V 1, #5
+addv V 0, #10
+ldi #$ffe
+addi V 1
+jp skip
+ldv V 2, #99
+skip: hlt" :machine 'chip8-test-machine)))
+    (fiveam:is (= 21 (length (assembly-cells a))))
+    (let ((m (make-machine 'chip8-test-machine)))
+      (load-program m a)
+      (multiple-value-bind (reason steps) (run m)
+        (fiveam:is (eq :trap reason))
+        (fiveam:is (= 7 steps))
+        (fiveam:is (= 4 (regref m 'v 0)))
+        (fiveam:is (= 5 (regref m 'v 1)))
+        (fiveam:is (= 0 (regref m 'v 2)))
+        (fiveam:is (= 3 (sref m 'i)))))))

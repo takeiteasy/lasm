@@ -117,6 +117,41 @@ argument — sitting just underneath its own return address — with the
 model](machine-model.md) and [Addressing modes, "Stack-relative
 addressing"](modes.md#stack-relative-addressing).
 
+```sh
+sbcl --script examples/word.lisp
+```
+
+A machine (`wordfoo`) whose whole instruction is one fixed-width 16-bit
+word split into bit fields, rather than an opcode byte plus fixed-width
+operand bytes — `seta`/`setb`'s operand packs inline into a 10-bit field
+for a small value, or escapes to its own following word for a large one,
+picked by the same relaxation loop that already picks between addressing-
+mode widths — see [Instructions, "Word-encoded
+instructions"](instructions.md#word-encoded-instructions-20).
+
+```sh
+sbcl --script examples/wordaddr.lisp
+```
+
+A machine (`wordaddrfoo`) whose memory declares `:cell-width 16`, so its
+assembled output is a vector of 16-bit cells rather than 8-bit bytes and
+`.word` means two of the machine's own cells — the assembler/encoder
+pipeline typed to a machine's own memory cell width rather than fixed at 8
+bits — see [Machine model, "Cell width and the
+assembler"](machine-model.md#cell-width-and-the-assembler).
+
+```sh
+sbcl --script examples/chip8.lisp
+```
+
+M4's first validation case (LASM-plan.md §3.7): a CHIP8-shaped machine
+(`chip8foo`) with a banked 8-bit `V` register (16 elements) and a scalar
+12-bit `I` register sharing one machine — `addi`'s `I += V[x]` moves a
+value from an 8-bit source into a 12-bit destination, wrapping at 12 bits
+rather than 8. Banked registers are read/written by `regref` and bound in
+semantics bodies as `(v idx)` rather than a plain symbol — see [Machine
+model](machine-model.md) and [Semantics vocabulary](semantics.md).
+
 ## Run the tests
 
 ```sh

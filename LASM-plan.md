@@ -220,6 +220,18 @@ rather than a hard boundary.
   (memory RAM :width 8 :addr-width 12))
 ```
 
+Implemented: `:count > 1` declares a banked register, read/written by
+`regref`/`(setf regref)` at a run-time index and bound in semantics bodies
+as `(V idx)` rather than a plain symbol, since indexed access can't be a
+symbol-macro. See [docs/machine-model.md](docs/machine-model.md) and
+[docs/semantics.md](docs/semantics.md) for the accessor and binding form,
+and [`examples/chip8.lisp`](examples/chip8.lisp) for a complete CHIP8-shaped
+machine (banked 8-bit V, 12-bit I, ordinary opcode-plus-operand-cells
+encoding) end to end -- proving this section's non-uniform-width target
+without needing #3.8's instruction-word mechanism, since CHIP8's real
+opcode nibble layouts are themselves non-uniform per instruction and need a
+further, separate mechanism.
+
 ### 3.8 Word-addressed memory + variant encoding (DCPU-16-style)
 
 Implemented as two separate pieces, both now landed: the bitfield/variant
