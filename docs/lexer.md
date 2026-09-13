@@ -2,9 +2,9 @@
 
 `deflexer` declares a *parameterized* surface syntax: comment styles,
 number-literal prefixes, label suffix, local-label prefix, string delimiter,
-identifier character class, and line continuation. Different fantasy CPUs
-can each declare their own dialect rather than sharing one hard-coded
-assembly syntax.
+identifier character class, line continuation, and mode-suffix separator.
+Different fantasy CPUs can each declare their own dialect rather than
+sharing one hard-coded assembly syntax.
 
 ```lisp
 (deflexer sixtyfoo-syntax
@@ -14,7 +14,8 @@ assembly syntax.
   (local-label-prefix ".")
   (string-delim "\"")
   (ident-chars :alnum "_.")
-  (line-continuation "\\"))
+  (line-continuation "\\")
+  (mode-suffix-separator "."))
 ```
 
 `deflexer` registers a `lexer-descriptor` under `NAME`, retrievable with
@@ -49,6 +50,17 @@ their own for a conventional dialect.
 - `(line-continuation string)` — e.g. `"\\"`. A continuation sequence at
   end of line, followed by an optional newline, is consumed without
   producing a `:newline` token, joining the next line onto the current one.
+- `(mode-suffix-separator string)` — e.g. `"."` (the `default` lexer's
+  setting). Separates a mnemonic from a forced addressing-mode suffix (e.g.
+  the `.w` in `lda.w`; see [Addressing modes, "Forcing a mode with a
+  mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix), #40).
+  Every character of it must already be listed in `ident-chars`, the same
+  way `local-label-prefix` must be — otherwise `lda.w` would split into two
+  tokens at the lexer level and the parser would never see one run to split
+  a suffix off of; `deflexer` signals an error rather than let that surface
+  later as a baffling "no addressing mode matches this operand". A
+  `nil`/omitted clause disables mode-suffix syntax entirely — a dotted
+  mnemonic is then just an ordinary (if unusual) identifier.
 
 ## Tokens
 

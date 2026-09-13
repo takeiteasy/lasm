@@ -105,6 +105,24 @@ sta b"))))
     (lex-error (c)
       (fiveam:is (= 1 (lasm-syntax-error-line c))))))
 
+;;; MODE-SUFFIX-SEPARATOR (#40)
+
+(fiveam:test default-lexer-mode-suffix-separator-is-dot
+  (fiveam:is (string= "." (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor 'default)))))
+
+(fiveam:test mode-suffix-separator-not-in-ident-chars-signals-error
+  (fiveam:signals error
+    (eval '(deflexer bogus-suffix-separator-syntax
+             (number-formats (:dec :default))
+             (ident-chars :alnum "_")
+             (mode-suffix-separator "/")))))
+
+(fiveam:test mode-suffix-separator-defaults-to-nil
+  (deflexer no-mode-suffix-syntax
+    (number-formats (:dec :default))
+    (ident-chars :alnum "_"))
+  (fiveam:is (null (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor 'no-mode-suffix-syntax)))))
+
 (fiveam:test two-lexers-tokenize-same-source-differently
   ;; The point of DEFLEXER: a machine's own lexer changes how identical
   ;; source text tokenizes -- this is what "parameterized" actually buys.

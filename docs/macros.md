@@ -111,6 +111,30 @@ Auto-uniquifying a macro body's own local labels (so repeat invocations never
 collide even under one enclosing global label) is tracked as a follow-up
 ticket.
 
+## Forced addressing-mode suffix (#40)
+
+A mode suffix (see [Addressing modes, "Forcing a mode with a mnemonic
+suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)) is rejected on a
+macro **invocation** — `macro-error`, since a mode name has nothing coherent
+to force against a statement that expands to zero or more statements of its
+own:
+
+```lisp
+.macro loadx n
+    ldx #n
+.endm
+    loadx.w 10   ; macro-error: a mode suffix is not meaningful here
+```
+
+Written literally inside a macro **body**, a suffix survives substitution
+and forces its mode after expansion exactly as it would in ordinary code:
+
+```lisp
+.macro loada n
+    lda.w n      ; always ABSOLUTE, whatever the caller's argument resolves to
+.endm
+```
+
 ## Conditions
 
 `macro-error` (a subtype of `lasm-syntax-error`) covers every

@@ -88,6 +88,7 @@
    #:statement-label-localp
    #:statement-mnemonic
    #:statement-operands
+   #:statement-mode-suffix
    #:statement-line
    #:operand
    #:operand-p
@@ -141,6 +142,8 @@
    #:mode-descriptor-width
    #:mode-descriptor-relativep
    #:mode-descriptor-signedp
+   #:mode-descriptor-suffix
+   #:find-mode-by-suffix
    #:match-operand-mode
    #:try-match-operand-mode
 

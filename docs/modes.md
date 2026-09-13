@@ -9,22 +9,22 @@ own.
 
 ```lisp
 (defmode immediate   "#" expr        :width 1)
-(defmode zero-page   expr            :width 1)
-(defmode absolute    expr)
+(defmode zero-page   expr            :width 1 :suffix "z")
+(defmode absolute    expr                      :suffix "w")
 (defmode indexed-x   expr "," "X")
 (defmode indirect-y  "(" expr ")" "," "Y")
 (defmode relative    expr            :width 1 :relative t)
 ```
 
-`immediate`, `absolute`, and `relative` above are exactly the modes LASM
-ships built in (in `mode.lisp`) — there is no special-cased "M1 mode" table
-any more; every mode, built-in or user-declared, goes through the same
-`defmode`.
+`immediate`, `zero-page`, `absolute`, `indexed-x`, `indirect-y`, and
+`relative` above are exactly the modes LASM ships built in (in `mode.lisp`)
+— there is no special-cased "M1 mode" table any more; every mode, built-in
+or user-declared, goes through the same `defmode`.
 
 ## `defmode`
 
 ```lisp
-(defmode NAME pattern-element... [:width n] [:signed t] [:relative t])
+(defmode NAME pattern-element... [:width n] [:signed t] [:relative t] [:suffix "s"])
 ```
 
 `NAME` is a symbol, registered globally (like a lexer — see below).
@@ -40,6 +40,9 @@ this mode's operand as a PC-relative offset rather than an absolute value —
 see [PC-relative modes](#pc-relative-modes) below. `:relative t` **implies**
 `:signed t` (a branch offset can go either direction); passing `:signed nil`
 alongside `:relative t` is a contradiction and `defmode` signals an error.
+`:suffix "s"`, if given, lets a program force this mode on a per-statement
+basis via a mnemonic suffix (e.g. `lda.w`) — see [Forcing a mode with a
+mnemonic suffix](#forcing-a-mode-with-a-mnemonic-suffix) below.
 
 Registration happens inside an `eval-when`, like `defmachine` — a mode
 must be resolvable by `definstruction` at macroexpansion time, not only
@@ -142,6 +145,50 @@ any other mode once an address is available to compute the offset from (see
 [Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)). This only
 matters once a mnemonic declares `relative` alongside another mode on the
 same syntax.
+
+## Forcing a mode with a mnemonic suffix
+
+Relaxation ([Assembler, "Choosing a mode"](assembler.md#choosing-a-mode))
+picks the narrowest addressing-mode variant a label-bearing operand fits
+once its address is known — but sometimes a program wants a *specific* mode
+regardless of what the operand's value folds to: reserving room for a value
+that will grow, or matching a fixed layout another tool expects. A `:suffix`
+on `defmode` (#40) enables a gas-style mnemonic suffix for exactly this:
+
+```lisp
+lda.z target   ; force ZERO-PAGE, whatever TARGET resolves to
+lda.w target   ; force ABSOLUTE, whatever TARGET resolves to
+```
+
+Only `zero-page` (`"z"`) and `absolute` (`"w"`) ship with a suffix — they're
+the only pair of LASM's built-in modes that share operand syntax (a bare
+`expr`), and so the only pair relaxation ever has to choose between.
+`immediate`/`indexed-x`/`indirect-y`/`relative` are already syntactically
+unambiguous, so a suffix would buy them nothing; a user-declared mode that
+does share syntax with another (like a custom signed-immediate alongside an
+ordinary one) can declare its own via `:suffix`.
+
+The separator between a mnemonic and its suffix (the `.` above) is a lexer
+property, not hard-coded — see `mode-suffix-separator` in
+[Lexer](lexer.md#mode-suffix-separator). The parser splits a dotted
+mnemonic into a base mnemonic and a suffix at parse time, before the
+assembler ever sees it (`statement-mode-suffix`; see [Statement grammar &
+expression parser](parser.md)); `.byte`-style directive names, which begin
+with the separator, are left alone (there is no base to their left to
+split off).
+
+A forced statement bypasses relaxation's floor *and* value filters entirely
+— the chosen mode is exactly the one the suffix names, and an out-of-range
+value silently wraps at encode time via the same `wrap-value` an ordinary
+M1-style single-mode instruction always used (see [Assembler, "Choosing a
+mode"](assembler.md#choosing-a-mode) for the one exception: a forced
+`:relative` mode still range-checks and errors, since that check happens
+unconditionally at encode time, not as part of the value filter). Signals
+`assembly-error` if the suffix names no registered mode, if the mnemonic
+has no variant using that mode, or if the operand doesn't match that mode's
+syntax. A mode suffix is rejected on a directive statement and on a macro
+invocation (it's meaningless on either); it survives substitution when
+written literally inside a macro body.
 
 ## Matching
 

@@ -38,12 +38,22 @@
                ; the branch's own address at encode time (assembler.lisp).
                ; Implies SIGNEDP (below); a RELATIVE mode is always signed,
                ; since a branch offset can go either direction.
-    signedp))  ; T if this mode's operand is a signed quantity (#30, split off
+    signedp    ; T if this mode's operand is a signed quantity (#30, split off
                ; RELATIVE): the emulator sign-extends the fetched operand
                ; (emulator.lisp) before handing it to semantics, and the
                ; assembler's mode selector range-checks candidate values
                ; against the signed range rather than the unsigned one
                ; (assembler.lisp's %CHOOSE-VARIANT).
+    suffix)    ; string, or nil -- a gas-style mnemonic suffix (e.g. "w" for
+               ; ABSOLUTE, "z" for ZERO-PAGE, #40) a program can append to a
+               ; mnemonic (lda.w target) to force this mode regardless of
+               ; what the operand's value folds to, bypassing relaxation's
+               ; floor and value filters entirely (assembler.lisp's
+               ; %CHOOSE-VARIANT). Not every mode needs one -- only modes
+               ; that share operand syntax with another mode (so relaxation
+               ; has an actual choice to override) benefit from a suffix;
+               ; LASM's built-ins give one only to ZERO-PAGE/ABSOLUTE.
+  )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
 ;; (lexer.lisp) and *MACHINES* (storage.lisp). Unlike those two, this needs
@@ -60,6 +70,38 @@
 Signals an error if none is registered."
   (or (gethash name *modes*)
       (error "No addressing mode named ~S has been defined with DEFMODE" name)))
+
+;; Both wrapped in an EVAL-WHEN, like BUILD-MODE-DESCRIPTOR itself (below) --
+;; BUILD-MODE-DESCRIPTOR calls %CHECK-SUFFIX-COLLISION, which calls
+;; FIND-MODE-BY-SUFFIX, at :COMPILE-TOPLEVEL time for this same file's own
+;; built-in DEFMODE forms (bottom of this file), so a plain DEFUN (only
+;; guaranteed callable at load time) would be too late.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun find-mode-by-suffix (suffix)
+    "Look up the MODE-DESCRIPTOR whose :SUFFIX (a string, #40) equals SUFFIX
+case-insensitively, or NIL if none declares one. A linear scan over *MODES*
+rather than a second suffix -> descriptor table -- there are only a handful
+of modes registered at once, and a parallel table would need its own
+invalidation whenever a DEFMODE is redefined dropping (or changing) its
+suffix. Used by the assembler's forced-mode operand syntax (assembler.lisp's
+%CHOOSE-VARIANT) to resolve e.g. \"w\" in \"lda.w\" to ABSOLUTE."
+    (loop for mode being the hash-values of *modes*
+          when (and (mode-descriptor-suffix mode)
+                    (string-equal (mode-descriptor-suffix mode) suffix))
+            return mode))
+
+  (defun %check-suffix-collision (name suffix)
+    "Signal an error if SUFFIX (non-NIL) is already claimed by a mode other
+than NAME -- e.g. two DEFMODE forms both declaring :SUFFIX \"w\" would make
+FIND-MODE-BY-SUFFIX's lookup ambiguous. Compares by MODE-DESCRIPTOR-NAME,
+not object identity: DEFMODE re-registering the same NAME (a plain file
+reload, e.g. under ASDF) builds a fresh MODE-DESCRIPTOR struct each time, so
+an EQ check would spuriously reject a mode reclaiming its own suffix."
+    (when suffix
+      (let ((existing (find-mode-by-suffix suffix)))
+        (when (and existing (not (eq (mode-descriptor-name existing) name)))
+          (error "DEFMODE ~S: suffix ~S is already used by mode ~S"
+                 name suffix (mode-descriptor-name existing)))))))
 
 (defun %mode-hole-count (mode)
   (count :expr (mode-descriptor-pattern mode) :key #'first))
@@ -101,13 +143,15 @@ options start at the first keyword symbol; everything before it is pattern."
       (let ((pattern (%parse-mode-pattern pattern-elements)))
         (unless (find :expr pattern :key #'first)
           (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
-        (destructuring-bind (&key width relative signed) options
+        (destructuring-bind (&key width relative signed suffix) options
           (when (and relative (not (eq signed t)) (member :signed options))
             (error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
+          (%check-suffix-collision name suffix)
           (make-mode-descriptor :name name :pattern pattern :width width
                                  :relativep relative
-                                 :signedp (or relative signed)))))))
+                                 :signedp (or relative signed)
+                                 :suffix suffix))))))
 
 (defmacro defmode (name &body pattern)
   "Define an addressing mode named NAME matching PATTERN, a sequence of
@@ -115,10 +159,15 @@ string literals and the symbol EXPR (one per operand hole), optionally
 followed by :WIDTH n (a default operand byte width instructions using this
 mode may omit from their own encoding), :SIGNED t (this mode's operand is a
 signed quantity -- the emulator sign-extends it and the assembler
-range-checks candidate values against the signed range; #30), and/or
-:RELATIVE t (this mode's operand is a PC-relative offset rather than an
-absolute value -- see RELATIVE below and #23; implies :SIGNED t, so passing
-:SIGNED NIL alongside :RELATIVE T is an error). E.g.:
+range-checks candidate values against the signed range; #30), :RELATIVE t
+(this mode's operand is a PC-relative offset rather than an absolute value
+-- see RELATIVE below and #23; implies :SIGNED t, so passing :SIGNED NIL
+alongside :RELATIVE T is an error), and/or :SUFFIX \"s\" (a gas-style
+mnemonic suffix, e.g. \"w\"/\"z\" -- a program can append SEPARATOR ++ s to
+a mnemonic, e.g. \"lda.w\", to force this mode regardless of what the
+operand's value folds to, bypassing relaxation entirely; #40, see
+docs/modes.md). Signals an error if SUFFIX is already claimed by a
+different mode. E.g.:
 
   (defmode immediate  \"#\" expr        :width 1)
   (defmode zero-page  expr            :width 1)
@@ -197,8 +246,13 @@ unconsumed."
 ;;; exactly this purpose.
 
 (defmode immediate "#" expr :width 1)
-(defmode zero-page expr :width 1)
-(defmode absolute expr)
+;; ZERO-PAGE/ABSOLUTE (#40): the only two built-in modes that share operand
+;; syntax (a bare expr) and so are the only pair relaxation ever has to pick
+;; between -- each gets a suffix ("z"/"w") so a program can force one over
+;; the other. IMMEDIATE/INDEXED-X/INDIRECT-Y/RELATIVE below are already
+;; syntactically unambiguous, so a suffix would buy them nothing.
+(defmode zero-page expr :width 1 :suffix "z")
+(defmode absolute expr :suffix "w")
 (defmode indexed-x expr "," "X")
 (defmode indirect-y "(" expr ")" "," "Y")
 

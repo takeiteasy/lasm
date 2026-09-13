@@ -125,3 +125,36 @@ looks like."
 (fiveam:test match-operand-mode-accepts-descriptor
   (let ((descriptor (find-mode-descriptor 'immediate)))
     (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "#10") descriptor))))))
+
+;;; :SUFFIX (#40) -- forced addressing-mode operand syntax
+
+(defmode test-suffixed-mode expr :width 1 :suffix "q")
+
+(fiveam:test defmode-suffix-option-round-trips
+  (fiveam:is (string= "q" (mode-descriptor-suffix (find-mode-descriptor 'test-suffixed-mode)))))
+
+(fiveam:test defmode-suffix-defaults-nil
+  (fiveam:is (null (mode-descriptor-suffix (find-mode-descriptor 'test-indexed-x)))))
+
+(fiveam:test built-in-zero-page-and-absolute-have-suffixes
+  (fiveam:is (string= "z" (mode-descriptor-suffix (find-mode-descriptor 'zero-page))))
+  (fiveam:is (string= "w" (mode-descriptor-suffix (find-mode-descriptor 'absolute)))))
+
+(fiveam:test find-mode-by-suffix-hit
+  (fiveam:is (eq (find-mode-descriptor 'test-suffixed-mode) (find-mode-by-suffix "q"))))
+
+(fiveam:test find-mode-by-suffix-miss-returns-nil
+  (fiveam:is (null (find-mode-by-suffix "no-such-suffix"))))
+
+(fiveam:test find-mode-by-suffix-is-case-insensitive
+  (fiveam:is (eq (find-mode-descriptor 'test-suffixed-mode) (find-mode-by-suffix "Q"))))
+
+(fiveam:test redefining-same-mode-with-same-suffix-does-not-signal
+  ;; A plain file reload (e.g. under ASDF) re-runs DEFMODE for the same
+  ;; name -- %CHECK-SUFFIX-COLLISION must not treat a mode's own suffix as
+  ;; already taken by "another" mode.
+  (fiveam:finishes (eval '(defmode test-suffixed-mode expr :width 1 :suffix "q"))))
+
+(fiveam:test different-mode-claiming-a-taken-suffix-signals-error
+  (fiveam:signals error
+    (eval '(defmode test-suffixed-mode-conflict expr :suffix "q"))))

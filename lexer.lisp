@@ -48,7 +48,16 @@
   local-label-prefix    ; string, or nil
   string-delim          ; string, or nil to disable string literals
   ident-extra-chars     ; string of non-alphanumeric chars allowed in identifiers
-  line-continuation)    ; string, or nil to disable line continuation
+  line-continuation     ; string, or nil to disable line continuation
+  mode-suffix-separator); string, or nil to disable mode-suffix syntax (#40)
+                        ; -- separates a mnemonic from a forced addressing-
+                        ; mode suffix, e.g. the "." in "lda.w" (mode.lisp's
+                        ; DEFMODE :SUFFIX option). Every character of it must
+                        ; already be in IDENT-EXTRA-CHARS (checked below), so
+                        ; the whole "mnemonic.suffix" run lexes as one
+                        ; :IDENTIFIER token for the parser (parser.lisp) to
+                        ; split, the same way LOCAL-LABEL-PREFIX relies on
+                        ; "." already being an identifier character.
 
 ;; Registry of defined lexer descriptors, keyed by name -- mirrors *MACHINES*
 ;; in storage.lisp.
@@ -89,7 +98,7 @@
 
 (defun build-lexer-descriptor (name clauses)
   (let (comment-styles number-formats label-suffix local-label-prefix
-        string-delim (ident-extra-chars "") line-continuation)
+        string-delim (ident-extra-chars "") line-continuation mode-suffix-separator)
     (dolist (clause clauses)
       (case (first clause)
         (comment-styles (setf comment-styles (parse-comment-styles-clause (rest clause))))
@@ -99,14 +108,25 @@
         (string-delim (setf string-delim (second clause)))
         (ident-chars (setf ident-extra-chars (parse-ident-chars-clause (rest clause))))
         (line-continuation (setf line-continuation (second clause)))
+        (mode-suffix-separator (setf mode-suffix-separator (second clause)))
         (t (error "Unknown DEFLEXER clause head ~S in ~S" (first clause) clause))))
+    ;; MODE-SUFFIX-SEPARATOR must already lex as part of an identifier, or
+    ;; "lda.w" would split into two tokens at the lexer level and never
+    ;; reach the parser as one run for %SPLIT-MNEMONIC-SUFFIX to split --
+    ;; failing loudly here beats a baffling "no addressing mode matches this
+    ;; operand" from a mnemonic no one intended to look dotted.
+    (when (and mode-suffix-separator
+               (notevery (lambda (c) (find c ident-extra-chars)) mode-suffix-separator))
+      (error "DEFLEXER ~S: mode-suffix-separator ~S must consist only of ~
+characters already listed in ident-chars" name mode-suffix-separator))
     (make-lexer-descriptor :name name :comment-styles comment-styles
                             :number-formats number-formats
                             :label-suffix label-suffix
                             :local-label-prefix local-label-prefix
                             :string-delim string-delim
                             :ident-extra-chars ident-extra-chars
-                            :line-continuation line-continuation)))
+                            :line-continuation line-continuation
+                            :mode-suffix-separator mode-suffix-separator)))
 
 (defmacro deflexer (name &body clauses)
   "Define a surface syntax named NAME from CLAUSES, each one of:
@@ -117,6 +137,12 @@
      (string-delim string)
      (ident-chars :alnum extra-chars-string)
      (line-continuation string)
+     (mode-suffix-separator string)
+
+MODE-SUFFIX-SEPARATOR (#40) separates a mnemonic from a forced addressing-
+mode suffix, e.g. the \".\" in \"lda.w\" (mode.lisp's DEFMODE :SUFFIX
+option) -- every character of it must already appear in IDENT-CHARS's
+extra-chars string, or building this descriptor signals an error.
 
 Registers a LEXER-DESCRIPTOR under NAME in *LEXERS*, retrievable with
 FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
@@ -133,7 +159,8 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   (local-label-prefix ".")
   (string-delim "\"")
   (ident-chars :alnum "_.")
-  (line-continuation "\\"))
+  (line-continuation "\\")
+  (mode-suffix-separator "."))
 
 ;;; Tokenizer
 

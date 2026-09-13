@@ -178,3 +178,21 @@ tag: nop
 .endm
     tagged
     tagged" :machine 'instr-test-machine)))
+
+;;; Forced addressing-mode suffix (#40) and macros
+
+(fiveam:test mode-suffix-on-macro-invocation-signals-macro-error
+  (fiveam:signals macro-error
+    (assemble ".macro loadx n
+    ldx #n
+.endm
+    loadx.w 10" :machine 'instr-test-machine)))
+
+(fiveam:test mode-suffix-in-macro-body-survives-expansion
+  ;; "lda.w n" inside the body still forces ABSOLUTE (opcode #x12) even
+  ;; though the substituted argument would otherwise fit zero-page.
+  (let ((a (assemble ".macro loada n
+    lda.w n
+.endm
+    loada 5" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 5 0) (assembly-bytes a)))))

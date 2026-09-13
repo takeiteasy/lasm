@@ -548,3 +548,83 @@ start: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "here" (assembly-symbols a))))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5 0) (assembly-bytes a)))))
+
+;;; Forced addressing-mode suffix (#40, e.g. "lda.w"/"lda.z") -- LDA's three
+;;; variants (immediate #x10, zero-page #x11, absolute #x12) share bare-expr
+;;; syntax between zero-page/absolute, so they're the pair a forced suffix
+;;; actually overrides.
+
+(fiveam:test mode-suffix-z-forces-zero-page
+  (let ((a (assemble "lda.z $10" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 #x10) (assembly-bytes a)))))
+
+(fiveam:test mode-suffix-w-forces-absolute-even-when-zero-page-would-fit
+  (let ((a (assemble "lda.w $05" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 5 0) (assembly-bytes a)))))
+
+(fiveam:test mode-suffix-z-bypasses-value-filter-and-wraps-silently
+  ;; $1000 doesn't fit a zero-page byte at all -- forced ZERO-PAGE skips the
+  ;; value filter entirely and ENCODE-INSTRUCTION's WRAP-VALUE truncates to
+  ;; the low byte, exactly like a single-mode M1 instruction always did
+  ;; (#28 tracks diagnosing this class of silent wrap generally).
+  (let ((a (assemble "lda.z $1000" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 #x00) (assembly-bytes a)))))
+
+(fiveam:test unknown-mode-suffix-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "lda.q $05" :machine 'instr-test-machine)))
+
+(fiveam:test mode-suffix-naming-a-mode-the-mnemonic-has-no-variant-for-signals-assembly-error
+  ;; LDX only declares an IMMEDIATE variant -- ZERO-PAGE is a real,
+  ;; registered mode (so the suffix itself resolves), but LDX has no variant
+  ;; using it.
+  (fiveam:signals assembly-error
+    (assemble "ldx.z $05" :machine 'instr-test-machine)))
+
+(fiveam:test mode-suffix-not-matching-forced-modes-syntax-signals-assembly-error
+  ;; ".z" forces ZERO-PAGE, whose pattern is a bare expr -- "$10,X" doesn't
+  ;; match it (that's INDEXED-X's syntax, a mode LDA has no variant for
+  ;; regardless), so this is a syntax mismatch against the forced mode
+  ;; itself, not "no addressing mode matches this operand" generically.
+  (fiveam:signals assembly-error
+    (assemble "lda.z $10,X" :machine 'instr-test-machine)))
+
+(fiveam:test mode-suffix-on-a-directive-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".byte.w 1" :machine 'instr-test-machine)))
+
+(fiveam:test mode-suffix-forced-statement-does-not-disrupt-relaxation-convergence
+  ;; A forced .w statement ahead of a label-bearing LDA that itself needs
+  ;; more than one relaxation pass to converge (the same cascading scenario
+  ;; as LABEL-OPERAND-NARROWING-CASCADES-ACROSS-ITERATIONS above, offset by
+  ;; the forced statement's fixed 3-byte width) -- the forced statement's
+  ;; own width never changes across passes, so it can't be the statement
+  ;; that keeps the fixpoint from being reached.
+  (let ((a (assemble "lda.w $05
+lda a
+.res 254
+a: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 5 0) (subseq (assembly-bytes a) 0 3)))
+    (fiveam:is (= (+ 3 #x101) (gethash "a" (assembly-symbols a))))
+    (fiveam:is (equalp #(#x12 4 1) (subseq (assembly-bytes a) 3 6)))))
+
+;; A custom RELATIVE mode with a suffix (#40): LASM's built-in RELATIVE mode
+;; ships with no suffix (only ZERO-PAGE/ABSOLUTE do), so forcing a RELATIVE
+;; variant needs a machine that declares its own suffixed relative mode --
+;; mirrors BRX (tests/instruction.lisp), which already pairs RELATIVE with
+;; ABSOLUTE on one mnemonic.
+(defmode test-relative-suffixed-mode expr :width 1 :relative t :suffix "r")
+
+(definstruction instr-test-machine brxs
+  (modes
+    (test-relative-suffixed-mode (opcode #x95) (semantics (set! pc (+ pc operand))))
+    (absolute (opcode #x96) (semantics (set! pc operand)))))
+
+(fiveam:test mode-suffix-forced-relative-out-of-range-still-signals-assembly-error
+  ;; Unlike ZERO-PAGE/ABSOLUTE, a forced RELATIVE mode is not exempt from
+  ;; range checking -- %RELATIVE-OFFSET (encode time) always range-checks,
+  ;; regardless of whether the mode was chosen by relaxation or forced.
+  (fiveam:signals assembly-error
+    (assemble "brxs.r target
+.res 200
+target: nop" :machine 'instr-test-machine)))

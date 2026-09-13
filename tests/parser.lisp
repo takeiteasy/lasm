@@ -89,6 +89,41 @@ jmp start")))
 (fiveam:test equals-with-nothing-after-it-signals-parse-failure
   (fiveam:signals parse-failure (parse "x =")))
 
+;;; Forced addressing-mode suffix on a mnemonic (#40, e.g. "lda.w")
+
+(fiveam:test mnemonic-suffix-splits-off-into-mode-suffix
+  (let ((s (first (parse "lda.w foo"))))
+    (fiveam:is (equal "lda" (statement-mnemonic s)))
+    (fiveam:is (equal "w" (statement-mode-suffix s)))))
+
+(fiveam:test mnemonic-with-no-suffix-leaves-mode-suffix-nil
+  (let ((s (first (parse "lda foo"))))
+    (fiveam:is (equal "lda" (statement-mnemonic s)))
+    (fiveam:is (null (statement-mode-suffix s)))))
+
+(fiveam:test no-mode-suffix-separator-leaves-dotted-mnemonic-unsplit
+  (deflexer no-mode-suffix-parse-syntax
+    (number-formats (:dec :default))
+    (ident-chars :alnum "_."))
+  (let ((s (first (parse "lda.w foo" :lexer 'no-mode-suffix-parse-syntax))))
+    (fiveam:is (equal "lda.w" (statement-mnemonic s)))
+    (fiveam:is (null (statement-mode-suffix s)))))
+
+(fiveam:test equals-sugar-is-unaffected-by-mode-suffix-splitting
+  ;; "x = 5" has no mnemonic identifier to split at all -- the sugar
+  ;; rewrite happens before %SPLIT-MNEMONIC-SUFFIX would ever see it.
+  (let ((s (first (parse "x = 5"))))
+    (fiveam:is (equal +assignment-directive-name+ (statement-mnemonic s)))
+    (fiveam:is (null (statement-mode-suffix s)))))
+
+(fiveam:test mnemonic-with-dot-at-position-zero-is-not-split
+  ;; A directive mnemonic (".byte") starts with the separator itself --
+  ;; %SPLIT-MNEMONIC-SUFFIX requires a non-empty base to its left, so this
+  ;; is left whole for the assembler's directive lookup.
+  (let ((s (first (parse ".byte 1"))))
+    (fiveam:is (equal ".byte" (statement-mnemonic s)))
+    (fiveam:is (null (statement-mode-suffix s)))))
+
 ;;; Expression parser: precedence & associativity
 
 (fiveam:test precedence-arithmetic

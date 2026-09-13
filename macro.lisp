@@ -127,6 +127,8 @@ FIND-DIRECTIVE-DESCRIPTOR, so they need no entry there."
              (%macro-error (statement-line statement) ".macro: nested inside another .macro"))
            (when (statement-label statement)
              (%macro-error (statement-line statement) ".macro: cannot itself carry a label"))
+           (when (statement-mode-suffix statement)
+             (%macro-error (statement-line statement) ".macro: a mode suffix is not valid here"))
            (multiple-value-bind (name params) (%parse-macro-header statement)
              (let ((key (string-upcase name)))
                (when (nth-value 1 (gethash key macros))
@@ -141,6 +143,8 @@ FIND-DIRECTIVE-DESCRIPTOR, so they need no entry there."
              (%macro-error (statement-line statement) ".endm without a matching .macro"))
            (when (statement-label statement)
              (%macro-error (statement-line statement) ".endm: cannot itself carry a label"))
+           (when (statement-mode-suffix statement)
+             (%macro-error (statement-line statement) ".endm: a mode suffix is not valid here"))
            (setf (gethash header-key macros)
                  (make-macro-descriptor :name header-key :params header-params
                                          :body (nreverse body) :line header-line))
@@ -186,6 +190,11 @@ the way hand-splicing each independently could."
                    (mapcar (lambda (group) (make-operand :tokens (coerce group 'simple-vector)))
                            (%split-operands substituted))
                    nil)
+     ;; A forced addressing-mode suffix written literally in the macro body
+     ;; (e.g. "lda.w %1", #40) was already split off onto STATEMENT by the
+     ;; parser -- pass it through unchanged so it still forces that mode
+     ;; after expansion.
+     :mode-suffix (statement-mode-suffix statement)
      :line (statement-line statement))))
 
 (defun %macro-invocation-p (statement macros)
@@ -207,6 +216,13 @@ doesn't match DESCRIPTOR's parameter count."
   (let* ((params (macro-descriptor-params descriptor))
          (args (statement-operands statement))
          (line (statement-line statement)))
+    ;; A forced addressing-mode suffix (#40) names a mode, which only means
+    ;; something on an instruction statement -- a macro invocation expands
+    ;; to zero or more statements of its own, so "NAME.w arg" has nothing
+    ;; coherent to force.
+    (when (statement-mode-suffix statement)
+      (%macro-error line "~A.~A: a mode suffix is not meaningful on a macro invocation"
+                    (macro-descriptor-name descriptor) (statement-mode-suffix statement)))
     (unless (= (length args) (length params))
       (%macro-error line "~A: expected ~D argument~:P, got ~D"
                     (macro-descriptor-name descriptor) (length params) (length args)))

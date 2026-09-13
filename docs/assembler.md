@@ -154,6 +154,39 @@ declared in `(modes ...)`:
    - Both fallback cases keep declaration order on a tie (equal total
      width).
 
+#### Forcing a mode with a mnemonic suffix
+
+A statement whose mnemonic carries a forced addressing-mode suffix (`lda.w`,
+`lda.z`; see [Addressing modes, "Forcing a mode with a mnemonic
+suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix), #40) skips all
+three filters above. `%choose-variant` hands off to `%choose-forced-
+variant`, which:
+
+1. Resolves the suffix to its `mode-descriptor` (`find-mode-by-suffix`) —
+   `assembly-error` if no mode declares that suffix.
+2. Finds the one variant of this mnemonic using that mode — `assembly-error`
+   if none does (this also covers a no-operand variant, whose `mode` is
+   `nil`).
+3. Matches the operand tokens against that mode's syntax alone
+   (`try-match-operand-mode`) — `assembly-error`, naming the forced mode, on
+   a mismatch.
+4. Returns that variant unconditionally — **no floor check, no value
+   filter**. An out-of-range value silently wraps at encode time via
+   `encode-instruction`'s `wrap-value`, exactly like a single-mode M1
+   instruction always did; this is one more instance of the class the
+   tracker's "diagnose out-of-range operand values instead of silently
+   wrapping" ticket covers unifying, so it gets no ticket of its own. The
+   one exception is a forced `relative` mode: `%relative-offset` (see "PC-
+   relative offsets" below) still range-checks unconditionally at encode
+   time and signals `assembly-error` on overflow, since that check isn't
+   part of the value filter this bypasses at all.
+
+This doesn't threaten [Convergence](#convergence) below: a forced
+statement's chosen variant depends only on its own suffix and operand
+syntax, never on the symbol table, so it picks the exact same (constant)
+width on every pass — trivially monotone, the same way a floor, once set,
+never decreases.
+
 ```lisp
 lda $10       ; constant, fits zero-page -> zero-page (first declared fit)
 lda $1000     ; constant, doesn't fit zero-page -> absolute

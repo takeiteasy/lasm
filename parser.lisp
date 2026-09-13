@@ -17,8 +17,18 @@
 ;;;;   line      := [label-def] [mnemonic [operands]]
 ;;;;             |  [label-def] identifier "=" expr-tokens
 ;;;;   label-def := identifier label-suffix
+;;;;   mnemonic  := identifier [mode-suffix-separator identifier]
 ;;;;   operands  := operand ("," operand)*
 ;;;; Blank and comment-only lines produce no statement.
+;;;;
+;;;; A mnemonic's trailing "separator identifier" piece (#40, e.g. the ".w"
+;;;; in "lda.w") is a forced addressing-mode suffix, not part of the
+;;;; mnemonic proper -- %SPLIT-MNEMONIC-SUFFIX below splits it off (using
+;;;; the active lexer's MODE-SUFFIX-SEPARATOR, lexer.lisp) into STATEMENT's
+;;;; own MODE-SUFFIX slot, so mode.lisp/assembler.lisp never see a dotted
+;;;; mnemonic string. Only the ordinary-mnemonic line form does this split;
+;;;; the "identifier = expr-tokens" sugar and label/symbol-name positions
+;;;; are untouched.
 ;;;;
 ;;;; The second line form ("name = value", #35) is pure surface sugar for
 ;;;; ".equ name, value" -- %PARSE-LINE below recognizes an identifier
@@ -52,6 +62,15 @@
                    ; since a mode's own pattern may include a literal ","
                    ; (e.g. INDEXED-X: expr "," "X"); empty when there is no
                    ; mnemonic or no operand tokens
+  mode-suffix     ; string, or nil -- a gas-style forced addressing-mode
+                   ; suffix split off the mnemonic by %SPLIT-MNEMONIC-SUFFIX
+                   ; below (e.g. "w" from "lda.w", #40), naming the mode
+                   ; (mode.lisp's DEFMODE :SUFFIX) the assembler must use for
+                   ; this statement's operand regardless of what it folds
+                   ; to -- see assembler.lisp's %CHOOSE-VARIANT. NIL when
+                   ; the mnemonic has no suffix, or when the active lexer
+                   ; disables mode-suffix syntax entirely (its
+                   ; MODE-SUFFIX-SEPARATOR is NIL).
   line)           ; source line number, for diagnostics
 
 (defstruct operand
@@ -178,10 +197,28 @@ parentheses do not split) into a list of token-lists, one per operand."
     (cl:push (nreverse current) groups)
     (nreverse groups)))
 
-(defun %parse-line (line-tokens)
+(defun %split-mnemonic-suffix (mnemonic-text separator)
+  "Split MNEMONIC-TEXT on the last occurrence of SEPARATOR (a non-empty
+string, or NIL to disable mode-suffix syntax entirely, #40), returning
+(VALUES base suffix) -- SUFFIX is NIL and BASE is MNEMONIC-TEXT unchanged
+when SEPARATOR is NIL, doesn't occur, or occurs only at position 0 (an
+empty base is never a suffix split -- there is no bare mnemonic to its
+left). :FROM-END T picks the *last* occurrence, so a hypothetical dotted
+base mnemonic name still yields the rightmost dot-separated piece as the
+suffix rather than the whole tail after the first dot."
+  (if (null separator)
+      (values mnemonic-text nil)
+      (let ((pos (search separator mnemonic-text :from-end t)))
+        (if (and pos (plusp pos))
+            (values (subseq mnemonic-text 0 pos)
+                    (subseq mnemonic-text (+ pos (length separator))))
+            (values mnemonic-text nil)))))
+
+(defun %parse-line (line-tokens &key mode-suffix-separator)
   (let* ((tokens (coerce line-tokens 'simple-vector))
          (len (length tokens))
-         (pos 0) label label-localp mnemonic operands (operand-tokens #()))
+         (pos 0) label label-localp mnemonic operands (operand-tokens #())
+         mode-suffix)
     (when (and (< (1+ pos) len)
                (eq (token-type (aref tokens pos)) :identifier)
                (eq (token-type (aref tokens (1+ pos))) :label-suffix))
@@ -204,7 +241,8 @@ parentheses do not split) into a list of token-lists, one per operand."
                operands (list (make-operand :tokens (vector name-tok))
                                (make-operand :tokens (subseq tokens (+ pos 2) len))))))
       ((and (< pos len) (eq (token-type (aref tokens pos)) :identifier))
-       (setf mnemonic (token-value (aref tokens pos)))
+       (multiple-value-setq (mnemonic mode-suffix)
+         (%split-mnemonic-suffix (token-value (aref tokens pos)) mode-suffix-separator))
        (incf pos 1)
        (when (< pos len)
          (setf operand-tokens (subseq tokens pos len))
@@ -219,6 +257,7 @@ parentheses do not split) into a list of token-lists, one per operand."
     (make-statement :label label :label-localp label-localp
                      :mnemonic mnemonic :operands operands
                      :operand-tokens operand-tokens
+                     :mode-suffix mode-suffix
                      :line (token-line (aref tokens 0)))))
 
 (defun %split-lines (tokens)
@@ -239,4 +278,6 @@ list of non-empty lists of non-newline tokens, one per source line."
   "Tokenize STRING with LEXER and parse it into a list of STATEMENT structs,
 one per non-blank source line. Signals LEX-ERROR or PARSE-FAILURE on
 malformed input."
-  (mapcar #'%parse-line (%split-lines (tokenize string :lexer lexer))))
+  (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
+    (mapcar (lambda (line-tokens) (%parse-line line-tokens :mode-suffix-separator separator))
+            (%split-lines (tokenize string :lexer lexer)))))

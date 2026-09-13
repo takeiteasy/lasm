@@ -22,6 +22,17 @@
 ;;;; %LAYOUT-PASS to a fixpoint on the per-statement width vector, then runs
 ;;;; one final pass whose output feeds %ENCODE.
 ;;;;
+;;;; A statement whose mnemonic carries a forced addressing-mode suffix
+;;;; (#40, e.g. "lda.w") skips mode selection entirely -- %CHOOSE-VARIANT
+;;;; hands off to %CHOOSE-FORCED-VARIANT, which resolves the suffix to its
+;;;; mode and returns it unconditionally, bypassing both the floor and value
+;;;; filters (an out-of-range value silently wraps at encode time, like a
+;;;; single-mode M1 instruction always did -- one more instance of the class
+;;;; #28 tracks unifying). This doesn't threaten the fixpoint argument above:
+;;;; a forced statement's chosen variant depends only on its own suffix and
+;;;; operand syntax, never on the symbol table, so it picks the same
+;;;; (constant) width on every pass -- trivially monotone.
+;;;;
 ;;;; Local labels (an identifier starting with the lexer's LOCAL-LABEL-PREFIX,
 ;;;; e.g. ".loop") are scoped to their nearest preceding non-local ("global")
 ;;;; label (#16): %LAYOUT threads a SCOPE variable, updated by every global
@@ -136,6 +147,40 @@ by default as the widest candidate."
          (next-address (+ address 1 width)))
     (%fits-signed-width-p (- value next-address) width)))
 
+(defun %choose-forced-variant (statement variants)
+  "STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
+\"lda.w\"). Resolve it to the one VARIANTS entry using that mode and match
+STATEMENT's operand tokens against it, bypassing %CHOOSE-VARIANT's floor and
+value filters entirely -- the whole point of a forced suffix is that the
+caller, not relaxation, decides the mode. An out-of-range value for that
+mode is not an error here: ENCODE-INSTRUCTION's existing WRAP-VALUE
+truncates it silently, exactly as a single-mode M1 instruction always did
+(this is one more instance of the class #28 tracks unifying). The one
+exception is a forced RELATIVE mode: %RELATIVE-OFFSET (below) still
+range-checks unconditionally at encode time and signals ASSEMBLY-ERROR on
+overflow, since that check isn't part of this filter at all.
+
+Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
+  (let* ((suffix (statement-mode-suffix statement))
+         (mode (find-mode-by-suffix suffix)))
+    (unless mode
+      (%assembly-error (statement-line statement)
+                        "~A: no addressing mode has suffix ~S"
+                        (statement-mnemonic statement) suffix))
+    (let ((variant (find (mode-descriptor-name mode) variants
+                          :key (lambda (v) (and (instruction-descriptor-mode v)
+                                                 (mode-descriptor-name (instruction-descriptor-mode v)))))))
+      (unless variant
+        (%assembly-error (statement-line statement)
+                          "~A: has no addressing-mode variant using .~A"
+                          (statement-mnemonic statement) suffix))
+      (multiple-value-bind (asts okp) (try-match-operand-mode (statement-operand-tokens statement) mode)
+        (unless okp
+          (%assembly-error (statement-line statement)
+                            "~A: operand does not match the forced .~A (~(~A~)) addressing mode"
+                            (statement-mnemonic statement) suffix (mode-descriptor-name mode)))
+        (values variant asts)))))
+
 (defun %choose-variant (statement variants address &key symbols (floor 0))
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
@@ -177,7 +222,19 @@ syntax (e.g. zero-page before absolute):
    one-immediate mode), so whether their holes resolve is not the same
    question for each.
 
+If STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
+\"lda.w\"), none of the above runs -- %CHOOSE-FORCED-VARIANT resolves the
+suffix to its mode, matches syntax against that one variant only, and
+returns it unconditionally, without the floor or value filter. This is
+still safe for %LAYOUT's fixpoint argument: a forced statement's chosen
+variant depends only on its own suffix and operand syntax, never on
+SYMBOLS, so it picks the exact same (constant) width on every pass --
+trivially monotone, same as sticky widening's floor, so it can never be the
+statement that keeps relaxation from converging.
+
 Returns (VALUES chosen-descriptor hole-asts)."
+  (when (statement-mode-suffix statement)
+    (return-from %choose-variant (%choose-forced-variant statement variants)))
   (let* ((tokens (statement-operand-tokens statement))
          (candidates
            (loop for v in variants
@@ -485,6 +542,11 @@ addresses are final."
           do (let* ((mnemonic (statement-mnemonic statement))
                      (directive (and mnemonic (find-directive-descriptor mnemonic)))
                      (line (statement-line statement)))
+               ;; A forced addressing-mode suffix (#40) names an addressing
+               ;; mode, which only means something for an instruction
+               ;; statement -- a directive has no addressing mode to force.
+               (when (and directive (statement-mode-suffix statement))
+                 (%assembly-error line "~A: a mode suffix is not valid on a directive" mnemonic))
                (cond
                  ;; .ORG binds this statement's own label (if any) to the
                  ;; address it moves *to*, not the address before the move --

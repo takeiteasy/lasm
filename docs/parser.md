@@ -27,12 +27,27 @@ constant expressions with no label support at all.
 line      := [label-def] [mnemonic [operands]]
           |  [label-def] identifier "=" expr-tokens
 label-def := identifier label-suffix
+mnemonic  := identifier [mode-suffix-separator identifier]
 operands  := operand ("," operand)*
 ```
 
 One `statement` per source line; blank and comment-only lines produce none.
 A label with no mnemonic is a legal statement (a label on its own line). A
 comma inside a parenthesized group does not split operands.
+
+A mnemonic's trailing "separator identifier" piece (e.g. the `.w` in
+`lda.w`, #40) is a forced addressing-mode suffix, not part of the mnemonic
+proper — split off at parse time (using the active lexer's
+`mode-suffix-separator`, [Lexer](lexer.md#mode-suffix-separator)) into the
+statement's own `mode-suffix` field, so neither `defmode`/`definstruction`
+lookups nor the assembler ever see a dotted mnemonic string. Only the
+ordinary-mnemonic line form splits a suffix off; the `identifier "="
+expr-tokens` sugar form, and label/symbol-name positions generally, are
+untouched. A mnemonic beginning with the separator itself (e.g. a directive
+like `.byte`) is left whole — there is no non-empty base to its left to
+split off. See [Addressing modes, "Forcing a mode with a mnemonic
+suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix) for what the
+assembler does with a forced mode.
 
 The second line form — `name = value` (#35) — is pure surface sugar for
 `.equ name, value`: `%parse-line` recognizes an identifier immediately
@@ -43,7 +58,7 @@ and rewrites it to a statement whose mnemonic is `.equ` with two operands
 [Directives, "`.equ`"](directives.md#equ).
 
 ```lisp
-(defstruct statement label mnemonic operands operand-tokens line)
+(defstruct statement label mnemonic operands operand-tokens mode-suffix line)
 (defstruct operand tokens)   ; raw token run — a simple-vector
 ```
 
