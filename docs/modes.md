@@ -8,18 +8,19 @@ semantics; this document covers the pattern grammar and matching on their
 own.
 
 ```lisp
-(defmode immediate   "#" expr        :width 1)
-(defmode zero-page   expr            :width 1 :suffix "z")
-(defmode absolute    expr                      :suffix "w")
-(defmode indexed-x   expr "," "X")
-(defmode indirect-y  "(" expr ")" "," "Y")
-(defmode relative    expr            :width 1 :relative t)
+(defmode immediate      "#" expr        :width 1)
+(defmode zero-page      expr            :width 1 :suffix "z")
+(defmode absolute       expr                      :suffix "w")
+(defmode indexed-x      expr "," "X")
+(defmode indirect-y     "(" expr ")" "," "Y")
+(defmode relative       expr            :width 1 :relative t)
+(defmode stack-relative expr "," "S"    :width 1)
 ```
 
-`immediate`, `zero-page`, `absolute`, `indexed-x`, `indirect-y`, and
-`relative` above are exactly the modes LASM ships built in (in `mode.lisp`)
-— there is no special-cased "M1 mode" table any more; every mode, built-in
-or user-declared, goes through the same `defmode`.
+`immediate`, `zero-page`, `absolute`, `indexed-x`, `indirect-y`, `relative`,
+and `stack-relative` above are exactly the modes LASM ships built in (in
+`mode.lisp`) — there is no special-cased "M1 mode" table any more; every
+mode, built-in or user-declared, goes through the same `defmode`.
 
 ## `defmode`
 
@@ -145,6 +146,37 @@ any other mode once an address is available to compute the offset from (see
 [Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)). This only
 matters once a mnemonic declares `relative` alongside another mode on the
 same syntax.
+
+## Stack-relative addressing
+
+`stack-relative` matches `expr "," "S"` — an operand followed by a literal
+comma and `S` (case-insensitive, like every literal token, so `1,s` matches
+too). Like every mode, its pattern says nothing about *which* stack `S`
+names or what the parsed offset means — that's entirely up to the
+instruction's semantics, exactly as `absolute`'s operand only becomes "a RAM
+address" because some instruction's `semantics` passes it to `mref`. A
+`stack-relative` instruction resolves its operand with
+[`stack-ref`](machine-model.md) against a stack named in the semantics body:
+
+```lisp
+(definstruction hybridfoo lda
+  (modes stack-relative)          ; source: lda 1,S
+  (encoding (opcode #xA3) (operand :mode))
+  (semantics (set! a (stack-ref machine 's operand))))
+```
+
+`stack-ref`'s own offset convention is top-relative and unsigned: offset 0
+is the top of the stack (the same entry a plain `pop` would return), 1 is
+one below that, and so on — Forth `PICK`/`OVER`, or 65816 `n,S`. This is why
+`stack-relative` declares no `:signed t` — unlike `relative`'s branch
+offset, a stack-relative index has no direction to sign. See
+[`examples/hybrid.lisp`](../examples/hybrid.lisp) for a subroutine reaching
+an argument sitting just underneath its own return address on a shared call
+stack.
+
+`stack-relative` gets no `:suffix` (above) — unlike `zero-page`/`absolute`,
+its syntax (`expr "," "S"`) is shared by no other built-in mode, so there is
+nothing for a forced suffix to disambiguate.
 
 ## Forcing a mode with a mnemonic suffix
 

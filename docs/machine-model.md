@@ -35,14 +35,21 @@ widths against a machine defined earlier in the same file.
   number of live entries, incrementing on push and decrementing on pop.
   Overflow/underflow signal `stack-overflow`/`stack-underflow`; see
   "Conditions" below for how those interact (or currently don't) with `run`.
-  The stack pointer itself is internal bookkeeping, not an addressable
-  storage element — `stack-depth` is the only way to read it, and there is
-  no `stack-ref`/`(setf stack-ref)` for indexed access into the stack (no
-  `PICK`/`OVER`, no stack-relative addressing mode; tracked as a follow-up).
-  A machine with only a stack (plus PC and memory) is a valid, fully
-  expressible machine — see [`examples/stack.lisp`](../examples/stack.lisp),
-  the M3 milestone's validation that this abstraction isn't secretly
-  register-shaped.
+  Besides the top (via `stack-push`/`stack-pop`), any live entry is readable
+  and writable by `stack-ref`/`(setf stack-ref)` — a top-relative, unsigned
+  index (`PICK`/`OVER`-style; offset 0 is the top, the same entry
+  `stack-pop` would return). This is also what the `stack-relative`
+  addressing mode (`n,S`, see [Addressing modes](modes.md)) resolves
+  against; the stack pointer itself stays internal bookkeeping either
+  way — `stack-depth` is the only way to read it, and there is no `sp`
+  storage element. A machine with only a stack (plus PC and memory) is a
+  valid, fully expressible machine — see
+  [`examples/stack.lisp`](../examples/stack.lisp), the M3 milestone's
+  validation that this abstraction isn't secretly register-shaped;
+  [`examples/hybrid.lisp`](../examples/hybrid.lisp) is M3's second
+  validation case, a stack shared between ordinary data and an implicit
+  call stack (`jsr`/`rts` pushing/popping `pc`), reaching an argument
+  underneath its own return address via `stack-ref`.
 - `(memory NAME :width n :addr-width n [:cell-width n])` — addressable
   storage. `:addr-width` is the number of address bits (so the element has
   `2^addr-width` cells); `:cell-width` is the bit width of each cell and
@@ -86,7 +93,7 @@ signed/unsigned mode.
 | Element kind | Read | Write |
 |---|---|---|
 | register / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
-| stack | `(stack-pop machine name)`, `(stack-depth machine name)` | `(stack-push machine name v)` |
+| stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-ref machine name offset) v)` |
 | memory | `(mref machine name address)` | `(setf (mref machine name address) v)` |
 
 `flag` treats any non-`nil` value as 1 and `nil` as 0 on write, and reads
@@ -95,9 +102,11 @@ back as `0`/`1`.
 ## Conditions
 
 All signalled conditions inherit `lasm-error`: `unknown-storage`,
-`address-out-of-range`, `stack-overflow`, `stack-underflow`. `lasm-trap` is
-signalled by the `trap` semantics operator (see
-[Semantics vocabulary](semantics.md)) and is not a storage error.
+`address-out-of-range`, `stack-overflow`, `stack-underflow`,
+`stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
+`(setf stack-ref)`). `lasm-trap` is signalled by the `trap` semantics
+operator (see [Semantics vocabulary](semantics.md)) and is not a storage
+error.
 
 None of these storage conditions are currently a `run` stop reason (see
 [Emulator, "Stop reasons"](emulator.md#stop-reasons)) — an instruction that

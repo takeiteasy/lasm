@@ -48,6 +48,47 @@
   (let ((m (make-machine 'test-machine)))
     (fiveam:signals stack-underflow (stack-pop m 's))))
 
+;;; STACK-REF / (SETF STACK-REF) (#50) -- top-relative, unsigned indexed
+;;; access: offset 0 is the top (what STACK-POP would return), 1 is one
+;;; below that, and so on.
+
+(fiveam:test stack-ref-reads-top-relative
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 10)
+    (stack-push m 's 20)
+    (stack-push m 's 30)
+    (fiveam:is (= 30 (stack-ref m 's 0)))
+    (fiveam:is (= 20 (stack-ref m 's 1)))
+    (fiveam:is (= 10 (stack-ref m 's 2)))))
+
+(fiveam:test stack-ref-does-not-disturb-depth
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 1)
+    (stack-push m 's 2)
+    (stack-ref m 's 0)
+    (fiveam:is (= 2 (stack-depth m 's)))
+    (fiveam:is (= 2 (stack-pop m 's)))))
+
+(fiveam:test stack-ref-setf-writes-and-wraps
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 1)
+    (stack-push m 's 2)
+    (setf (stack-ref m 's 1) 300) ; wraps mod 256, same width as PUSH
+    (fiveam:is (= 44 (stack-ref m 's 1)))
+    (fiveam:is (= 2 (stack-pop m 's)))
+    (fiveam:is (= 44 (stack-pop m 's)))))
+
+(fiveam:test stack-ref-out-of-range-signalled
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 1)
+    (fiveam:signals stack-index-out-of-range (stack-ref m 's 1))
+    (fiveam:signals stack-index-out-of-range (stack-ref m 's -1))
+    (fiveam:signals stack-index-out-of-range (setf (stack-ref m 's 1) 99))))
+
+(fiveam:test stack-ref-out-of-range-on-empty-stack-signalled
+  (let ((m (make-machine 'test-machine)))
+    (fiveam:signals stack-index-out-of-range (stack-ref m 's 0))))
+
 (fiveam:test memory-read-write
   (let ((m (make-machine 'test-machine)))
     (setf (mref m 'ram #x10) 7)

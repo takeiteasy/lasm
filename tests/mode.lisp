@@ -103,6 +103,27 @@ looks like."
   (let ((ast (match-operand-mode (%tokens-for "($10),Y") 'indirect-y)))
     (fiveam:is (= #x10 (expr-number-value ast)))))
 
+;;; STACK-RELATIVE (#50) -- "n,S", built in alongside INDEXED-X/INDIRECT-Y.
+
+(fiveam:test stack-relative-matches-expr-comma-s
+  (let ((ast (match-operand-mode (%tokens-for "1,S") 'stack-relative)))
+    (fiveam:is (expr-number-p ast))
+    (fiveam:is (= 1 (expr-number-value ast)))))
+
+(fiveam:test stack-relative-literal-match-is-case-insensitive
+  (fiveam:is (match-operand-mode (%tokens-for "1,s") 'stack-relative)))
+
+(fiveam:test stack-relative-rejects-missing-comma-s
+  (fiveam:signals parse-failure
+    (match-operand-mode (%tokens-for "1") 'stack-relative)))
+
+(fiveam:test stack-relative-rejects-comma-x
+  (fiveam:signals parse-failure
+    (match-operand-mode (%tokens-for "1,X") 'stack-relative)))
+
+(fiveam:test stack-relative-has-no-suffix
+  (fiveam:is (null (mode-descriptor-suffix (find-mode-descriptor 'stack-relative)))))
+
 (fiveam:test match-operand-mode-trailing-token-signals-parse-failure
   (fiveam:signals parse-failure
     (match-operand-mode (%tokens-for "#10 20") 'immediate)))

@@ -33,6 +33,18 @@
              (format s "Stack underflow on ~S (machine ~S)"
                      (storage-error-name c) (storage-error-machine c)))))
 
+;; #50: signalled by STACK-REF/(SETF STACK-REF) for an OFFSET outside the
+;; stack's live region -- distinct from STACK-UNDERFLOW (which is specifically
+;; "popped an empty stack") since an out-of-range indexed access is a
+;; different program bug, e.g. reading three deep into a stack that only has
+;; one live entry. Mirrors ADDRESS-OUT-OF-RANGE's shape.
+(define-condition stack-index-out-of-range (storage-error)
+  ((index :initarg :index :reader stack-index-out-of-range-index))
+  (:report (lambda (c s)
+             (format s "Stack index ~S out of range for stack ~S on machine ~S"
+                     (stack-index-out-of-range-index c)
+                     (storage-error-name c) (storage-error-machine c)))))
+
 ;; Generalized trap primitive placeholder. M6 replaces this with a full
 ;; interrupt/exception model (deftrap/definterrupt, vectors, priority);
 ;; for now `trap` just signals this condition with a tag and optional data.
@@ -247,3 +259,30 @@
   (multiple-value-bind (slot element) (%slot machine name :stack)
     (declare (ignore element))
     (cdr slot)))
+
+;; #50: indexed access into a stack, for a stack-relative addressing mode
+;; (mode.lisp's STACK-RELATIVE) or any semantics body that needs to look past
+;; the top without popping. OFFSET is top-relative and unsigned: 0 is the
+;; top (the most recently pushed value, same as STACK-POP would return), 1 is
+;; one below that, and so on -- Forth PICK / 65816 "n,S" convention. This
+;; means the internal vector index is (- sp 1 offset), the mirror image of
+;; how STACK-PUSH/STACK-POP already use SP. Bottom-relative indexing (index 0
+;; = oldest entry) is still reachable by callers via STACK-DEPTH when wanted;
+;; it just isn't OFFSET's own convention.
+(defun stack-ref (machine name offset)
+  (multiple-value-bind (slot element) (%slot machine name :stack)
+    (declare (ignore element))
+    (let ((sp (cdr slot)))
+      (unless (and (>= offset 0) (< offset sp))
+        (error 'stack-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                                          :name name :index offset))
+      (aref (car slot) (- sp 1 offset)))))
+
+(defun (setf stack-ref) (value machine name offset)
+  (multiple-value-bind (slot element) (%slot machine name :stack)
+    (let ((sp (cdr slot)))
+      (unless (and (>= offset 0) (< offset sp))
+        (error 'stack-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                                          :name name :index offset))
+      (setf (aref (car slot) (- sp 1 offset))
+            (wrap-value value (storage-element-width element))))))

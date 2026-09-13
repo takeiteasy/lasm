@@ -266,3 +266,14 @@ unconsumed."
 ;; mode's default -- a machine with wider branches overrides it per
 ;; instruction via the existing (operand :width n).
 (defmode relative expr :width 1 :relative t)
+
+;; STACK-RELATIVE (#50): syntactically "n,S" -- an expr hole followed by the
+;; literal ",S", 6502/65816-flavoured like INDEXED-X/INDIRECT-Y above. Like
+;; every mode, this is pure operand *syntax*: the parsed value is just an
+;; offset, and it says nothing about which stack it indexes into or what that
+;; offset means -- an instruction's semantics resolves it against a named
+;; stack via STACK-REF (storage.lisp), with STACK-REF's own top-relative,
+;; unsigned convention (offset 0 = the top). No :SUFFIX -- unlike ZERO-PAGE/
+;; ABSOLUTE, this mode shares its syntax with no other built-in mode, so
+;; there is nothing for a forced suffix to disambiguate.
+(defmode stack-relative expr "," "S" :width 1)

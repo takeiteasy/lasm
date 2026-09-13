@@ -19,6 +19,8 @@
    #:address-out-of-range
    #:stack-overflow
    #:stack-underflow
+   #:stack-index-out-of-range
+   #:stack-index-out-of-range-index
    #:lasm-trap
    #:lasm-syntax-error
    #:lasm-syntax-error-message
@@ -52,6 +54,7 @@
    #:stack-push
    #:stack-pop
    #:stack-depth
+   #:stack-ref
    #:flag
    #:wrap-value
 

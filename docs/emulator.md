@@ -109,8 +109,9 @@ fails to decode does not (nothing executed that iteration).
 
 **Not currently a stop reason:** a storage condition raised from inside an
 instruction's semantics — `stack-overflow`, `stack-underflow`,
-`address-out-of-range` (see [Machine model, "Conditions"](machine-model.md))
-— propagates straight out of `run` as an ordinary Lisp error, since
+`stack-index-out-of-range`, `address-out-of-range` (see [Machine model,
+"Conditions"](machine-model.md)) — propagates straight out of `run` as an
+ordinary Lisp error, since
 `step-machine` only catches `unknown-instruction` and `run` only catches
 `lasm-trap`. `tests/emulator.lisp`'s `stack-underflow-escapes-run` and
 `stack-overflow-escapes-run` pin this down as the current behaviour;
