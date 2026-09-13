@@ -10,9 +10,9 @@
 ;;;; already uses -- word addressing and bitfield instruction words are two
 ;;;; independent axes, and this example deliberately isolates the first one.
 ;;;;
-;;;; This is intentionally small and not DCPU-16-shaped -- a real DCPU-16
-;;;; example combining this ticket's word-addressed memory with #20's
-;;;; variant encoding is a separate, larger ticket (#55).
+;;;; This is intentionally small and not DCPU-16-shaped -- see
+;;;; examples/dcpu16.lisp for a real DCPU-16-shaped machine combining
+;;;; this word-addressed memory with #20's variant encoding.
 ;;;;
 ;;;; Run with:  sbcl --script examples/wordaddr.lisp
 

@@ -177,3 +177,10 @@ this ambiguous, and each of those entry points takes an explicit `:memory`
 argument for exactly that case — the same shape as `%default-address-width`
 (instruction.lisp) already uses to pick a sole memory element's address
 width when an addressing mode doesn't declare one.
+
+Word-addressed memory and bitfield/variant instruction-word encoding (see
+["Word-encoded instructions"](instructions.md#word-encoded-instructions-20))
+are independent axes and compose freely — an `instruction-word`'s `:width`
+just has to be a whole multiple of the target cell width.
+[`examples/dcpu16.lisp`](../examples/dcpu16.lisp) combines both, DCPU-16
+shaped.

@@ -808,3 +808,94 @@ skip: hlt" :machine 'chip8-test-machine)))
         (fiveam:is (= 5 (regref m 'v 1)))
         (fiveam:is (= 0 (regref m 'v 2)))
         (fiveam:is (= 3 (sref m 'i)))))))
+
+;;; Word-addressed memory + bitfield/variant encoding combined (#55, M4) --
+;;; DCPU16FOO mirrors examples/dcpu16.lisp: DCPU-16's real instruction-word
+;;; layout (6-bit A, 5-bit B, 5-bit OPCODE fields) over :CELL-WIDTH 16
+;;; memory, and a banked (#13) 16-bit REG register standing in for DCPU-16's
+;;; eight named registers, addressed here by index.
+
+(defmachine dcpu16-test-machine
+  (register pc :width 16)
+  (register reg :width 16 :count 8)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16
+    (field a 6)
+    (field b 5)
+    (field opcode 5)))
+
+(defmode dcpu16-rr expr "," expr)
+
+(definstruction dcpu16-test-machine set
+  (modes dcpu16-rr)
+  (encoding
+    (opcode 1)
+    (operand dst :field b)
+    (operand src :field a
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f))))
+  (semantics (set! (reg dst) src)))
+
+(definstruction dcpu16-test-machine add
+  (modes dcpu16-rr)
+  (encoding
+    (opcode 2)
+    (operand dst :field b)
+    (operand src :field a
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f))))
+  (semantics (set! (reg dst) (wrap-value (+ (reg dst) src) 16))))
+
+(definstruction dcpu16-test-machine addr
+  (modes dcpu16-rr)
+  (encoding
+    (opcode 3)
+    (operand dst :field b)
+    (operand srcreg :field a))
+  (semantics (set! (reg dst) (wrap-value (+ (reg dst) (reg srcreg)) 16))))
+
+(definstruction dcpu16-test-machine sto
+  (modes dcpu16-rr)
+  (encoding
+    (opcode 4)
+    (operand addr :field a
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f)))
+    (operand dst :field b))
+  (semantics (setf (mref machine 'ram addr) (reg dst))))
+
+(definstruction dcpu16-test-machine hlt
+  (encoding (opcode 5))
+  (semantics (trap :halt)))
+
+(fiveam:test dcpu16-set-small-value-packs-inline-one-cell
+  (let ((a (assemble "set 0, 5" :machine 'dcpu16-test-machine)))
+    (fiveam:is (= 1 (length (assembly-cells a))))))
+
+(fiveam:test dcpu16-set-large-value-escapes-to-extra-cell
+  (let ((a (assemble "set 1, 1000" :machine 'dcpu16-test-machine)))
+    (fiveam:is (= 2 (length (assembly-cells a))))
+    (fiveam:is (= 1000 (aref (assembly-cells a) 1)))))
+
+(fiveam:test dcpu16-addr-registers-both-plain-inline-one-cell
+  (let ((a (assemble "addr 0, 1" :machine 'dcpu16-test-machine)))
+    (fiveam:is (= 1 (length (assembly-cells a))))))
+
+(fiveam:test dcpu16-machine-end-to-end
+  ;; Mirrors examples/dcpu16.lisp's *SOURCE* verbatim.
+  (let ((a (assemble "set 0, 5
+set 1, 1000
+addr 0, 1
+sto result, 0
+hlt
+result: .byte 0" :machine 'dcpu16-test-machine)))
+    (fiveam:is (= 16 (assembly-cell-width a)))
+    (fiveam:is (= 7 (length (assembly-cells a))))
+    (fiveam:is (equal '(unsigned-byte 16) (array-element-type (assembly-cells a))))
+    (let ((m (make-machine 'dcpu16-test-machine)))
+      (load-program m a)
+      (multiple-value-bind (reason steps) (run m)
+        (fiveam:is (eq :trap reason))
+        (fiveam:is (= 5 steps))
+        (fiveam:is (= 1005 (regref m 'reg 0)))
+        (fiveam:is (= 1005 (mref m 'ram (gethash "result" (assembly-symbols a)))))))))

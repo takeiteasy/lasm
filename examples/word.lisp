@@ -12,10 +12,10 @@
 ;;;; assembler picks between them with the same relaxation loop it already
 ;;;; uses to pick an addressing-mode width (docs/assembler.md).
 ;;;;
-;;;; This is intentionally small -- a full DCPU-16-shaped machine (word-
-;;;; addressed memory as well as variant encoding) is a separate, larger
-;;;; ticket; WORDFOO stays byte-addressed and keeps its instruction word
-;;;; itself emitted as ordinary little-endian bytes.
+;;;; This is intentionally small -- WORDFOO stays byte-addressed and keeps
+;;;; its instruction word itself emitted as ordinary little-endian bytes;
+;;;; see examples/dcpu16.lisp for a full DCPU-16-shaped machine combining
+;;;; this mechanism with word-addressed memory.
 ;;;;
 ;;;; Run with:  sbcl --script examples/word.lisp
 

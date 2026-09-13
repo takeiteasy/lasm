@@ -407,9 +407,13 @@ field(s). It does not cover:
   mode may only have one hole (see "Repeated `(operand ...)` subclauses"
   above and [Addressing modes](modes.md#pc-relative-modes)) — a separate,
   follow-up feature.
-- Indexed access for banked (`:count > 1`) registers in semantics — the
-  `:count > 1` skip in `with-machine-bindings` (see
-  [Semantics vocabulary](semantics.md)) applies here too.
+
+Banked (`:count > 1`) registers work the same way in word-encoded semantics
+as everywhere else — bound as `(NAME idx)` via `regref` — see [Semantics
+vocabulary](semantics.md). [`examples/dcpu16.lisp`](../examples/dcpu16.lisp)
+combines this mechanism with word-addressed memory (see [Machine model,
+"Cell width and the assembler"](machine-model.md#cell-width-and-the-assembler))
+and a banked register for DCPU-16's eight named registers, end to end.
 
 ## Deviation from the design draft
 

@@ -152,6 +152,20 @@ rather than 8. Banked registers are read/written by `regref` and bound in
 semantics bodies as `(v idx)` rather than a plain symbol — see [Machine
 model](machine-model.md) and [Semantics vocabulary](semantics.md).
 
+```sh
+sbcl --script examples/dcpu16.lisp
+```
+
+M4's second validation case (LASM-plan.md §3.8): a DCPU-16-shaped machine
+(`dcpu16foo`) combining word-addressed memory with bitfield/variant
+instruction-word encoding for the first time — DCPU-16's real instruction
+layout (6-bit `a`, 5-bit `b`, 5-bit `opcode` fields) over `:cell-width 16`
+memory, and a banked register standing in for DCPU-16's eight named
+registers. `set 1, 1000` exercises the extra-word escape path; every other
+operand packs inline — see [Instructions, "Word-encoded
+instructions"](instructions.md#word-encoded-instructions-20) and [Machine
+model, "Cell width and the assembler"](machine-model.md#cell-width-and-the-assembler).
+
 ## Run the tests
 
 ```sh
