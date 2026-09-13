@@ -190,6 +190,9 @@ syntax. A mode suffix is rejected on a directive statement and on a macro
 invocation (it's meaningless on either); it survives substitution when
 written literally inside a macro body.
 
+See [`examples/complete.lisp`](../examples/complete.lisp) for a runnable
+program using `sta.w`/`lda.z` to force a mode.
+
 ## Matching
 
 - `(match-operand-mode tokens mode)` — `tokens` is a token run (e.g. a

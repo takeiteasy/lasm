@@ -84,6 +84,15 @@ sbcl --script examples/macros.lisp
 A two-parameter `.macro` expands twice against two different call sites,
 each under its own global label — see [Macros](macros.md).
 
+```sh
+sbcl --script examples/complete.lisp
+```
+
+`.equ` constants, a `.macro` expansion, and a forced addressing-mode suffix
+(`sta.w`/`lda.z`, overriding the normal zero-page-vs-absolute choice) working
+together in one program — see [Directives](directives.md#equ), [Macros](macros.md),
+and [Addressing modes, "Forcing a mode with a mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix).
+
 ## Run the tests
 
 ```sh
