@@ -202,6 +202,23 @@ declared in `(modes ...)`:
    - Both fallback cases keep declaration order on a tie (equal total
      width).
 
+Once relaxation has converged (the final pass, not a mid-relaxation trial —
+see "Convergence" below), `%choose-variant` also checks for **ambiguity**:
+if the chosen candidate ties on total operand width with another
+syntax-matching candidate of a different mode, it `warn`s with an
+`ambiguous-mode` condition naming both, since nothing but declaration order
+distinguished between them. This is *not* the `zero-page`/`absolute` case
+above — those differ in width, so relaxation resolves the choice on its own
+and never warns; the warning fires only when width alone can't break the
+tie either. See [Diagnostics, "Mode-selection
+ambiguity"](diagnostics.md#mode-selection-ambiguity).
+
+An out-of-range value that falls back to `wrap-value` (the "no candidate
+fits" case above) is by default silent, same as it always was — opt into an
+`assembly-error` instead per mode (`:strict t`) or globally
+(`*strict-operand-range*`); see [Diagnostics, "Strict operand
+range"](diagnostics.md#strict-operand-range).
+
 #### Forcing a mode with a mnemonic suffix
 
 A statement whose mnemonic carries a forced addressing-mode suffix (`lda.w`,
@@ -504,8 +521,11 @@ at, `.org` can still move it further before the first byte).
   label or `.equ` name bound twice, in any combination), a local label or
   `.equ` name with no enclosing global label (see "Local-label scoping"
   above), an operand whose syntax matches none of the mnemonic's declared
-  addressing-mode variants, a `relative`-mode offset that doesn't fit its
-  operand's width (see "PC-relative offsets" above), or a malformed
+  addressing-mode variants (naming the accepted modes and the operand given —
+  see [Diagnostics](diagnostics.md)), a `relative`-mode offset that doesn't
+  fit its operand's width (see "PC-relative offsets" above), a strict-mode
+  operand out of range (see "Choosing a mode" above and
+  [Diagnostics](diagnostics.md#strict-operand-range)), or a malformed
   directive use (wrong operand count, a non-constant `.org`/`.res` operand,
   an `.org`/`.res` operand referencing a non-pure `.equ`, an `.equ`'s value
   referencing a symbol not yet defined, or a backward-moving `.org` — see
@@ -520,6 +540,13 @@ at, `.org` can still move it further before the first byte).
   `:pc` given (see "Location counter" above); does not occur during ordinary
   assembly, only from a standalone `eval-expr`/`eval-expr-constant` call.
 - `lex-error` / `parse-failure` — from the front end (`assemble` only).
+- `ambiguous-mode` — a warning (program execution continues after it), not
+  an error; see "Choosing a mode" above and
+  [Diagnostics](diagnostics.md#mode-selection-ambiguity).
+
+Every condition above that subtypes `lasm-syntax-error` renders with a
+source excerpt and caret via `diagnostic-text` once source text is
+available — see [Diagnostics](diagnostics.md).
 
 ## Scope
 

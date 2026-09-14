@@ -26,9 +26,22 @@
    #:lasm-syntax-error-message
    #:lasm-syntax-error-line
    #:lasm-syntax-error-column
+   #:lasm-syntax-error-source
    #:lex-error
    #:parse-failure
    #:unresolved-location
+
+   ;; Diagnostics (#74)
+   #:diagnostic-text
+   #:with-source-context
+   #:lasm-warning
+   #:lasm-warning-message
+   #:lasm-warning-line
+   #:ambiguous-mode
+   #:ambiguous-mode-mnemonic
+   #:ambiguous-mode-chosen
+   #:ambiguous-mode-alternatives
+   #:*strict-operand-range*
 
    ;; Machine definition
    #:defmachine
@@ -154,6 +167,7 @@
    #:mode-descriptor-width
    #:mode-descriptor-relativep
    #:mode-descriptor-signedp
+   #:mode-descriptor-strictp
    #:mode-descriptor-suffix
    #:find-mode-by-suffix
    #:match-operand-mode

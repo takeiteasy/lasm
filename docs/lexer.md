@@ -95,7 +95,10 @@ for `.equ name, value` (#35, see [Directives](directives.md#equ)).
 `lasm-error`) is signalled on malformed input — unterminated string/block
 comment/character literal, a numeric prefix with no digits following, or an
 unrecognized character. It carries `lasm-syntax-error-message`,
-`-line`, and `-column`.
+`-line`, and `-column`, plus (once caught alongside the source text
+`tokenize` was given, which `with-source-context` attaches automatically) a
+`-source` rendered as an excerpt with a caret by `diagnostic-text` — see
+[Diagnostics](diagnostics.md).
 
 ## Known limitations / deferred to later tickets
 

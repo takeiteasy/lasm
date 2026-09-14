@@ -109,8 +109,48 @@ of the instruction declares. Undefined labels are not this condition -- they
 surface as UNRESOLVED-LABEL from EVAL-EXPR, since that condition already
 names exactly this failure."))
 
+(defun %signal-assembly-error (line column fmt args)
+  (error 'assembly-error :message (apply #'format nil fmt args) :line line :column column))
+
 (defun %assembly-error (line fmt &rest args)
-  (error 'assembly-error :message (apply #'format nil fmt args) :line line))
+  (%signal-assembly-error line nil fmt args))
+
+(defun %assembly-error-at (token fmt &rest args)
+  "Like %ASSEMBLY-ERROR, but anchored at TOKEN (a token, or NIL) rather than
+a bare line number -- gives the resulting ASSEMBLY-ERROR a COLUMN (#74), so
+DIAGNOSTIC-TEXT can point a caret at the offending operand instead of only
+naming its line."
+  (%signal-assembly-error (and token (token-line token)) (and token (token-column token)) fmt args))
+
+;;; Operand/mode diagnostic text (#74)
+
+(defun %operand-text (tokens)
+  "Join TOKENS' (a simple-vector, e.g. a STATEMENT's OPERAND-TOKENS) verbatim
+TOKEN-TEXT back into one string, for echoing an operand into a diagnostic --
+e.g. \"(#5),Y\". Not a re-lexing round-trip (no whitespace is reinserted
+between tokens), just enough to name what was given."
+  (format nil "~{~A~}" (map 'list #'token-text tokens)))
+
+(defun %mode-syntax-text (mode)
+  "MODE's own pattern (mode.lisp), rendered back to the syntax a program
+would write to select it, e.g. IMMEDIATE -> \"#expr\", INDIRECT-Y ->
+\"(expr),Y\" -- an :EXPR hole prints as the literal word \"expr\"."
+  (format nil "~{~A~}"
+          (mapcar (lambda (el) (if (eq (first el) :literal) (second el) "expr"))
+                  (mode-descriptor-pattern mode))))
+
+(defun %accepted-modes-text (variants)
+  "VARIANTS' (an instruction's list of INSTRUCTION-DESCRIPTOR) addressing
+modes, rendered as a comma-separated \"name (syntax)\" list for a mode-
+mismatch diagnostic -- a no-operand variant (MODE nil) renders as \"no
+operand\" instead."
+  (format nil "~{~A~^, ~}"
+          (mapcar (lambda (v)
+                    (let ((mode (instruction-descriptor-mode v)))
+                      (if mode
+                          (format nil "~(~A~) (~A)" (mode-descriptor-name mode) (%mode-syntax-text mode))
+                          "no operand")))
+                  variants)))
 
 ;;; Result
 
@@ -252,7 +292,9 @@ overflow, since that check isn't part of this filter at all.
 
 Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
   (let* ((suffix (statement-mode-suffix statement))
-         (mode (find-mode-by-suffix suffix)))
+         (mode (find-mode-by-suffix suffix))
+         (operand-tokens (statement-operand-tokens statement))
+         (anchor (and (plusp (length operand-tokens)) (aref operand-tokens 0))))
     (unless mode
       (%assembly-error (statement-line statement)
                         "~A: no addressing mode has suffix ~S"
@@ -262,16 +304,19 @@ Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
                                                  (mode-descriptor-name (instruction-descriptor-mode v)))))))
       (unless variant
         (%assembly-error (statement-line statement)
-                          "~A: has no addressing-mode variant using .~A"
-                          (statement-mnemonic statement) suffix))
-      (multiple-value-bind (asts okp) (try-match-operand-mode (statement-operand-tokens statement) mode)
+                          "~A: has no addressing-mode variant using .~A -- this instruction ~
+accepts ~A"
+                          (statement-mnemonic statement) suffix (%accepted-modes-text variants)))
+      (multiple-value-bind (asts okp) (try-match-operand-mode operand-tokens mode)
         (unless okp
-          (%assembly-error (statement-line statement)
-                            "~A: operand does not match the forced .~A (~(~A~)) addressing mode"
-                            (statement-mnemonic statement) suffix (mode-descriptor-name mode)))
+          (%assembly-error-at anchor
+                               "~A: operand ~S does not match the forced .~A ~
+(~(~A~), syntax ~A) addressing mode"
+                               (statement-mnemonic statement) (%operand-text operand-tokens)
+                               suffix (mode-descriptor-name mode) (%mode-syntax-text mode)))
         (values variant asts)))))
 
-(defun %choose-variant (statement variants address &key symbols (floor 0) (cell-width 8))
+(defun %choose-variant (statement variants address &key symbols (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
 for that variant's mode. ADDRESS is this statement's own address; SYMBOLS,
@@ -322,10 +367,21 @@ SYMBOLS, so it picks the exact same (constant) width on every pass --
 trivially monotone, same as sticky widening's floor, so it can never be the
 statement that keeps relaxation from converging.
 
+FINALP (#74), like %LAYOUT-PASS's own, defers a check that only makes sense
+once relaxation has converged: when two or more syntax-matching candidates
+tie on total operand width, declaration order alone decides between them --
+genuinely ambiguous mode selection, unlike e.g. ZERO-PAGE/ABSOLUTE sharing
+syntax at *different* widths, which relaxation resolves on its own and never
+warns about. %MAYBE-WARN-AMBIGUOUS-MODE below only runs when FINALP is T, so
+a mid-relaxation trial pass (whose candidate set can still change) never
+produces a spurious or duplicate warning -- see %LAYOUT-PASS's own FINALP
+for the parallel deferral.
+
 Returns (VALUES chosen-descriptor hole-asts)."
   (when (statement-mode-suffix statement)
     (return-from %choose-variant (%choose-forced-variant statement variants)))
   (let* ((tokens (statement-operand-tokens statement))
+         (anchor (and (plusp (length tokens)) (aref tokens 0)))
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
@@ -336,9 +392,11 @@ Returns (VALUES chosen-descriptor hole-asts)."
                  when (and okp (>= (instruction-descriptor-size v) floor))
                    collect (list v asts))))
     (when (null candidates)
-      (%assembly-error (statement-line statement)
-                        "~A: no addressing mode matches this operand"
-                        (statement-mnemonic statement)))
+      (%assembly-error-at anchor
+                           "~A: operand ~S matches no addressing mode -- this instruction ~
+accepts ~A"
+                           (statement-mnemonic statement) (%operand-text tokens)
+                           (%accepted-modes-text variants)))
     ;; STABLE-SORT, not SORT: ties (equal total size) must keep declaration
     ;; order.
     (let* ((width-key (lambda (c) (instruction-descriptor-size (first c))))
@@ -372,8 +430,42 @@ Returns (VALUES chosen-descriptor hole-asts)."
                                   (t (every (lambda (v w) (%fits-width-p v w cell-width)) vals widths))))
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
-           (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates)))
-      (values-list (or fitting (if any-unresolvedp narrowest widest))))))
+           (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
+           (chosen (or fitting (if any-unresolvedp narrowest widest))))
+      (when finalp
+        (%maybe-warn-ambiguous-mode statement candidates chosen))
+      (values-list chosen))))
+
+(defun %maybe-warn-ambiguous-mode (statement candidates chosen)
+  "WARN with an AMBIGUOUS-MODE condition (#74) if CANDIDATES (the full
+syntax-and-floor-matching list %CHOOSE-VARIANT built, one (descriptor asts)
+pair per entry) has another candidate tied with CHOSEN on total operand
+width but naming a different mode -- the one case width-based relaxation
+cannot break, so declaration order alone decided. No-op when CHOSEN's own
+mode is NIL (a no-operand variant, which nothing can tie against)."
+  (let ((chosen-mode (instruction-descriptor-mode (first chosen))))
+    (when chosen-mode
+      (let* ((chosen-width (instruction-descriptor-size (first chosen)))
+             (ties (remove-duplicates
+                    (loop for c in candidates
+                          for mode = (instruction-descriptor-mode (first c))
+                          when (and mode
+                                    (not (eq (mode-descriptor-name mode) (mode-descriptor-name chosen-mode)))
+                                    (= (instruction-descriptor-size (first c)) chosen-width))
+                            collect mode)
+                    :key #'mode-descriptor-name)))
+        (when ties
+          (warn 'ambiguous-mode
+                :mnemonic (statement-mnemonic statement)
+                :chosen chosen-mode
+                :alternatives ties
+                :line (statement-line statement)
+                :message (format nil "~A: operand matches ~D addressing modes of equal ~
+width (~(~A~)~{, ~(~A~)~}) -- picked ~(~A~) by declaration order"
+                                  (statement-mnemonic statement) (1+ (length ties))
+                                  (mode-descriptor-name chosen-mode)
+                                  (mapcar #'mode-descriptor-name ties)
+                                  (mode-descriptor-name chosen-mode))))))))
 
 ;;; Directives (directive.lisp, #14) -- operand parsing and argument folding
 
@@ -712,7 +804,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                          (multiple-value-bind (descriptor asts)
                              (%choose-variant statement variants address
                                                :symbols prev-symbols :floor (aref floors i)
-                                               :cell-width cell-width)
+                                               :cell-width cell-width :finalp finalp)
                            (%qualify-locals-in-asts! asts scope line)
                            (cl:push (list :instruction address descriptor asts (statement-line statement))
                                     sized)
@@ -781,6 +873,44 @@ than silently wrapping to a branch at the wrong address (#23)."
                         (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))
     offset))
 
+(defun %operand-range (width cell-width signedp)
+  "(VALUES lo hi), the inclusive range of values WIDTH cells of CELL-WIDTH
+bits each can hold without WRAP-VALUE truncating -- the signed two's-
+complement range when SIGNEDP, else the wider unsigned-or-signed range
+%FITS-WIDTH-P itself accepts (mirrors that function's and %FITS-SIGNED-
+WIDTH-P's own bounds exactly, so a strict range check and the ordinary
+value filter never disagree about what \"fits\")."
+  (let ((bits (* cell-width width)))
+    (if signedp
+        (let ((bound (ash 1 (1- bits)))) (values (- bound) (1- bound)))
+        (values (- (ash 1 (1- bits))) (1- (ash 1 bits))))))
+
+(defun %check-strict-operand-range! (descriptor mode values line cell-width)
+  "Signal ASSEMBLY-ERROR if any of VALUES (DESCRIPTOR's already-folded
+operand values, in encoding order) doesn't fit its own operand width, when
+strict range-checking is in effect for this operand (#74, absorbing #28 and
+#43's out-of-range-operand-silently-wraps reports) -- either MODE declares
+:STRICT T (mode.lisp) or *STRICT-OPERAND-RANGE* (diagnostic.lisp) is bound
+to T, the latter being the only way to cover a mode-less instruction's bare
+(operand :width n) M1-style encoding, since :STRICT lives on a MODE-
+DESCRIPTOR. A no-op by design for a word-encoded DESCRIPTOR (WORD-FIELDS
+non-NIL -- an :INLINE field's own RANGE is already a hard boundary chosen
+at DEFINSTRUCTION time, not a WRAP-VALUE truncation) and for a RELATIVE
+mode (%RELATIVE-OFFSET below already range-checks it unconditionally,
+strict or not, since a wrapped branch is a correctness bug regardless)."
+  (when (and (or *strict-operand-range* (and mode (mode-descriptor-strictp mode)))
+             (not (instruction-descriptor-word-fields descriptor))
+             (not (and mode (mode-descriptor-relativep mode))))
+    (loop for value in values
+          for width in (instruction-descriptor-operand-widths descriptor)
+          do (multiple-value-bind (lo hi)
+                 (%operand-range width cell-width (and mode (mode-descriptor-signedp mode)))
+               (unless (<= lo value hi)
+                 (%assembly-error line
+                                   "~A: operand value ~D out of range for ~D-cell operand ~
+(must be between ~D and ~D)"
+                                   (instruction-descriptor-name descriptor) value width lo hi))))))
+
 (defun %make-growable-cells (size cell-width)
   (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
                     :initial-element 0))
@@ -816,11 +946,15 @@ emits two different words."
            (declare (ignore kind))
            (let* ((mode (instruction-descriptor-mode descriptor))
                   (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
-             (when (and mode (mode-descriptor-relativep mode))
-               ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
-               ;; RELATIVE mode has exactly one hole, so VALUES here is
-               ;; always a single-element list.
-               (setf values (list (%relative-offset address descriptor (first values) line cell-width))))
+             (if (and mode (mode-descriptor-relativep mode))
+                 ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
+                 ;; RELATIVE mode has exactly one hole, so VALUES here is
+                 ;; always a single-element list.
+                 (setf values (list (%relative-offset address descriptor (first values) line cell-width)))
+                 ;; #74: strict range-checking runs on every other mode --
+                 ;; RELATIVE's own unconditional check above already covers
+                 ;; it, and running both would double-report the same value.
+                 (%check-strict-operand-range! descriptor mode values line cell-width))
              (loop with i = (- address origin)
                    for cell in (encode-instruction descriptor values)
                    do (setf (aref cells i) cell) (incf i)))))
@@ -906,19 +1040,22 @@ renders without a source column. Retains the address<->statement mapping
 LISTING-LINE list in address order; see listing.lisp for how it's rendered
 and looked up. Also retains %LAYOUT's scope/kind metadata (#37) as
 ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
-  (let ((cell-width (%machine-cell-width machine memory)))
-    (multiple-value-bind (symbols sized final-address asm-origin info)
-        (%layout (expand-macros statements) machine origin cell-width)
-      (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
-                     :cell-width cell-width
-                     :origin asm-origin :symbols symbols :symbol-info info
-                     :listing (%build-listing sized) :source source))))
+  (with-source-context source
+    (let ((cell-width (%machine-cell-width machine memory)))
+      (multiple-value-bind (symbols sized final-address asm-origin info)
+          (%layout (expand-macros statements) machine origin cell-width)
+        (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
+                       :cell-width cell-width
+                       :origin asm-origin :symbols symbols :symbol-info info
+                       :listing (%build-listing sized) :source source)))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
 ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
 front end, for what MEMORY selects, and for how SOURCE (passed through
-automatically here) is retained as ASSEMBLY-SOURCE (#25)."
-  (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory
-                        :source source))
+automatically here) is retained as ASSEMBLY-SOURCE (#25) and, via WITH-
+SOURCE-CONTEXT (#74), on any LASM-SYNTAX-ERROR either stage signals."
+  (with-source-context source
+    (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory
+                          :source source)))

@@ -144,7 +144,10 @@ instruction, a `.byte`/`.word` element, `.org`'s operand) supplies it.
 `parse-failure` (a subtype of `lasm-syntax-error`) is signalled on a
 malformed token stream: an empty operand, a missing mnemonic, unbalanced
 parentheses, a trailing binary operator, or any other token the grammar
-doesn't expect.
+doesn't expect. Every such condition carries a line and column, and — once
+caught alongside the source text `parse` was given, which `with-source-
+context` attaches automatically — renders as a source excerpt with a caret;
+see [Diagnostics](diagnostics.md).
 
 ## Follow-ups not covered here
 

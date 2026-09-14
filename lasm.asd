@@ -16,6 +16,7 @@
   :serial t
   :components ((:file "package")
                (:file "storage")
+               (:file "diagnostic")
                (:file "machine")
                (:file "semantics")
                (:file "lexer")
@@ -47,6 +48,7 @@
                (:file "directive")
                (:file "macro")
                (:file "assembler")
+               (:file "diagnostic")
                (:file "emulator")
                (:file "disassembler")
                (:file "listing")))

@@ -25,7 +25,7 @@ mode, built-in or user-declared, goes through the same `defmode`.
 ## `defmode`
 
 ```lisp
-(defmode NAME pattern-element... [:width n] [:signed t] [:relative t] [:suffix "s"])
+(defmode NAME pattern-element... [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t])
 ```
 
 `NAME` is a symbol, registered globally (like a lexer — see below).
@@ -43,7 +43,10 @@ see [PC-relative modes](#pc-relative-modes) below. `:relative t` **implies**
 alongside `:relative t` is a contradiction and `defmode` signals an error.
 `:suffix "s"`, if given, lets a program force this mode on a per-statement
 basis via a mnemonic suffix (e.g. `lda.w`) — see [Forcing a mode with a
-mnemonic suffix](#forcing-a-mode-with-a-mnemonic-suffix) below.
+mnemonic suffix](#forcing-a-mode-with-a-mnemonic-suffix) below. `:strict t`,
+if given, turns an out-of-range operand value into an `assembly-error` at
+encode time instead of silently wrapping — see [Diagnostics, "Strict operand
+range"](diagnostics.md#strict-operand-range).
 
 Registration happens inside an `eval-when`, like `defmachine` — a mode
 must be resolvable by `definstruction` at macroexpansion time, not only

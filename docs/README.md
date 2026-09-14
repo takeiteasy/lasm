@@ -13,6 +13,7 @@
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`
+- [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
 
 This directory covers what exists today. For the design rationale and the
 milestone roadmap, see [`LASM-plan.md`](../LASM-plan.md) at the repo root —

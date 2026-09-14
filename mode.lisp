@@ -44,7 +44,7 @@
                ; assembler's mode selector range-checks candidate values
                ; against the signed range rather than the unsigned one
                ; (assembler.lisp's %CHOOSE-VARIANT).
-    suffix)    ; string, or nil -- a gas-style mnemonic suffix (e.g. "w" for
+    suffix     ; string, or nil -- a gas-style mnemonic suffix (e.g. "w" for
                ; ABSOLUTE, "z" for ZERO-PAGE, #40) a program can append to a
                ; mnemonic (lda.w target) to force this mode regardless of
                ; what the operand's value folds to, bypassing relaxation's
@@ -53,6 +53,14 @@
                ; that share operand syntax with another mode (so relaxation
                ; has an actual choice to override) benefit from a suffix;
                ; LASM's built-ins give one only to ZERO-PAGE/ABSOLUTE.
+    strictp)   ; T if an operand encoded through this mode that doesn't fit
+               ; its own width is an ASSEMBLY-ERROR rather than silently
+               ; wrapping (#74, absorbing #28/#43) -- checked at encode time
+               ; by %ENCODE's :INSTRUCTION branch (assembler.lisp), alongside
+               ; the *STRICT-OPERAND-RANGE* global switch (diagnostic.lisp)
+               ; that makes every mode strict, including a mode-less
+               ; instruction's bare operand. Default NIL preserves #28/#43's
+               ; original wrap-on-overflow behavior.
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -143,7 +151,7 @@ options start at the first keyword symbol; everything before it is pattern."
       (let ((pattern (%parse-mode-pattern pattern-elements)))
         (unless (find :expr pattern :key #'first)
           (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
-        (destructuring-bind (&key width relative signed suffix) options
+        (destructuring-bind (&key width relative signed suffix strict) options
           (when (and relative (not (eq signed t)) (member :signed options))
             (error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
@@ -151,7 +159,8 @@ options start at the first keyword symbol; everything before it is pattern."
           (make-mode-descriptor :name name :pattern pattern :width width
                                  :relativep relative
                                  :signedp (or relative signed)
-                                 :suffix suffix))))))
+                                 :suffix suffix
+                                 :strictp strict))))))
 
 (defmacro defmode (name &body pattern)
   "Define an addressing mode named NAME matching PATTERN, a sequence of
@@ -166,8 +175,11 @@ alongside :RELATIVE T is an error), and/or :SUFFIX \"s\" (a gas-style
 mnemonic suffix, e.g. \"w\"/\"z\" -- a program can append SEPARATOR ++ s to
 a mnemonic, e.g. \"lda.w\", to force this mode regardless of what the
 operand's value folds to, bypassing relaxation entirely; #40, see
-docs/modes.md). Signals an error if SUFFIX is already claimed by a
-different mode. E.g.:
+docs/modes.md), and/or :STRICT t (an operand that doesn't fit this mode's
+own width is an ASSEMBLY-ERROR at encode time rather than silently wrapping
+via WRAP-VALUE; #74, see docs/diagnostics.md -- *STRICT-OPERAND-RANGE*
+makes every mode behave this way without marking any one of them). Signals
+an error if SUFFIX is already claimed by a different mode. E.g.:
 
   (defmode immediate  \"#\" expr        :width 1)
   (defmode zero-page  expr            :width 1)
@@ -191,7 +203,10 @@ when its own form is compiled."
   "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.
 Returns (VALUES asts okp failure-token message): on success ASTS is the list
 of EXPR-* ASTs parsed from each :EXPR hole (in pattern order) and OKP is T;
-on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why."
+on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why -- FAILURE-TOKEN
+is NIL only when the underlying PARSE-FAILURE (an :EXPR hole's own malformed
+expression) itself carried no token to point at (e.g. an empty expression at
+end of input), never as a way of discarding a position that was available."
   (let ((end (length tokens))
         (i 0)
         asts)
@@ -202,17 +217,27 @@ on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why."
            (unless (and tok (string-equal (token-text tok) (second element)))
              (return-from %match-mode-pattern
                (values nil nil tok
-                       (format nil "Operand does not match ~(~A~) addressing mode"
-                               (mode-descriptor-name mode)))))
+                       (format nil "Operand does not match ~(~A~) addressing mode ~
+(expected ~S~@[, found ~S~])"
+                               (mode-descriptor-name mode) (second element)
+                               (and tok (token-text tok))))))
            (incf i)))
         (:expr
          (handler-case
              (multiple-value-bind (ast next-i) (parse-expression tokens :start i :end end)
                (cl:push ast asts)
                (setf i next-i))
+           ;; #74: keep the inner PARSE-FAILURE's own line/column instead of
+           ;; only its message -- %TOK below can't reconstruct a token from
+           ;; a bare string, so the failure token this returns is a
+           ;; synthetic one carrying just enough (line/column) for
+           ;; MATCH-OPERAND-MODE's %PARSE-ERROR to preserve position.
            (parse-failure (c)
              (return-from %match-mode-pattern
-               (values nil nil nil (lasm-syntax-error-message c))))))))
+               (values nil nil
+                       (make-token :line (lasm-syntax-error-line c)
+                                   :column (lasm-syntax-error-column c))
+                       (lasm-syntax-error-message c))))))))
     (if (< i end)
         (values nil nil (%tok tokens i end) "Unexpected trailing token in operand")
         (values (nreverse asts) t nil nil))))
@@ -234,7 +259,9 @@ MODE-DESCRIPTOR, or a symbol naming one): consume MODE's literal tokens in
 order and parse each :EXPR hole as an expression. Returns (VALUES first-ast
 all-asts) -- FIRST-AST alone is what every current single-hole mode needs.
 Signals PARSE-FAILURE if TOKENS don't match MODE or leave a trailing token
-unconsumed."
+unconsumed -- with the failing token's own line/column (#74), not just its
+message, even when the failure came from a nested :EXPR hole's own
+PARSE-FAILURE rather than a literal mismatch."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
     (multiple-value-bind (asts okp failure-token message) (%match-mode-pattern tokens mode)
       (unless okp

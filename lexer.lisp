@@ -352,7 +352,12 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
 (defun tokenize (string &key (lexer 'default))
   "Tokenize STRING with the syntax registered under LEXER (default 'DEFAULT).
 Returns a SIMPLE-VECTOR of TOKEN structs, terminated by a single :EOF token.
-Signals LEX-ERROR on malformed input."
+Signals LEX-ERROR on malformed input -- carrying STRING as its SOURCE (#74,
+WITH-SOURCE-CONTEXT) so DIAGNOSTIC-TEXT can render the offending line."
+  (with-source-context string
+   (%tokenize-1 string lexer)))
+
+(defun %tokenize-1 (string lexer)
   (let ((descriptor (find-lexer-descriptor lexer))
         (state (make-lex-state :string string))
         (tokens '()))

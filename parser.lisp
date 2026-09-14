@@ -140,9 +140,10 @@
        (multiple-value-bind (inner next-i) (%parse-binary tokens (1+ i) end 0)
          (let ((close (%tok tokens next-i end)))
            (unless (eq (%punct-value close) :rparen)
-             (%parse-error close "Expected closing parenthesis"))
+             (%parse-error close "Expected closing parenthesis, found ~:[end of expression~;~:*~S~]"
+                            (and close (token-text close))))
            (values inner (1+ next-i)))))
-      (t (%parse-error tok "Unexpected token in expression")))))
+      (t (%parse-error tok "Unexpected token in expression: ~S" (token-text tok))))))
 
 (defun %parse-unary (tokens i end)
   (let* ((tok (%tok tokens i end))
@@ -241,19 +242,24 @@ suffix rather than the whole tail after the first dot."
                operands (list (make-operand :tokens (vector name-tok))
                                (make-operand :tokens (subseq tokens (+ pos 2) len))))))
       ((and (< pos len) (eq (token-type (aref tokens pos)) :identifier))
-       (multiple-value-setq (mnemonic mode-suffix)
-         (%split-mnemonic-suffix (token-value (aref tokens pos)) mode-suffix-separator))
-       (incf pos 1)
-       (when (< pos len)
-         (setf operand-tokens (subseq tokens pos len))
-         (setf operands
-               (mapcar (lambda (group)
-                         (when (null group)
-                           (%parse-error nil "Empty operand"))
-                         (make-operand :tokens (coerce group 'simple-vector)))
-                       (%split-operands (coerce (subseq tokens pos len) 'list)))))))
+       (let ((mnemonic-tok (aref tokens pos)))
+         (multiple-value-setq (mnemonic mode-suffix)
+           (%split-mnemonic-suffix (token-value mnemonic-tok) mode-suffix-separator))
+         (incf pos 1)
+         (when (< pos len)
+           (setf operand-tokens (subseq tokens pos len))
+           (setf operands
+                 (mapcar (lambda (group)
+                           (when (null group)
+                             ;; #74: a stray comma (e.g. "lda 1,,2") leaves no
+                             ;; token of its own to point at -- the mnemonic
+                             ;; token is the closest anchor this line has.
+                             (%parse-error mnemonic-tok
+                                           "~A: empty operand" (token-text mnemonic-tok)))
+                           (make-operand :tokens (coerce group 'simple-vector)))
+                         (%split-operands (coerce (subseq tokens pos len) 'list))))))))
     (when (and (< pos len) (null mnemonic))
-      (%parse-error (aref tokens pos) "Expected mnemonic"))
+      (%parse-error (aref tokens pos) "Expected mnemonic, found ~S" (token-text (aref tokens pos))))
     (make-statement :label label :label-localp label-localp
                      :mnemonic mnemonic :operands operands
                      :operand-tokens operand-tokens
@@ -277,7 +283,10 @@ list of non-empty lists of non-newline tokens, one per source line."
 (defun parse (string &key (lexer 'default))
   "Tokenize STRING with LEXER and parse it into a list of STATEMENT structs,
 one per non-blank source line. Signals LEX-ERROR or PARSE-FAILURE on
-malformed input."
-  (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
-    (mapcar (lambda (line-tokens) (%parse-line line-tokens :mode-suffix-separator separator))
-            (%split-lines (tokenize string :lexer lexer)))))
+malformed input -- both carry STRING as their SOURCE (#74, WITH-SOURCE-
+CONTEXT), so DIAGNOSTIC-TEXT can render the offending source line even if
+the caller only catches the condition well outside this call."
+  (with-source-context string
+    (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
+      (mapcar (lambda (line-tokens) (%parse-line line-tokens :mode-suffix-separator separator))
+              (%split-lines (tokenize string :lexer lexer))))))
