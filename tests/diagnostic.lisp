@@ -77,11 +77,13 @@
       (fiveam:is (search "line 2, column 5: bad thing" text))
       (fiveam:is (search "abcdefgh" text))
       (fiveam:is (search "^" text))
-      ;; The caret sits under column 5 -- 4 spaces of indent before it, past
-      ;; the gutter.
+      ;; The caret sits under column 5 of "abcdefgh" -- the 'e'. Line label
+      ;; "2" is 1 char, so the gutter is 1 space; then " | " (3 chars); then
+      ;; 4 spaces of indent (column - 1); the caret is the 9th character,
+      ;; index 8.
       (let* ((caret-line (first (last (%split-into-lines text))))
              (caret-pos (position #\^ caret-line)))
-        (fiveam:is (integerp caret-pos))))))
+        (fiveam:is (= 8 caret-pos))))))
 
 ;;; WITH-SOURCE-CONTEXT / condition SOURCE slot
 
