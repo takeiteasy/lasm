@@ -284,4 +284,27 @@
    #:assembly-symbols-list
    #:assembly-symbol-groups
    #:symbols-text
-   #:print-symbols))
+   #:print-symbols
+
+   ;; Debugger (#76)
+   #:make-debug-session
+   #:debug-session
+   #:debug-session-p
+   #:debug-session-machine
+   #:debug-session-assembly
+   #:breakpoint
+   #:breakpoint-p
+   #:breakpoint-id
+   #:breakpoint-address
+   #:breakpoint-label
+   #:debug-break
+   #:debug-unbreak
+   #:debug-breakpoints
+   #:debug-step
+   #:debug-continue
+   #:debug-continue-to
+   #:debug-state-text
+   #:debug-memory-text
+   #:debug-where-text
+   #:debug-command
+   #:debugger-repl))

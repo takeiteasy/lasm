@@ -278,3 +278,5 @@ declares. It does not cover:
   beyond the single `trap` primitive — M6.
 - Recovering source text from encoded cells — see [Disassembler](disassembler.md)
   (#21), built on this file's own `decode-instruction-at`.
+- Stopping at a chosen point and inspecting live state interactively — see
+  [Debugger](debugger.md) (#76), built directly on `step-machine`/`run`.

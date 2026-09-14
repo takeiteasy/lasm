@@ -197,6 +197,15 @@ cycle budget, and `run-for-duration` stops it on a simulated-time budget —
 see [Emulator, "Cycle-cost model, clock speed, and cycle-accurate
 execution"](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
 
+```sh
+sbcl --script examples/debugger.lisp
+```
+
+The same counter-loop program again, driven through the debugger's
+`debug-command` dispatcher instead of a plain `run` — sets a breakpoint on
+the loop label, steps, continues, and inspects registers and memory. See
+[Debugger](debugger.md).
+
 ## Run the tests
 
 ```sh

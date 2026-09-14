@@ -29,7 +29,8 @@
                (:file "assembler")
                (:file "emulator")
                (:file "disassembler")
-               (:file "listing")))
+               (:file "listing")
+               (:file "debugger")))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -51,4 +52,5 @@
                (:file "diagnostic")
                (:file "emulator")
                (:file "disassembler")
-               (:file "listing")))
+               (:file "listing")
+               (:file "debugger")))
