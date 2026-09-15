@@ -187,6 +187,11 @@
    #:unknown-instruction-machine
    #:unknown-instruction-mnemonic
    #:unknown-instruction-opcode
+   #:no-matching-choice
+   #:no-matching-choice-machine
+   #:no-matching-choice-instruction
+   #:no-matching-choice-operand
+   #:no-matching-choice-choice
    #:instruction-descriptor
    #:instruction-descriptor-p
    #:instruction-descriptor-name

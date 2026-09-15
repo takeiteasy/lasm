@@ -740,6 +740,24 @@ hlt" :machine 'word-test-machine)))
     (fiveam:is (= 5 (sref m 'b)))
     (fiveam:is (= 4 (sref m 'pc)))))     ; instruction word + one extra word
 
+(fiveam:test step-machine-choice-case-dispatches-differently-per-alternative
+  ;; #73: WCC (tests/instruction.lisp) writes to A for WC-REG syntax and B
+  ;; for WC-IND, despite both packing the identical value 5 into disjoint
+  ;; halves of one field -- STEP-MACHINE threads DECODE-INSTRUCTION-AT's
+  ;; CHOICES through to EXECUTE-INSTRUCTION, so this is the real per-hole
+  ;; alternative recovered from the fetched instruction word, not a value
+  ;; handed in directly by a test.
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "wcc 5
+wcc [5]
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "WCC" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 0 (sref m 'b)))
+    (fiveam:is (string= "WCC" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'b)))))
+
 (fiveam:test step-machine-word-encoded-decode-failure-on-unregistered-opcode
   (let ((m (make-machine 'word-test-machine)))
     (setf (mref m 'ram 0) 0)

@@ -111,19 +111,24 @@ ran to completion before signalling).
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
 (disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
-PC by the decoded SIZE, accounts cycles, and executes."
+PC by the decoded SIZE, accounts cycles, and executes.
+
+DECODE-INSTRUCTION-AT's fourth value, CHOICES (#73) -- the matched ONE-OF
+alternative per operand hole -- is forwarded straight to EXECUTE-INSTRUCTION,
+so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
+decoded, not just the values."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (pc (%resolve-pc machine-name pc))
          (memory (%resolve-memory machine-name memory))
          (address (sref machine pc)))
-    (multiple-value-bind (descriptor values size)
+    (multiple-value-bind (descriptor values size choices)
         (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
       (if (eq descriptor :decode-failure)
           (values :decode-failure 0)
           (let ((cost (%descriptor-cycle-cost descriptor)))
             (setf (sref machine pc) (+ address size))
             (incf (machine-cycles machine) cost)
-            (execute-instruction descriptor machine values)
+            (execute-instruction descriptor machine values choices)
             (values descriptor cost))))))
 
 ;;; Run

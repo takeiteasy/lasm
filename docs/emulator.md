@@ -136,6 +136,14 @@ field's negative-value handling is entirely its variant's `:bias` (see
 [Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)),
 already undone by the debiasing above.
 
+`decode-instruction-at` returns a fourth value on both paths: `choices`, the
+`one-of` alternative each operand hole actually matched (a word-encoded
+field's own `word-field-choice`, or `nil` on a cell-encoded machine, which
+never produces one). `step-machine` forwards it straight through to
+`execute-instruction`, so a `(semantics ...)` body's `choice-case` (see
+[Semantics vocabulary, "`choice-case`"](semantics.md#choice-case)) sees
+exactly what was actually decoded, not just the operand values.
+
 ## `run`
 
 ```lisp

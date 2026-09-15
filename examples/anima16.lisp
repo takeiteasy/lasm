@@ -1,13 +1,14 @@
 ;;;; examples/anima16.lisp
 ;;;;
-;;;; #104 (M4): mode-selected word-field codes and unconditional extra words --
-;;;; the piece #103's orthogonal per-operand addressing modes (see
-;;;; examples/orthogonal.lisp) deliberately left unwired: a `one-of` hole's
-;;;; matched alternative can now steer a word-encoded field's own code, and
-;;;; can spend a trailing word unconditionally (not just when a value doesn't
-;;;; fit, the way an ordinary `:else` escape does). This is the shape
-;;;; ANIMA-16-style operand tables need throughout, where the same field-value
-;;;; range means a different addressing form depending on syntax alone:
+;;;; Mode-selected word-field codes (with unconditional extra words) and
+;;;; CHOICE-CASE semantics dispatch, together: a `one-of` hole's matched
+;;;; alternative steers a word-encoded field's own code, can spend a trailing
+;;;; word unconditionally (not just when a value doesn't fit, the way an
+;;;; ordinary `:else` escape does), and steers *semantics* the same way, so
+;;;; `[reg]` really dereferences while a bare `reg` reads the register's value
+;;;; directly. This is the shape ANIMA-16-style operand tables need
+;;;; throughout, where the same field-value range means a different
+;;;; addressing form depending on syntax alone:
 ;;;;
 ;;;;   0x00-0x07  register            reg
 ;;;;   0x08-0x0F  [register]          [reg]
@@ -15,17 +16,17 @@
 ;;;;   0x20-0x3F  short literal       #lit    -- value-selected, packs inline
 ;;;;   0x1F       ""                  #lit    -- :else escape when #lit doesn't fit
 ;;;;
-;;;; LD below demonstrates the new CHOICE-selected rows (register/indirect/
-;;;; absolute -- syntax picks the field code, and the absolute form always
-;;;; spends a word regardless of the address's own value); LDI demonstrates
-;;;; the pre-existing value-selected rows (short literal inline, or an :else
-;;;; escape) unchanged by this ticket. They are two separate instructions,
-;;;; not two variant groups of one field, because this ticket's own
-;;;; DEFINSTRUCTION-time check (%CHECK-WORD-VARIANTS) forbids mixing
-;;;; CHOICE-selected and value-selected variants on the *same* operand field
-;;;; -- real ANIMA-16 packs every row above into one field, which this
-;;;; restriction does not yet support; see docs/instructions.md and #118
-;;;; (the follow-up tracking lifting it) for more.
+;;;; LD below demonstrates the CHOICE-selected rows (register/indirect/
+;;;; absolute -- syntax picks the field code, the absolute form always spends
+;;;; a word regardless of the address's own value, and CHOICE-CASE in LD's
+;;;; own semantics picks a genuinely different runtime effect per alternative:
+;;;; read a register, dereference it, or load from an absolute address); LDI
+;;;; demonstrates the value-selected rows (short literal inline, or an :else
+;;;; escape). They are two separate instructions, not two variant groups of
+;;;; one field, since one operand field's variants may not mix CHOICE-selected
+;;;; and value-selected forms -- real ANIMA-16 packs every row above into one
+;;;; field, which this restriction does not yet support; see
+;;;; docs/instructions.md and the tracker for more.
 ;;;;
 ;;;; `[register]` and `(address)` are spelled with different bracketing
 ;;;; ("[...]" vs "(...)") purely so this example's syntax stays unambiguous
@@ -33,19 +34,6 @@
 ;;;; examples/dcpu16.lisp's own header) -- real ANIMA-16 spells both as
 ;;;; "[...]" and tells them apart by whether the bracketed expression names a
 ;;;; register or an arbitrary address, which lasm cannot do yet either.
-;;;;
-;;;; Simplification (see the follow-up ticket #73 this doesn't close):
-;;;; dispatching *semantics* on which alternative a field's raw value
-;;;; actually names -- so `[reg]` really dereferences and `(addr)` really
-;;;; reads memory -- is a separate, still-open piece. Every sibling
-;;;; descriptor LD's three field-code variants expand into shares one
-;;;; `semantics-fn` (DEFINSTRUCTION's multi-mode expansion, instruction.lisp),
-;;;; so LD's semantics here just assigns the decoded field value straight
-;;;; into the destination register, regardless of which form encoded it --
-;;;; the same simplification examples/orthogonal.lisp documents for its own
-;;;; MOV. This example asserts *encoded cells* and a *decode/disassemble
-;;;; round-trip*, not differentiated runtime behaviour between the three LD
-;;;; forms.
 ;;;;
 ;;;; Run with:  sbcl --script examples/anima16.lisp
 
@@ -104,23 +92,26 @@
 (defmode a-ind "[" expr "]")
 (defmode a-reg expr)
 
-;; LDI's short-literal operand -- ordinary value-selected syntax, unchanged
-;; by #104, kept as a separate mode/instruction from LD's CHOICE-selected one
-;; per this file's header.
+;; LDI's short-literal operand -- ordinary value-selected syntax, kept as a
+;; separate mode/instruction from LD's CHOICE-selected one per this file's
+;; header.
 (defmode a-lit "#" expr)
 
 (defmode ld-mode expr "," (one-of a-mem a-ind a-reg))
 (defmode ldi-mode expr "," "#" expr)
 
-;; LD dst, src -- reg[dst] := decoded field value, regardless of which of
-;; SRC's three syntaxes encoded it (see this file's header on why semantics
-;; can't yet differentiate them, #73). Field A's three variants below are
-;; the new part: (choice a-reg)/(choice a-ind) each pack inline into a
-;; disjoint half of A's 0-15 sub-range, and (choice a-mem) spends its own
-;; trailing word *unconditionally* -- unlike SET's :else in
-;; examples/dcpu16.lisp, this doesn't depend on whether the address value
-;; would have fit inline; a-mem always means "value follows in its own
-;; word", by syntax alone.
+;; LD dst, src -- reg[dst] := SRC, where SRC means something different
+;; depending on which of its three syntaxes was actually written: a bare
+;; register index reads that register's own value; "[reg]" dereferences it
+;; as a RAM address; "(addr)" loads directly from an absolute RAM address.
+;; Field A's three variants each pack a different field code -- (choice
+;; a-reg)/(choice a-ind) into a disjoint half of A's 0-15 sub-range, and
+;; (choice a-mem) spends its own trailing word *unconditionally* -- unlike
+;; SET's :else in examples/dcpu16.lisp, this doesn't depend on whether the
+;; address value would have fit inline; a-mem always means "value follows in
+;; its own word", by syntax alone. CHOICE-CASE in the semantics below reads
+;; back exactly which of the three was matched and picks the matching
+;; runtime effect.
 (definstruction anima16foo ld
   (modes ld-mode)
   (encoding
@@ -130,12 +121,16 @@
       (variant (choice a-reg) inline :range (0 7) :bias #x00)
       (variant (choice a-ind) inline :range (0 7) :bias #x08)
       (variant (choice a-mem) (extra-word :escape #x1e))))
-  (semantics (set! (reg dst) src)))
+  (semantics
+    (set! (reg dst)
+      (choice-case src
+        (a-reg (reg src))
+        (a-ind (mref machine 'ram (reg src)))
+        (a-mem (mref machine 'ram src))))))
 
 ;; LDI dst, #lit -- reg[dst] := lit. Ordinary value-selected field A: a small
 ;; literal (-1..30, biased +33) packs inline into 0x20-0x3F; anything wider
-;; escapes to its own word at 0x1F. No (choice ...) here at all -- this is
-;; exactly #20's pre-#104 mechanism, unchanged.
+;; escapes to its own word at 0x1F. No (choice ...) here at all.
 (definstruction anima16foo ldi
   (modes ldi-mode)
   (encoding
@@ -172,7 +167,7 @@
   (assert (= 2 (length mem-form)))    ; absolute: unconditional trailing word
   (format t "~%All three assemble to distinct encodings, as expected.~%"))
 
-(format t "~%Encoding, by value (LDI, unchanged #20 behaviour):~%")
+(format t "~%Encoding, by value (LDI):~%")
 (let ((inline-form (assembly-cells (assemble "ldi 1, #5" :machine 'anima16foo)))
       (escape-form (assembly-cells (assemble "ldi 1, #1000" :machine 'anima16foo))))
   (format t "  ldi 1, #5     -> ~{~4,'0X~^ ~}  (~D cell~:P)~%"
@@ -183,11 +178,12 @@
   (assert (= 2 (length escape-form))))
 
 (defparameter *source*
-  "ld 1, 0        ; reg1 = 0, CHOICE a-reg -- inline, biased #x00
-ld 2, [0]      ; reg2 = 0, CHOICE a-ind -- inline, biased #x08 (different bits, same value)
-ld 3, (256)    ; reg3 = 256, CHOICE a-mem -- unconditional trailing word
-ldi 4, #5      ; reg4 = 5, value-selected inline (unchanged #20 behaviour)
-ldi 5, #1000   ; reg5 = 1000, value-selected :else escape (unchanged #20 behaviour)
+  "ldi 0, #100    ; reg0 = 100 -- base address the indirect/absolute forms below read through
+ld 1, 0        ; reg1 = reg[0]      = 100        CHOICE a-reg -- reads the register directly
+ld 2, [0]      ; reg2 = mem[reg[0]] = mem[100]   CHOICE a-ind -- dereferences it
+ld 3, (256)    ; reg3 = mem[256]                 CHOICE a-mem -- absolute load
+ldi 4, #5      ; reg4 = 5, value-selected inline
+ldi 5, #1000   ; reg5 = 1000, value-selected :else escape
 hlt")
 
 (format t "~&~%Source:~%~A~2%" *source*)
@@ -197,19 +193,28 @@ hlt")
   (format t "  cells: ~D~%" (length (assembly-cells assembly)))
   (let ((m (make-machine 'anima16foo)))
     (load-program m assembly)
+    ;; Preload the two RAM cells LD's indirect and absolute forms read from,
+    ;; each a different value from the other and from reg0's own 100 -- so
+    ;; the three forms' three genuinely different runtime effects (register
+    ;; read, dereference, absolute load) show up as three different results
+    ;; below, not just three different encodings.
+    (setf (mref m 'ram 100) 222)
+    (setf (mref m 'ram 256) 333)
     (multiple-value-bind (reason steps) (run m)
       (format t "  stopped: ~A after ~D step~:P~%" reason steps)
       (format t "  reg1=~D reg2=~D reg3=~D reg4=~D reg5=~D~%"
               (regref m 'reg 1) (regref m 'reg 2) (regref m 'reg 3)
               (regref m 'reg 4) (regref m 'reg 5))
       (assert (eq :trap reason))
-      (assert (= 6 steps))
-      (assert (= 0 (regref m 'reg 1)))
-      (assert (= 0 (regref m 'reg 2)))
-      (assert (= 256 (regref m 'reg 3)))
+      (assert (= 7 steps))
+      (assert (= 100 (regref m 'reg 1)))  ; a-reg: the register's own value
+      (assert (= 222 (regref m 'reg 2)))  ; a-ind: mem[reg[0]] -- dereferenced
+      (assert (= 333 (regref m 'reg 3)))  ; a-mem: mem[256] -- absolute load
       (assert (= 5 (regref m 'reg 4)))
       (assert (= 1000 (regref m 'reg 5)))
-      (format t "~%All assertions passed.~%")))
+      (format t "~%All assertions passed -- the three LD forms produced three ~
+different results for the same written value, not just three different ~
+encodings.~%")))
 
   ;; Decode/disassemble round-trip (#117): LD's matched CHOICE alternative
   ;; comes back from DECODE-INSTRUCTION-AT (decoder.lisp) as each hole's own
@@ -220,7 +225,7 @@ hlt")
   (format t "~%Disassembling (#117 -- the real alternative comes back):~%")
   (let ((lines (disassemble-assembly assembly :machine 'anima16foo :labels nil)))
     (dolist (l lines) (format t "  ~A~%" (disassembly-line-text l)))
-    (assert (string= "ld $1,$0" (disassembly-line-text (first lines))))
-    (assert (string= "ld $2,[$0]" (disassembly-line-text (second lines))))
-    (assert (string= "ld $3,($100)" (disassembly-line-text (third lines))))
+    (assert (string= "ld $1,$0" (disassembly-line-text (second lines))))
+    (assert (string= "ld $2,[$0]" (disassembly-line-text (third lines))))
+    (assert (string= "ld $3,($100)" (disassembly-line-text (fourth lines))))
     (format t "~%All three LD forms round-trip to their own real syntax.~%")))

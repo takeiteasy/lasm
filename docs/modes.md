@@ -199,11 +199,16 @@ see [Instructions, "CHOICE-selected word
 fields"](instructions.md#choice-selected-word-fields) and
 [`examples/anima16.lisp`](../examples/anima16.lisp), where `reg`, `[reg]`,
 and `(addr)` genuinely encode to different field codes for the identical
-value 0. This still says nothing about *semantics* — every sibling
-descriptor a `one-of`'s alternatives expand into (one per `(choice ...)`
-combination) shares one `semantics` body, so a program cannot yet make
-`[reg]` really dereference while a bare `reg` reads the value directly (see
-the tracker). And letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
+value 0. A `(semantics ...)` body can read this back too: `choice-case`
+(see [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case))
+dispatches on which alternative a hole actually matched, so `[reg]` really
+dereferences while a bare `reg` reads the value directly, on a word-encoded
+machine — every sibling descriptor a `one-of`'s alternatives expand into
+still shares one `semantics` body, but that body can now tell them apart at
+runtime instead of treating every alternative identically. On a
+byte-encoded machine there is no encoded discriminator for `choice-case` to
+read at all (see below) — it signals there unless given an `otherwise`
+clause. Letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
 `[register]` vs. `[register + offset]`) actually mean different things
 still needs symbolic register names (see the tracker) so the assembler can
 tell a register apart from an arbitrary expression inside the brackets.

@@ -777,6 +777,139 @@
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil)))))
 
+;;; CHOICE-CASE semantics dispatch (#73) -- reading back which ONE-OF
+;;; alternative a hole actually matched from inside (semantics ...), rather
+;;; than every CHOICE-selected sibling sharing one runtime effect.
+
+;; WCC's single operand dispatches to a different register depending on
+;; whether WC-REG or WC-IND matched, despite both packing the identical
+;; value into disjoint halves of one field -- the differentiated-execution
+;; case #104 alone could not express (see tests/emulator.lisp's own
+;; STEP-MACHINE-CHOICE-CASE-... test for this run end to end).
+(definstruction word-test-machine wcc
+  (modes wc-two)
+  (encoding
+    (opcode 8)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+  (semantics
+    (choice-case value
+      (wc-reg (set! a value))
+      (wc-ind (set! b value)))))
+
+;; WCCM: a second operand (DST, a plain value-selected field with no variant
+;; forms of its own) alongside SRC's CHOICE-selected one -- pins down that
+;; DECODE-INSTRUCTION-AT's per-hole CHOICES stays positionally aligned with
+;; its per-hole VALUES: DST's own hole always decodes a NIL choice, SRC's
+;; names whichever alternative was actually written.
+(defmode wccm-mode expr "," (one-of wc-reg wc-ind))
+
+(definstruction word-test-machine wccm
+  (modes wccm-mode)
+  (encoding
+    (opcode 9)
+    (operand dst :field dst)
+    (operand src :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+  (semantics (set! a dst)))
+
+;; WCC's two sibling descriptors (one per matched CHOICE) share one identical
+;; semantics-fn (%SEMANTICS-FN-FORM builds it once per DEFINSTRUCTION variant,
+;; from the same SEMANTICS-FORMS/OPERAND-NAMES/HOLE-ALTERNATIVES-LIST) -- so
+;; which branch CHOICE-CASE actually takes is entirely a function of the
+;; CHOICES argument EXECUTE-INSTRUCTION is handed, not which sibling
+;; descriptor happens to be at hand. Every test below picks FIRST arbitrarily
+;; for exactly this reason.
+(fiveam:test choice-case-dispatches-on-matched-alternative
+  (let ((descriptor (first (find-instruction-variants 'word-test-machine "WCC")))
+        (m (make-machine 'word-test-machine)))
+    (execute-instruction descriptor m (list 5) (list (make-word-field-choice :width 10 :shift 0 :kind :inline :choice 'wc-reg)))
+    (fiveam:is (= 5 (sref m 'a)))
+    (execute-instruction descriptor m (list 7) (list (make-word-field-choice :width 10 :shift 0 :kind :inline :choice 'wc-ind)))
+    (fiveam:is (= 7 (sref m 'b)))))
+
+(fiveam:test choice-case-list-of-keys-matches-either
+  (eval '(definstruction word-test-machine wcc-shared
+           (modes wc-two)
+           (encoding (opcode 10)
+                     (operand value :field src
+                       (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+                       (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+           (semantics (choice-case value ((wc-reg wc-ind) (set! a value))))))
+  (let ((descriptor (first (find-instruction-variants 'word-test-machine "WCC-SHARED")))
+        (m (make-machine 'word-test-machine)))
+    (dolist (choice-name '(wc-reg wc-ind))
+      (execute-instruction descriptor m (list 3) (list (make-word-field-choice :width 10 :shift 0 :kind :inline :choice choice-name)))
+      (fiveam:is (= 3 (sref m 'a))))))
+
+(fiveam:test choice-case-no-choice-and-no-otherwise-signals-no-matching-choice
+  (let ((descriptor (first (find-instruction-variants 'word-test-machine "WCC")))
+        (m (make-machine 'word-test-machine)))
+    (fiveam:signals no-matching-choice
+      (execute-instruction descriptor m (list 5) nil))
+    (fiveam:signals no-matching-choice
+      (execute-instruction descriptor m (list 5) (list nil)))))
+
+(fiveam:test choice-case-with-otherwise-falls-back-on-no-choice
+  (eval '(definstruction word-test-machine wcc-otherwise
+           (modes wc-two)
+           (encoding (opcode 11)
+                     (operand value :field src
+                       (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+                       (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+           (semantics (choice-case value
+                        (wc-reg (set! a value))
+                        (otherwise (set! a -1))))))
+  (let ((descriptor (first (find-instruction-variants 'word-test-machine "WCC-OTHERWISE")))
+        (m (make-machine 'word-test-machine)))
+    (execute-instruction descriptor m (list 9) nil)
+    (fiveam:is (= (wrap-value -1 16) (sref m 'a)))))
+
+(fiveam:test choice-case-unknown-operand-name-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 12)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+                         (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+             (semantics (choice-case no-such-operand (wc-reg 1)))))))
+
+(fiveam:test choice-case-key-not-among-hole-alternatives-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 12)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+                         (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+             (semantics (choice-case value (word-abs 1) (wc-ind 2)))))))
+
+(fiveam:test choice-case-normalizes-mode-descriptor-entry
+  ;; MATCH-OPERAND-MODE's own assemble-time CHOICES arrive as MODE-DESCRIPTORs,
+  ;; not WORD-FIELD-CHOICEs -- %MATCHED-CHOICE-NAME must normalize both.
+  (let ((descriptor (first (find-instruction-variants 'word-test-machine "WCC")))
+        (m (make-machine 'word-test-machine)))
+    (execute-instruction descriptor m (list 5) (list (find-mode-descriptor 'wc-ind)))
+    (fiveam:is (= 5 (sref m 'b)))))
+
+(fiveam:test decode-instruction-at-choices-hole-aligned-with-values
+  ;; #73: CHOICE-CASE's whole mechanism depends on this staying true --
+  ;; DST's hole (a plain value-selected field, no CHOICE of its own) decodes
+  ;; a NIL choice; SRC's hole (CHOICE-selected) names the real alternative,
+  ;; in the same hole order as VALUES.
+  (let* ((a (assemble "wccm 2, [5]" :machine 'word-test-machine))
+         (reader (vector-cell-reader (assembly-cells a))))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at reader 0 'word-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "WCCM" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(2 5) values))
+      (fiveam:is (null (%matched-choice-name choices 0)))
+      (fiveam:is (eq 'wc-ind (%matched-choice-name choices 1))))))
+
 (fiveam:test word-opcode-overflowing-opcode-field-signals-error
   (fiveam:signals error
     (eval '(definstruction word-test-machine bogus

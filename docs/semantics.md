@@ -50,6 +50,73 @@ when it runs) if the name is left out — name one explicitly in that case.
 - `(zero? value)`, `(bit-set? value bit)` — small predicates used in flag
   expressions.
 
+## `choice-case`
+
+Dispatches on a matched addressing-mode alternative. `choice-case` is
+available inside a `definstruction` `(semantics ...)` body
+alongside the operators above — but, unlike them, it is not part of
+`with-machine-bindings` itself, since it needs information
+`with-machine-bindings`'s standalone callers never have: which `one-of`
+alternative (see [Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) an operand hole actually matched.
+
+```lisp
+(choice-case name
+  (mode-or-modes form...)
+  ...
+  [(otherwise form...)])
+```
+
+`name` is an operand field name from the instruction's `(operand ...)`
+subclauses, or `operand` for the first field (mirroring the `operand`
+binding every semantics body already gets). Each clause's key is one
+mode-name symbol or a list of them, exactly like `cl:case`; every key must
+be one of `name`'s hole's own `one-of` alternatives — checked at
+`definstruction` time — unless that hole isn't governed by a `one-of` at
+all, in which case there is nothing to check a key against and the check is
+skipped. At runtime, `choice-case` dispatches on which alternative the hole
+was actually decoded (or assembled) as; with no `otherwise` clause, a hole
+matching none of the given keys — including one with no recorded
+alternative at all — signals `no-matching-choice` instead of silently
+falling through.
+
+This is the piece a word-encoded field's `(choice mode)` variant selector
+(see [Instructions, "CHOICE-selected word
+fields"](instructions.md#choice-selected-word-fields-104)) leaves open on
+its own: `(choice mode)` steers a field's own *encoding*, but every sibling
+descriptor its combinations expand into still shares one semantics body.
+`choice-case` reads back which alternative was really written, so `[reg]`
+can genuinely dereference while a bare `reg` reads the register's own value:
+
+```lisp
+(definstruction anima16foo ld
+  (modes ld-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :field b)
+    (operand src :field a
+      (variant (choice a-reg) inline :range (0 7) :bias #x00)
+      (variant (choice a-ind) inline :range (0 7) :bias #x08)
+      (variant (choice a-mem) (extra-word :escape #x1e))))
+  (semantics
+    (set! (reg dst)
+      (choice-case src
+        (a-reg (reg src))
+        (a-ind (mref machine 'ram (reg src)))
+        (a-mem (mref machine 'ram src))))))
+```
+
+See [`examples/anima16.lisp`](../examples/anima16.lisp) for this run end to
+end: the three forms of `ld` now produce three genuinely different results
+for the same written value, not just three different encodings.
+
+A **cell-encoded** machine's decoded instruction carries no record of which
+`one-of` alternative was assembled at all (see [Addressing modes, "What
+`one-of` does and does not
+do"](modes.md#what-one-of-does-and-does-not-do)) — `choice-case` there
+always sees every hole as unmatched, so it signals `no-matching-choice`
+unless given an `otherwise` clause.
+
 ## `push`/`pop` and Common Lisp
 
 `push` and `pop` here are LASM's stack-semantics operators, not

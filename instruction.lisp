@@ -55,6 +55,27 @@ error.")
                  (format s "No instruction with opcode ~S registered on machine ~S"
                          (unknown-instruction-opcode c) (unknown-instruction-machine c))))))
 
+(define-condition no-matching-choice (lasm-error)
+  ((machine :initarg :machine :reader no-matching-choice-machine)
+   (instruction :initarg :instruction :reader no-matching-choice-instruction)
+   (operand :initarg :operand :reader no-matching-choice-operand)
+   (choice :initarg :choice :reader no-matching-choice-choice))
+  (:documentation "Signalled by a (SEMANTICS ...) body's CHOICE-CASE (#73)
+when OPERAND's matched alternative -- CHOICE, a mode-name symbol, or NIL when
+none was recorded (a cell-encoded machine, or EXECUTE-INSTRUCTION called
+directly with no CHOICES) -- names none of CHOICE-CASE's own clauses and it
+declares no OTHERWISE clause to fall back to. Distinguishable from any other
+error a semantics body might signal, the same rationale as UNKNOWN-
+INSTRUCTION being its own condition rather than a generic error. MACHINE and
+INSTRUCTION are kept as separate slots, like UNKNOWN-INSTRUCTION's own
+MACHINE/MNEMONIC, so a handler can read either programmatically rather than
+parsing them back out of a combined report string.")
+  (:report (lambda (c s)
+             (format s "Instruction ~S ~S: operand ~S matched alternative ~S, ~
+which no CHOICE-CASE clause names, and no OTHERWISE clause was given"
+                     (no-matching-choice-machine c) (no-matching-choice-instruction c)
+                     (no-matching-choice-operand c) (no-matching-choice-choice c)))))
+
 (define-condition opcode-conflict (lasm-error)
   ((machine :initarg :machine :reader opcode-conflict-machine)
    (opcode :initarg :opcode :reader opcode-conflict-opcode)
@@ -413,20 +434,114 @@ operand, so per-hole relative marking is not supported"
 ;; (never observed, since %CHECK-OPERAND-NAMES rejects that combination at
 ;; DEFINSTRUCTION time -- this ordering is what makes REJECTING it, rather
 ;; than just documenting it, actually sufficient).
-(defun %semantics-fn-form (semantics-forms machine operand-names)
-  (let ((named-bindings (loop for name in operand-names
+
+;;; CHOICE-CASE (#73): dispatching (semantics ...) on the ONE-OF alternative
+;;; an operand hole actually matched -- #104's (choice MODE) selector steers
+;;; a word-encoded field's own code, but every sibling descriptor its
+;;; combinations expand into still shares one semantics-fn. The information
+;;; needed is already computed at decode time (DECODE-INSTRUCTION-AT's fourth
+;;; CHOICES value, decoder.lisp) and at assemble time (MATCH-OPERAND-MODE's
+;;; own CHOICES, mode.lisp) -- CHOICE-CASE just gives a semantics body
+;;; somewhere to read it.
+
+(defun %choice-case-operand-index (name operand-names)
+  "NAME is a CHOICE-CASE operand argument (unevaluated). Returns its hole
+index against OPERAND-NAMES -- the symbol OPERAND always means hole 0
+(mirroring DEFINSTRUCTION's own OPERAND alias for the first field, whether or
+not that field has a name of its own), same as any declared field name.
+Signals a DEFINSTRUCTION-time error if NAME is neither OPERAND nor a declared
+field, or if this variant has no operand fields at all."
+  (unless operand-names
+    (error "DEFINSTRUCTION: CHOICE-CASE ~S: this variant has no operand fields" name))
+  (or (position name operand-names)
+      (and (eq name 'operand) 0)
+      (error "DEFINSTRUCTION: CHOICE-CASE: no operand field named ~S -- ~
+declared fields are ~S" name (or (remove nil operand-names) '(operand)))))
+
+(defun %check-choice-case-keys! (name keys hole-alternatives)
+  "Signal a DEFINSTRUCTION-time error if any of KEYS (one CHOICE-CASE clause's
+key -- a single mode-name symbol, or a list of them) names a mode not among
+HOLE-ALTERNATIVES -- this operand's own ONE-OF alternatives, in hole order
+(mode.lisp's %MODE-HOLE-ALTERNATIVES). HOLE-ALTERNATIVES NIL means this
+NAME's hole isn't a ONE-OF at all -- e.g. a shared top-level (semantics ...)
+whose other modes never route this field through a ONE-OF -- so the check is
+skipped silently rather than erroring: %MATCHED-CHOICE-NAME returns NIL
+there, and CHOICE-CASE's own OTHERWISE/NO-MATCHING-CHOICE fallback already
+covers what happens at runtime. CL:CASE's own OTHERWISE/T fallback keys are
+exempted unconditionally, same rationale."
+  (when hole-alternatives
+    (dolist (key (if (listp keys) keys (list keys)))
+      (unless (member key '(otherwise t))
+        (unless (member key hole-alternatives)
+          (error "DEFINSTRUCTION: CHOICE-CASE ~S: ~S is not one of this operand's ~
+ONE-OF alternatives ~S" name key hole-alternatives))))))
+
+(defun %choice-case-form (name clauses machine-name instruction-name operand-names hole-alternatives-list)
+  "Expansion of one (CHOICE-CASE NAME CLAUSE...) form (see the DEFINSTRUCTION
+docstring) inside a (semantics ...) body -- a plain CL:CASE on
+%MATCHED-CHOICE-NAME's result, with a NO-MATCHING-CHOICE fallback spliced in
+unless CLAUSES already supplies its own OTHERWISE/T clause."
+  (let* ((index (%choice-case-operand-index name operand-names))
+         (hole-alternatives (nth index hole-alternatives-list)))
+    (dolist (clause clauses)
+      (%check-choice-case-keys! name (first clause) hole-alternatives))
+    (let ((has-fallback (some (lambda (c) (member (first c) '(otherwise t))) clauses))
+          (choice-var (gensym "CHOICE")))
+      `(let ((,choice-var (%matched-choice-name choices ,index)))
+         (case ,choice-var
+           ,@clauses
+           ,@(unless has-fallback
+               `((otherwise (error 'no-matching-choice
+                                    :machine ',machine-name
+                                    :instruction ',instruction-name
+                                    :operand ',name
+                                    :choice ,choice-var)))))))))
+
+(defun %validate-choice-case-forms! (form machine name operand-names hole-alternatives-list)
+  "Walk FORM (one top-level element of a (semantics ...) body, or any
+sub-form of one) for every literal (CHOICE-CASE ...) sub-form, eagerly
+re-running its own validation (%CHOICE-CASE-FORM, discarding the expansion
+it builds) right here, at DEFINSTRUCTION's own outer macroexpansion.
+CHOICE-CASE's validation also runs again, redundantly, inside its MACROLET
+expander when the generated semantics lambda is actually compiled -- but an
+error signalled *there* is a nested macroexpansion inside a to-be-compiled
+sub-form, which SBCL's compiler absorbs as a diagnostic rather than
+propagating as a normal condition, invisible to a caller's HANDLER-CASE or
+FIVEAM:SIGNALS. Running the same check here, synchronously in this
+function's own call stack, is what makes a bad operand name or clause key an
+error EVAL/COMPILE's caller actually sees. A generic car/cdr tree walk (not
+just the top level) since CHOICE-CASE may appear nested inside LET/IF/PROGN/
+etc., not only as a form's own head -- except a (QUOTE ...) sub-form, which
+this does not descend into: quoted data merely containing the symbols
+CHOICE-CASE is not a use of the macro and has nothing to validate."
+  (when (and (consp form) (not (eq (first form) 'quote)))
+    (if (eq (first form) 'choice-case)
+        (destructuring-bind (op-name &rest clauses) (rest form)
+          (%choice-case-form op-name clauses machine name operand-names hole-alternatives-list))
+        (progn
+          (%validate-choice-case-forms! (car form) machine name operand-names hole-alternatives-list)
+          (%validate-choice-case-forms! (cdr form) machine name operand-names hole-alternatives-list)))))
+
+(defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list)
+  (dolist (form semantics-forms)
+    (%validate-choice-case-forms! form machine name operand-names hole-alternatives-list))
+  (let ((named-bindings (loop for op-name in operand-names
                                for i from 0
-                               when name
-                                 collect `(,name (nth ,i operands)))))
-    `(lambda (machine operands)
-       (declare (ignorable operands))
+                               when op-name
+                                 collect `(,op-name (nth ,i operands)))))
+    `(lambda (machine operands choices)
+       (declare (ignorable operands choices))
        (with-machine-bindings (machine ,machine)
          (let ((operand (first operands))
                ,@named-bindings)
            (declare (ignorable operand ,@(remove nil operand-names)))
-           ,@semantics-forms)))))
+           (macrolet ((choice-case (choice-name &body clauses)
+                        (%choice-case-form choice-name clauses ',machine ',name
+                                            ',operand-names ',hole-alternatives-list)))
+             ,@semantics-forms))))))
 
-(defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms)
+(defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
+                          &optional hole-alternatives-list)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -435,7 +550,7 @@ operand, so per-hole relative marking is not supported"
     :operand-widths ',operand-widths
     :operand-names ',operand-names
     :cycles ,cycles
-    :semantics-fn ,(%semantics-fn-form semantics-forms machine operand-names)))
+    :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
 
 (defun %resolve-operand-fields (mode operand-subclauses machine name mode-name machine-name)
   "Resolve the (operand ...) subclauses (zero or more whole forms, in
@@ -508,6 +623,22 @@ SUBCLAUSES)."
   ;; a record of which alternative was really encoded, instead of always
   ;; rendering a ONE-OF's first alternative.
   (choice nil :type (or null symbol)))
+
+(defun %matched-choice-name (choices index)
+  "The mode-name symbol INDEX's hole actually matched, from CHOICES (a
+positional, hole-aligned list) -- or NIL if CHOICES is too short, INDEX's
+entry is NIL, or it names a value-selected field (no CHOICE of its own).
+Normalizes the two shapes CHOICES arrives in: a WORD-FIELD-CHOICE
+(DECODE-INSTRUCTION-AT/EXECUTE-INSTRUCTION, decoder.lisp) or a MODE-DESCRIPTOR
+(MATCH-OPERAND-MODE, mode.lisp -- the same shape %WORD-CHOICES-ELIGIBLE-P
+already reads at assemble time, assembler.lisp); a bare symbol or NIL passes
+through unchanged, for a caller that already extracted a mode name itself."
+  (let ((entry (nth index choices)))
+    (etypecase entry
+      (null nil)
+      (symbol entry)
+      (word-field-choice (word-field-choice-choice entry))
+      (mode-descriptor (mode-descriptor-name entry)))))
 
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
@@ -738,7 +869,8 @@ fetched bits."
                                        (word-operand-spec-variants spec))))
                     specs)))
 
-(defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms)
+(defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms
+                               hole-alternatives-list)
   "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
 . VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order)."
   (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
@@ -755,7 +887,7 @@ fetched bits."
       :word-alternatives ,alternatives-form
       :extra-words ,extra-words
       :cycles ,cycles
-      :semantics-fn ,(%semantics-fn-form semantics-forms machine operand-names))))
+      :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list))))
 
 (defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
                                      cycles semantics-forms)
@@ -784,13 +916,14 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
               :word-alternatives nil
               :extra-words 0
               :cycles ,cycles
-              :semantics-fn ,(%semantics-fn-form semantics-forms machine nil)))
+              :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
       (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name))
              (alternatives-form (%word-alternatives-form specs))
-             (combos (%expand-word-combos specs)))
+             (combos (%expand-word-combos specs))
+             (hole-alternatives-list (%mode-hole-alternatives mode)))
         (mapcar (lambda (combo)
                   (%word-descriptor-form machine name mode-form opcode alternatives-form combo
-                                          cycles semantics-forms))
+                                          cycles semantics-forms hole-alternatives-list))
                 combos))))
 
 (defun %check-word-opcode (machine name opcode)
@@ -860,7 +993,8 @@ its absolute-mode sibling."
             (multiple-value-bind (operand-widths operand-names)
                 (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
               (list (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                       opcode operand-widths operand-names cycles-form semantics-forms))))))))
+                                       opcode operand-widths operand-names cycles-form semantics-forms
+                                       (%mode-hole-alternatives mode)))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -964,7 +1098,33 @@ declared bit width; no two INLINE variants' (biased) ranges may overlap; no
 two :EXTRA-WORD variants may share an escape value; and no escape value may
 fall inside any INLINE variant's biased range -- all checked here, at
 DEFINSTRUCTION time, since any of them would make the field undecodable. A
-:RELATIVE addressing mode is not supported on a word-encoded machine."
+:RELATIVE addressing mode is not supported on a word-encoded machine.
+
+CHOICE-CASE (#73), usable inside any (semantics ...) body alongside SET!/
+PUSH/POP/SET-FLAGS!/TRAP, dispatches on which ONE-OF alternative an operand
+hole actually matched -- the piece the CHOICE-selected word fields above
+deliberately leave open, since every sibling descriptor one (choice ...)
+combination expands into still shares one semantics body:
+
+  (choice-case NAME
+    (MODE-OR-MODES form...)
+    ...
+    [(otherwise form...)])
+
+NAME is an operand field name from this variant's (operand ...) subclauses,
+or the symbol OPERAND for the first field (mirroring the existing OPERAND
+binding), even when that field also has its own name. Each clause's key is
+one mode-name symbol or a list of them (as CL:CASE); every key must be one
+of NAME's hole's own ONE-OF alternatives, checked here at DEFINSTRUCTION
+time -- unless NAME's hole isn't governed by any ONE-OF at all (e.g. this
+(semantics ...) is a multi-mode instruction's shared default and some other
+mode routes the same field name through a plain EXPR hole instead), in which
+case no key can ever be validated against anything and the check is skipped.
+At runtime, CHOICE-CASE reads EXECUTE-INSTRUCTION's CHOICES argument (see
+below) for NAME's hole and dispatches like CL:CASE; with no OTHERWISE clause,
+a hole matching none of the given keys -- including a hole with no recorded
+choice at all, e.g. on a cell-encoded machine, which never produces one --
+signals NO-MATCHING-CHOICE rather than silently falling through."
   (let (modes-clause encoding-clause semantics-clause cycles-clause)
     (dolist (clause clauses)
       (case (first clause)
@@ -1057,7 +1217,8 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                      (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
                                                (second opcode-subclause)
                                                operand-widths operand-names
-                                               cycles-form (rest semantics-clause))))
+                                               cycles-form (rest semantics-clause)
+                                               (%mode-hole-alternatives mode))))
                     ',name)))))))))
 
 ;;; Encoding / execution
@@ -1123,10 +1284,19 @@ its own should supply the same."
                       for width in (instruction-descriptor-operand-widths descriptor)
                       append (%encode-value-cells value width cell-width)))))))
 
-(defun execute-instruction (descriptor machine values)
+(defun execute-instruction (descriptor machine values &optional choices)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing
 VALUES (a list of already-evaluated integers, one per operand encoding
 field, or NIL for a no-operand instruction) to its semantics -- OPERAND is
 bound to the first (or only) value, and any named field to its own value
-(see %SEMANTICS-FN-FORM)."
-  (funcall (instruction-descriptor-semantics-fn descriptor) machine values))
+(see %SEMANTICS-FN-FORM).
+
+CHOICES (#73), when given, is DECODE-INSTRUCTION-AT's fourth return value (or
+the assemble-time equivalent, MATCH-OPERAND-MODE's own CHOICES) -- the ONE-OF
+alternative each operand hole actually matched, positionally hole-aligned.
+STEP-MACHINE (emulator.lisp) always supplies it; a caller with no CHOICES to
+give (or on a cell-encoded machine, which never produces any -- see
+%DECODE-CELL-INSTRUCTION, decoder.lisp) can omit it, in which case a
+(semantics ...) body's CHOICE-CASE (if it has one) sees every hole as
+unmatched, same as an operand not governed by any ONE-OF at all."
+  (funcall (instruction-descriptor-semantics-fn descriptor) machine values choices))

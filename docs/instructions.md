@@ -452,13 +452,27 @@ floor/value filters ever run. Unlike the value-selected case, a
 `choice`-selected sibling to relax into, so this is an `assembly-error`
 rather than a silent wrap.
 
-This says nothing about *semantics* — every sibling descriptor `ld`'s three
-`choice` variants expand into shares one `semantics` body
-(`with-machine-bindings`, below), so `[reg]` cannot yet mean "dereference"
-while a bare `reg` means "use directly"; dispatching semantics on which
-alternative actually matched is a separate, still-open piece (see the
-tracker). See [`examples/anima16.lisp`](../examples/anima16.lisp) for this
-run end to end, including the decode/disassemble round-trip — the matched
+Encoding is only half the picture — every sibling descriptor `ld`'s three
+`choice` variants expand into still shares one *body*, but that body can
+read back which alternative was actually matched: `choice-case` (see
+[Semantics vocabulary](semantics.md#choice-case--dispatching-on-a-matched-addressing-mode-alternative))
+dispatches on it directly, so `[reg]` really means "dereference" while a
+bare `reg` means "use the value directly" (see [Semantics vocabulary,
+"`choice-case`"](semantics.md#choice-case) for the full picture, including
+what happens on a cell-encoded machine, which has no matched alternative to
+read back):
+
+```lisp
+(semantics
+  (set! (reg dst)
+    (choice-case src
+      (a-reg (reg src))
+      (a-ind (mref machine 'ram (reg src)))
+      (a-mem (mref machine 'ram src)))))
+```
+
+See [`examples/anima16.lisp`](../examples/anima16.lisp) for this run end to
+end, including the decode/disassemble round-trip — the matched
 alternative's own syntax renders back, not always the `one-of`'s first
 alternative (see [Disassembler](disassembler.md)).
 
