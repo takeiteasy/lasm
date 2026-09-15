@@ -178,6 +178,7 @@
    #:find-instruction
    #:find-instruction-variants
    #:find-instruction-by-opcode
+   #:find-instruction-descriptors-by-opcode
    #:eval-expr-constant
    #:encode-instruction
    #:execute-instruction

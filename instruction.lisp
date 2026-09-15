@@ -80,16 +80,40 @@ which no CHOICE-CASE clause names, and no OTHERWISE clause was given"
   ((machine :initarg :machine :reader opcode-conflict-machine)
    (opcode :initarg :opcode :reader opcode-conflict-opcode)
    (mnemonic :initarg :mnemonic :reader opcode-conflict-mnemonic)
-   (other-mnemonic :initarg :other-mnemonic :reader opcode-conflict-other-mnemonic))
+   (other-mnemonic :initarg :other-mnemonic :reader opcode-conflict-other-mnemonic)
+   ;; #105: NIL for the original "different mnemonic, same opcode" case
+   ;; (below); :UNDECODABLE-BYTE-MACHINE or :INDISTINGUISHABLE otherwise --
+   ;; see REGISTER-INSTRUCTION-VARIANTS!/%CHECK-OPCODE-DECODABLE!.
+   (reason :initarg :reason :initform nil :reader opcode-conflict-reason))
   (:documentation "Signalled by REGISTER-INSTRUCTION-VARIANTS! when a
-descriptor's opcode is already claimed by a *different* mnemonic on the same
-machine (#26) -- without this check the later DEFINSTRUCTION silently wins
-the opcode-table entry, and a later redefinition of the earlier mnemonic can
-then delete the winner's entry outright as an apparently orphaned opcode.")
+descriptor's opcode is already claimed by another descriptor on the same
+machine and the two cannot coexist there: a *different* mnemonic (#26) --
+without this check the later DEFINSTRUCTION silently wins the opcode-table
+entry, and a later redefinition of the earlier mnemonic can then delete the
+winner's entry outright as an apparently orphaned opcode -- or, on a
+byte-encoded machine, even the *same* mnemonic under a different mode (#105:
+a byte encoding carries no per-field discriminator to decode two modes
+apart, unlike a word-encoded machine's operand fields), or, on a
+word-encoded machine, two descriptors whose operand fields accept
+overlapping raw bit patterns at every hole (#105's
+%CHECK-OPCODE-DECODABLE!, which is what REASON :INDISTINGUISHABLE names).")
   (:report (lambda (c s)
-             (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S"
-                     (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
-                     (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))))
+             (case (opcode-conflict-reason c)
+               (:undecodable-byte-machine
+                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S -- ~
+a byte-encoded machine has no per-field discriminator to decode two modes ~
+of one mnemonic apart, so they may not share an opcode"
+                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
+               (:indistinguishable
+                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S with ~
+an indistinguishable encoding -- no operand field's raw bits tell the two apart at decode time"
+                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
+               (t
+                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S"
+                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))))))
 
 ;;; Instruction descriptor
 
@@ -230,37 +254,57 @@ reference is not a label, so it's independent of \"no labels allowed here\"."
 (defun register-instruction-variants! (machine-name descriptors)
   "Register DESCRIPTORS -- one or more INSTRUCTION-DESCRIPTORs sharing one
 mnemonic -- on machine MACHINE-NAME, replacing any previous registration
-under that mnemonic. Every old opcode not reused by DESCRIPTORS is dropped
-from the opcode table first, so a redefinition that drops a mode's opcode
-does not leave FIND-INSTRUCTION-BY-OPCODE (an emulator's decode step)
-resolving it to a now-stale descriptor.
+under that mnemonic. Every old descriptor registered under this mnemonic is
+first dropped from every opcode bucket it occupied, so a redefinition that
+drops a mode does not leave FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE (an
+emulator's decode step) still resolving it to a now-stale descriptor; a
+co-tenant *other* mnemonic sharing one of those opcodes (#105, below) is
+untouched by this cleanup.
 
-A word-encoded machine's variant expansion (#20, instruction.lisp's
-%EXPAND-WORD-COMBOS) can hand this several sibling DESCRIPTORS that all
-share one opcode value (one mnemonic, encoded differently by operand size,
-not by opcode) -- whichever ends up in the opcode table below (the last one
-processed wins, same as any other same-opcode overwrite here) is fine for
-decode: every sibling carries an equivalent WORD-ALTERNATIVES menu, so
-%STEP-WORD-MACHINE (emulator.lisp) reconstructs the actual encoding from the
-fetched bits regardless of which specific combo it's looking at."
+Each of MACHINE-NAME's opcode buckets holds a *list* of descriptors, not one
+(#105) -- one entry per DEFINSTRUCTION-time-verified decode-distinguishable
+descriptor sharing that opcode. A word-encoded machine's variant expansion
+(#20, %EXPAND-WORD-COMBOS) can hand this several sibling DESCRIPTORS sharing
+one opcode value with an EQUALP WORD-ALTERNATIVES menu (one DEFINSTRUCTION
+mode clause, encoded differently by operand size) -- those always coexist,
+since %STEP-WORD-MACHINE (emulator.lisp, via DECODE-INSTRUCTION-AT) tries
+every candidate at an opcode and picks the one whose fields the fetched bits
+actually match, regardless of which specific combo it's looking at. Two
+descriptors that are *not* siblings -- a different mnemonic, or the same
+mnemonic under a different (MODES ...) clause -- may also coexist at one
+opcode on a word-encoded machine, but only once %CHECK-OPCODE-DECODABLE!
+(below) confirms some operand field's raw bits tell them apart; a
+byte-encoded machine has no per-field discriminator to decode by at all, so
+any second descriptor at an opcode there -- same mnemonic or different -- is
+an unconditional OPCODE-CONFLICT (#26 for the cross-mnemonic case; #105 for
+the same-mnemonic-different-mode case, previously silent: it registered with
+no error and then mis-decoded, since the opcode table held exactly one
+descriptor, last-write-wins)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
-         (old (gethash name (machine-descriptor-instructions md)))
-         (new-opcodes (mapcar #'instruction-descriptor-opcode descriptors)))
+         (wordp (%word-machine-p machine-name)))
+    (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
+            using (hash-value bucket)
+          do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
+               (if kept
+                   (setf (gethash opcode (machine-descriptor-opcodes md)) kept)
+                   (remhash opcode (machine-descriptor-opcodes md)))))
+    ;; One new descriptor at a time, so a later entry in DESCRIPTORS itself
+    ;; sees an earlier one this same call already inserted -- needed for
+    ;; same-mnemonic-different-mode co-tenancy, where two entries of
+    ;; DESCRIPTORS (not just a pre-existing bucket) can share an opcode.
     (dolist (descriptor descriptors)
-      (let ((claimant (gethash (instruction-descriptor-opcode descriptor) (machine-descriptor-opcodes md))))
-        (when (and claimant (not (string= (instruction-descriptor-name claimant) name)))
-          (error 'opcode-conflict :machine machine-name
-                                   :opcode (instruction-descriptor-opcode descriptor)
-                                   :mnemonic name
-                                   :other-mnemonic (instruction-descriptor-name claimant)))))
-    (dolist (old-descriptor old)
-      (unless (member (instruction-descriptor-opcode old-descriptor) new-opcodes)
-        (remhash (instruction-descriptor-opcode old-descriptor) (machine-descriptor-opcodes md))))
+      (let* ((opcode (instruction-descriptor-opcode descriptor))
+             (bucket (gethash opcode (machine-descriptor-opcodes md))))
+        (dolist (other bucket)
+          (if wordp
+              (%check-opcode-decodable! machine-name name descriptor other)
+              (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
+                                       :other-mnemonic (instruction-descriptor-name other)
+                                       :reason (when (string= name (instruction-descriptor-name other))
+                                                 :undecodable-byte-machine))))
+        (setf (gethash opcode (machine-descriptor-opcodes md)) (append bucket (list descriptor)))))
     (setf (gethash name (machine-descriptor-instructions md)) descriptors)
-    (dolist (descriptor descriptors)
-      (setf (gethash (instruction-descriptor-opcode descriptor) (machine-descriptor-opcodes md))
-            descriptor))
     descriptors))
 
 (defun find-instruction-variants (machine-name mnemonic)
@@ -288,13 +332,32 @@ unregistered, or if MODE names none of its variants."
               (error 'unknown-instruction :machine machine-name :mnemonic mnemonic)))
         (first variants))))
 
-(defun find-instruction-by-opcode (machine-name opcode)
-  "Look up the INSTRUCTION-DESCRIPTOR registered under OPCODE on machine
-MACHINE-NAME -- the decode direction an emulator loop needs. Signals
-UNKNOWN-INSTRUCTION if none is registered."
+(defun find-instruction-descriptors-by-opcode (machine-name opcode)
+  "Look up every INSTRUCTION-DESCRIPTOR registered under OPCODE on machine
+MACHINE-NAME, in declaration order -- the decode direction an emulator loop
+needs. More than one entry only on a word-encoded machine (#105): either
+sibling combos of one DEFINSTRUCTION mode clause (%EXPAND-WORD-COMBOS), which
+share an EQUALP WORD-ALTERNATIVES menu, or distinct co-tenant descriptors
+REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE! has already
+confirmed are pairwise distinguishable by some operand field's raw bits --
+%DECODE-WORD-INSTRUCTION (decoder.lisp) tries each in turn against the bits
+actually fetched. A byte-encoded machine's opcode table holds exactly one
+entry per key, enforced at registration time. Signals UNKNOWN-INSTRUCTION if
+none is registered."
   (let ((md (find-machine-descriptor machine-name)))
     (or (gethash opcode (machine-descriptor-opcodes md))
         (error 'unknown-instruction :machine machine-name :opcode opcode))))
+
+(defun find-instruction-by-opcode (machine-name opcode)
+  "Look up the first INSTRUCTION-DESCRIPTOR registered under OPCODE on
+machine MACHINE-NAME -- see FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE for the
+full candidate list this picks from. Correct for a byte-encoded machine
+(exactly one candidate, always) and for a word-encoded opcode with only
+sibling combos at it (every sibling decodes any one candidate's bits
+equivalently, per REGISTER-INSTRUCTION-VARIANTS!'s docstring) -- not a
+substitute for FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE's own decode-by-actual-
+bits behavior when distinct co-tenants share an opcode."
+  (first (find-instruction-descriptors-by-opcode machine-name opcode)))
 
 ;; A mode's default operand width, when neither the mode itself nor the
 ;; instruction gives one explicitly: the machine's sole memory element's
@@ -624,6 +687,19 @@ SUBCLAUSES)."
   ;; rendering a ONE-OF's first alternative.
   (choice nil :type (or null symbol)))
 
+(defun %word-choice-matches-p (raw-value choice)
+  "T if RAW-VALUE -- a field's bits as actually fetched or, at
+DEFINSTRUCTION time (#105's %CHECK-OPCODE-DECODABLE!), enumerated -- is what
+CHOICE (a WORD-FIELD-CHOICE) would encode: its exact ESCAPE for an
+:EXTRA-WORD choice, or a value in its (biased) RANGE for an :INLINE one.
+Lives here, not in decoder.lisp (which loads after this file), so
+REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
+(decoder.lisp) still uses it for its own, original purpose."
+  (ecase (word-field-choice-kind choice)
+    (:extra-word (= raw-value (word-field-choice-escape choice)))
+    (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
+               (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice)))))))
+
 (defun %matched-choice-name (choices index)
   "The mode-name symbol INDEX's hole actually matched, from CHOICES (a
 positional, hole-aligned list) -- or NIL if CHOICES is too short, INDEX's
@@ -646,6 +722,81 @@ through unchanged, for a caller that already extracted a mode name itself."
 word-field/variant encoding path below instead of the byte-encoded
 (operand :mode)/(operand :width n) one."
   (and (machine-descriptor-instruction-word (find-machine-descriptor machine-name)) t))
+
+(defun %sibling-combos-p (a b)
+  "T if descriptors A and B are sibling combos %EXPAND-WORD-COMBOS (below)
+expanded from *one* DEFINSTRUCTION mode clause: the same mnemonic (siblings
+are always produced together, for one mnemonic, by one call) whose
+WORD-ALTERNATIVES are EQUALP. Both conditions matter -- same mnemonic alone
+doesn't imply compatibility (two distinct (MODES ...) clauses of one
+mnemonic could, in principle, land on byte-identical field encodings without
+being the combo expansion's own siblings), and same WORD-ALTERNATIVES alone
+doesn't either: two *different* mnemonics can coincidentally declare
+identical field ranges, and unlike true siblings they carry different
+SEMANTICS-FN, so decode picking whichever one happens to come first would
+silently run the wrong effect -- exactly the ambiguity #105's
+%CHECK-OPCODE-DECODABLE! exists to catch, not wave through. True siblings
+always decode compatibly (REGISTER-INSTRUCTION-VARIANTS!'s long-standing
+guarantee, predating #105) -- %CHECK-OPCODE-DECODABLE! skips checking them
+against each other, since there is nothing to check. An all-NIL
+WORD-ALTERNATIVES (a no-operand mode) EQUALP-compares equal to itself, which
+is correct when the mnemonic also matches: two sibling no-operand combos
+(possible only via a value-selected field with no operand at all, which does
+not occur today, but nothing rules it out) are exactly as decode-compatible
+as any other sibling pair."
+  (and (string= (instruction-descriptor-name a) (instruction-descriptor-name b))
+       (equalp (instruction-descriptor-word-alternatives a) (instruction-descriptor-word-alternatives b))))
+
+(defun %word-field-choice-values (choice)
+  "Every raw field value CHOICE (a WORD-FIELD-CHOICE) accepts: its ESCAPE
+alone for an :EXTRA-WORD choice, or the whole (biased) RANGE, inclusive, for
+an :INLINE one. Used at DEFINSTRUCTION time by %CHECK-OPCODE-DECODABLE! to
+test two co-tenant descriptors' field menus for disjointness -- field widths
+in practice are small (a handful of bits), so enumerating is simpler than
+range algebra over RANGE/BIAS/ESCAPE together, and cheap: called only when
+two descriptors are about to share an opcode, not on any hot path."
+  (ecase (word-field-choice-kind choice)
+    (:extra-word (list (word-field-choice-escape choice)))
+    (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
+               (loop for v from (+ lo (word-field-choice-bias choice))
+                       to (+ hi (word-field-choice-bias choice))
+                     collect v)))))
+
+(defun %hole-disjoint-p (alternatives-a alternatives-b)
+  "T if the raw field values ALTERNATIVES-A and ALTERNATIVES-B (two
+descriptors' WORD-ALTERNATIVES entries for the *same* hole index -- each a
+list of WORD-FIELD-CHOICE) accept are disjoint sets, i.e. no raw value
+decodes as a match under both. Used by %CHECK-OPCODE-DECODABLE! to find one
+hole where two co-tenant candidates can never both match a fetched word."
+  (let ((values-a (mapcan #'%word-field-choice-values alternatives-a)))
+    (notany (lambda (c) (some (lambda (v) (%word-choice-matches-p v c)) values-a)) alternatives-b)))
+
+(defun %check-opcode-decodable! (machine-name name a b)
+  "Signal OPCODE-CONFLICT (:REASON :INDISTINGUISHABLE) unless A and B --
+two INSTRUCTION-DESCRIPTORs about to share one opcode on word-encoded
+MACHINE-NAME (#105), neither a sibling combo of the other
+(%SIBLING-COMBOS-P) -- disagree at some shared hole: a hole index, within
+(MIN (length A's WORD-ALTERNATIVES) (length B's)), where %HOLE-DISJOINT-P
+finds no raw fetched value that would match both. Requires *at least one*
+such hole, not that every hole disagrees -- decode only needs one field to
+tell the two apart. A no-operand descriptor's WORD-ALTERNATIVES is NIL, so
+MIN is 0 and the loop below finds no hole to check at all --
+%TRY-DECODE-WORD-CANDIDATE (decoder.lisp) matches a no-operand descriptor
+vacuously, so it would collide with *any* co-tenant, and this correctly
+falls through to the error rather than reporting a false pass; likewise for
+two co-tenant no-operand descriptors, which are truly indistinguishable
+unless they are siblings (caught by %SIBLING-COMBOS-P above)."
+  (unless (%sibling-combos-p a b)
+    (let ((n (min (length (instruction-descriptor-word-alternatives a))
+                   (length (instruction-descriptor-word-alternatives b)))))
+      (unless (loop for i below n
+                    thereis (%hole-disjoint-p (nth i (instruction-descriptor-word-alternatives a))
+                                               (nth i (instruction-descriptor-word-alternatives b))))
+        (error 'opcode-conflict :machine machine-name
+                                 :opcode (instruction-descriptor-opcode a)
+                                 :mnemonic name
+                                 :other-mnemonic (instruction-descriptor-name b)
+                                 :reason :indistinguishable)))))
 
 (defun %parse-word-variant-form (form field-name)
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)

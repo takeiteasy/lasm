@@ -117,7 +117,17 @@
   ;; mode the mnemonic accepts (mode.lisp/M2); a no-operand or single-mode
   ;; mnemonic's list has exactly one element.
   (instructions (make-hash-table :test 'equal))
-  (opcodes (make-hash-table :test 'eql))          ; opcode -> instruction-descriptor
+  ;; opcode -> list of instruction-descriptor, one per co-tenant decode-
+  ;; distinguishable descriptor sharing that opcode (#105) -- more than one
+  ;; entry only on a word-encoded machine, where %CHECK-OPCODE-DECODABLE!
+  ;; (instruction.lisp) requires every pair sharing a list to disagree on
+  ;; some operand field's accepted raw bits so DECODE-INSTRUCTION-AT
+  ;; (decoder.lisp) can tell them apart by the bits actually fetched. A
+  ;; byte-encoded machine's opcode table has exactly one entry per key --
+  ;; there is no per-field discriminator to decode by, so
+  ;; REGISTER-INSTRUCTION-VARIANTS! rejects any second descriptor at an
+  ;; opcode outright there, regardless of mnemonic or mode.
+  (opcodes (make-hash-table :test 'eql))
   ;; NIL for an ordinary byte-encoded machine (every machine before #20) --
   ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
   ;; vs. an INSTRUCTION-WORD-LAYOUT to pick between the two encoding schemes.

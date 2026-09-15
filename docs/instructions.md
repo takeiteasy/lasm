@@ -275,16 +275,63 @@ addressing mode it accepts (a no-operand or single-mode instruction's list
 has exactly one). `(find-instruction-variants machine-name mnemonic)`
 returns the list; `(find-instruction machine-name mnemonic &key mode)`
 returns one variant, defaulting to the first declared when `mode` is
-omitted. `(find-instruction-by-opcode machine-name opcode)` is unaffected by
-any of this: each variant carries its own distinct opcode, so opcode → 
-descriptor decode stays one-to-one regardless of how many modes a mnemonic
-declares.
+omitted.
 
 Redefining a mnemonic (a repeated `definstruction`) replaces its whole
 variant list; any old opcode not reused by the new list is dropped from the
-opcode table, so a redefinition that drops a mode never leaves
-`find-instruction-by-opcode` resolving a stale opcode to a descriptor that no
-longer exists.
+opcode table, so a redefinition that drops a mode never leaves decode
+resolving a stale opcode to a descriptor that no longer exists.
+
+### Opcode to descriptor decode
+
+`(find-instruction-by-opcode machine-name opcode)` returns one descriptor
+registered under `opcode`; `(find-instruction-descriptors-by-opcode
+machine-name opcode)` returns every descriptor registered there. On a
+byte-encoded machine these always agree — an opcode has exactly one
+descriptor, enforced at `definstruction` time. On a word-encoded machine an
+opcode can carry several: sibling combos one `(modes ...)` clause's own
+operand-field variants expand into (`%expand-word-combos`, always
+compatible with each other), and, independently, several genuinely distinct
+descriptors — different mnemonics, or one mnemonic's different modes — that
+`definstruction` has verified are *decode-distinguishable*: some operand
+field's raw bits accept disjoint value sets between every such pair. Decode
+(`decode-instruction-at`) tries each candidate registered at an opcode in
+turn and returns the first whose fields the fetched bits actually match;
+since co-tenants are pairwise disjoint at some hole, at most one can ever
+match a given word, so this is never a race between overlapping candidates.
+
+Declaring two descriptors at one opcode that are *not* decode-distinguishable
+is a `definstruction`-time `opcode-conflict` error, not a silent
+last-write-wins overwrite: an unrelated mnemonic already claiming the opcode
+(as before); the same mnemonic under a second `(modes ...)` clause whose
+fields can't be told apart from the first's; or, on a byte-encoded machine,
+*any* second descriptor at all — a byte encoding has no per-field
+discriminator for decode to key off, so two modes of one mnemonic (or two
+different mnemonics) may never share an opcode there regardless of what
+their operand syntax looks like.
+
+```lisp
+(defmode a-reg expr)
+(defmode a-lit "#" expr)
+
+(definstruction anima16foo ld
+  (modes
+    (a-reg (opcode 1)
+      (operand dst :field b)
+      (operand src :field a (variant (range 0 7) inline))
+      (semantics (set! (reg dst) (reg src))))
+    (a-lit (opcode 1)
+      (operand dst :field b)
+      (operand lit :field a (variant (range 0 30) inline :bias 33))
+      (semantics (set! (reg dst) lit)))))
+```
+
+`ld 1, 0` and `ld 1, #5` share opcode 1, told apart purely by which raw
+values field `a` falls into (0–7 for the register form, 33–63 for the
+literal form) — `ld 1, 0` decodes back to the register mode, `ld 1, #5` to
+the literal mode, neither `:decode-failure` nor the other's mode. See
+[`examples/sharedopcode.lisp`](../examples/sharedopcode.lisp) for this run
+end to end, including a second mnemonic sharing an opcode the same way.
 
 ## Operand pipeline
 

@@ -150,6 +150,25 @@
       (variant (choice disasm-oo-ind) inline :range (0 15) :bias 16)))
   (semantics (set! (reg 0) val)))
 
+;; Shared opcode (#105): two mnemonics, decode-distinguishable purely by
+;; their field A's own disjoint bias range -- what returned :DECODE-FAILURE
+;; for one form and mis-decoded the other before this ticket.
+(definstruction disasm-word-machine sh1
+  (modes disasm-rr)
+  (encoding
+    (opcode 5)
+    (operand dst :field b)
+    (operand src :field a (variant (range 0 30) inline :bias 0)))
+  (semantics (set! (reg dst) src)))
+
+(definstruction disasm-word-machine sh2
+  (modes disasm-rr)
+  (encoding
+    (opcode 5)
+    (operand dst :field b)
+    (operand src :field a (variant (range 0 30) inline :bias 32)))
+  (semantics (set! (reg dst) (+ src 1))))
+
 ;;; Regression gate -- the EMULATOR suite (tests/emulator.lisp) exercising
 ;;; STEP-MACHINE must still pass unchanged after the DECODE-INSTRUCTION-AT
 ;;; extraction; no test here duplicates that, but every test below that
@@ -468,3 +487,18 @@ hlt" :machine 'disasm-word-machine))
          (text (disassembly-text lines))
          (a2 (assemble text :machine 'disasm-word-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
+(fiveam:test round-trip-shared-opcode-decodes-each-mnemonic-back-to-itself
+  ;; #105's own reproduction, at the disassembler level: SH1 and SH2 share
+  ;; opcode 5 and are told apart only by field A's own disjoint bias range --
+  ;; each must decode and render back to its *own* mnemonic, not
+  ;; :DECODE-FAILURE for one and the other's name for both.
+  (let* ((a (assemble "sh1 0,5
+sh2 1,5
+hlt" :machine 'disasm-word-machine))
+         (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil)))
+    (fiveam:is (string= "sh1 $0,$5" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "sh2 $1,$5" (disassembly-line-text (second lines))))
+    (let* ((text (disassembly-text lines))
+           (a2 (assemble text :machine 'disasm-word-machine)))
+      (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))

@@ -19,7 +19,7 @@ on both a byte-encoded and a word-encoded (DCPU-16-shaped) machine.
 
 ```lisp
 (decode-instruction-at read-cell address machine-name &key memory)
-;; => (values descriptor values size) | (values :decode-failure nil nil)
+;; => (values descriptor values size choices) | (values :decode-failure nil nil)
 ```
 
 The pure fetch/decode step shared by [the emulator's `step-machine`](emulator.md#step-machine)
@@ -41,13 +41,14 @@ for both cell sources.
 
 `size`, the third return value, is the instruction's width in cells,
 accumulated during decode rather than taken from
-`instruction-descriptor-size`: on a word-encoded machine, the opcode table's
-entry for a given opcode is whichever sibling combo
-`register-instruction-variants!` registered last — always the combo with the
-*most* extra words (see [Instructions, "Word-encoded
-instructions"](instructions.md#word-encoded-instructions-20)) — so trusting
-its own `instruction-descriptor-size` would overstate the size of a narrower
-encoding genuinely present in the stream.
+`instruction-descriptor-size`: on a word-encoded machine, decode tries every
+descriptor registered under the fetched opcode in turn (see [Instructions,
+"Opcode to descriptor decode"](instructions.md#opcode-to-descriptor-decode))
+and returns the first whose fields the actually-fetched bits match — which
+candidate that is, and so how many extra words it spends, isn't knowable
+from the opcode alone, so trusting any one candidate's own
+`instruction-descriptor-size` up front would overstate (or understate) the
+size of whichever encoding is genuinely present in the stream.
 
 A condition raised by `read-cell` itself (e.g. `address-out-of-range` past
 the end of a buffer) propagates out of `decode-instruction-at` rather than

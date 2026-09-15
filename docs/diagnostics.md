@@ -224,6 +224,19 @@ that widest fallback happens to be the strict mode, and wraps silently if
 it isn't. `*strict-operand-range*` doesn't have this gap, since it applies
 regardless of which mode was chosen.
 
+## Opcode conflicts
+
+`opcode-conflict` — signalled by `definstruction`, not a runtime assembly
+diagnostic — covers three shapes: an unrelated mnemonic already claiming an
+opcode; a word-encoded machine's own mode-distinguished variants sharing an
+opcode without any operand field's raw bits actually telling them apart
+("indistinguishable"); and, on a byte-encoded machine, any second descriptor
+at all landing on an already-claimed opcode ("undecodable — byte-encoded"),
+since a byte encoding has no per-field discriminator for decode to key off
+regardless of how the two modes' syntax differs. See [Instructions, "Opcode
+to descriptor decode"](instructions.md#opcode-to-descriptor-decode) for the
+full picture and a worked example.
+
 ## Follow-ups not covered here
 
 - **Macro-expansion context.** A diagnostic inside a `.macro` expansion

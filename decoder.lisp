@@ -56,36 +56,66 @@ closure rather than always MREF."
         do (setf v (logior v (ash (funcall read-cell (+ address i)) (* cell-width i))))
         finally (return v)))
 
-(defun %word-choice-matches-p (raw-value choice)
-  "T if RAW-VALUE -- a field's bits as actually fetched -- is what CHOICE (a
-WORD-FIELD-CHOICE, instruction.lisp) would encode: its exact ESCAPE for an
-:EXTRA-WORD choice, or a value in its (biased) RANGE for an :INLINE one."
-  (ecase (word-field-choice-kind choice)
-    (:extra-word (= raw-value (word-field-choice-escape choice)))
-    (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
-               (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice)))))))
+;; %WORD-CHOICE-MATCHES-P now lives in instruction.lisp (#105) -- registration
+;; (REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE!) needs it too,
+;; and decoder.lisp loads after instruction.lisp in the :SERIAL T system.
+
+(defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word)
+  "Try decoding WORD (already fetched at ADDRESS) against one candidate
+DESCRIPTOR sharing this opcode (#105) -- decode each operand field against
+DESCRIPTOR's WORD-ALTERNATIVES: a fetched raw field value matching some
+alternative's escape means the real value follows in its own word (fetched
+and consumed in turn); matching an inline alternative's biased range instead
+means the value *is* the field, debiased. Returns (VALUES values offset
+matches okp) on success (OKP T; VALUES is NIL, not a failure signal, for a
+legitimately no-operand DESCRIPTOR -- see OKP), or (VALUES NIL NIL NIL NIL)
+if some field's raw bits match none of this candidate's own alternatives --
+the caller (%DECODE-WORD-INSTRUCTION) tries the next candidate at this
+opcode rather than failing outright, since #105's %CHECK-OPCODE-DECODABLE!
+(instruction.lisp) only guarantees candidates are pairwise distinguishable,
+not that every raw bit pattern at the opcode names exactly one of them --
+this trial-and-reject is what actually does the telling-apart."
+  (loop with offset = width-cells
+        for alternatives in (instruction-descriptor-word-alternatives descriptor)
+        for choice0 = (first alternatives)
+        for raw = (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word)
+        for match = (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives)
+        do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
+        collect (ecase (word-field-choice-kind match)
+                  (:inline (- raw (word-field-choice-bias match)))
+                  (:extra-word
+                   (prog1 (%fetch-cells read-cell (+ address offset) width-cells cell-width)
+                     (incf offset width-cells))))
+          into values
+        collect match into matches
+        finally (return (values values offset matches t))))
 
 (defun %decode-word-instruction (read-cell address machine-name layout)
   "DECODE-INSTRUCTION-AT's word-encoded (#20) path: fetch one
 INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS-wide word at ADDRESS, extract its OPCODE
-field to find DESCRIPTOR (any sibling combo registered under that opcode
-works equally well here -- see REGISTER-INSTRUCTION-VARIANTS!'s docstring,
-instruction.lisp), then decode each operand field against DESCRIPTOR's
-WORD-ALTERNATIVES: a fetched raw field value matching some alternative's
-escape means the real value follows in its own word (fetched and consumed in
-turn); matching an inline alternative's biased range instead means the value
-*is* the field, debiased. A raw value matching no alternative at all is
-:DECODE-FAILURE, same as an unregistered opcode -- an encoding this
-DEFINSTRUCTION never declared.
+field, and try each candidate DESCRIPTOR registered under that opcode in
+turn (#105: more than one only when several mode-distinguished variants of
+one or more mnemonics share the opcode) via %TRY-DECODE-WORD-CANDIDATE,
+returning the first that fully matches. A raw value matching no candidate's
+alternatives at all is :DECODE-FAILURE, same as an unregistered opcode -- an
+encoding no DEFINSTRUCTION on this machine ever declared.
+
+Candidate order only matters for determinism, not correctness:
+%CHECK-OPCODE-DECODABLE! (instruction.lisp) requires every pair of
+co-tenant candidates to disagree at some shared field index, so at most one
+candidate can ever match a given fetched word -- the first-match loop below
+never has to arbitrate a genuine tie, it just stops as soon as it finds the
+one candidate that was always going to match.
 
 SIZE (the third return value on success) is accumulated as cells are
 consumed, never read off INSTRUCTION-DESCRIPTOR-SIZE -- %EXPAND-WORD-COMBOS
 (instruction.lisp) sorts a mnemonic's sibling combos ascending by extra-word
-count and REGISTER-INSTRUCTION-VARIANTS! is last-write-wins, so the
-descriptor actually sitting in the opcode table is the combo with the *most*
-extra words. INSTRUCTION-DESCRIPTOR-SIZE would overstate the size of any
-narrower encoding genuinely present in the stream; it is only trustworthy in
-the encode direction (assembler.lisp) and on the byte-encoded path below.
+count, so a mnemonic's own combo actually matched here need not be the one
+INSTRUCTION-DESCRIPTOR-SIZE would compute for whichever combo happens to
+sit first in the candidate list. INSTRUCTION-DESCRIPTOR-SIZE would overstate
+the size of any narrower encoding genuinely present in the stream; it is
+only trustworthy in the encode direction (assembler.lisp) and on the
+byte-encoded path below.
 
 CHOICES (the fourth return value on success, #104) is the matched
 WORD-FIELD-CHOICE per operand hole, in hole order -- exactly the alternative
@@ -106,21 +136,12 @@ extend. This mirrors that asymmetry rather than unifying it."
     (destructuring-bind (opcode-width opcode-shift) (rest opcode-field)
       (let ((opcode (ldb (byte opcode-width opcode-shift) word)))
         (handler-case
-            (let ((descriptor (find-instruction-by-opcode machine-name opcode)))
-              (loop with offset = width-cells
-                    for alternatives in (instruction-descriptor-word-alternatives descriptor)
-                    for choice0 = (first alternatives)
-                    for raw = (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word)
-                    for match = (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives)
-                    do (unless match (return-from %decode-word-instruction (values :decode-failure nil nil)))
-                    collect (ecase (word-field-choice-kind match)
-                              (:inline (- raw (word-field-choice-bias match)))
-                              (:extra-word
-                               (prog1 (%fetch-cells read-cell (+ address offset) width-cells cell-width)
-                                 (incf offset width-cells))))
-                      into values
-                    collect match into matches
-                    finally (return (values descriptor values offset matches))))
+            (let ((candidates (find-instruction-descriptors-by-opcode machine-name opcode)))
+              (dolist (descriptor candidates (values :decode-failure nil nil))
+                (multiple-value-bind (values offset matches okp)
+                    (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word)
+                  (when okp
+                    (return-from %decode-word-instruction (values descriptor values offset matches))))))
           (unknown-instruction () (values :decode-failure nil nil)))))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width)

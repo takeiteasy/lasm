@@ -1191,3 +1191,166 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
         (fiveam:is (= 5 steps))
         (fiveam:is (= 1005 (regref m 'reg 0)))
         (fiveam:is (= 1005 (mref m 'ram (gethash "result" (assembly-symbols a)))))))))
+
+;;; Shared opcodes across mode-distinguished variants (#105) -- several
+;;; decode-distinguishable descriptors, one mnemonic's own several MODES
+;;; clauses or several distinct mnemonics, sharing one opcode on a
+;;; word-encoded machine. WORD-TEST-MACHINE's src field is 10 bits, so a
+;;; small bias offset per variant is plenty of room to keep raw field ranges
+;;; disjoint.
+
+(definstruction word-test-machine wcy
+  (modes (wc-two (opcode 13)
+           (operand v :field src
+             (variant (choice wc-reg) inline :range (0 7) :bias 0)
+             (variant (choice wc-ind) inline :range (0 7) :bias 8))
+           (semantics (set! a v)))
+         (word-imm (opcode 13)
+           (operand v :field src (variant (range 0 15) inline :bias 800))
+           (semantics (set! a v)))))
+
+(fiveam:test shared-opcode-one-mnemonic-two-mode-clauses-registers
+  (let ((variants (find-instruction-variants 'word-test-machine "WCY")))
+    (fiveam:is (= 3 (length variants))) ; WC-TWO expands into 2 sibling combos + WORD-IMM's 1
+    (fiveam:is (every (lambda (d) (= 13 (instruction-descriptor-opcode d))) variants))
+    (fiveam:is (= 3 (length (find-instruction-descriptors-by-opcode 'word-test-machine 13))))))
+
+(fiveam:test shared-opcode-one-mnemonic-two-mode-clauses-each-decodes-to-its-own-mode
+  ;; The #105 reproduction: before this ticket, one of these two forms
+  ;; returned :DECODE-FAILURE and the other silently reported the wrong
+  ;; descriptor -- the opcode table held exactly one, last-write-wins.
+  ;; MODE is the whole (MODES ...) clause matched (WC-TWO for both the
+  ;; bare-register and bracketed-indirect forms, since both are ONE-OF
+  ;; alternatives of that one mode); CHOICE is that hole's own matched
+  ;; ONE-OF alternative (NIL for WORD-IMM, which has none), read off the
+  ;; fourth CHOICES return value the same way the disassembler does.
+  (dolist (case '(("wcy 5" wc-two wc-reg) ("wcy [5]" wc-two wc-ind) ("wcy #5" word-imm nil)))
+    (destructuring-bind (source expected-mode expected-choice) case
+      (let* ((cells (assembly-cells (assemble source :machine 'word-test-machine))))
+        (multiple-value-bind (descriptor values size choices)
+            (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
+          (declare (ignore size))
+          (fiveam:is (not (eq :decode-failure descriptor)))
+          (fiveam:is (string= "WCY" (instruction-descriptor-name descriptor)))
+          (fiveam:is (eq expected-mode (mode-descriptor-name (instruction-descriptor-mode descriptor))))
+          (fiveam:is (eq expected-choice (word-field-choice-choice (first choices))))
+          (fiveam:is (= 5 (first values))))))))
+
+(definstruction word-test-machine wcz1
+  (modes wc-two)
+  (encoding
+    (opcode 14)
+    (operand v :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias 0)
+      (variant (choice wc-ind) inline :range (0 7) :bias 8)))
+  (semantics (set! a v)))
+
+(definstruction word-test-machine wcz2
+  (modes word-imm)
+  (encoding (opcode 14) (operand v :field src (variant (range 0 15) inline :bias 800)))
+  (semantics (set! b v)))
+
+(fiveam:test shared-opcode-two-mnemonics-registers-and-decodes-both
+  ;; WCZ1's WC-TWO field is CHOICE-selected (2 variants -> 2 sibling combos);
+  ;; WCZ2's WORD-IMM field is a single plain variant -> 1 combo. 3 total.
+  (fiveam:is (= 3 (length (find-instruction-descriptors-by-opcode 'word-test-machine 14))))
+  (let ((ld (assembly-cells (assemble "wcz1 5" :machine 'word-test-machine)))
+        (st (assembly-cells (assemble "wcz2 #5" :machine 'word-test-machine))))
+    (fiveam:is (string= "WCZ1" (instruction-descriptor-name
+                                 (decode-instruction-at (vector-cell-reader ld) 0 'word-test-machine))))
+    (fiveam:is (string= "WCZ2" (instruction-descriptor-name
+                                 (decode-instruction-at (vector-cell-reader st) 0 'word-test-machine))))))
+
+(fiveam:test shared-opcode-indistinguishable-pair-signals-opcode-conflict
+  ;; WCZ3 declares the identical field encoding WCZ1 already claims at
+  ;; opcode 14 -- no fetched raw value could ever tell the two mnemonics
+  ;; apart at decode time.
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction word-test-machine wcz3
+             (modes wc-two)
+             (encoding
+               (opcode 14)
+               (operand v :field src
+                 (variant (choice wc-reg) inline :range (0 7) :bias 0)
+                 (variant (choice wc-ind) inline :range (0 7) :bias 8)))
+             (semantics (set! a v)))))
+  (handler-case
+      (eval '(definstruction word-test-machine wcz3
+               (modes wc-two)
+               (encoding
+                 (opcode 14)
+                 (operand v :field src
+                   (variant (choice wc-reg) inline :range (0 7) :bias 0)
+                   (variant (choice wc-ind) inline :range (0 7) :bias 8)))
+               (semantics (set! a v))))
+    (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))))
+
+;; The mixed-kind case %HOLE-DISJOINT-P must also catch: one candidate's
+;; field is :EXTRA-WORD (a single escape value), the other's is :INLINE (a
+;; whole biased range) -- disjointness must hold in the direction where the
+;; *new* descriptor being registered is the :EXTRA-WORD one and the
+;; *already-registered* co-tenant is the :INLINE one (%CHECK-OPCODE-
+;; DECODABLE! enumerates the new descriptor's own field values and tests
+;; them against the existing one's WORD-FIELD-CHOICEs), the reverse of
+;; SHARED-OPCODE-INDISTINGUISHABLE-PAIR-SIGNALS-OPCODE-CONFLICT above (both
+;; :INLINE) and the LD/WCZ tests elsewhere (both :EXTRA-WORD via :ELSE, or
+;; neither). A dedicated tiny word machine, rather than reusing WORD-TEST-
+;; MACHINE's own 4-bit (0-15) opcode space -- opcodes 1-14 there are already
+;; claimed by tests above and 15 is reserved unregistered
+;; (tests/emulator.lisp's STEP-MACHINE-WORD-ENCODED-DECODE-FAILURE-ON-
+;; UNREGISTERED-OPCODE), leaving no room.
+
+(defmachine mixed-kind-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16 (field opcode 4) (field src 12)))
+
+(defmode mk-imm "#" expr)
+
+(definstruction mixed-kind-test-machine mk1
+  (modes mk-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range 900 920) inline)))
+  (semantics (set! a v)))
+
+(fiveam:test shared-opcode-new-extra-word-escape-inside-existing-inline-range-signals-error
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction mixed-kind-test-machine mk2
+             (modes mk-imm)
+             (encoding (opcode 1)
+                       (operand v :field src (variant :else (extra-word :escape 910))))
+             (semantics (set! b v))))))
+
+(fiveam:test shared-opcode-redefining-one-co-tenant-leaves-the-other-intact
+  (definstruction word-test-machine wcz1
+    (modes wc-two)
+    (encoding
+      (opcode 14)
+      (operand v :field src
+        (variant (choice wc-reg) inline :range (0 7) :bias 0)
+        (variant (choice wc-ind) inline :range (0 7) :bias 8)))
+    (semantics (set! a (+ v 1)))) ; redefined body, same opcode/mode
+  (fiveam:is (= 3 (length (find-instruction-descriptors-by-opcode 'word-test-machine 14))))
+  (fiveam:is (find "WCZ2" (find-instruction-descriptors-by-opcode 'word-test-machine 14)
+                    :key #'instruction-descriptor-name :test #'string=)))
+
+;; Byte-encoded machines have no per-field discriminator to decode two modes
+;; of one mnemonic apart -- what #105's reproduction found registering
+;; silently and then mis-decoding (one DEFINSTRUCTION's own (MODES ...)
+;; clause declaring two modes at one opcode, not a later redefinition
+;; replacing the mnemonic wholesale -- REGISTER-INSTRUCTION-VARIANTS!'s
+;; cleanup phase drops a redefined mnemonic's own old entries first, so
+;; redefining BYTE-SH under a new mode at the same opcode is not this case
+;; at all) is now an unconditional DEFINSTRUCTION-time error there, same
+;; severity as the pre-existing cross-mnemonic case.
+(fiveam:test shared-opcode-byte-machine-same-mnemonic-different-mode-signals-error
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction instr-test-machine byte-sh
+             (modes (immediate (opcode #x77) (operand :mode) (semantics (set! a operand)))
+                    (absolute (opcode #x77) (operand :mode) (semantics (set! a operand)))))))
+  (handler-case
+      (eval '(definstruction instr-test-machine byte-sh
+               (modes (immediate (opcode #x77) (operand :mode) (semantics (set! a operand)))
+                      (absolute (opcode #x77) (operand :mode) (semantics (set! a operand))))))
+    (opcode-conflict (c) (fiveam:is (eq :undecodable-byte-machine (opcode-conflict-reason c))))))
