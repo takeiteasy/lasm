@@ -211,6 +211,7 @@
    #:word-field-choice-bias
    #:word-field-choice-range
    #:word-field-choice-escape
+   #:word-field-choice-choice
    #:eval-expr
 
    ;; Assembler
@@ -269,6 +270,7 @@
    #:disassembly-line-cells
    #:disassembly-line-descriptor
    #:disassembly-line-values
+   #:disassembly-line-choices
    #:disassembly-line-label
    #:disassembly-line-text
 

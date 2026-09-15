@@ -7,22 +7,27 @@
 ;;;; throughout their operand tables (see examples/dcpu16.lisp's own header
 ;;;; for the workaround this replaces: a separate mnemonic per combination).
 ;;;;
-;;;; Simplification (see the follow-up ticket this notes): declaring a
-;;;; `one-of` gives each hole its own *syntax* choice, matched at
-;;;; assemble time -- but nothing downstream of the match yet lets that
-;;;; choice steer the *encoding*. `MOV`'s ONE-OF-TWO mode below lets each
-;;;; operand be written as a bare register index, a bracketed `[reg]`
-;;;; indirection, or a `#imm`-looking literal, but every one of those
-;;;; alternatives still just parses to a plain integer and encodes into the
-;;;; same one-byte field: `mov 1, 0`, `mov 1, [0]`, and `mov 1, #0` all
-;;;; assemble identically (this file asserts that explicitly, below), and
-;;;; MOV's semantics always reads its second operand as a register index
-;;;; regardless of which syntax picked it. Giving each `one-of` alternative
-;;;; its own field code (so `[reg]` really means "read through this
-;;;; register" and `#imm` really means "this literal value") needs
-;;;; mode-selected field codes and unconditional extra words -- a follow-up
-;;;; ticket -- and, for `[reg+offset]`-shaped forms, symbolic register names
-;;;; (another follow-up) so the assembler can tell a register apart from an
+;;;; Simplification: declaring a `one-of` gives each hole its own *syntax*
+;;;; choice, matched at assemble time -- but ORTHOGONAL-FOO is a
+;;;; byte-encoded machine (a plain `(operand :mode)`/`(operand :width n)`
+;;;; encoding, no `(instruction-word ...)` clause), and mode-selected field
+;;;; codes (see the tracker) are a *word-encoding* feature: only a
+;;;; word-encoded operand field has room for a `(choice mode)` variant
+;;;; selector to steer. `MOV`'s ONE-OF-TWO mode below lets each operand be
+;;;; written as a bare register index, a bracketed `[reg]` indirection, or a
+;;;; `#imm`-looking literal, but on this byte-encoded machine every one of
+;;;; those alternatives still just parses to a plain integer and encodes
+;;;; into the same one-byte field: `mov 1, 0`, `mov 1, [0]`, and `mov 1, #0`
+;;;; all assemble identically (this file asserts that explicitly, below),
+;;;; and MOV's semantics always reads its second operand as a register index
+;;;; regardless of which syntax picked it -- see
+;;;; examples/anima16.lisp for the word-encoded case, where the identical
+;;;; `one-of` shape genuinely does encode `reg`/`[reg]`/`(addr)` into
+;;;; different field codes. Giving each `one-of` alternative its own
+;;;; *semantics* too (so `[reg]` really means "read through this register")
+;;;; is still a follow-up (#73) even on a word-encoded machine, and
+;;;; `[reg+offset]`-shaped forms need symbolic register names (another
+;;;; follow-up) so the assembler can tell a register apart from an
 ;;;; arbitrary expression inside the brackets.
 ;;;;
 ;;;; ORTHOGONAL-FOO has no symbolic register names yet (that follow-up
@@ -114,8 +119,9 @@ hlt")
 
 ;; The simplification, made explicit: three syntactically distinct MOV
 ;; operands -- a bare register, a bracketed indirection, and a "#" literal
-;; -- currently assemble to the identical bytes. This is what a follow-up
-;; ticket's mode-selected field codes will change.
+;; -- assemble to identical bytes on this byte-encoded machine, and always
+;; will -- mode-selected field codes only exist for a word-encoded operand
+;; field (see examples/anima16.lisp for the case where they do apply).
 (format t "~%Confirming today's simplification (see header):~%")
 (let ((bare (assembly-cells (assemble "mov 1, 0" :machine 'orthogonal-foo)))
       (indirect (assembly-cells (assemble "mov 1, [0]" :machine 'orthogonal-foo)))

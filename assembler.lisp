@@ -285,6 +285,31 @@ narrowest (fewest extra words) combo a value actually fits."
                         (<= lo value hi)))))
          values (instruction-descriptor-word-fields descriptor)))
 
+(defun %word-choices-eligible-p (descriptor choices)
+  "T if DESCRIPTOR (a word-encoded candidate, #20) is eligible given
+CHOICES -- mode.lisp's hole-aligned per-hole list of the ONE-OF alternative
+each operand hole actually matched, NIL for a hole not governed by any
+ONE-OF (#104). For each of DESCRIPTOR's WORD-FIELDS, paired positionally
+with CHOICES: a field whose own WORD-FIELD-CHOICE-CHOICE is non-NIL (a
+(CHOICE M) variant, instruction.lisp) is eligible only when that hole's
+CHOICES entry is the same mode M actually matched; a field with no CHOICE
+of its own (value-selected, RANGE/:ELSE) is always eligible regardless of
+CHOICES -- %CHECK-WORD-VARIANTS' no-mixing rule guarantees a field's own
+variant menu is either wholly CHOICE-selected or wholly value-selected, so
+there is no per-variant \"does some other variant of this field claim this
+choice\" case to also consider here.
+
+A byte-encoded DESCRIPTOR (WORD-FIELDS NIL) and a word-encoded one with no
+CHOICE-selected field anywhere are both vacuously eligible for any CHOICES,
+including the all-NIL CHOICES of a program using no ONE-OF at all -- #104
+changes nothing for either, which is what keeps every pre-#104 DEFINSTRUCTION
+selecting exactly as it always did."
+  (loop for field-choice in (instruction-descriptor-word-fields descriptor)
+        for hole-choice in choices
+        always (let ((wanted (word-field-choice-choice field-choice)))
+                 (or (null wanted)
+                     (and hole-choice (eq wanted (mode-descriptor-name hole-choice)))))))
+
 (defun %choose-forced-variant (statement variants)
   "STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
 \"lda.w\"). Resolve it to the one VARIANTS entry using that mode and match
@@ -297,6 +322,22 @@ truncates it silently, exactly as a single-mode M1 instruction always did
 exception is a forced RELATIVE mode: %RELATIVE-OFFSET (below) still
 range-checks unconditionally at encode time and signals ASSEMBLY-ERROR on
 overflow, since that check isn't part of this filter at all.
+
+On a word-encoded machine (#20) whose forced MODE contains a ONE-OF, several
+VARIANTS entries can share that one mode name -- one sibling combo per
+%EXPAND-WORD-COMBOS variant combination (instruction.lisp), same as an
+unforced candidate set. #104's %WORD-CHOICES-ELIGIBLE-P still applies here,
+after matching: the plain (FIND ... :KEY #'MODE-DESCRIPTOR-NAME) below picks
+some same-mode sibling just to size the \"does this mnemonic have this mode
+at all\" check, but the actual return value is re-selected among every
+same-mode sibling for the one whose CHOICE-selected field(s), if any, agree
+with the operand's own matched alternative -- skipping this would let an
+arbitrary sibling's field code win regardless of which ONE-OF alternative
+was actually written, silently encoding the wrong addressing form exactly
+the way an unfiltered candidate set would (see %CHOOSE-VARIANT's own point
+1.5). A byte-encoded mode, or a word-encoded one with no CHOICE-selected
+field, has only one such sibling (or several vacuously all-eligible ones),
+so this changes nothing for those cases.
 
 Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
   (let* ((suffix (statement-mode-suffix statement))
@@ -315,14 +356,20 @@ Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
                           "~A: has no addressing-mode variant using .~A -- this instruction ~
 accepts ~A"
                           (statement-mnemonic statement) suffix (%accepted-modes-text variants)))
-      (multiple-value-bind (asts okp) (try-match-operand-mode operand-tokens mode)
+      (multiple-value-bind (asts okp choices) (try-match-operand-mode operand-tokens mode)
         (unless okp
           (%assembly-error-at anchor
                                "~A: operand ~S does not match the forced .~A ~
 (~(~A~), syntax ~A) addressing mode"
                                (statement-mnemonic statement) (%operand-text operand-tokens)
                                suffix (mode-descriptor-name mode) (%mode-syntax-text mode)))
-        (values variant asts)))))
+        (values (or (find-if (lambda (v) (and (instruction-descriptor-mode v)
+                                               (eq (mode-descriptor-name (instruction-descriptor-mode v))
+                                                   (mode-descriptor-name mode))
+                                               (%word-choices-eligible-p v choices)))
+                              variants)
+                    variant)
+                asts)))))
 
 (defun %choose-variant (statement variants address &key symbols (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
@@ -365,6 +412,25 @@ syntax (e.g. zero-page before absolute):
    one-immediate mode), so whether their holes resolve is not the same
    question for each.
 
+1.5 (#104) Mode-choice -- between the syntax and floor filters above: on a
+   word-encoded candidate (instruction.lisp, #20) whose fields include a
+   (CHOICE M) variant, drop it unless M is the alternative each such field's
+   own hole actually matched (mode.lisp's hole-aligned MATCH-OPERAND-MODE
+   CHOICES, #103/#104 -- see %WORD-CHOICES-ELIGIBLE-P). A candidate with no
+   CHOICE-selected field is always eligible, so a program using no ONE-OF at
+   all is unaffected. Unlike the value filter, a CHOICE-selected field's
+   matched-but-out-of-range value has no wider CHOICE-selected sibling to
+   relax into -- the ambiguity would be silent (ENCODE-INSTRUCTION's
+   WRAP-VALUE would emit bits that decode as a *different* addressing form,
+   not merely a truncated one) -- so once relaxation has converged (FINALP),
+   an eligible-but-unfitting CHOICE-narrowed set signals ASSEMBLY-ERROR
+   instead of falling back to WIDEST. Deferred until FINALP for the same
+   reason %MAYBE-WARN-AMBIGUOUS-MODE is: mode selection is syntax-determined
+   and constant across passes (see the forced-suffix argument below), so
+   eligibility itself never oscillates, but a label's *value* can still be
+   provisional on a trial pass, and erroring off a value that has not
+   settled yet would be a false positive.
+
 If STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
 \"lda.w\"), none of the above runs -- %CHOOSE-FORCED-VARIANT resolves the
 suffix to its mode, matches syntax against that one variant only, and
@@ -393,11 +459,17 @@ Returns (VALUES chosen-descriptor hole-asts)."
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp) = (multiple-value-list
-                                    (if mode
-                                        (try-match-operand-mode tokens mode)
-                                        (values nil (zerop (length tokens)))))
-                 when (and okp (>= (instruction-descriptor-size v) floor))
+                 for (asts okp choices) = (multiple-value-list
+                                            (if mode
+                                                (try-match-operand-mode tokens mode)
+                                                (values nil (zerop (length tokens)) nil)))
+                 when (and okp (>= (instruction-descriptor-size v) floor)
+                           ;; #104: drop a word-encoded candidate whose
+                           ;; CHOICE-selected field(s) don't match what this
+                           ;; operand's ONE-OF hole(s) actually chose --
+                           ;; vacuously T for a byte-encoded candidate or one
+                           ;; with no CHOICE-selected field.
+                           (%word-choices-eligible-p v choices))
                    collect (list v asts))))
     (when (null candidates)
       (%assembly-error-at anchor
@@ -439,10 +511,65 @@ accepts ~A"
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
-           (chosen (or fitting (if any-unresolvedp narrowest widest))))
+           ;; #104: the first remaining CANDIDATE (if any) whose word-fields
+           ;; include a CHOICE-selected one -- i.e. the eligibility filter
+           ;; above actually narrowed by syntax for this statement, so a
+           ;; value that doesn't fit has no wider CHOICE-selected sibling to
+           ;; relax into (see %CHOOSE-VARIANT's own docstring, point 1.5).
+           ;; Used both as the "narrowed at all?" test and, when so, as the
+           ;; specific candidate %SIGNAL-WORD-CHOICE-OVERFLOW reports on --
+           ;; on a multi-mode mnemonic mixing CHOICE- and value-selected
+           ;; modes, CANDIDATES' first entry need not be this one.
+           (choice-narrowed
+             (find-if (lambda (c) (some #'word-field-choice-choice
+                                         (instruction-descriptor-word-fields (first c))))
+                      candidates))
+           (chosen (cond
+                     (fitting fitting)
+                     (any-unresolvedp narrowest)
+                     ((and finalp choice-narrowed)
+                      (%signal-word-choice-overflow statement choice-narrowed symbols address anchor))
+                     (t widest))))
       (when finalp
         (%maybe-warn-ambiguous-mode statement candidates chosen))
       (values-list chosen))))
+
+(defun %word-choice-overflow-values (candidate symbols address)
+  "CANDIDATE is (descriptor asts), a word-encoded %CHOOSE-VARIANT candidate
+(#104) none of whose CHOICE-selected variants fit. Evaluates ASTS and finds
+the first :INLINE field whose value falls outside its own (biased) RANGE.
+Returns (VALUES hole-index value lo hi choice-name), or NIL if every field
+does fit (not reachable from %CHOOSE-VARIANT's own call site, which only
+calls this once %WORD-VARIANT-FITS-P has already said no)."
+  (let* ((descriptor (first candidate))
+         (vals (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) (second candidate))))
+    (loop for value in vals
+          for field-choice in (instruction-descriptor-word-fields descriptor)
+          for i from 0
+          when (and (eq (word-field-choice-kind field-choice) :inline)
+                    (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
+                      (not (<= lo value hi))))
+            return (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
+                     (values i value lo hi (word-field-choice-choice field-choice))))))
+
+(defun %signal-word-choice-overflow (statement candidate symbols address anchor)
+  "Signal ASSEMBLY-ERROR (#104) for CANDIDATE (a word-encoded %CHOOSE-VARIANT
+candidate, instruction.lisp's #20), whose matched CHOICE-selected addressing
+form's own operand value doesn't fit that form's declared :RANGE -- see
+%CHOOSE-VARIANT's docstring, point 1.5, for why this is an error rather than
+the value filter's usual silent WRAP-VALUE fallback. ANCHOR anchors the
+diagnostic at the whole operand's first token (#74), same as every other
+mode-mismatch error in this file -- there is no per-hole token position kept
+this far from parsing to point at just the offending hole."
+  (multiple-value-bind (hole value lo hi choice-name)
+      (%word-choice-overflow-values candidate symbols address)
+    (let* ((descriptor (first candidate))
+           (operand-name (nth hole (instruction-descriptor-operand-names descriptor))))
+      (%assembly-error-at anchor
+                           "~A: operand value ~D out of range ~D..~D for addressing form ~
+~(~A~)~@[ (operand ~(~A~))~]"
+                           (statement-mnemonic statement) value lo hi
+                           choice-name operand-name))))
 
 (defun %maybe-warn-ambiguous-mode (statement candidates chosen)
   "WARN with an AMBIGUOUS-MODE condition (#74) if CANDIDATES (the full

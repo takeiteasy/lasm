@@ -163,29 +163,57 @@ pattern, which succeeds. Alternatives are otherwise tried in declaration
 order, same as `(modes ...)` variants.
 
 `try-match-operand-mode`/`match-operand-mode` (see
-[Matching](#matching) below) return which alternative each `one-of` element
-picked, as a trailing `choices` value — one `mode-descriptor` per `one-of`
-element, in pattern order. Nothing in the assembler or the encoder consults
-it yet (see the follow-up ticket in "What `one-of` does not do" below); it
-exists as the hook a future mode-selected field code reads from.
+[Matching](#matching) below) return which alternative each operand *hole*
+matched, as a trailing `choices` value — one entry per hole, in hole order,
+`nil` for a hole not governed by any `one-of` at all. A multi-hole `one-of`
+alternative reports its own chosen `mode-descriptor` for *every* hole it
+contributes, not just once for the element as a whole; a nested `one-of`
+(one alternative's own pattern containing another `one-of`) reports the
+*outer* element's chosen alternative for all of its holes, not the nested
+match's own choice. On a word-encoded machine (see
+[Instructions](instructions.md#choice-selected-word-fields)), a `(choice
+mode)` variant selector reads this value to pick a field's own code, or an
+unconditional extra word, by which alternative a hole actually matched —
+byte-encoded machines have no such consumer, so `choices` there remains
+purely informational.
 
-### What `one-of` does not do
+### What `one-of` does and does not do
 
 Declaring a `one-of` only changes which *syntax* an operand hole accepts —
-it says nothing about the value each alternative parses to, and nothing
-about how the chosen alternative affects encoding. `a-ind` above (`"[" expr
-"]"`) parses to the same plain integer `a-reg` (`expr`) would; an
-instruction whose holes are `one-of` elements currently encodes every
-alternative's value into the same field the same way, regardless of which
-alternative matched (see [`examples/orthogonal.lisp`](../examples/orthogonal.lisp)
-for this made explicit — three syntactically distinct operands assembling
-to identical bytes). Letting the chosen alternative steer the field code or
-add its own unconditional extra word needs mode-selected field codes (see
-the tracker); letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
-`[register]` vs. `[register + offset]`) actually mean different things needs
-symbolic register names (see the tracker) so the assembler can tell a
-register apart from an arbitrary expression inside the brackets. Disassembly
-has the parallel limitation — see [Disassembler](disassembler.md).
+it says nothing, by itself, about the value each alternative parses to. On a
+**byte-encoded** machine (a plain `(operand :mode)`/`(operand :width n)`
+encoding), this is still the whole story: `a-ind` above (`"[" expr "]"`)
+parses to the same plain integer `a-reg` (`expr`) would, and every
+alternative's value encodes into the same field the same way, regardless of
+which one matched (see
+[`examples/orthogonal.lisp`](../examples/orthogonal.lisp) for this made
+explicit — three syntactically distinct operands assembling to identical
+bytes, and staying that way, since there is no word-encoded field for a
+`(choice mode)` selector to apply to).
+
+On a **word-encoded** machine (`(instruction-word ...)`, see
+[Instructions](instructions.md#word-encoded-instructions-20-m4)), a `(choice
+mode)` variant selector lets the matched alternative steer that hole's own
+field code, or spend an unconditional extra word regardless of the value —
+see [Instructions, "CHOICE-selected word
+fields"](instructions.md#choice-selected-word-fields) and
+[`examples/anima16.lisp`](../examples/anima16.lisp), where `reg`, `[reg]`,
+and `(addr)` genuinely encode to different field codes for the identical
+value 0. This still says nothing about *semantics* — every sibling
+descriptor a `one-of`'s alternatives expand into (one per `(choice ...)`
+combination) shares one `semantics` body, so a program cannot yet make
+`[reg]` really dereference while a bare `reg` reads the value directly (see
+the tracker). And letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
+`[register]` vs. `[register + offset]`) actually mean different things
+still needs symbolic register names (see the tracker) so the assembler can
+tell a register apart from an arbitrary expression inside the brackets.
+
+Disassembly mirrors this split: a byte-encoded machine's decoded word
+carries no record of which alternative was assembled, so it always renders
+a `one-of`'s first alternative; a word-encoded machine's `(choice mode)`
+field carries that record forward from decode, so the disassembler renders
+the alternative that was actually written — see
+[Disassembler](disassembler.md).
 
 ## Signed operands
 
@@ -328,8 +356,9 @@ program using `sta.w`/`lda.z` to force a mode.
   picks a backtracking-matched alternative for each `one-of` element (see
   [Per-operand modes](#per-operand-modes) above). Returns `(values first-ast
   all-asts choices)` — `first-ast` alone is what every current single-hole
-  mode needs; `choices` is one `mode-descriptor` per `one-of` element, in
-  pattern order (`nil` for a mode with no `one-of` elements). Signals
+  mode needs; `choices` is one entry per hole, in hole order, `nil` for a
+  hole not governed by any `one-of` (empty/all-`nil` for a mode with none at
+  all). Signals
   `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
   unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns

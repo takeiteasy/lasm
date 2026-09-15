@@ -174,6 +174,29 @@ element as a whole."
   (defun %mode-hole-count (mode)
     (%pattern-hole-count (mode-descriptor-pattern mode)))
 
+  (defun %pattern-hole-alternatives (pattern)
+    "One entry per hole in PATTERN, in hole order -- NIL for a plain :EXPR
+hole, or the list of :ONE-OF alternative mode-name symbols governing a
+:ONE-OF-produced hole (#104). A multi-hole :ONE-OF element repeats its own
+alt-names list once per hole it contributes -- the whole element's choice of
+alternative governs each of its holes alike, mirroring the hole-alignment
+%MATCH-MODE-ELEMENTS' CHOICES return value now uses. A nested :ONE-OF (inside
+one alternative of an outer one) is walked via that alternative's own
+pattern -- see %MODE-HOLE-ALTERNATIVES; this is the pattern-only half, mirroring
+%PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT's own split. Used by DEFINSTRUCTION's
+word-encoded (CHOICE M) selector validation (instruction.lisp) to check M
+against the actual alternatives available at a given hole."
+    (loop for element in pattern
+          append (ecase (first element)
+                   (:literal nil)
+                   (:expr (list nil))
+                   (:one-of (let* ((alt-names (rest element))
+                                    (holes (%mode-hole-count (find-mode-descriptor (first alt-names)))))
+                              (make-list holes :initial-element alt-names))))))
+
+  (defun %mode-hole-alternatives (mode)
+    (%pattern-hole-alternatives (mode-descriptor-pattern mode)))
+
   (defun %check-one-of-elements! (name pattern)
     "Validate every (:ONE-OF ...) element of PATTERN, the DEFMODE NAME is
 building: at least two alternatives; each must already be a registered mode
@@ -280,23 +303,28 @@ when its own form is compiled."
   "Match ELEMENTS (a suffix of some mode's pattern) against TOKENS from
 position I (bounded by END). Returns (VALUES asts choices next-i okp
 failure-token message): on success ASTS is the list of EXPR-* ASTs parsed
-from each :EXPR hole and CHOICES the list of chosen MODE-DESCRIPTORs from
-each :ONE-OF element consumed along the way, both in pattern order, and
-NEXT-I the token position just past the match; on failure OKP is NIL and
-FAILURE-TOKEN/MESSAGE describe why.
+from each :EXPR hole and CHOICES the parallel, HOLE-ALIGNED list -- one entry
+per hole in ASTS, NIL for a hole not governed by any :ONE-OF, or the chosen
+MODE-DESCRIPTOR for a hole that came from one (#104) -- both in pattern
+order, and NEXT-I the token position just past the match; on failure OKP is
+NIL and FAILURE-TOKEN/MESSAGE describe why.
 
-CHOICES' length is NOT a fixed function of the pattern when a :ONE-OF
-alternative's own pattern nests another :ONE-OF (legal -- BUILD-MODE-
-DESCRIPTOR's hole-count check treats a nested :ONE-OF the same as a plain
-:EXPR -- but not yet exercised by anything in this codebase): each chosen
-alternative contributes its own nested choices, flattened depth-first ahead
-of the outer element's continuation, so two alternatives of the same
-:ONE-OF can yield different CHOICES lengths depending on which one matched.
-A caller keying anything positional off CHOICES (a follow-up giving
-:ONE-OF's chosen alternative its own field code, say) needs to account for
-this rather than assume one entry per :ONE-OF element in the *pattern*.
+CHOICES is always the same length as ASTS: a multi-hole :ONE-OF alternative
+contributes its own chosen MODE-DESCRIPTOR to *every* hole it produces, not
+just one entry for the element as a whole -- this is what lets a caller
+(DEFINSTRUCTION's word-encoded (CHOICE M) selector, instruction.lisp) key
+directly off hole position, the same position (OPERAND ...) subclauses
+already use. When an alternative's own pattern nests another :ONE-OF, the
+*outer* element's chosen alternative overwrites whatever the nested match
+would have reported for those holes -- the outermost :ONE-OF a hole belongs
+to always wins its CHOICES entry, preserving \"CHOICES[i] is one of the
+alternatives named by the pattern element that produced hole i\" as an
+invariant callers can validate against (mirrored by mode.lisp's
+%MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). Nested
+:ONE-OF is legal (BUILD-MODE-DESCRIPTOR's hole-count check treats it like a
+plain :EXPR) but not yet exercised by anything in this codebase.
 
-(Also worth flagging for that follow-up, not guarded here: a hand-written
+(Also worth flagging for a follow-up, not guarded here: a hand-written
 DEFMODE cycle -- redefining a mode that some :ONE-OF already references so
 the reference loops back to it -- would make %MODE-HOLE-COUNT recurse
 forever. A plain file reload can't create one, since it replays the same
@@ -335,7 +363,7 @@ with no separate undo step needed."
                  (multiple-value-bind (asts choices next-i okp failure-token message)
                      (%match-mode-elements tokens rest-elements next-i-hole end)
                    (if okp
-                       (values (cons ast asts) choices next-i t nil nil)
+                       (values (cons ast asts) (cons nil choices) next-i t nil nil)
                        (values nil nil nil nil failure-token message))))
              ;; #74: keep the inner PARSE-FAILURE's own line/column instead of
              ;; only its message -- %TOK below can't reconstruct a token from
@@ -354,12 +382,19 @@ with no separate undo step needed."
                (let ((alt (find-mode-descriptor alt-name)))
                  (multiple-value-bind (alt-asts alt-choices alt-next-i alt-okp alt-failure-token alt-message)
                      (%match-mode-elements tokens (mode-descriptor-pattern alt) i end)
+                   (declare (ignore alt-choices))
                    (if alt-okp
                        (multiple-value-bind (asts choices next-i okp failure-token message)
                            (%match-mode-elements tokens rest-elements alt-next-i end)
                          (if okp
+                             ;; #104: every hole ALT-ASTS contributes gets ALT
+                             ;; itself as its CHOICES entry -- not ALT-CHOICES
+                             ;; (the nested match's own, discarded above) --
+                             ;; so the outermost :ONE-OF a hole belongs to
+                             ;; always wins that hole's entry.
                              (return-from %match-mode-elements
-                               (values (append alt-asts asts) (cons alt (append alt-choices choices))
+                               (values (append alt-asts asts)
+                                       (append (make-list (length alt-asts) :initial-element alt) choices)
                                        next-i t nil nil))
                              (setf last-failure-token failure-token last-message message)))
                        (setf last-failure-token alt-failure-token last-message alt-message)))))))))))
@@ -372,9 +407,10 @@ OKP is T; on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why --
 FAILURE-TOKEN is NIL only when the underlying PARSE-FAILURE (an :EXPR hole's
 own malformed expression) itself carried no token to point at (e.g. an empty
 expression at end of input), never as a way of discarding a position that
-was available. CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from
-each of MODE's own :ONE-OF pattern elements, in pattern order -- a trailing
-value existing callers that only bind the first four are unaffected by."
+was available. CHOICES (#103, hole-aligned per #104) is the list of chosen
+MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
+:ONE-OF -- see %MATCH-MODE-ELEMENTS -- a trailing value existing callers
+that only bind the first four are unaffected by."
   (let ((end (length tokens)))
     (multiple-value-bind (asts choices next-i okp failure-token message)
         (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end)
@@ -388,8 +424,9 @@ value existing callers that only bind the first four are unaffected by."
 (VALUES NIL NIL NIL) on a mismatch instead of signalling -- the assembler's
 mode candidate filter (assembler.lisp) uses this to try several modes in
 turn. MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
-naming one. CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from each
-of MODE's own :ONE-OF pattern elements, in pattern order."
+naming one. CHOICES (#103, hole-aligned per #104) is the list of chosen
+MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
+see %MATCH-MODE-ELEMENTS."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
     (multiple-value-bind (asts okp failure-token message choices) (%match-mode-pattern tokens mode)
       (declare (ignore failure-token message))
@@ -401,8 +438,9 @@ STATEMENT's OPERAND-TOKENS) against addressing MODE's pattern (a
 MODE-DESCRIPTOR, or a symbol naming one): consume MODE's literal tokens in
 order and parse each :EXPR hole as an expression. Returns (VALUES first-ast
 all-asts choices) -- FIRST-AST alone is what every current single-hole mode
-needs; CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from each of
-MODE's own :ONE-OF pattern elements, in pattern order. Signals PARSE-FAILURE
+needs; CHOICES (#103, hole-aligned per #104) is the list of chosen
+MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
+see %MATCH-MODE-ELEMENTS. Signals PARSE-FAILURE
 if TOKENS don't match MODE or leave a trailing token unconsumed -- with the
 failing token's own line/column (#74), not just its message, even when the
 failure came from a nested :EXPR hole's own PARSE-FAILURE rather than a

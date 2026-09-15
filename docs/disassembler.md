@@ -131,16 +131,24 @@ by position, never by `instruction-descriptor-operand-names` — an unnamed
 field's entry there is `nil`.
 
 A mode containing a `(one-of ...)` element ([Addressing modes, "Per-operand
-modes"](modes.md#per-operand-modes)) always renders that element's *first*
-alternative's own syntax, regardless of which alternative was actually
-written on assembly — a decoded word carries no record of which alternative
-was chosen (that record exists only at assembly time, as
-`try-match-operand-mode`'s `choices` return value), so there is nothing to
-disambiguate with here. This is a known, documented limitation, not a
-best-effort guess: recovering the real alternative needs mode-selected field
-codes (see the tracker) to tell alternatives apart by decoded value, the way
-a word-encoded machine's own `word-alternatives`-based decode already does
-for value-vs-encoding choices (see [Instructions](instructions.md)).
+modes"](modes.md#per-operand-modes)) renders the alternative that was
+*actually* written whenever a record of it survives to decode — on a
+word-encoded machine, a `(choice mode)`-selected field (#104, [Instructions,
+"CHOICE-selected word fields"](instructions.md#choice-selected-word-fields))
+carries its matched alternative forward from `decode-instruction-at`, the
+same way a word-encoded machine's own `word-alternatives`-based decode
+already tells an inline value from an escaped extra-word marker apart, and
+the disassembler renders that alternative's own syntax instead of always the
+first. This has no equivalent on a byte-encoded machine, or for a hole whose
+field is value-selected rather than `choice`-selected — a decoded value
+there carries no such record at all (that only ever existed at assembly
+time, as `try-match-operand-mode`'s `choices` return value), so those cases
+still fall back to rendering a `one-of`'s first alternative, a known,
+documented limitation rather than a best-effort guess. See
+[`examples/anima16.lisp`](../examples/anima16.lisp) for the round-trip where
+a real record exists, and
+[`examples/orthogonal.lisp`](../examples/orthogonal.lisp) for the
+byte-encoded fallback case.
 
 A `relative` mode's decoded value is a signed offset from the address of the
 *next* instruction (the same convention `assemble`'s own

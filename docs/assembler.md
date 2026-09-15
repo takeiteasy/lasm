@@ -148,6 +148,14 @@ declared in `(modes ...)`:
    statement's operand tokens (`try-match-operand-mode`,
    [Addressing modes](modes.md)) — a no-operand variant's "pattern" is
    simply an empty token run. No match at all is an `assembly-error`.
+   - **CHOICE eligibility** (#104, word-encoded only), applied right after:
+     drop a candidate whose `word-fields` include a `(choice mode)`-selected
+     field (see [Instructions, "CHOICE-selected word
+     fields"](instructions.md#choice-selected-word-fields)) unless `mode` is
+     the alternative that hole actually matched — `try-match-operand-mode`'s
+     own `choices` return value, hole-aligned. A candidate with no
+     `choice`-selected field is always eligible, so a byte-encoded machine,
+     or a word-encoded one using no `one-of` at all, is unaffected.
 2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
    than this statement's current floor — the size it committed to on an
    earlier pass (0 on the first pass, when nothing has committed to anything
@@ -194,6 +202,14 @@ declared in `(modes ...)`:
      back to the **widest** syntax-and-floor-matching candidate (by total
      operand width) and let `encode-instruction`'s existing `wrap-value`
      mask each value, exactly as a single-mode instruction has always done.
+     **Unless** the eligible set was narrowed by CHOICE eligibility (step
+     1.5) — a `choice`-selected field's matched-but-out-of-range value has
+     no wider `choice`-selected sibling to relax into (widening there would
+     just wrap to bits that decode as a *different* addressing form, not a
+     truncated version of the same one) — in which case this is an
+     `assembly-error` instead, deferred to the final pass like the ambiguity
+     warning below. See [Diagnostics, "Strict operand
+     range"](diagnostics.md#strict-operand-range).
    - If any hole doesn't fold at all (a label not yet in the symbol table —
      always true of a forward reference on the first pass) fall back to the
      **narrowest** eligible candidate instead of the widest, so an operand

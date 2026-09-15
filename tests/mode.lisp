@@ -301,3 +301,46 @@ looks like."
   ;; EQUAL, on the pattern comparison.
   (fiveam:signals error
     (eval '(defmode oo-bad-dup-case (one-of test-indexed-x oo-indexed-x-lower)))))
+
+;;; Hole-aligned CHOICES (#104) -- ONE-OF's CHOICES value grows one entry per
+;;; hole, NIL for a hole not governed by any ONE-OF, rather than one entry
+;;; per ONE-OF pattern element.
+
+(defmode oo-mixed (one-of oo-reg oo-ind) "," expr)
+
+(fiveam:test one-of-choices-hole-aligned-with-a-plain-expr-hole
+  ;; OO-MIXED has two holes: the ONE-OF's own, and a plain EXPR after the
+  ;; comma. CHOICES must carry one entry per hole -- the ONE-OF's chosen
+  ;; alternative, then NIL for the plain EXPR hole -- not just one entry for
+  ;; the ONE-OF element as the pre-#104 shape did.
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5,10") 'oo-mixed)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5 10) (mapcar #'expr-number-value asts)))
+    (fiveam:is (= 2 (length choices)))
+    (fiveam:is (eq 'oo-reg (mode-descriptor-name (first choices))))
+    (fiveam:is (null (second choices)))))
+
+(fiveam:test one-of-choices-length-matches-asts-length
+  ;; A general invariant this ticket introduces: CHOICES is always the same
+  ;; length as ASTS, for any pattern.
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5,10") 'oo-two)
+    (declare (ignore okp))
+    (fiveam:is (= (length asts) (length choices))))
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5,10") 'oo-mixed)
+    (declare (ignore okp))
+    (fiveam:is (= (length asts) (length choices)))))
+
+;;; %MODE-HOLE-ALTERNATIVES (#104) -- the pattern-only, DEFINSTRUCTION-time
+;;; counterpart of hole-aligned CHOICES: per hole, the ONE-OF alternative
+;;; names available there, or NIL for a plain EXPR hole.
+
+(fiveam:test mode-hole-alternatives-plain-expr-mode
+  (fiveam:is (equal '(nil) (%mode-hole-alternatives (find-mode-descriptor 'oo-reg)))))
+
+(fiveam:test mode-hole-alternatives-one-of-mode
+  (fiveam:is (equal '((oo-reg oo-ind oo-lit) (oo-reg oo-ind oo-lit))
+                     (%mode-hole-alternatives (find-mode-descriptor 'oo-two)))))
+
+(fiveam:test mode-hole-alternatives-mixed-mode
+  (fiveam:is (equal '((oo-reg oo-ind) nil)
+                     (%mode-hole-alternatives (find-mode-descriptor 'oo-mixed)))))

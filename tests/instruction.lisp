@@ -643,6 +643,140 @@
                          (variant :else (extra-word :escape 30))))
              (semantics nil)))))
 
+;;; CHOICE-selected word fields (#104) -- syntax-, not value-, selected
+;;; encoding and unconditional extra words, keyed by which ONE-OF
+;;; alternative an operand hole actually matched (mode.lisp, #103's CHOICES,
+;;; hole-aligned by #104).
+
+(defmode wc-reg expr)
+(defmode wc-ind "[" expr "]")
+(defmode wc-two (one-of wc-reg wc-ind))
+
+(definstruction word-test-machine wcx
+  (modes wc-two)
+  (encoding
+    (opcode 4)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+  (semantics (set! a operand)))
+
+(fiveam:test choice-selected-field-parses-into-word-field-choice
+  ;; Two CHOICE-selected variants on one field -> two sibling descriptors,
+  ;; one per combo, each carrying its own variant's :CHOICE (instruction.lisp)
+  ;; on its own WORD-FIELDS entry.
+  (let* ((variants (find-instruction-variants 'word-test-machine "WCX"))
+         (choices (sort (mapcar (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d))))
+                                 variants)
+                         #'string< :key #'symbol-name)))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (equal '(wc-ind wc-reg) choices))))
+
+(fiveam:test choice-inline-without-range-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :bias 3)
+                         (variant (choice wc-ind) inline :range (0 7))))
+             (semantics nil)))))
+
+(fiveam:test choice-naming-unregistered-mode-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice no-such-mode-at-all) inline :range (0 7))
+                         (variant (choice wc-ind) inline :range (8 15))))
+             (semantics nil)))))
+
+(fiveam:test choice-on-non-one-of-hole-signals-error
+  ;; WORD-IMM's single hole is a plain EXPR, not a ONE-OF -- CHOICE only
+  ;; selects between ONE-OF alternatives.
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7))
+                         (variant :else (extra-word :escape #x3ff))))
+             (semantics nil)))))
+
+(fiveam:test choice-not-among-hole-alternatives-signals-error
+  ;; WORD-ABS is a registered mode, so FIND-MODE-DESCRIPTOR alone wouldn't
+  ;; catch this -- it just isn't one of WC-TWO's own ONE-OF alternatives.
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice word-abs) inline :range (0 7))
+                         (variant (choice wc-ind) inline :range (8 15))))
+             (semantics nil)))))
+
+(fiveam:test choice-and-value-selected-variants-may-not-mix
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7))
+                         (variant (range 8 15) inline)))
+             (semantics nil)))))
+
+(fiveam:test choice-overlapping-inline-ranges-signal-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7))
+                         (variant (choice wc-ind) inline :range (4 11))))
+             (semantics nil)))))
+
+;; WCXS (#104): a forced-suffix (#40) single-mode instruction whose one mode
+;; contains a ONE-OF -- %EXPAND-WORD-COMBOS (instruction.lisp) still expands
+;; it into several sibling descriptors (one per field variant) sharing this
+;; one mode's name, exactly the shape %CHOOSE-FORCED-VARIANT's own
+;; same-mode-name FIND has to pick correctly among by CHOICE eligibility,
+;; not just grab the first. See tests/assembler.lisp's own use of this.
+(defmode wc-two-forced (one-of wc-reg wc-ind) :suffix "c")
+
+(definstruction word-test-machine wcxs
+  (modes wc-two-forced)
+  (encoding
+    (opcode 7)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
+  (semantics (set! a value)))
+
+;; WCXW (#104): a CHOICE-selected field whose second alternative is an
+;; *unconditional* extra word -- WC-IND syntax always spills its value into
+;; its own following word, regardless of what that value is (unlike an
+;; :ELSE fallback, which only escapes a value-selected field's inline range
+;; when the value doesn't fit). Used by tests/emulator.lisp's round-trip.
+(definstruction word-test-machine wcxw
+  (modes wc-two)
+  (encoding
+    (opcode 6)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) (extra-word :escape #x3ff))))
+  (semantics (set! b operand)))
+
+(fiveam:test choice-duplicate-escapes-signal-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) (extra-word :escape #x3ff))
+                         (variant (choice wc-ind) (extra-word :escape #x3ff))))
+             (semantics nil)))))
+
 (fiveam:test word-opcode-overflowing-opcode-field-signals-error
   (fiveam:signals error
     (eval '(definstruction word-test-machine bogus

@@ -67,6 +67,13 @@
   (cells nil :type list)                                   ; raw cells consumed, in address order
   (descriptor nil :type (or null instruction-descriptor))   ; NIL = undecodable data
   (values nil :type list)                                  ; decoded operand values, hole order
+  ;; #104: DECODE-INSTRUCTION-AT's matched WORD-FIELD-CHOICE per hole, hole
+  ;; order -- NIL on the byte-encoded path or for undecodable data, same as
+  ;; VALUES. %RENDER-OPERAND-TEXT reads a hole's own WORD-FIELD-CHOICE-CHOICE
+  ;; (a CHOICE-selected field's actually-matched ONE-OF alternative mode
+  ;; name, instruction.lisp) to render that alternative's own syntax instead
+  ;; of always a ONE-OF's first one -- see #117.
+  (choices nil :type list)
   (label nil :type (or null string))                        ; a symbol bound to this address, or NIL
   (text nil :type (or null string)))                        ; rendered source line, sans label
 
@@ -81,9 +88,9 @@ left NIL; %RENDER-LINES! fills them in once every line's address is known."
   (let (lines)
     (loop with address = origin
           while (< address end)
-          do (multiple-value-bind (descriptor values size)
+          do (multiple-value-bind (descriptor values size choices)
                  (handler-case (decode-instruction-at read-cell address machine-name :memory memory)
-                   (address-out-of-range () (values :decode-failure nil nil)))
+                   (address-out-of-range () (values :decode-failure nil nil nil)))
                (if (eq descriptor :decode-failure)
                    (multiple-value-bind (cell okp)
                        (handler-case (values (funcall read-cell address) t)
@@ -99,7 +106,7 @@ left NIL; %RENDER-LINES! fills them in once every line's address is known."
                          (setf address end)))
                    (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
                      (cl:push (make-disassembly-line :address address :size size :cells cells
-                                                      :descriptor descriptor :values values)
+                                                      :descriptor descriptor :values values :choices choices)
                               lines)
                      (incf address size)))))
     (nreverse lines)))
@@ -186,7 +193,7 @@ re-assembly. Every other mode's values render as decoded."
         (mapcar (lambda (v) (+ address size v)) values)
         values)))
 
-(defun %render-operand-text (mode render-values lexer reverse-symbols)
+(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices)
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -195,23 +202,39 @@ carry any punctuation (e.g. INDIRECT-Y's pattern renders \"($10),Y\", not
 INSTRUCTION-DESCRIPTOR-OPERAND-NAMES -- an unnamed field's entry there is
 NIL.
 
-A :ONE-OF element (#103) always renders its *first* alternative's own
-pattern -- a decoded word carries no record of which alternative was
-actually assembled (that record only exists at assembly time, as
-TRY-MATCH-OPERAND-MODE's CHOICES return value), so there is nothing here to
-disambiguate with. Recovering the real alternative needs mode-selected field
-codes (see the tracker) to tell alternatives apart by decoded value, the way
-#20's WORD-ALTERNATIVES already does for value-vs-encoding choices; until
-then this is a known, documented limitation, not a best-effort guess."
+HOLE-CHOICES (#104), when given, is DECODE-INSTRUCTION-AT's own hole-aligned
+WORD-FIELD-CHOICE list (decoder.lisp) -- one entry per hole in RENDER-VALUES,
+parallel to it, NIL for a hole with no CHOICE-selected record. A :ONE-OF
+element peeks the entry for its own first hole before recursing: a non-NIL
+WORD-FIELD-CHOICE-CHOICE there names the ONE-OF alternative that was actually
+matched at assemble time (mode.lisp's hole-aligned CHOICES, threaded through
+CHOICE-selected word fields, #104), and that alternative's own pattern is
+rendered instead of always the first. Every :EXPR hole this walk crosses --
+whether directly or inside a :ONE-OF's chosen alternative -- pops one entry
+off HOLE-CHOICES in lockstep with RENDER-VALUES, keeping both lists aligned
+to the same hole position throughout the walk.
+
+Falls back to always rendering the first alternative -- #103's original
+behaviour -- whenever HOLE-CHOICES is NIL (the default, and always true on a
+byte-encoded machine, where no WORD-FIELD-CHOICE record exists at all) or
+carries no non-NIL entry for this particular hole (a value-selected field, or
+one CHOICE-selected field's record sitting alongside an ordinary EXPR hole
+elsewhere in the same instruction) -- a decoded word simply carries no record
+to disambiguate with in either case."
   (with-output-to-string (s)
-    (let ((vals render-values))
+    (let ((vals render-values) (choices hole-choices))
       (labels ((render-pattern (pattern)
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
-                     (:expr (let ((v (cl:pop vals)))
+                     (:expr (cl:pop choices)
+                            (let ((v (cl:pop vals)))
                               (write-string (%render-value v lexer :label (gethash v reverse-symbols)) s)))
-                     (:one-of (render-pattern (mode-descriptor-pattern (find-mode-descriptor (second el)))))))))
+                     (:one-of
+                      (let* ((field-choice (first choices))
+                             (chosen-name (and field-choice (word-field-choice-choice field-choice)))
+                             (alt-name (or chosen-name (second el))))
+                        (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
 
 (defun %mnemonic-suffix-text (descriptor lexer)
@@ -235,13 +258,13 @@ MODE-SUFFIX-SEPARATOR to write it with."
         (format nil "~A~A~A" name (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer)) suffix)
         name)))
 
-(defun %render-line (descriptor values address size lexer suffixes reverse-symbols)
+(defun %render-line (descriptor values address size lexer suffixes reverse-symbols choices)
   (let ((mnemonic (%render-mnemonic descriptor lexer suffixes))
         (mode (instruction-descriptor-mode descriptor)))
     (if mode
         (format nil "~A ~A" mnemonic
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
-                                       lexer reverse-symbols))
+                                       lexer reverse-symbols choices))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)
@@ -264,7 +287,7 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
             (if (disassembly-line-descriptor l)
                 (%render-line (disassembly-line-descriptor l) (disassembly-line-values l)
                                (disassembly-line-address l) (disassembly-line-size l)
-                               lexer suffixes reverse-symbols)
+                               lexer suffixes reverse-symbols (disassembly-line-choices l))
                 (%data-line-text (first (disassembly-line-cells l)) lexer))))
     lines))
 

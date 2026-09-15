@@ -469,7 +469,15 @@ SUBCLAUSES)."
   (kind nil :type (member :inline :extra-word))
   (bias 0 :type integer)                 ; :inline only
   (range nil :type (or null cons))       ; :inline only, pre-bias (lo . hi)
-  (escape nil :type (or null integer)))  ; :extra-word only
+  (escape nil :type (or null integer))   ; :extra-word only
+  ;; #104: non-NIL only for a (CHOICE M) selector -- the ONE-OF alternative
+  ;; mode-name symbol M that must be this hole's matched alternative
+  ;; (mode.lisp's hole-aligned CHOICES) for this variant to apply, rather
+  ;; than the operand's own folded VALUE choosing between a (RANGE LO HI)
+  ;; variant and an :ELSE one. A field's variants are either all CHOICE-
+  ;; selected or all value-selected (%CHECK-WORD-VARIANTS rejects mixing) --
+  ;; never both on the same operand.
+  (choice nil :type (or null symbol)))
 
 (defstruct word-operand-spec
   (name nil)                  ; operand field name, or NIL for unnamed
@@ -490,7 +498,16 @@ SUBCLAUSES)."
   (kind nil :type (member :inline :extra-word))
   (bias 0 :type integer)
   (range nil :type (or null cons))
-  (escape nil :type (or null integer)))
+  (escape nil :type (or null integer))
+  ;; #104: mirrors WORD-VARIANT-CHOICE -- non-NIL only for a variant
+  ;; selected by matched ONE-OF alternative rather than by value. Carried
+  ;; through to every descriptor's WORD-FIELDS/WORD-ALTERNATIVES so
+  ;; %CHOOSE-VARIANT (assembler.lisp) can filter combos by the operand's
+  ;; actually-matched alternative, and so DECODE-INSTRUCTION-AT's matched
+  ;; choice (decoder.lisp) gives the disassembler (disassembler.lisp, #117)
+  ;; a record of which alternative was really encoded, instead of always
+  ;; rendering a ONE-OF's first alternative.
+  (choice nil :type (or null symbol)))
 
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
@@ -501,9 +518,15 @@ word-field/variant encoding path below instead of the byte-encoded
 
 (defun %parse-word-variant-form (form field-name)
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
-into a WORD-VARIANT. SELECTOR is (range LO HI) for an :INLINE variant
-(optionally :BIAS N, default 0) or :ELSE for the :EXTRA-WORD fallback, whose
-kind form is (extra-word :escape n)."
+into a WORD-VARIANT. SELECTOR is (range LO HI) for a value-selected :INLINE
+variant (optionally :BIAS N, default 0), :ELSE for the value-selected
+:EXTRA-WORD fallback (kind form (extra-word :escape n)), or (choice M) (#104)
+for a variant selected by hole M matching mode.lisp's hole-aligned CHOICES
+instead of by the operand's folded value -- kind form INLINE (requiring its
+own :RANGE (lo hi), since unlike (range lo hi) a CHOICE selector carries no
+range to double as one; optionally :BIAS N, default 0) or (extra-word
+:escape n), the latter an *unconditional* trailing word once M is the
+matched alternative, not a value-triggered fallback."
   (destructuring-bind (head selector &rest tail) form
     (unless (eq head 'variant)
       (error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
@@ -527,16 +550,42 @@ INLINE, got ~S" field-name tail))
          (unless escape
            (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
          (make-word-variant :kind :extra-word :escape escape)))
-      (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi) ~
-or :else, got ~S" field-name selector)))))
+      ((and (consp selector) (eq (first selector) 'choice))
+       (destructuring-bind (choice-kw choice-name) selector
+         (declare (ignore choice-kw))
+         (cond
+           ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
+            (destructuring-bind (extra-word-kw &key escape) (first tail)
+              (declare (ignore extra-word-kw))
+              (unless escape
+                (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
+              (make-word-variant :kind :extra-word :escape escape :choice choice-name)))
+           ((eq (first tail) 'inline)
+            (destructuring-bind (inline-sym &key range (bias 0)) tail
+              (declare (ignore inline-sym))
+              (unless range
+                (error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
+own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range of its own"
+                       field-name choice-name))
+              (destructuring-bind (lo hi) range
+                (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name))))
+           (t (error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
+:range) or (extra-word :escape n), got ~S" field-name choice-name tail)))))
+      (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
+or (choice mode), got ~S" field-name selector)))))
 
 (defun %check-word-variants (variants field-width field-name)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
-variant list, already parsed) doesn't fit FIELD-WIDTH bits, or if an
+variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
 :EXTRA-WORD variant's escape value falls inside another variant's biased
-inline range -- the ambiguity #20's own mockup leaves unresolved: a decoder
-reading that raw field value could never tell a genuine inline value from
-the escape marker apart."
+inline range; if two :INLINE variants' biased ranges overlap; if two
+:EXTRA-WORD variants share one escape value; or if VARIANTS mixes CHOICE-
+selected (#104) and value-selected (RANGE/:ELSE) variants on one operand --
+every one of these is an ambiguity a decoder reading a raw field value could
+never resolve (the RANGE/:ELSE-only versions of the first two checks predate
+#104; a field with only one value-selected :INLINE and one :ELSE, the only
+shape possible before #104, could never trigger the overlap/duplicate-escape
+cases, so this doesn't change any existing DEFINSTRUCTION's validity)."
   (let ((max (1- (ash 1 field-width))) inline-ranges escapes)
     (dolist (v variants)
       (ecase (word-variant-kind v)
@@ -558,14 +607,58 @@ not fit its ~D-bit field" field-name lo hi field-width))
         (when (<= (car r) e (cdr r))
           (error "DEFINSTRUCTION: field ~S: escape value ~D is inside inline ~
 range ~D..~D -- an encoded field value of ~D can never be told apart from a ~
-genuine inline value" field-name e (car r) (cdr r) e))))))
+genuine inline value" field-name e (car r) (cdr r) e))))
+    ;; #104: reachable now that several CHOICE-selected :INLINE variants can
+    ;; share one field -- unreachable before, when a field had at most one
+    ;; value-selected :INLINE variant.
+    (loop for (r . later) on inline-ranges
+          do (dolist (r2 later)
+               (when (<= (max (car r) (car r2)) (min (cdr r) (cdr r2)))
+                 (error "DEFINSTRUCTION: field ~S: inline ranges ~D..~D and ~D..~D overlap -- ~
+an encoded field value in the overlap could never be told apart"
+                        field-name (car r) (cdr r) (car r2) (cdr r2)))))
+    ;; #104: reachable now that several CHOICE-selected :EXTRA-WORD variants
+    ;; can share one field -- unreachable before, when a field had at most
+    ;; one :ELSE.
+    (let ((dup (loop for (e . later) on escapes when (member e later) return e)))
+      (when dup
+        (error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant"
+               field-name dup)))
+    ;; #104: a field is either all CHOICE-selected or all value-selected --
+    ;; never both, so %CHOOSE-VARIANT's eligibility filter never has to
+    ;; reason about a mix.
+    (let ((choice-count (count-if #'word-variant-choice variants)))
+      (when (and (plusp choice-count) (/= choice-count (length variants)))
+        (error "DEFINSTRUCTION: field ~S: CHOICE-selected and value-selected ~
+(RANGE/:ELSE) variants may not be mixed on the same operand" field-name)))))
 
-(defun %parse-word-operand-subclause (subclause machine-name)
+(defun %check-word-variant-choices! (variants field-name hole-alternatives)
+  "Signal an error if any of VARIANTS' non-NIL WORD-VARIANT-CHOICE (#104)
+names a mode not registered (FIND-MODE-DESCRIPTOR signals), or one not among
+HOLE-ALTERNATIVES -- this operand hole's actual ONE-OF alternatives, per
+mode.lisp's %MODE-HOLE-ALTERNATIVES (NIL when the hole isn't a ONE-OF at
+all, which makes any (CHOICE M) on it an error unconditionally)."
+  (dolist (v variants)
+    (let ((choice (word-variant-choice v)))
+      (when choice
+        (find-mode-descriptor choice)
+        (unless hole-alternatives
+          (error "DEFINSTRUCTION: field ~S: (choice ~S) given for an operand hole that is ~
+not a ONE-OF pattern element -- CHOICE only selects between ONE-OF alternatives"
+                 field-name choice))
+        (unless (member choice hole-alternatives)
+          (error "DEFINSTRUCTION: field ~S: (choice ~S) is not one of this hole's ONE-OF ~
+alternatives ~S" field-name choice hole-alternatives))))))
+
+(defun %parse-word-operand-subclause (subclause machine-name hole-alternatives)
   "SUBCLAUSE is one whole (operand [NAME] :field FIELD-NAME (variant ...)*)
 form on a word-encoded machine. Returns a WORD-OPERAND-SPEC. With no
 (variant ...) forms at all, the operand is plain inline over the field's
 full unsigned range (bias 0) -- the word-encoded equivalent of a byte-encoded
-(operand :mode)'s implicit default."
+(operand :mode)'s implicit default. HOLE-ALTERNATIVES (#104) is this hole's
+own ONE-OF alternative mode-name list (mode.lisp's %MODE-HOLE-ALTERNATIVES),
+or NIL for a plain EXPR hole -- validated against any (CHOICE M) variant
+here (%CHECK-WORD-VARIANT-CHOICES!)."
   (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
     (destructuring-bind (field-kw field-name &rest variant-forms) spec
       (unless (eq field-kw :field)
@@ -584,18 +677,24 @@ full unsigned range (bias 0) -- the word-encoded equivalent of a byte-encoded
                                (list (make-word-variant :kind :inline :bias 0
                                                          :range (cons 0 (1- (ash 1 fwidth))))))))
             (%check-word-variants variants fwidth field-name)
+            (%check-word-variant-choices! variants field-name hole-alternatives)
             (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
                                      :variants variants)))))))
 
 (defun %parse-word-operand-subclauses (mode subclauses machine name mode-name machine-name)
   "Like %PARSE-OPERAND-SUBCLAUSES but for a word-encoded machine -- one
-WORD-OPERAND-SPEC per MODE hole, in hole order."
+WORD-OPERAND-SPEC per MODE hole, in hole order. Threads MODE's own
+hole-by-hole ONE-OF alternatives (mode.lisp's %MODE-HOLE-ALTERNATIVES, #104)
+through to each subclause so a (CHOICE M) variant can be checked against
+what its hole can actually match."
   (let ((holes (%mode-hole-count mode)) (n (length subclauses)))
     (unless (= holes n)
       (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
 but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
 per hole" machine name mode-name holes n (= n 1))))
-  (let ((specs (mapcar (lambda (s) (%parse-word-operand-subclause s machine-name)) subclauses)))
+  (let* ((hole-alternatives (%mode-hole-alternatives mode))
+         (specs (mapcar (lambda (s alts) (%parse-word-operand-subclause s machine-name alts))
+                         subclauses hole-alternatives)))
     (%check-operand-names (mapcar #'word-operand-spec-name specs) machine name mode-name)
     specs))
 
@@ -624,7 +723,8 @@ extra word."
     :kind ,(word-variant-kind variant)
     :bias ,(word-variant-bias variant)
     :range ',(word-variant-range variant)
-    :escape ,(word-variant-escape variant)))
+    :escape ,(word-variant-escape variant)
+    :choice ',(word-variant-choice variant)))
 
 (defun %word-alternatives-form (specs)
   "One (quoted) form building SPECS' full per-operand variant menu -- shared
@@ -823,23 +923,48 @@ On a machine declaring an (instruction-word ...) clause (machine.lisp, #20),
 every (operand ...) subclause above instead reads
   (operand [NAME] :field FIELD-NAME
     [(variant (range LO HI) inline [:bias N])
-     (variant :else (extra-word :escape N))]*)
+     (variant :else (extra-word :escape N))
+     (variant (choice MODE) inline :range (LO HI) [:bias N])
+     (variant (choice MODE) (extra-word :escape N))]*)
 binding NAME's value to instruction-word field FIELD-NAME rather than to a
 byte-width encoding. With no (variant ...) forms, the field holds the value
 directly (biased by 0) over its full unsigned range. With one or more, a
-value in an INLINE variant's (biased) range packs straight into the field; an
-:ELSE (extra-word :escape N) variant instead writes N into the field and the
-value into its own following word. Declaring this makes DEFINSTRUCTION
-register one INSTRUCTION-DESCRIPTOR per combination of variants across all of
-a mode's fields, sharing one mnemonic, mode, and opcode value -- the
-assembler's existing relaxation (%CHOOSE-VARIANT, assembler.lisp) picks
-between them per statement exactly like it picks between addressing-mode
-widths, all-inline tried before any needing an extra word. Every variant of a
-field's range and every :ELSE escape value must fit FIELD-NAME's declared bit
-width, and an escape value may not fall inside any inline variant's biased
-range (that ambiguity would make the field undecodable) -- both checked here,
-at DEFINSTRUCTION time. A :RELATIVE addressing mode is not supported on a
-word-encoded machine."
+value-selected INLINE variant's (biased) range or :ELSE fallback works as
+described above.
+
+A (choice MODE) selector (#104) instead selects by *syntax*, not value: MODE
+must be one of the addressing-mode alternatives named by the ONE-OF pattern
+element (mode.lisp) that produced this hole, and the variant applies only
+when MODE is the alternative that hole actually matched (mode.lisp's
+TRY-MATCH-OPERAND-MODE/MATCH-OPERAND-MODE CHOICES, hole-aligned per #104).
+A CHOICE-selected INLINE variant packs its own value into the field's range
+exactly like a value-selected one, but requires an explicit :RANGE (LO HI)
+of its own -- unlike (range LO HI), the selector itself carries no range.
+A CHOICE-selected (extra-word :escape N) variant writes N into the field and
+the value into its own following word *unconditionally* once MODE is
+matched, regardless of what value the hole folds to -- unlike :ELSE, which
+only triggers when no INLINE variant's range fits. Declaring a (choice M)
+variant for a hole that is not a ONE-OF, or naming a mode that is not one of
+that ONE-OF's own alternatives, is a DEFINSTRUCTION-time error
+(%CHECK-WORD-VARIANT-CHOICES!). A field's variants must be either all
+CHOICE-selected or all value-selected (RANGE/:ELSE) -- never a mix.
+
+Either way, declaring variants at all makes DEFINSTRUCTION register one
+INSTRUCTION-DESCRIPTOR per combination of variants across all of a mode's
+fields, sharing one mnemonic, mode, and opcode value -- the assembler's
+existing relaxation and #104's new CHOICE-eligibility filter
+(%CHOOSE-VARIANT, assembler.lisp) pick between them per statement, all-inline
+tried before any needing an extra word among whichever combos a CHOICE-
+selected field's matched alternative left eligible. A CHOICE-selected field
+whose matched alternative's own range doesn't fit the folded value is an
+ASSEMBLY-ERROR at assemble time (there being no wider CHOICE-selected
+sibling to relax into, unlike the value-selected case's silent-wrap
+fallback). Every variant's range and every escape value must fit FIELD-NAME's
+declared bit width; no two INLINE variants' (biased) ranges may overlap; no
+two :EXTRA-WORD variants may share an escape value; and no escape value may
+fall inside any INLINE variant's biased range -- all checked here, at
+DEFINSTRUCTION time, since any of them would make the field undecodable. A
+:RELATIVE addressing mode is not supported on a word-encoded machine."
   (let (modes-clause encoding-clause semantics-clause cycles-clause)
     (dolist (clause clauses)
       (case (first clause)

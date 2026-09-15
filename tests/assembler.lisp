@@ -763,6 +763,51 @@ target: hlt" :machine 'word-test-machine)))
   (let ((a (assemble "hlt" :machine 'word-test-machine)))
     (fiveam:is (equalp #(#x00 #x20) (assembly-cells a)))))
 
+;;; CHOICE-selected word fields (#104) -- the payoff: WCX's operand encodes
+;;; differently depending on which ONE-OF alternative (WC-REG bare, WC-IND
+;;; "[" expr "]") the hole actually matched, unlike a plain value-selected
+;;; field (SET above), where syntax has no bearing on encoding at all.
+
+(fiveam:test choice-selected-field-encodes-by-matched-syntax-bare
+  ;; WC-REG (bias #x00): raw field = 0 + 5 = 5 -> word #x4005.
+  (let ((a (assemble "wcx 5" :machine 'word-test-machine)))
+    (fiveam:is (equalp #(#x05 #x40) (assembly-cells a)))))
+
+(fiveam:test choice-selected-field-encodes-by-matched-syntax-indirect
+  ;; WC-IND (bias #x08): raw field = 8 + 5 = 13 (#x0D) -> word #x400D --
+  ;; different cells than the bare form above for the identical value 5,
+  ;; which is exactly what a plain (non-CHOICE) field could never do (see
+  ;; examples/orthogonal.lisp's byte-encoded counterexample).
+  (let ((a (assemble "wcx [5]" :machine 'word-test-machine)))
+    (fiveam:is (equalp #(#x0d #x40) (assembly-cells a)))))
+
+(fiveam:test choice-selected-field-overflow-signals-assembly-error
+  ;; 9 doesn't fit WC-REG's own declared :range (0 7) -- and unlike the
+  ;; value-selected SET above, there is no wider CHOICE-selected sibling to
+  ;; relax into (WC-IND's variant isn't even eligible here -- "9" is bare
+  ;; syntax, so it never matched WC-IND's "[" expr "]" pattern in the first
+  ;; place), so this is an ASSEMBLY-ERROR, not a silent WRAP-VALUE.
+  (fiveam:signals assembly-error
+    (assemble "wcx 9" :machine 'word-test-machine)))
+
+(fiveam:test choice-selected-field-with-forced-suffix-picks-matched-alternative
+  ;; #104: WCXS's one mode (WC-TWO-FORCED) contains a ONE-OF, so
+  ;; %EXPAND-WORD-COMBOS still expands it into two sibling descriptors under
+  ;; that one mode name -- %CHOOSE-FORCED-VARIANT must pick the sibling
+  ;; whose CHOICE-selected field agrees with the operand's own matched
+  ;; alternative, not an arbitrary one. Same bias values as WCX above.
+  (let ((bare (assembly-cells (assemble "wcxs.c 5" :machine 'word-test-machine)))
+        (indirect (assembly-cells (assemble "wcxs.c [5]" :machine 'word-test-machine))))
+    (fiveam:is (equalp #(#x05 #x70) bare))       ; WC-REG: raw = 0 + 5
+    (fiveam:is (equalp #(#x0d #x70) indirect))    ; WC-IND: raw = 8 + 5
+    (fiveam:is (not (equalp bare indirect)))))
+
+(fiveam:test choice-selected-field-overflow-error-has-a-column
+  (handler-case (assemble "wcx 9" :machine 'word-test-machine)
+    (assembly-error (c)
+      (fiveam:is (integerp (lasm-syntax-error-column c))))
+    (:no-error (&rest _) (declare (ignore _)) (fiveam:fail "expected ASSEMBLY-ERROR"))))
+
 ;;; Cell-width-typed assembler output (#53) -- WORDADDR-TEST-MACHINE
 ;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory with an ordinary
 ;;; (not INSTRUCTION-WORD/#20) opcode-plus-operand-cells encoding. The

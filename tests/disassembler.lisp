@@ -133,6 +133,23 @@
       (variant :else (extra-word :escape #x1f))))
   (semantics (set! (reg dst) src)))
 
+;; CHOICE-selected field (#104/#117): unlike SET/MOVX above, COO's field A
+;; encoding depends on which of DISASM-OO's ONE-OF alternatives (declared
+;; alongside MOO above, on the byte-encoded machine -- modes are a global
+;; registry, not per-machine, so reusing it here exercises the same ONE-OF
+;; against a word-encoded field) the operand actually matched, not its
+;; value -- and DECODE-INSTRUCTION-AT's matched WORD-FIELD-CHOICE record
+;; (decoder.lisp) lets %RENDER-OPERAND-TEXT render the real alternative back,
+;; unlike MOO's byte-encoded (no-record) fallback above.
+(definstruction disasm-word-machine coo
+  (modes disasm-oo)
+  (encoding
+    (opcode 4)
+    (operand val :field a
+      (variant (choice disasm-oo-reg) inline :range (0 15) :bias 0)
+      (variant (choice disasm-oo-ind) inline :range (0 15) :bias 16)))
+  (semantics (set! (reg 0) val)))
+
 ;;; Regression gate -- the EMULATOR suite (tests/emulator.lisp) exercising
 ;;; STEP-MACHINE must still pass unchanged after the DECODE-INSTRUCTION-AT
 ;;; extraction; no test here duplicates that, but every test below that
@@ -234,15 +251,30 @@ ldsr $2,S" :machine 'disasm-test-machine))
     (fiveam:is (string= "movi $10,$20" (disassembly-line-text (first lines))))
     (fiveam:is (equal (list #x10 #x20) (disassembly-line-values (first lines))))))
 
-(fiveam:test disassemble-one-of-renders-first-alternative
-  ;; #103: MOO's operand was written bracketed ([DISASM-OO-IND]), but
-  ;; disassembly still renders it via the *first* alternative's own syntax
-  ;; (DISASM-OO-REG, a bare expr) -- a documented limitation until
-  ;; mode-selected field codes (see the tracker) can tell them apart by
-  ;; decoded value, not a bug in this test.
+(fiveam:test disassemble-one-of-with-no-choice-record-renders-first-alternative
+  ;; #103/#117: MOO is byte-encoded (DISASM-TEST-MACHINE, plain (operand
+  ;; :mode)), so it carries no WORD-FIELD-CHOICE record of which alternative
+  ;; assembled it at all -- the operand was written bracketed
+  ;; ([DISASM-OO-IND]), but disassembly still renders it via the *first*
+  ;; alternative's own syntax (DISASM-OO-REG, a bare expr), same as before
+  ;; #104: mode-selected field codes are a word-encoding-only feature (see
+  ;; DISASSEMBLE-ONE-OF-RENDERS-THE-MATCHED-ALTERNATIVE below for the case
+  ;; where a real record exists) -- a documented fallback, not a bug in this
+  ;; test.
   (let* ((a (assemble "moo [$10]" :machine 'disasm-test-machine))
          (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "moo $10" (disassembly-line-text (first lines))))))
+
+(fiveam:test disassemble-one-of-renders-the-matched-alternative
+  ;; #104/#117: COO is word-encoded with a CHOICE-selected field, so unlike
+  ;; MOO's byte-encoded fallback above, the real alternative comes back --
+  ;; "5" and "[5]" render distinctly, matching what was actually written.
+  (let* ((bare (disassemble-assembly (assemble "coo 5" :machine 'disasm-word-machine)
+                                      :machine 'disasm-word-machine :labels nil))
+         (indirect (disassemble-assembly (assemble "coo [5]" :machine 'disasm-word-machine)
+                                          :machine 'disasm-word-machine :labels nil)))
+    (fiveam:is (string= "coo $5" (disassembly-line-text (first bare))))
+    (fiveam:is (string= "coo [$5]" (disassembly-line-text (first indirect))))))
 
 (fiveam:test disassemble-no-operand-instruction
   (let* ((a (assemble "hlt" :machine 'disasm-test-machine))

@@ -716,6 +716,30 @@ hlt" :machine 'word-test-machine)))
       (fiveam:is (= 3 steps))
       (fiveam:is (= 1000 (sref m 'a))))))
 
+(fiveam:test step-machine-choice-selected-inline-round-trip
+  ;; #104: WCX's field is CHOICE-selected, not value-selected -- WC-REG
+  ;; syntax packs inline biased #x00.
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "wcx 5
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "WCX" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 2 (sref m 'pc)))))     ; one word consumed, same as SET's inline case
+
+(fiveam:test step-machine-choice-selected-unconditional-extra-word-round-trip
+  ;; #104: WCXW's WC-IND alternative always spills to a trailing word once
+  ;; matched, regardless of the value -- unlike SET's :ELSE, which only
+  ;; escapes when the value itself doesn't fit inline. 5 would fit an inline
+  ;; field easily, but the CHOICE (syntax), not the value, decides here.
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "wcxw [5]
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "WCXW" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'b)))
+    (fiveam:is (= 4 (sref m 'pc)))))     ; instruction word + one extra word
+
 (fiveam:test step-machine-word-encoded-decode-failure-on-unregistered-opcode
   (let ((m (make-machine 'word-test-machine)))
     (setf (mref m 'ram 0) 0)

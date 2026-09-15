@@ -197,6 +197,23 @@ unaffected — an inline field's own declared `(range lo hi)` is already a
 hard boundary chosen at `definstruction` time, not a `wrap-value`
 truncation.
 
+**A `(choice mode)`-selected word field (#104) also errors unconditionally,
+like `relative`**, and for the same reason: once a hole's matched
+alternative has narrowed a field to a `choice`-selected variant, there is no
+wider `choice`-selected sibling to relax into the way a value-selected
+field's `:else` escape provides — the value either fits that one matched
+alternative's declared `:range`, or the program is wrong.
+
+```lisp
+(assemble "ld 1, 9" :machine 'anima16foo)
+;; assembly-error: ld: operand value 9 out of range 0..7 for addressing
+;; form a-reg (operand src)
+```
+
+See [Instructions, "CHOICE-selected word
+fields"](instructions.md#choice-selected-word-fields) and
+[`examples/anima16.lisp`](../examples/anima16.lisp).
+
 **One asymmetry worth knowing:** because the check runs where `%encode`
 already knows the *chosen* descriptor, a per-mode `:strict` only fires when
 that strict mode is the one `%choose-variant` actually picked. On a

@@ -87,6 +87,14 @@ extra words. INSTRUCTION-DESCRIPTOR-SIZE would overstate the size of any
 narrower encoding genuinely present in the stream; it is only trustworthy in
 the encode direction (assembler.lisp) and on the byte-encoded path below.
 
+CHOICES (the fourth return value on success, #104) is the matched
+WORD-FIELD-CHOICE per operand hole, in hole order -- exactly the alternative
+%WORD-CHOICE-MATCHES-P found for each field, kept (not just its debiased
+value) so a CHOICE-selected field's own WORD-FIELD-CHOICE-CHOICE (the ONE-OF
+alternative mode-name that was actually encoded, instruction.lisp) survives
+to the disassembler (disassembler.lisp, #117). NIL entries mix in freely for
+a value-selected field (WORD-FIELD-CHOICE-CHOICE NIL there).
+
 Word machines never sign-extend a decoded value, unlike the byte path below
 -- %CHECK-WORD-RELATIVE (instruction.lisp) forbids a :RELATIVE mode on a
 word-encoded machine outright, so there is no signed word-machine operand to
@@ -111,7 +119,8 @@ extend. This mirrors that asymmetry rather than unifying it."
                                (prog1 (%fetch-cells read-cell (+ address offset) width-cells cell-width)
                                  (incf offset width-cells))))
                       into values
-                    finally (return (values descriptor values offset))))
+                    collect match into matches
+                    finally (return (values descriptor values offset matches))))
           (unknown-instruction () (values :decode-failure nil nil)))))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width)
@@ -141,7 +150,9 @@ a single element."
                              do (incf offset width))))
           (when (and mode (mode-descriptor-signedp mode))
             (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
-          (values descriptor values (instruction-descriptor-size descriptor)))
+          ;; #104: no fourth CHOICES value on the byte-encoded path -- there
+          ;; is no WORD-FIELD-CHOICE here at all, CHOICE-selected or not.
+          (values descriptor values (instruction-descriptor-size descriptor) nil))
       (unknown-instruction () (values :decode-failure nil nil)))))
 
 (defun decode-instruction-at (read-cell address machine-name &key memory)
@@ -153,12 +164,17 @@ nothing -- the inverse of ENCODE-INSTRUCTION (instruction.lisp), shared by
 STEP-MACHINE (emulator.lisp) and the disassembler (disassembler.lisp) so
 they cannot decode the same encoding two different ways.
 
-Returns (VALUES descriptor values size) on success: the matched
+Returns (VALUES descriptor values size choices) on success: the matched
 INSTRUCTION-DESCRIPTOR, its decoded operand VALUES in hole order (already
 sign-extended per mode where applicable -- see %DECODE-CELL-INSTRUCTION), and
 SIZE, the instruction's width in cells, accumulated during decode rather than
 taken from INSTRUCTION-DESCRIPTOR-SIZE (see %DECODE-WORD-INSTRUCTION's
-docstring for why that matters on a word-encoded machine).
+docstring for why that matters on a word-encoded machine). CHOICES (#104) is
+the matched WORD-FIELD-CHOICE per hole on a word-encoded machine (see
+%DECODE-WORD-INSTRUCTION), or NIL on the byte-encoded path -- existing
+callers (STEP-MACHINE, emulator.lisp) that only bind the first three values
+are unaffected; DISASSEMBLE-CELLS (disassembler.lisp, #117) reads it to
+render the ONE-OF alternative that was actually encoded.
 
 Returns (VALUES :DECODE-FAILURE NIL NIL) on an unregistered opcode, or, on a
 word-encoded machine, a raw operand field matching none of the descriptor's

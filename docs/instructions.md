@@ -387,6 +387,81 @@ the same raw bits. Both are checked at `definstruction`'s macroexpansion
 time, not left as an encode- or decode-time surprise. The `opcode` value
 itself is checked the same way, against the `opcode` field's own width.
 
+### CHOICE-selected word fields (#104)
+
+Both `(variant ...)` forms above pick an encoding purely from the operand's
+*value*. A third selector picks by *syntax* instead — which alternative of a
+`(one-of mode...)` pattern element (see [Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) a hole actually matched:
+
+```lisp
+(operand [NAME] :field FIELD-NAME
+  [(variant (choice MODE) inline :range (LO HI) [:bias N])
+   (variant (choice MODE) (extra-word :escape N))]*)
+```
+
+`MODE` must be one of the alternatives named by the `one-of` element that
+produced this hole — declaring `(choice mode)` for a hole that isn't a
+`one-of` at all, or naming a mode that isn't one of *that* `one-of`'s own
+alternatives, is a `definstruction`-time error. A `choice`-selected `inline`
+variant requires its own `:range (LO HI)` — unlike `(range LO HI)`, the
+selector itself carries no range to double as one. A `choice`-selected
+`(extra-word :escape N)` variant writes `N` into the field and spends the
+value's own trailing word **unconditionally** once `MODE` is the matched
+alternative, regardless of what the value actually is — unlike `:else`,
+which only escapes when no inline variant's range fits.
+
+A field's variants must be either all `choice`-selected or all
+value-selected (`range`/`:else`) — never a mix; declaring both on one
+operand is an error (see the tracker for the follow-up that would lift
+this, needed for an ISA whose real operand table packs both kinds into one
+field, e.g. ANIMA-16's own — see `examples/anima16.lisp`'s header). Every
+`choice`-selected range and escape must fit
+`FIELD-NAME`'s bit width the same as a value-selected one, and — reachable
+now that several variants of one kind can share a field — no two inline
+ranges may overlap and no two escapes may collide, checked the same way as
+the existing inline-vs-escape ambiguity check, all at `definstruction` time.
+
+```lisp
+(defmode a-reg expr)
+(defmode a-ind "[" expr "]")
+(defmode a-mem "(" expr ")")
+(defmode ld-mode expr "," (one-of a-mem a-ind a-reg))
+
+(definstruction anima16foo ld
+  (modes ld-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :field b)
+    (operand src :field a
+      (variant (choice a-reg) inline :range (0 7) :bias #x00)
+      (variant (choice a-ind) inline :range (0 7) :bias #x08)
+      (variant (choice a-mem) (extra-word :escape #x1e))))
+  (semantics (set! (reg dst) src)))
+```
+
+`ld 1, 0` and `ld 1, [0]` now encode into *different* field codes for the
+identical value 0 (disjoint biased halves of `a`'s 0–15 sub-range); `ld 1,
+(0)` always spends a trailing word, however small the address. Selection
+among these at assemble time is `%choose-variant`'s job, same as the
+value-selected case (see [Assembler](assembler.md#choosing-a-mode)) — a
+candidate whose field is `choice`-selected is dropped outright unless its
+`MODE` is the alternative the hole actually matched, before the ordinary
+floor/value filters ever run. Unlike the value-selected case, a
+`choice`-selected field's matched-but-out-of-range value has no wider
+`choice`-selected sibling to relax into, so this is an `assembly-error`
+rather than a silent wrap.
+
+This says nothing about *semantics* — every sibling descriptor `ld`'s three
+`choice` variants expand into shares one `semantics` body
+(`with-machine-bindings`, below), so `[reg]` cannot yet mean "dereference"
+while a bare `reg` means "use directly"; dispatching semantics on which
+alternative actually matched is a separate, still-open piece (see the
+tracker). See [`examples/anima16.lisp`](../examples/anima16.lisp) for this
+run end to end, including the decode/disassemble round-trip — the matched
+alternative's own syntax renders back, not always the `one-of`'s first
+alternative (see [Disassembler](disassembler.md)).
+
 A `:relative` addressing mode is not supported on a word-encoded machine —
 its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
 assumes a cell-counted operand width. A word-encoded field also has no `:signed`
