@@ -58,6 +58,19 @@ jmp start")))
 (fiveam:test empty-operand-signals-parse-failure
   (fiveam:signals parse-failure (parse "lda a,,b")))
 
+(fiveam:test comma-inside-brackets-does-not-split-operands
+  ;; #103: bracket depth shares %SPLIT-OPERANDS' DEPTH counter with paren
+  ;; depth, so an addressing-mode pattern's own literal "[" ... "]" (e.g. an
+  ;; indirect "[" expr "," expr "]" hole) can carry a comma of its own
+  ;; without STATEMENT-OPERANDS (a general statement-grammar product, unused
+  ;; by mode matching itself -- see docs/modes.md) splitting on it.
+  (let ((stmts (parse "foo [1,2],3")))
+    (let ((s (first stmts)))
+      (fiveam:is (= 2 (length (statement-operands s))))
+      (fiveam:is (equalp #(:lbracket 1 :comma 2 :rbracket)
+                          (map 'vector #'token-value (operand-tokens (first (statement-operands s))))))
+      (fiveam:is (equalp #(3) (map 'vector #'token-value (operand-tokens (second (statement-operands s)))))))))
+
 ;;; "name = value" sugar for ".equ name, value" (#35)
 
 (fiveam:test equals-sugar-rewrites-to-equ-mnemonic

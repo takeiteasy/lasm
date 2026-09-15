@@ -33,7 +33,9 @@ operands  := operand ("," operand)*
 
 One `statement` per source line; blank and comment-only lines produce none.
 A label with no mnemonic is a legal statement (a label on its own line). A
-comma inside a parenthesized group does not split operands.
+comma inside a parenthesized *or* bracketed group does not split operands —
+`[`/`]` share the same depth counter `(`/`)` do (see [Addressing modes,
+"Per-operand modes"](modes.md#per-operand-modes)).
 
 A mnemonic's trailing "separator identifier" piece (e.g. the `.w` in
 `lda.w`, #40) is a forced addressing-mode suffix, not part of the mnemonic

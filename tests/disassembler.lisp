@@ -75,6 +75,19 @@
   (encoding (opcode #x90) (operand :mode))
   (semantics (when (zerop z) (set! pc (+ pc operand)))))
 
+;; ONE-OF (#103): a decoded word carries no record of which alternative was
+;; assembled -- see %RENDER-OPERAND-TEXT's own docstring -- so disassembly
+;; always renders the first alternative, DISASM-OO-REG here, regardless of
+;; which one was actually written.
+(defmode disasm-oo-reg expr)
+(defmode disasm-oo-ind "[" expr "]")
+(defmode disasm-oo (one-of disasm-oo-reg disasm-oo-ind))
+
+(definstruction disasm-test-machine moo
+  (modes disasm-oo)
+  (encoding (opcode #x04) (operand :mode))
+  (semantics (set! x operand)))
+
 ;;; Word-encoded fixture -- DCPU-16-shaped (examples/dcpu16.lisp): a 6-bit
 ;;; field A, a 5-bit field B, a 5-bit OPCODE field, MSB-first. SET's operand
 ;;; order (dst = field B, shift 5; src = field A, shift 10) is declared
@@ -220,6 +233,16 @@ ldsr $2,S" :machine 'disasm-test-machine))
          (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "movi $10,$20" (disassembly-line-text (first lines))))
     (fiveam:is (equal (list #x10 #x20) (disassembly-line-values (first lines))))))
+
+(fiveam:test disassemble-one-of-renders-first-alternative
+  ;; #103: MOO's operand was written bracketed ([DISASM-OO-IND]), but
+  ;; disassembly still renders it via the *first* alternative's own syntax
+  ;; (DISASM-OO-REG, a bare expr) -- a documented limitation until
+  ;; mode-selected field codes (see the tracker) can tell them apart by
+  ;; decoded value, not a bug in this test.
+  (let* ((a (assemble "moo [$10]" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+    (fiveam:is (string= "moo $10" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-no-operand-instruction
   (let* ((a (assemble "hlt" :machine 'disasm-test-machine))

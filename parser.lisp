@@ -185,12 +185,15 @@ case a program's own \".equ\" spelling uses.")
 
 (defun %split-operands (tokens)
   "Split a list of TOKENS on top-level commas (commas nested inside
-parentheses do not split) into a list of token-lists, one per operand."
+parentheses or brackets do not split) into a list of token-lists, one per
+operand. Bracket depth (#103) shares DEPTH with paren depth -- a mode
+pattern's own literal \"[\"/\"]\" (e.g. an indirect \"[\" expr \"]\" hole) is
+just as entitled to hide a comma as a literal \"(\"/\")\" already is."
   (let (groups current (depth 0))
     (dolist (tok tokens)
       (case (%punct-value tok)
-        (:lparen (incf depth) (cl:push tok current))
-        (:rparen (decf depth) (cl:push tok current))
+        ((:lparen :lbracket) (incf depth) (cl:push tok current))
+        ((:rparen :rbracket) (decf depth) (cl:push tok current))
         (:comma (if (zerop depth)
                     (progn (cl:push (nreverse current) groups) (setf current nil))
                     (cl:push tok current)))

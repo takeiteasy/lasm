@@ -94,6 +94,21 @@ suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)) that names a real
 mode the instruction just doesn't declare, or whose syntax the operand
 doesn't match.
 
+A mode containing a `(one-of ...)` element ([Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) renders that element as its
+alternatives' own syntax joined with `|`:
+
+```
+moo: operand "$10,X" matches no addressing mode -- this instruction accepts
+expr|[expr]
+```
+
+Per-hole ambiguity — two `one-of` alternatives both matching the same
+operand text — is not detected: "Mode-selection ambiguity" below compares
+whole modes by name, and a mode with a `one-of` element has only the one
+name regardless of which alternative each hole picked (see the tracker for
+this follow-up).
+
 ## Mode-selection ambiguity
 
 Two modes sharing identical operand syntax (`zero-page`/`absolute`, a bare

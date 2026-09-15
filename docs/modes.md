@@ -28,6 +28,9 @@ mode, built-in or user-declared, goes through the same `defmode`.
 (defmode NAME pattern-element... [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t])
 ```
 
+`pattern-element` is a string literal, the symbol `expr`, or `(one-of
+mode...)` — see [Per-operand modes](#per-operand-modes) below.
+
 `NAME` is a symbol, registered globally (like a lexer — see below).
 `pattern-element` is either a string literal (matched against a token's
 verbatim text, case-insensitively — so `"X"` matches `x` too) or the symbol
@@ -94,7 +97,95 @@ may have any number of holes — each is sign-extended independently (see
 to `:relative`: a `:relative` mode may not have more than one hole, since
 its *offset* applies to the operand as a whole and there is currently no way
 to mark just one hole of a multi-hole mode as the relative one (see
-[PC-relative modes](#pc-relative-modes) below).
+[PC-relative modes](#pc-relative-modes) below). A `one-of` element (below)
+contributes as many holes as any one of its alternatives — every alternative
+must share the same count.
+
+## Per-operand modes
+
+A `(one-of mode...)` pattern element lets a single operand hole pick its own
+addressing-mode syntax independently of every other hole in the same
+pattern — the shape a DCPU-16/ANIMA-16-style instruction set needs
+throughout its operand table, where one operand might be a bare register,
+another `[register]`, another `[register + next word]`, and so on, all in
+the same instruction:
+
+```lisp
+(defmode a-reg expr)
+(defmode a-ind "[" expr "]")
+(defmode a-lit "#" expr)
+
+(defmode ab (one-of a-reg a-ind a-lit) "," (one-of a-reg a-ind a-lit))
+```
+
+`ab` above matches `5, 10`, `[5], #10`, `#5, [10]`, and every other
+combination of its two holes' three alternatives — each hole's choice has no
+bearing on the other's.
+
+Each `one-of` alternative names an already-registered mode (a plain symbol,
+resolved the same way `definstruction`'s `(modes ...)` resolves a mode
+name). At `defmode` time, every alternative:
+
+- must have the exact same hole count as every other alternative in the same
+  `one-of` — the positional hole ↔ operand-encoding-field parallel the rest
+  of the pipeline depends on (see [Instructions](instructions.md)) has no
+  room for a `one-of` that yields a different field count depending on which
+  alternative matched;
+- may declare none of `:width`, `:signed`, `:relative`, `:strict`, or
+  `:suffix` itself — honoring one of those per hole, rather than per
+  statement, is a follow-up (see the tracker);
+- must not share identical syntax with another alternative in the same
+  `one-of` (checked case-insensitively, since a `:literal` element already
+  matches that way) — nothing could ever choose between two alternatives
+  that read the same.
+
+A `one-of` needs at least two alternatives; one alternative would just be
+the same as writing that mode's pattern directly.
+
+### Matching and backtracking
+
+At match time, an alternative is tried by matching *the rest of the
+pattern* after it too, not just its own tokens — an alternative that
+matches locally but leaves what follows unable to match is rejected in
+favor of a later alternative, rather than the match failing outright. Given
+
+```lisp
+(defmode bt-plain expr)
+(defmode bt-marked expr "X")
+(defmode bt (one-of bt-plain bt-marked) "," "Y")
+```
+
+matching `bt` against `5 X, Y`: `bt-plain` (a bare `expr`) matches `5`
+locally and stops (`X` isn't part of an expression), but the pattern's
+trailing `,` `Y` then can't match starting at `X` — so `bt-marked` (`expr
+"X"`) is tried next, matching `5 X` and leaving `, Y` for the rest of the
+pattern, which succeeds. Alternatives are otherwise tried in declaration
+order, same as `(modes ...)` variants.
+
+`try-match-operand-mode`/`match-operand-mode` (see
+[Matching](#matching) below) return which alternative each `one-of` element
+picked, as a trailing `choices` value — one `mode-descriptor` per `one-of`
+element, in pattern order. Nothing in the assembler or the encoder consults
+it yet (see the follow-up ticket in "What `one-of` does not do" below); it
+exists as the hook a future mode-selected field code reads from.
+
+### What `one-of` does not do
+
+Declaring a `one-of` only changes which *syntax* an operand hole accepts —
+it says nothing about the value each alternative parses to, and nothing
+about how the chosen alternative affects encoding. `a-ind` above (`"[" expr
+"]"`) parses to the same plain integer `a-reg` (`expr`) would; an
+instruction whose holes are `one-of` elements currently encodes every
+alternative's value into the same field the same way, regardless of which
+alternative matched (see [`examples/orthogonal.lisp`](../examples/orthogonal.lisp)
+for this made explicit — three syntactically distinct operands assembling
+to identical bytes). Letting the chosen alternative steer the field code or
+add its own unconditional extra word needs mode-selected field codes (see
+the tracker); letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
+`[register]` vs. `[register + offset]`) actually mean different things needs
+symbolic register names (see the tracker) so the assembler can tell a
+register apart from an arbitrary expression inside the brackets. Disassembly
+has the parallel limitation — see [Disassembler](disassembler.md).
 
 ## Signed operands
 
@@ -233,19 +324,23 @@ program using `sta.w`/`lda.z` to force a mode.
 - `(match-operand-mode tokens mode)` — `tokens` is a token run (e.g. a
   `statement`'s `operand-tokens`; see [Statement grammar & expression
   parser](parser.md)), `mode` a `mode-descriptor` or a symbol naming one.
-  Consumes `mode`'s literal tokens in order and parses each `expr` hole.
-  Returns `(values first-ast all-asts)` — `first-ast` alone is what every
-  current single-hole mode needs. Signals `parse-failure` if `tokens` don't
-  match `mode`, or leave a trailing token unconsumed.
+  Consumes `mode`'s literal tokens in order, parses each `expr` hole, and
+  picks a backtracking-matched alternative for each `one-of` element (see
+  [Per-operand modes](#per-operand-modes) above). Returns `(values first-ast
+  all-asts choices)` — `first-ast` alone is what every current single-hole
+  mode needs; `choices` is one `mode-descriptor` per `one-of` element, in
+  pattern order (`nil` for a mode with no `one-of` elements). Signals
+  `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
+  unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns
-  `(values asts t)` on a match or `(values nil nil)` on a mismatch. This is
-  what the assembler's mode-candidate filter uses to try several of a
-  mnemonic's modes against one operand without a `handler-case` per
-  candidate.
+  `(values asts t choices)` on a match or `(values nil nil nil)` on a
+  mismatch. This is what the assembler's mode-candidate filter uses to try
+  several of a mnemonic's modes against one operand without a
+  `handler-case` per candidate.
 
 ```lisp
 (match-operand-mode (statement-operand-tokens some-statement) 'immediate)
-;; => #10 parses to an EXPR-NUMBER AST, (values ast (list ast))
+;; => #10 parses to an EXPR-NUMBER AST, (values ast (list ast) nil)
 ```
 
 ## Why `statement-operand-tokens`, not `operands`

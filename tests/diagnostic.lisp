@@ -153,6 +153,25 @@
         (fiveam:is (search "immediate" msg))
         (fiveam:is (search "#expr" msg))))))
 
+;;; ONE-OF mode-mismatch diagnostics (#103): %MODE-SYNTAX-TEXT renders a
+;;; :ONE-OF element as its alternatives' own syntax joined with "|".
+
+(defmode diag-oo-reg expr)
+(defmode diag-oo-ind "[" expr "]")
+(defmode diag-oo (one-of diag-oo-reg diag-oo-ind))
+
+(definstruction diag-test-machine moo
+  (modes diag-oo)
+  (encoding (opcode #x03) (operand :mode))
+  (semantics (set! a operand)))
+
+(fiveam:test one-of-mode-mismatch-renders-alternatives-joined-by-pipe
+  (handler-case
+      (progn (assemble "moo $10,X" :machine 'diag-test-machine) (fiveam:fail "did not signal"))
+    (assembly-error (c)
+      (let ((msg (lasm-syntax-error-message c)))
+        (fiveam:is (search "expr|[expr]" msg))))))
+
 ;;; Ambiguity warning (assembler.lisp, #74)
 
 (fiveam:test tied-width-candidates-signal-ambiguous-mode

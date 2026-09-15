@@ -193,14 +193,26 @@ hole -- concatenated with no separator, since a mode's own literals already
 carry any punctuation (e.g. INDIRECT-Y's pattern renders \"($10),Y\", not
 \"( $10 ) , Y\"). Values are paired by hole order, never by
 INSTRUCTION-DESCRIPTOR-OPERAND-NAMES -- an unnamed field's entry there is
-NIL."
+NIL.
+
+A :ONE-OF element (#103) always renders its *first* alternative's own
+pattern -- a decoded word carries no record of which alternative was
+actually assembled (that record only exists at assembly time, as
+TRY-MATCH-OPERAND-MODE's CHOICES return value), so there is nothing here to
+disambiguate with. Recovering the real alternative needs mode-selected field
+codes (see the tracker) to tell alternatives apart by decoded value, the way
+#20's WORD-ALTERNATIVES already does for value-vs-encoding choices; until
+then this is a known, documented limitation, not a best-effort guess."
   (with-output-to-string (s)
     (let ((vals render-values))
-      (dolist (el (mode-descriptor-pattern mode))
-        (ecase (first el)
-          (:literal (write-string (second el) s))
-          (:expr (let ((v (cl:pop vals)))
-                   (write-string (%render-value v lexer :label (gethash v reverse-symbols)) s))))))))
+      (labels ((render-pattern (pattern)
+                 (dolist (el pattern)
+                   (ecase (first el)
+                     (:literal (write-string (second el) s))
+                     (:expr (let ((v (cl:pop vals)))
+                              (write-string (%render-value v lexer :label (gethash v reverse-symbols)) s)))
+                     (:one-of (render-pattern (mode-descriptor-pattern (find-mode-descriptor (second el)))))))))
+        (render-pattern (mode-descriptor-pattern mode))))))
 
 (defun %mnemonic-suffix-text (descriptor lexer)
   "The gas-style forced-mode suffix (mode.lisp's DEFMODE :SUFFIX, e.g. \"w\")

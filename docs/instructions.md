@@ -181,6 +181,13 @@ there is currently no way to mark just one hole of a multi-hole mode as the
 relative one (see [Addressing modes](modes.md#width) and the tracker for
 this follow-up).
 
+A `(one-of mode...)` pattern element ([Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) counts as one hole, the same as a plain
+`expr` — every alternative it names is validated at `defmode` time to have
+the same hole count as every other, so `(operand ...)` subclause counting
+here doesn't need to know or care whether a given hole came from a bare
+`expr` or a `one-of`.
+
 ### `(semantics form...)`
 
 Expanded via `with-machine-bindings` (see below) with two extra bindings in

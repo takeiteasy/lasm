@@ -819,3 +819,25 @@ jmp *" :machine 'wordaddr-test-machine)))
 .org 5
 nop" :machine 'wordaddr-test-machine)))
     (fiveam:is (equalp #(0 0 0 0 0 0) (assembly-cells a)))))
+
+;;; ONE-OF (#103): end-to-end assembly through MOO (tests/instruction.lisp,
+;;; opcode #xF7), whose OO-INSTR-TWO mode gives each of its two operand
+;;; holes an independent choice between a bare register-shaped EXPR and a
+;;; "[" expr "]" indirection. Because #103 delivers only the syntax --
+;;; mode-selected field codes are a follow-up (see the tracker) -- every
+;;; combination currently encodes identically; these tests pin that down as
+;;; today's documented behavior, not an oversight.
+
+(fiveam:test one-of-mode-assembles-first-alternative-on-both-holes
+  (let ((a (assemble "moo $10, $20" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
+
+(fiveam:test one-of-mode-assembles-mixed-alternatives-per-hole
+  ;; dst via "[" expr "]", src via a bare expr -- each hole's choice is
+  ;; independent of the other's.
+  (let ((a (assemble "moo [$10], $20" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
+
+(fiveam:test one-of-mode-assembles-both-holes-bracketed
+  (let ((a (assemble "moo [$10], [$20]" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))

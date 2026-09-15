@@ -332,11 +332,16 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
 ;; *BINARY-PRECEDENCE* and *UNARY-OPS*, parser.lisp) -- it exists only so
 ;; %PARSE-LINE (parser.lisp, #35) can recognize "name = value" as sugar for
 ;; ".equ name, value".
+;; "[" / "]" (#103) have no meaning to the lexer or expression parser either,
+;; same as "#" above -- they exist so an addressing-mode pattern (defmode,
+;; mode.lisp's ONE-OF alternatives) has tokens to match e.g. an indirect
+;; "[" expr "]" operand form against.
 (defparameter *punctuators*
   '(("<<" . :shl) (">>" . :shr)
     ("|" . :pipe) ("^" . :caret) ("&" . :amp)
     ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash) ("~" . :tilde)
-    ("(" . :lparen) (")" . :rparen) ("," . :comma) ("#" . :hash)
+    ("(" . :lparen) (")" . :rparen) ("[" . :lbracket) ("]" . :rbracket)
+    ("," . :comma) ("#" . :hash)
     ("<" . :lt) (">" . :gt) ("=" . :equals)))
 
 (defun %match-punctuation (state descriptor)

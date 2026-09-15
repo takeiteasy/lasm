@@ -134,9 +134,17 @@ between tokens), just enough to name what was given."
 (defun %mode-syntax-text (mode)
   "MODE's own pattern (mode.lisp), rendered back to the syntax a program
 would write to select it, e.g. IMMEDIATE -> \"#expr\", INDIRECT-Y ->
-\"(expr),Y\" -- an :EXPR hole prints as the literal word \"expr\"."
+\"(expr),Y\" -- an :EXPR hole prints as the literal word \"expr\", and a
+:ONE-OF element (#103) as its alternatives' own syntax joined with \"|\",
+e.g. \"expr|[expr]\"."
   (format nil "~{~A~}"
-          (mapcar (lambda (el) (if (eq (first el) :literal) (second el) "expr"))
+          (mapcar (lambda (el)
+                    (ecase (first el)
+                      (:literal (second el))
+                      (:expr "expr")
+                      (:one-of (format nil "~{~A~^|~}"
+                                        (mapcar (lambda (name) (%mode-syntax-text (find-mode-descriptor name)))
+                                                (rest el))))))
                   (mode-descriptor-pattern mode))))
 
 (defun %accepted-modes-text (variants)

@@ -130,6 +130,18 @@ carry any punctuation: `immediate` renders `#$10`, `indexed-x` renders
 by position, never by `instruction-descriptor-operand-names` — an unnamed
 field's entry there is `nil`.
 
+A mode containing a `(one-of ...)` element ([Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) always renders that element's *first*
+alternative's own syntax, regardless of which alternative was actually
+written on assembly — a decoded word carries no record of which alternative
+was chosen (that record exists only at assembly time, as
+`try-match-operand-mode`'s `choices` return value), so there is nothing to
+disambiguate with here. This is a known, documented limitation, not a
+best-effort guess: recovering the real alternative needs mode-selected field
+codes (see the tracker) to tell alternatives apart by decoded value, the way
+a word-encoded machine's own `word-alternatives`-based decode already does
+for value-vs-encoding choices (see [Instructions](instructions.md)).
+
 A `relative` mode's decoded value is a signed offset from the address of the
 *next* instruction (the same convention `assemble`'s own
 [PC-relative offset](assembler.md#pc-relative-offsets) computation uses); it

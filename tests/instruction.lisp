@@ -332,6 +332,31 @@
              (encoding (opcode #xFF) (operand z :width 1) (operand :width 1))
              (semantics nil)))))
 
+;;; ONE-OF (#103): a mode's hole count still comes from the pattern, whether
+;;; a hole is a plain EXPR or a ONE-OF alternation -- DEFINSTRUCTION requires
+;;; one (operand ...) subclause per hole exactly as for any other mode.
+
+(defmode oo-instr-reg expr)
+(defmode oo-instr-ind "[" expr "]")
+(defmode oo-instr-two (one-of oo-instr-reg oo-instr-ind) "," (one-of oo-instr-reg oo-instr-ind))
+
+(definstruction instr-test-machine moo
+  (modes oo-instr-two)
+  (encoding (opcode #xF7) (operand dst :width 1) (operand src :width 1))
+  (semantics (setf (mref machine 'ram dst) src)))
+
+(fiveam:test one-of-mode-registers-one-width-per-hole
+  (let ((moo (find-instruction 'instr-test-machine 'moo)))
+    (fiveam:is (equal '(1 1) (instruction-descriptor-operand-widths moo)))
+    (fiveam:is (equal '(dst src) (instruction-descriptor-operand-names moo)))))
+
+(fiveam:test one-of-mode-too-few-operand-subclauses-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes oo-instr-two)
+             (encoding (opcode #xFF) (operand :width 1))
+             (semantics nil)))))
+
 (fiveam:test multi-operand-instruction-named-operand-not-shadowed-by-register
   ;; The reverse of the two error tests above, but with a name that does NOT
   ;; collide (SRC is not a storage element on INSTR-TEST-MACHINE) -- proves

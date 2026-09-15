@@ -111,9 +111,6 @@ an EQ check would spuriously reject a mode reclaiming its own suffix."
           (error "DEFMODE ~S: suffix ~S is already used by mode ~S"
                  name suffix (mode-descriptor-name existing)))))))
 
-(defun %mode-hole-count (mode)
-  (count :expr (mode-descriptor-pattern mode) :key #'first))
-
 ;;; DEFMODE pattern parsing
 ;;;
 ;;; These run inside an EVAL-WHEN, not just plain DEFUNs, because this same
@@ -121,19 +118,37 @@ an EQ check would spuriously reject a mode reclaiming its own suffix."
 ;;; DESCRIPTOR at :COMPILE-TOPLEVEL time -- a plain DEFUN's body is only
 ;;; guaranteed callable at load time, which is too late within one
 ;;; compilation unit (see the DEFVAR comment above for the same issue).
+;;;
+;;; %MODE-HOLE-COUNT and %PATTERN-HOLE-COUNT (below) also live in this
+;;; EVAL-WHEN, not just at top level like a plain accessor would -- ONE-OF
+;;; validation (%CHECK-ONE-OF-ELEMENTS!, #103) calls %MODE-HOLE-COUNT at
+;;; DEFMODE's own :COMPILE-TOPLEVEL time, the same reason everything else
+;;; here needs one.
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun %one-of-element-p (el)
+    "T if EL is a raw DEFMODE pattern element spelled (ONE-OF mode...) (#103)
+-- a list headed by a symbol named ONE-OF, matched case-insensitively like
+EXPR below."
+    (and (consp el) (symbolp (first el)) (string-equal (symbol-name (first el)) "ONE-OF")))
+
   (defun %parse-mode-pattern (elements)
-    "ELEMENTS is DEFMODE's pattern spine: a mix of string literals and the
-symbol EXPR. Returns a list of (:literal string) | (:expr) pattern elements,
-plus any trailing keyword options untouched by this function (the caller
-splits those off first)."
+    "ELEMENTS is DEFMODE's pattern spine: a mix of string literals, the
+symbol EXPR, and (ONE-OF mode...) alternations (#103). Returns a list of
+(:literal string) | (:expr) | (:one-of mode-name...) pattern elements, plus
+any trailing keyword options untouched by this function (the caller splits
+those off first)."
     (mapcar (lambda (el)
               (cond
                 ((stringp el) (list :literal el))
                 ((and (symbolp el) (string-equal (symbol-name el) "EXPR")) (list :expr))
+                ((%one-of-element-p el)
+                 (unless (and (>= (length (rest el)) 2) (every #'symbolp (rest el)))
+                   (error "Malformed DEFMODE pattern element ~S -- (ONE-OF ...) needs at ~
+least two mode-name symbols" el))
+                 (list* :one-of (rest el)))
                 (t (error "Malformed DEFMODE pattern element ~S -- expected a string ~
-literal or the symbol EXPR" el))))
+literal, the symbol EXPR, or (ONE-OF mode...)" el))))
             elements))
 
   (defun %split-mode-clause (body)
@@ -144,12 +159,67 @@ options start at the first keyword symbol; everything before it is pattern."
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
 
+  (defun %pattern-hole-count (pattern)
+    "Total :EXPR holes in PATTERN (a MODE-DESCRIPTOR's own pattern list, or a
+DEFMODE-in-progress's), recursing into any :ONE-OF element via its first
+alternative -- %CHECK-ONE-OF-ELEMENTS! (below) validates every alternative of
+one :ONE-OF shares the same hole count, so any one of them stands for the
+element as a whole."
+    (loop for element in pattern
+          sum (ecase (first element)
+                (:literal 0)
+                (:expr 1)
+                (:one-of (%mode-hole-count (find-mode-descriptor (second element)))))))
+
+  (defun %mode-hole-count (mode)
+    (%pattern-hole-count (mode-descriptor-pattern mode)))
+
+  (defun %check-one-of-elements! (name pattern)
+    "Validate every (:ONE-OF ...) element of PATTERN, the DEFMODE NAME is
+building: at least two alternatives; each must already be a registered mode
+(FIND-MODE-DESCRIPTOR signals if not); none may declare a whole-mode
+attribute (:WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX) -- honoring one of
+those per hole rather than per statement is a follow-up, not yet supported;
+every alternative must have the same hole count as every other, since the
+positional hole <-> operand-field parallel the rest of the pipeline depends
+on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room for a
+:ONE-OF that yields a different field count depending which alternative
+matched; and no two alternatives may share identical (EQUALP, since a
+:LITERAL matches case-insensitively) syntax, since nothing could ever
+disambiguate between them."
+    (dolist (element pattern)
+      (when (eq (first element) :one-of)
+        (let* ((alt-names (rest element))
+               (alts (mapcar #'find-mode-descriptor alt-names)))
+          (when (< (length alts) 2)
+            (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
+                   name alt-names))
+          (dolist (alt alts)
+            (when (or (mode-descriptor-width alt) (mode-descriptor-relativep alt)
+                      (mode-descriptor-signedp alt) (mode-descriptor-strictp alt)
+                      (mode-descriptor-suffix alt))
+              (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
+(:WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
+                     name (mode-descriptor-name alt))))
+          (let ((counts (remove-duplicates (mapcar #'%mode-hole-count alts))))
+            (when (> (length counts) 1)
+              (error "DEFMODE ~S: ONE-OF alternatives ~S have differing hole counts ~S -- ~
+every alternative must bind the same number of operand fields"
+                     name alt-names counts)))
+          (loop for (alt . later) on alts
+                do (dolist (other later)
+                     (when (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
+                       (error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
+-- nothing could ever choose between them"
+                              name (mode-descriptor-name alt) (mode-descriptor-name other)))))))))
+
   (defun build-mode-descriptor (name body)
     (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
       (when (null pattern-elements)
         (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
       (let ((pattern (%parse-mode-pattern pattern-elements)))
-        (unless (find :expr pattern :key #'first)
+        (%check-one-of-elements! name pattern)
+        (unless (plusp (%pattern-hole-count pattern))
           (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
         (destructuring-bind (&key width relative signed suffix strict) options
           (when (and relative (not (eq signed t)) (member :signed options))
@@ -164,8 +234,15 @@ options start at the first keyword symbol; everything before it is pattern."
 
 (defmacro defmode (name &body pattern)
   "Define an addressing mode named NAME matching PATTERN, a sequence of
-string literals and the symbol EXPR (one per operand hole), optionally
-followed by :WIDTH n (a default operand byte width instructions using this
+string literals, the symbol EXPR (one per operand hole), and/or
+(ONE-OF mode...) alternations (#103, at least two already-registered modes;
+see \"Per-operand modes\" in docs/modes.md) -- each hole an addressing mode
+declares may independently pick its own syntax from a set of other modes,
+e.g. a bare register or \"[\" expr \"]\" indirection at the same operand
+position. Every ONE-OF alternative must have the same hole count as every
+other and may declare none of :WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX
+itself (a follow-up extends per-hole attributes). Optionally followed by
+:WIDTH n (a default operand byte width instructions using this
 mode may omit from their own encoding), :SIGNED t (this mode's operand is a
 signed quantity -- the emulator sign-extends it and the assembler
 range-checks candidate values against the signed range; #30), :RELATIVE t
@@ -199,74 +276,142 @@ when its own form is compiled."
 
 ;;; Pattern matching
 
-(defun %match-mode-pattern (tokens mode)
-  "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.
-Returns (VALUES asts okp failure-token message): on success ASTS is the list
-of EXPR-* ASTs parsed from each :EXPR hole (in pattern order) and OKP is T;
-on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why -- FAILURE-TOKEN
-is NIL only when the underlying PARSE-FAILURE (an :EXPR hole's own malformed
-expression) itself carried no token to point at (e.g. an empty expression at
-end of input), never as a way of discarding a position that was available."
-  (let ((end (length tokens))
-        (i 0)
-        asts)
-    (dolist (element (mode-descriptor-pattern mode))
-      (ecase (first element)
-        (:literal
-         (let ((tok (%tok tokens i end)))
-           (unless (and tok (string-equal (token-text tok) (second element)))
-             (return-from %match-mode-pattern
-               (values nil nil tok
-                       (format nil "Operand does not match ~(~A~) addressing mode ~
+(defun %match-mode-elements (tokens elements i end)
+  "Match ELEMENTS (a suffix of some mode's pattern) against TOKENS from
+position I (bounded by END). Returns (VALUES asts choices next-i okp
+failure-token message): on success ASTS is the list of EXPR-* ASTs parsed
+from each :EXPR hole and CHOICES the list of chosen MODE-DESCRIPTORs from
+each :ONE-OF element consumed along the way, both in pattern order, and
+NEXT-I the token position just past the match; on failure OKP is NIL and
+FAILURE-TOKEN/MESSAGE describe why.
+
+CHOICES' length is NOT a fixed function of the pattern when a :ONE-OF
+alternative's own pattern nests another :ONE-OF (legal -- BUILD-MODE-
+DESCRIPTOR's hole-count check treats a nested :ONE-OF the same as a plain
+:EXPR -- but not yet exercised by anything in this codebase): each chosen
+alternative contributes its own nested choices, flattened depth-first ahead
+of the outer element's continuation, so two alternatives of the same
+:ONE-OF can yield different CHOICES lengths depending on which one matched.
+A caller keying anything positional off CHOICES (a follow-up giving
+:ONE-OF's chosen alternative its own field code, say) needs to account for
+this rather than assume one entry per :ONE-OF element in the *pattern*.
+
+(Also worth flagging for that follow-up, not guarded here: a hand-written
+DEFMODE cycle -- redefining a mode that some :ONE-OF already references so
+the reference loops back to it -- would make %MODE-HOLE-COUNT recurse
+forever. A plain file reload can't create one, since it replays the same
+patterns in the same order, so this is not a regression this ticket needs
+to close.)
+
+Recursive over ELEMENTS -- not a linear scan -- so a :ONE-OF element can
+backtrack (#103): each alternative is tried by recursively matching *the
+rest of the pattern* after it, not just the alternative's own tokens, so an
+alternative that matches locally but leaves the remaining elements unable to
+match is rejected in favor of a later alternative, rather than committing to
+the first token-level match. ASTS and CHOICES are built by consing each
+element's own contribution onto the *return value* of the recursive call for
+everything after it, never onto a shared accumulator -- an abandoned
+alternative's partial match is simply never included in what gets returned,
+with no separate undo step needed."
+  (if (null elements)
+      (values nil nil i t nil nil)
+      (let ((element (first elements)) (rest-elements (rest elements)))
+        (ecase (first element)
+          (:literal
+           (let ((tok (%tok tokens i end)))
+             (if (and tok (string-equal (token-text tok) (second element)))
+                 (multiple-value-bind (asts choices next-i okp failure-token message)
+                     (%match-mode-elements tokens rest-elements (1+ i) end)
+                   (if okp
+                       (values asts choices next-i t nil nil)
+                       (values nil nil nil nil failure-token message)))
+                 (values nil nil nil nil tok
+                         (format nil "Operand does not match addressing mode ~
 (expected ~S~@[, found ~S~])"
-                               (mode-descriptor-name mode) (second element)
-                               (and tok (token-text tok))))))
-           (incf i)))
-        (:expr
-         (handler-case
-             (multiple-value-bind (ast next-i) (parse-expression tokens :start i :end end)
-               (cl:push ast asts)
-               (setf i next-i))
-           ;; #74: keep the inner PARSE-FAILURE's own line/column instead of
-           ;; only its message -- %TOK below can't reconstruct a token from
-           ;; a bare string, so the failure token this returns is a
-           ;; synthetic one carrying just enough (line/column) for
-           ;; MATCH-OPERAND-MODE's %PARSE-ERROR to preserve position.
-           (parse-failure (c)
-             (return-from %match-mode-pattern
-               (values nil nil
+                                 (second element) (and tok (token-text tok)))))))
+          (:expr
+           (handler-case
+               (multiple-value-bind (ast next-i-hole) (parse-expression tokens :start i :end end)
+                 (multiple-value-bind (asts choices next-i okp failure-token message)
+                     (%match-mode-elements tokens rest-elements next-i-hole end)
+                   (if okp
+                       (values (cons ast asts) choices next-i t nil nil)
+                       (values nil nil nil nil failure-token message))))
+             ;; #74: keep the inner PARSE-FAILURE's own line/column instead of
+             ;; only its message -- %TOK below can't reconstruct a token from
+             ;; a bare string, so the failure token this returns is a
+             ;; synthetic one carrying just enough (line/column) for
+             ;; MATCH-OPERAND-MODE's %PARSE-ERROR to preserve position.
+             (parse-failure (c)
+               (values nil nil nil nil
                        (make-token :line (lasm-syntax-error-line c)
                                    :column (lasm-syntax-error-column c))
-                       (lasm-syntax-error-message c))))))))
-    (if (< i end)
-        (values nil nil (%tok tokens i end) "Unexpected trailing token in operand")
-        (values (nreverse asts) t nil nil))))
+                       (lasm-syntax-error-message c)))))
+          (:one-of
+           (let (last-failure-token last-message)
+             (dolist (alt-name (rest element)
+                      (values nil nil nil nil last-failure-token last-message))
+               (let ((alt (find-mode-descriptor alt-name)))
+                 (multiple-value-bind (alt-asts alt-choices alt-next-i alt-okp alt-failure-token alt-message)
+                     (%match-mode-elements tokens (mode-descriptor-pattern alt) i end)
+                   (if alt-okp
+                       (multiple-value-bind (asts choices next-i okp failure-token message)
+                           (%match-mode-elements tokens rest-elements alt-next-i end)
+                         (if okp
+                             (return-from %match-mode-elements
+                               (values (append alt-asts asts) (cons alt (append alt-choices choices))
+                                       next-i t nil nil))
+                             (setf last-failure-token failure-token last-message message)))
+                       (setf last-failure-token alt-failure-token last-message alt-message)))))))))))
+
+(defun %match-mode-pattern (tokens mode)
+  "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.
+Returns (VALUES asts okp failure-token message choices): on success ASTS is
+the list of EXPR-* ASTs parsed from each :EXPR hole (in pattern order) and
+OKP is T; on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why --
+FAILURE-TOKEN is NIL only when the underlying PARSE-FAILURE (an :EXPR hole's
+own malformed expression) itself carried no token to point at (e.g. an empty
+expression at end of input), never as a way of discarding a position that
+was available. CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from
+each of MODE's own :ONE-OF pattern elements, in pattern order -- a trailing
+value existing callers that only bind the first four are unaffected by."
+  (let ((end (length tokens)))
+    (multiple-value-bind (asts choices next-i okp failure-token message)
+        (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end)
+      (cond
+        ((not okp) (values nil nil failure-token message nil))
+        ((< next-i end) (values nil nil (%tok tokens next-i end) "Unexpected trailing token in operand" nil))
+        (t (values asts t nil nil choices))))))
 
 (defun try-match-operand-mode (tokens mode)
-  "Like MATCH-OPERAND-MODE, but returns (VALUES asts T) on a match or (VALUES
-NIL NIL) on a mismatch instead of signalling -- the assembler's mode
-candidate filter (assembler.lisp) uses this to try several modes in turn.
-MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
-naming one."
+  "Like MATCH-OPERAND-MODE, but returns (VALUES asts T choices) on a match or
+(VALUES NIL NIL NIL) on a mismatch instead of signalling -- the assembler's
+mode candidate filter (assembler.lisp) uses this to try several modes in
+turn. MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
+naming one. CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from each
+of MODE's own :ONE-OF pattern elements, in pattern order."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp) (%match-mode-pattern tokens mode)
-      (if okp (values asts t) (values nil nil)))))
+    (multiple-value-bind (asts okp failure-token message choices) (%match-mode-pattern tokens mode)
+      (declare (ignore failure-token message))
+      (if okp (values asts t choices) (values nil nil nil)))))
 
 (defun match-operand-mode (tokens mode)
   "Match TOKENS (a SIMPLE-VECTOR of raw tokens, e.g. an OPERAND's TOKENS or a
 STATEMENT's OPERAND-TOKENS) against addressing MODE's pattern (a
 MODE-DESCRIPTOR, or a symbol naming one): consume MODE's literal tokens in
 order and parse each :EXPR hole as an expression. Returns (VALUES first-ast
-all-asts) -- FIRST-AST alone is what every current single-hole mode needs.
-Signals PARSE-FAILURE if TOKENS don't match MODE or leave a trailing token
-unconsumed -- with the failing token's own line/column (#74), not just its
-message, even when the failure came from a nested :EXPR hole's own
-PARSE-FAILURE rather than a literal mismatch."
+all-asts choices) -- FIRST-AST alone is what every current single-hole mode
+needs; CHOICES (#103) is the list of chosen MODE-DESCRIPTORs from each of
+MODE's own :ONE-OF pattern elements, in pattern order. Signals PARSE-FAILURE
+if TOKENS don't match MODE or leave a trailing token unconsumed -- with the
+failing token's own line/column (#74), not just its message, even when the
+failure came from a nested :EXPR hole's own PARSE-FAILURE rather than a
+literal mismatch."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp failure-token message) (%match-mode-pattern tokens mode)
+    (multiple-value-bind (asts okp failure-token message choices) (%match-mode-pattern tokens mode)
       (unless okp
         (%parse-error failure-token message))
-      (values (first asts) asts))))
+      (values (first asts) asts choices))))
 
 ;;; Built-in modes -- M1's *BUILTIN-MODE-PREFIXES* table, expressed as
 ;;; ordinary DEFMODE forms. "#" already lexes to :HASH (lexer.lisp) for

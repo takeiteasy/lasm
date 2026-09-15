@@ -92,6 +92,16 @@ sta b"))))
     (fiveam:is (eq :equals (token-value (second toks))))
     (fiveam:is (eq :punctuation (token-type (second toks))))))
 
+(fiveam:test brackets-lex-as-punctuation-tokens
+  ;; "[" / "]" (#103) exist purely so an addressing-mode pattern (defmode,
+  ;; mode.lisp) has tokens to match an indirect "[" expr "]" operand form
+  ;; against -- same rationale as :HASH/:EQUALS above, so this only checks
+  ;; the lexer hands them back as their own punctuator tokens.
+  (let ((toks (%non-eof (tokenize "[5]"))))
+    (fiveam:is (equal '(:punctuation :number :punctuation) (%types toks)))
+    (fiveam:is (eq :lbracket (token-value (first toks))))
+    (fiveam:is (eq :rbracket (token-value (third toks))))))
+
 (fiveam:test token-line-and-column-tracked
   (let ((toks (remove :newline (%non-eof (tokenize "a
   b")) :key #'token-type)))

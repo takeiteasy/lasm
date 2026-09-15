@@ -179,3 +179,125 @@ looks like."
 (fiveam:test different-mode-claiming-a-taken-suffix-signals-error
   (fiveam:signals error
     (eval '(defmode test-suffixed-mode-conflict expr :suffix "q"))))
+
+;;; ONE-OF -- orthogonal per-operand addressing modes (#103)
+
+(defmode oo-reg expr)
+(defmode oo-ind "[" expr "]")
+(defmode oo-lit "#" expr)
+(defmode oo-two (one-of oo-reg oo-ind oo-lit) "," (one-of oo-reg oo-ind oo-lit))
+
+(fiveam:test defmode-one-of-registers-pattern
+  (let ((m (find-mode-descriptor 'oo-two)))
+    (fiveam:is (equal '((:one-of oo-reg oo-ind oo-lit) (:literal ",") (:one-of oo-reg oo-ind oo-lit))
+                       (mode-descriptor-pattern m)))))
+
+(fiveam:test one-of-hole-count-is-recursive
+  ;; #103: %MODE-HOLE-COUNT sums one hole per alternative's own hole count,
+  ;; not one per :ONE-OF element -- OO-TWO has two holes total (one per
+  ;; :ONE-OF), each alternative itself contributing exactly one.
+  (fiveam:is (= 2 (%mode-hole-count (find-mode-descriptor 'oo-two)))))
+
+(fiveam:test one-of-matches-first-alternative
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5,10") 'oo-two)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5 10) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(oo-reg oo-reg) (mapcar #'mode-descriptor-name choices)))))
+
+(fiveam:test one-of-matches-a-later-alternative
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "[5],#10") 'oo-two)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5 10) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(oo-ind oo-lit) (mapcar #'mode-descriptor-name choices)))))
+
+(fiveam:test one-of-choices-independent-per-hole
+  ;; Each hole picks its own alternative, orthogonally to the other -- the
+  ;; ticket's whole point.
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "#5,[10]") 'oo-two)
+    (declare (ignore asts))
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(oo-lit oo-ind) (mapcar #'mode-descriptor-name choices)))))
+
+(fiveam:test one-of-total-mismatch-fails-without-signalling
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5") 'oo-two)
+    (fiveam:is (null okp))
+    (fiveam:is (null asts))
+    (fiveam:is (null choices))))
+
+(fiveam:test one-of-total-mismatch-signals-parse-failure
+  (fiveam:signals parse-failure
+    (match-operand-mode (%tokens-for "5") 'oo-two)))
+
+;; Backtracking: an alternative that matches locally but leaves the rest of
+;; the pattern unable to match must not be committed to -- the next
+;; alternative is tried instead. BT-C (bare EXPR) locally matches "5" out of
+;; "5 X, Y" and stops (X isn't part of an expression), but the outer
+;; pattern's trailing "," "Y" then can't match starting at "X" -- so BT-D
+;; (EXPR "X") must be the one chosen instead, consuming "5 X" and leaving
+;; ", Y" for the rest of the pattern to match.
+(defmode oo-bt-plain expr)
+(defmode oo-bt-marked expr "X")
+(defmode oo-bt (one-of oo-bt-plain oo-bt-marked) "," "Y")
+
+(fiveam:test one-of-backtracks-when-first-alternative-strands-the-tail
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5 X, Y") 'oo-bt)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(oo-bt-marked) (mapcar #'mode-descriptor-name choices)))))
+
+;;; ONE-OF validation errors
+
+(fiveam:test one-of-fewer-than-two-alternatives-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-single (one-of oo-reg)))))
+
+(fiveam:test one-of-unknown-alternative-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-unknown (one-of oo-reg no-such-mode)))))
+
+(defmode oo-two-hole expr "," expr)
+
+(fiveam:test one-of-mismatched-hole-counts-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-holes (one-of oo-reg oo-two-hole)))))
+
+(defmode oo-signed expr :signed t)
+(defmode oo-relative expr :relative t)
+(defmode oo-widthed expr :width 1)
+(defmode oo-strict expr :strict t)
+(defmode oo-suffixed expr :suffix "oo")
+
+(fiveam:test one-of-alternative-with-signed-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-signed (one-of oo-reg oo-signed)))))
+
+(fiveam:test one-of-alternative-with-relative-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-relative (one-of oo-reg oo-relative)))))
+
+(fiveam:test one-of-alternative-with-width-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-width (one-of oo-reg oo-widthed)))))
+
+(fiveam:test one-of-alternative-with-strict-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-strict (one-of oo-reg oo-strict)))))
+
+(fiveam:test one-of-alternative-with-suffix-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-suffix (one-of oo-reg oo-suffixed)))))
+
+(defmode oo-reg-2 expr)
+(defmode oo-indexed-x-lower expr "," "x")
+
+(fiveam:test one-of-duplicate-alternative-patterns-signal-error
+  (fiveam:signals error
+    (eval '(defmode oo-bad-dup (one-of oo-reg oo-reg-2)))))
+
+(fiveam:test one-of-duplicate-check-is-case-insensitive
+  ;; A :LITERAL element matches case-insensitively at match time
+  ;; (STRING-EQUAL), so two alternatives differing only in a literal's case
+  ;; are the same syntax and must be rejected the same way -- EQUALP, not
+  ;; EQUAL, on the pattern comparison.
+  (fiveam:signals error
+    (eval '(defmode oo-bad-dup-case (one-of test-indexed-x oo-indexed-x-lower)))))
