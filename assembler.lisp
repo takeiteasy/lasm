@@ -339,7 +339,10 @@ the way an unfiltered candidate set would (see %CHOOSE-VARIANT's own point
 field, has only one such sibling (or several vacuously all-eligible ones),
 so this changes nothing for those cases.
 
-Returns (VALUES chosen-descriptor hole-asts), like %CHOOSE-VARIANT."
+Returns (VALUES chosen-descriptor hole-asts choices), like %CHOOSE-VARIANT
+(#115) -- CHOICES is TRY-MATCH-OPERAND-MODE's own hole-aligned match result
+for MODE, already computed below to check syntax, simply threaded out
+instead of discarded."
   (let* ((suffix (statement-mode-suffix statement))
          (mode (find-mode-by-suffix suffix))
          (operand-tokens (statement-operand-tokens statement))
@@ -369,7 +372,8 @@ accepts ~A"
                                                (%word-choices-eligible-p v choices)))
                               variants)
                     variant)
-                asts)))))
+                asts
+                choices)))))
 
 (defun %choose-variant (statement variants address &key symbols (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
@@ -451,7 +455,12 @@ a mid-relaxation trial pass (whose candidate set can still change) never
 produces a spurious or duplicate warning -- see %LAYOUT-PASS's own FINALP
 for the parallel deferral.
 
-Returns (VALUES chosen-descriptor hole-asts)."
+Returns (VALUES chosen-descriptor hole-asts choices) -- CHOICES (#115) is
+the hole-aligned MODE-DESCRIPTOR list TRY-MATCH-OPERAND-MODE reported for
+CHOSEN's own match (NIL entries for a hole not governed by any ONE-OF, NIL
+throughout for a no-operand statement), carried through so
+%CHECK-STRICT-OPERAND-RANGE! (below) can read a hole's own matched
+alternative's :STRICT once a value exists to check it against."
   (when (statement-mode-suffix statement)
     (return-from %choose-variant (%choose-forced-variant statement variants)))
   (let* ((tokens (statement-operand-tokens statement))
@@ -470,7 +479,11 @@ Returns (VALUES chosen-descriptor hole-asts)."
                            ;; vacuously T for a byte-encoded candidate or one
                            ;; with no CHOICE-selected field.
                            (%word-choices-eligible-p v choices))
-                   collect (list v asts))))
+                   ;; #115: CHOICES rides along with each candidate (not just
+                   ;; used to filter, above) so %CHECK-STRICT-OPERAND-RANGE!
+                   ;; can read a hole's own matched ONE-OF alternative's
+                   ;; :STRICT once ENCODE has a value to check it against.
+                   collect (list v asts choices))))
     (when (null candidates)
       (%assembly-error-at anchor
                            "~A: operand ~S matches no addressing mode -- this instruction ~
@@ -831,9 +844,13 @@ SYMBOLS itself cannot -- returned last so existing positional callers of the
 other five values are unaffected. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
-  (:instruction address descriptor asts line)
+  (:instruction address descriptor asts line choices)
   (:emit        address width asts line)
   (:reserve     address count line)
+CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
+hole-aligned matched-alternative list for the chosen descriptor, threaded
+through so %ENCODE can read a hole's own matched ONE-OF alternative's
+:STRICT once a value exists to check it against.
 -- %ENCODE dispatches on the leading keyword. A .ORG statement (directive.lisp)
 contributes no entry -- it only moves the address counter (and, before
 anything else has been laid out, ASM-ORIGIN -- see %APPLY-ORIGIN-DIRECTIVE).
@@ -936,12 +953,17 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                             (setf emitted-p t)))))
                       (t
                        (let ((variants (find-instruction-variants machine mnemonic)))
-                         (multiple-value-bind (descriptor asts)
+                         (multiple-value-bind (descriptor asts choices)
                              (%choose-variant statement variants address
                                                :symbols prev-symbols :floor (aref floors i)
                                                :cell-width cell-width :finalp finalp)
                            (%qualify-locals-in-asts! asts scope line)
-                           (cl:push (list :instruction address descriptor asts (statement-line statement))
+                           ;; #115: CHOICES rides along in the sized entry so
+                           ;; %ENCODE can read a hole's own matched ONE-OF
+                           ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
+                           ;; RANGE!) once a value exists to check it against.
+                           (cl:push (list :instruction address descriptor asts
+                                          (statement-line statement) choices)
                                     sized)
                            (let ((size (instruction-descriptor-size descriptor)))
                              (setf (aref new-floors i) size)
@@ -1020,31 +1042,49 @@ value filter never disagree about what \"fits\")."
         (let ((bound (ash 1 (1- bits)))) (values (- bound) (1- bound)))
         (values (- (ash 1 (1- bits))) (1- (ash 1 bits))))))
 
-(defun %check-strict-operand-range! (descriptor mode values line cell-width)
+(defun %check-strict-operand-range! (descriptor mode values line cell-width choices)
   "Signal ASSEMBLY-ERROR if any of VALUES (DESCRIPTOR's already-folded
 operand values, in encoding order) doesn't fit its own operand width, when
-strict range-checking is in effect for this operand (#74, absorbing #28 and
-#43's out-of-range-operand-silently-wraps reports) -- either MODE declares
-:STRICT T (mode.lisp) or *STRICT-OPERAND-RANGE* (diagnostic.lisp) is bound
-to T, the latter being the only way to cover a mode-less instruction's bare
-(operand :width n) M1-style encoding, since :STRICT lives on a MODE-
-DESCRIPTOR. A no-op by design for a word-encoded DESCRIPTOR (WORD-FIELDS
-non-NIL -- an :INLINE field's own RANGE is already a hard boundary chosen
-at DEFINSTRUCTION time, not a WRAP-VALUE truncation) and for a RELATIVE
+strict range-checking is in effect for *that hole* (#74, absorbing #28 and
+#43's out-of-range-operand-silently-wraps reports; #115 makes the decision
+per hole rather than once for the whole statement). A hole is strict when
+*STRICT-OPERAND-RANGE* (diagnostic.lisp) is bound to T -- the only way to
+cover a mode-less instruction's bare (operand :width n) M1-style encoding,
+since :STRICT otherwise lives on a MODE-DESCRIPTOR -- or MODE itself
+declares :STRICT T, or, when CHOICES (#115, %CHOOSE-VARIANT's hole-aligned
+matched-ONE-OF-alternative list, assembler.lisp) names one for this hole,
+*that alternative's own* :STRICT is T -- a ONE-OF alternative may declare
+:STRICT independently of its siblings and of MODE's own (mode.lisp's
+%CHECK-ONE-OF-ELEMENTS! is what lets :STRICT, alone among the whole-mode
+attributes, appear on a ONE-OF alternative at all: it is a pure encode-time
+check with no size, value, or decode consequence, so a per-hole difference
+never disturbs %LAYOUT's monotone floor fixpoint). CHOICES may be NIL (a
+statement with no ONE-OF hole at all, or the forced-suffix path when the
+forced mode itself has none) -- every hole is then governed by MODE/*STRICT-
+OPERAND-RANGE* alone, as before #115.
+
+A no-op by design for a word-encoded DESCRIPTOR (WORD-FIELDS non-NIL -- an
+:INLINE field's own RANGE is already a hard boundary chosen at
+DEFINSTRUCTION time, not a WRAP-VALUE truncation, and per-hole :WIDTH/
+:SIGNED remain unsupported there regardless of :STRICT) and for a RELATIVE
 mode (%RELATIVE-OFFSET below already range-checks it unconditionally,
 strict or not, since a wrapped branch is a correctness bug regardless)."
-  (when (and (or *strict-operand-range* (and mode (mode-descriptor-strictp mode)))
-             (not (instruction-descriptor-word-fields descriptor))
+  (when (and (not (instruction-descriptor-word-fields descriptor))
              (not (and mode (mode-descriptor-relativep mode))))
     (loop for value in values
           for width in (instruction-descriptor-operand-widths descriptor)
-          do (multiple-value-bind (lo hi)
-                 (%operand-range width cell-width (and mode (mode-descriptor-signedp mode)))
-               (unless (<= lo value hi)
-                 (%assembly-error line
-                                   "~A: operand value ~D out of range for ~D-cell operand ~
+          for choice in (or choices (make-list (length values)))
+          for hole-strictp = (or *strict-operand-range*
+                                  (and mode (mode-descriptor-strictp mode))
+                                  (and choice (mode-descriptor-strictp choice)))
+          when hole-strictp
+            do (multiple-value-bind (lo hi)
+                   (%operand-range width cell-width (and mode (mode-descriptor-signedp mode)))
+                 (unless (<= lo value hi)
+                   (%assembly-error line
+                                     "~A: operand value ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
-                                   (instruction-descriptor-name descriptor) value width lo hi))))))
+                                     (instruction-descriptor-name descriptor) value width lo hi))))))
 
 (defun %make-growable-cells (size cell-width)
   (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
@@ -1077,7 +1117,7 @@ emits two different words."
     (dolist (entry sized-entries)
       (ecase (first entry)
         (:instruction
-         (destructuring-bind (kind address descriptor asts line) entry
+         (destructuring-bind (kind address descriptor asts line choices) entry
            (declare (ignore kind))
            (let* ((mode (instruction-descriptor-mode descriptor))
                   (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
@@ -1089,7 +1129,7 @@ emits two different words."
                  ;; #74: strict range-checking runs on every other mode --
                  ;; RELATIVE's own unconditional check above already covers
                  ;; it, and running both would double-report the same value.
-                 (%check-strict-operand-range! descriptor mode values line cell-width))
+                 (%check-strict-operand-range! descriptor mode values line cell-width choices))
              (loop with i = (- address origin)
                    for cell in (encode-instruction descriptor values)
                    do (setf (aref cells i) cell) (incf i)))))
@@ -1123,8 +1163,8 @@ separate from it (rather than folded into the same walk) since %ENCODE
 needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
   (ecase (first entry)
     (:instruction
-     (destructuring-bind (kind address descriptor asts line) entry
-       (declare (ignore asts))
+     (destructuring-bind (kind address descriptor asts line choices) entry
+       (declare (ignore asts choices))
        (make-listing-line :address address :size (instruction-descriptor-size descriptor)
                             :line line :kind kind :descriptor descriptor)))
     (:emit

@@ -237,3 +237,29 @@ ambi $30" :machine 'diag-test-machine))
   (let ((*strict-operand-range* t))
     (fiveam:signals assembly-error
       (assemble "stiw #100000" :machine 'diag-test-machine))))
+
+;;; Per-hole :STRICT on a ONE-OF alternative (#115) -- unlike :WIDTH/:SIGNED/
+;;; :RELATIVE/:SUFFIX, :STRICT is a pure encode-time range check with no
+;;; decode consequence, so a ONE-OF alternative may declare it independently
+;;; of its siblings and of the mode as a whole (mode.lisp's
+;;; %CHECK-ONE-OF-ELEMENTS!).
+
+(defmode diag-oo-strict expr :strict t)
+(defmode diag-oo-loose "[" expr "]")
+(defmode diag-oo-ph (one-of diag-oo-strict diag-oo-loose))
+
+(definstruction diag-test-machine oph
+  (modes diag-oo-ph)
+  (encoding (opcode #x08) (operand :width 1))
+  (semantics (set! a operand)))
+
+(fiveam:test one-of-per-hole-strict-alternative-signals-on-out-of-range-value
+  (fiveam:signals assembly-error
+    (assemble "oph 300" :machine 'diag-test-machine)))
+
+(fiveam:test one-of-per-hole-strict-sibling-without-strict-still-wraps
+  ;; Same instruction, same operand width -- but matched via DIAG-OO-LOOSE
+  ;; (bracketed), which declares no :STRICT of its own, so the same
+  ;; out-of-range value wraps instead of erroring: strictness is a property
+  ;; of the matched hole's own alternative, not the whole ONE-OF.
+  (fiveam:finishes (assemble "oph [300]" :machine 'diag-test-machine)))

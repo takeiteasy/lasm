@@ -159,22 +159,33 @@ options start at the first keyword symbol; everything before it is pattern."
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
 
-  (defun %pattern-hole-count (pattern)
+  (defun %pattern-hole-count (pattern &optional seen)
     "Total :EXPR holes in PATTERN (a MODE-DESCRIPTOR's own pattern list, or a
 DEFMODE-in-progress's), recursing into any :ONE-OF element via its first
 alternative -- %CHECK-ONE-OF-ELEMENTS! (below) validates every alternative of
 one :ONE-OF shares the same hole count, so any one of them stands for the
-element as a whole."
+element as a whole. SEEN is the list of mode names already on this recursion
+path -- signals an error rather than recursing forever if a :ONE-OF element
+names a mode already being walked (a hand-written DEFMODE cycle: redefining
+a mode some :ONE-OF already references so the reference loops back to it).
+A plain file reload can't create a cycle (it replays the same patterns in
+the same order), so this only ever fires on a genuinely circular
+redefinition, caught here at DEFMODE time rather than as an unbounded
+recursion at some later, unrelated call."
     (loop for element in pattern
           sum (ecase (first element)
                 (:literal 0)
                 (:expr 1)
-                (:one-of (%mode-hole-count (find-mode-descriptor (second element)))))))
+                (:one-of (%mode-hole-count (find-mode-descriptor (second element)) seen)))))
 
-  (defun %mode-hole-count (mode)
-    (%pattern-hole-count (mode-descriptor-pattern mode)))
+  (defun %mode-hole-count (mode &optional seen)
+    (let ((name (mode-descriptor-name mode)))
+      (when (member name seen)
+        (error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
+               name (reverse seen) name))
+      (%pattern-hole-count (mode-descriptor-pattern mode) (cons name seen))))
 
-  (defun %pattern-hole-alternatives (pattern)
+  (defun %pattern-hole-alternatives (pattern &optional seen)
     "One entry per hole in PATTERN, in hole order -- NIL for a plain :EXPR
 hole, or the list of :ONE-OF alternative mode-name symbols governing a
 :ONE-OF-produced hole (#104). A multi-hole :ONE-OF element repeats its own
@@ -185,25 +196,31 @@ one alternative of an outer one) is walked via that alternative's own
 pattern -- see %MODE-HOLE-ALTERNATIVES; this is the pattern-only half, mirroring
 %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT's own split. Used by DEFINSTRUCTION's
 word-encoded (CHOICE M) selector validation (instruction.lisp) to check M
-against the actual alternatives available at a given hole."
+against the actual alternatives available at a given hole. SEEN guards
+against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
     (loop for element in pattern
           append (ecase (first element)
                    (:literal nil)
                    (:expr (list nil))
                    (:one-of (let* ((alt-names (rest element))
-                                    (holes (%mode-hole-count (find-mode-descriptor (first alt-names)))))
+                                    (holes (%mode-hole-count (find-mode-descriptor (first alt-names)) seen)))
                               (make-list holes :initial-element alt-names))))))
 
-  (defun %mode-hole-alternatives (mode)
-    (%pattern-hole-alternatives (mode-descriptor-pattern mode)))
+  (defun %mode-hole-alternatives (mode &optional seen)
+    (%pattern-hole-alternatives (mode-descriptor-pattern mode) seen))
 
   (defun %check-one-of-elements! (name pattern)
     "Validate every (:ONE-OF ...) element of PATTERN, the DEFMODE NAME is
 building: at least two alternatives; each must already be a registered mode
 (FIND-MODE-DESCRIPTOR signals if not); none may declare a whole-mode
-attribute (:WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX) -- honoring one of
-those per hole rather than per statement is a follow-up, not yet supported;
-every alternative must have the same hole count as every other, since the
+:WIDTH/:SIGNED/:RELATIVE/:SUFFIX attribute -- honoring one of those per hole
+rather than per statement needs a byte-encoded machine to have some way to
+decode which alternative was actually written (it has only the opcode
+today), so it stays a follow-up; :STRICT is exempt from this restriction
+(#115) -- it is a pure encode-time range check with no size, value, or
+decode consequence, so it is meaningful and honored per hole regardless of
+encoding scheme (see %CHECK-STRICT-OPERAND-RANGE!, assembler.lisp). Every
+alternative must have the same hole count as every other, since the
 positional hole <-> operand-field parallel the rest of the pipeline depends
 on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room for a
 :ONE-OF that yields a different field count depending which alternative
@@ -219,10 +236,9 @@ disambiguate between them."
                    name alt-names))
           (dolist (alt alts)
             (when (or (mode-descriptor-width alt) (mode-descriptor-relativep alt)
-                      (mode-descriptor-signedp alt) (mode-descriptor-strictp alt)
-                      (mode-descriptor-suffix alt))
+                      (mode-descriptor-signedp alt) (mode-descriptor-suffix alt))
               (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
-(:WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
+(:WIDTH/:SIGNED/:RELATIVE/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
                      name (mode-descriptor-name alt))))
           (let ((counts (remove-duplicates (mapcar #'%mode-hole-count alts))))
             (when (> (length counts) 1)
@@ -322,14 +338,14 @@ alternatives named by the pattern element that produced hole i\" as an
 invariant callers can validate against (mirrored by mode.lisp's
 %MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). Nested
 :ONE-OF is legal (BUILD-MODE-DESCRIPTOR's hole-count check treats it like a
-plain :EXPR) but not yet exercised by anything in this codebase.
+plain :EXPR) -- see tests/mode.lisp for coverage of both the hole-counting
+and this outermost-wins CHOICES behavior.
 
-(Also worth flagging for a follow-up, not guarded here: a hand-written
-DEFMODE cycle -- redefining a mode that some :ONE-OF already references so
-the reference loops back to it -- would make %MODE-HOLE-COUNT recurse
-forever. A plain file reload can't create one, since it replays the same
-patterns in the same order, so this is not a regression this ticket needs
-to close.)
+A hand-written DEFMODE cycle -- redefining a mode that some :ONE-OF already
+references so the reference loops back to it -- is guarded against
+elsewhere: %MODE-HOLE-COUNT (#115) signals rather than recursing forever
+when a mode name reappears on its own recursion path. A plain file reload
+can't create a cycle, since it replays the same patterns in the same order.
 
 Recursive over ELEMENTS -- not a linear scan -- so a :ONE-OF element can
 backtrack (#103): each alternative is tried by recursively matching *the

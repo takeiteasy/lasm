@@ -187,6 +187,14 @@ so a strict check and the ordinary fit test never disagree about what
 ;; (must be between -128 and 255)
 ```
 
+`:strict t` may also be declared on one alternative of a `one-of` element
+(see [Addressing modes, "Per-hole `:strict`"](modes.md#per-hole-strict)),
+independently of its siblings and of the mode as a whole — a hole is
+strict when `*strict-operand-range*` is set, the whole mode is `:strict`,
+*or* the specific alternative that hole matched is, so the same instruction
+can error on one written syntax and silently wrap the identical value
+written another way.
+
 A `relative` mode is unaffected by either switch — it already range-checks
 unconditionally and errors on overflow (see [Addressing modes, "PC-relative
 modes"](modes.md#pc-relative-modes)), strict or not, since a wrapped branch

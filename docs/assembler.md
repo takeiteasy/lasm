@@ -232,8 +232,14 @@ ambiguity"](diagnostics.md#mode-selection-ambiguity).
 An out-of-range value that falls back to `wrap-value` (the "no candidate
 fits" case above) is by default silent, same as it always was — opt into an
 `assembly-error` instead per mode (`:strict t`) or globally
-(`*strict-operand-range*`); see [Diagnostics, "Strict operand
-range"](diagnostics.md#strict-operand-range).
+(`*strict-operand-range*`), or per hole on a `one-of` element (`:strict t`
+on one alternative alone); see [Diagnostics, "Strict operand
+range"](diagnostics.md#strict-operand-range). `%choose-variant`'s own
+`choices` — the hole-aligned matched-alternative list `try-match-operand-
+mode` already computed for the chosen candidate (step 1 above) — rides
+along with the chosen descriptor and its holes' AST list all the way to
+`%encode`, which is what lets the strict check tell a hole's own matched
+alternative apart from its mode's whole-statement setting.
 
 #### Forcing a mode with a mnemonic suffix
 

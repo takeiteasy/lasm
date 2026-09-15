@@ -131,9 +131,12 @@ name). At `defmode` time, every alternative:
   of the pipeline depends on (see [Instructions](instructions.md)) has no
   room for a `one-of` that yields a different field count depending on which
   alternative matched;
-- may declare none of `:width`, `:signed`, `:relative`, `:strict`, or
-  `:suffix` itself — honoring one of those per hole, rather than per
-  statement, is a follow-up (see the tracker);
+- may declare `:strict` — see [Per-hole `:strict`](#per-hole-strict) below —
+  but none of `:width`, `:signed`, `:relative`, or `:suffix` itself: each of
+  those needs some way to recover, at decode time, which alternative a hole
+  actually matched, and a byte-encoded machine has only the opcode to decode
+  from — honoring them per hole, rather than per statement, is a follow-up
+  (see the tracker);
 - must not share identical syntax with another alternative in the same
   `one-of` (checked case-insensitively, since a `:literal` element already
   matches that way) — nothing could ever choose between two alternatives
@@ -219,6 +222,29 @@ a `one-of`'s first alternative; a word-encoded machine's `(choice mode)`
 field carries that record forward from decode, so the disassembler renders
 the alternative that was actually written — see
 [Disassembler](disassembler.md).
+
+### Per-hole `:strict`
+
+Unlike `:width`/`:signed`/`:relative`/`:suffix`, a `one-of` alternative *may*
+declare `:strict t` — it needs no decode-time record of which alternative
+matched, since it is a pure encode-time range check with no bearing on size,
+value, or decode at all (see [Diagnostics, "Strict operand
+range"](diagnostics.md#strict-operand-range)). A hole is strict when
+`*strict-operand-range*` is set, when the mode as a whole declares `:strict
+t`, or when the specific alternative that hole matched does — independently
+of its siblings and of the mode's own setting:
+
+```lisp
+(defmode oo-strict expr :strict t)
+(defmode oo-loose "[" expr "]")
+(defmode oo-either (one-of oo-strict oo-loose))
+```
+
+An instruction using `oo-either` errors on an out-of-range bare value (it
+matched `oo-strict`) but silently wraps the identical value written
+bracketed (it matched `oo-loose`, which declares no `:strict` of its own) —
+the same operand width, two different outcomes, decided purely by which
+syntax was written.
 
 ## Signed operands
 

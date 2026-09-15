@@ -279,9 +279,13 @@ looks like."
   (fiveam:signals error
     (eval '(defmode oo-bad-width (one-of oo-reg oo-widthed)))))
 
-(fiveam:test one-of-alternative-with-strict-signals-error
-  (fiveam:signals error
-    (eval '(defmode oo-bad-strict (one-of oo-reg oo-strict)))))
+(fiveam:test one-of-alternative-with-strict-is-accepted
+  ;; #115: :STRICT is exempt from ONE-OF's whole-mode-attribute restriction
+  ;; -- it is a pure encode-time range check with no size, value, or decode
+  ;; consequence, so it is meaningful (and honored) per hole regardless of
+  ;; encoding scheme, unlike :WIDTH/:SIGNED/:RELATIVE/:SUFFIX above.
+  (fiveam:finishes (eval '(defmode oo-ok-strict (one-of oo-ind oo-strict))))
+  (fiveam:is (mode-descriptor-strictp (find-mode-descriptor 'oo-strict))))
 
 (fiveam:test one-of-alternative-with-suffix-signals-error
   (fiveam:signals error
@@ -344,3 +348,62 @@ looks like."
 (fiveam:test mode-hole-alternatives-mixed-mode
   (fiveam:is (equal '((oo-reg oo-ind) nil)
                      (%mode-hole-alternatives (find-mode-descriptor 'oo-mixed)))))
+
+;;; Nested ONE-OF (#115) -- one ONE-OF alternative's own pattern is itself
+;;; another ONE-OF's whole pattern. BUILD-MODE-DESCRIPTOR's hole-count check
+;;; treats a ONE-OF element like a plain EXPR (one hole, taken from its first
+;;; alternative), so this is legal; %MATCH-MODE-ELEMENTS' own docstring
+;;; already commits to "outermost wins" for CHOICES -- these are the tests
+;;; that invariant was left owing.
+
+(defmode no-inner-a expr)
+(defmode no-inner-b "[" expr "]")
+(defmode no-inner (one-of no-inner-a no-inner-b))
+(defmode no-other expr)
+(defmode no-outer (one-of no-inner no-other))
+
+(fiveam:test nested-one-of-hole-count-is-one
+  (fiveam:is (= 1 (%mode-hole-count (find-mode-descriptor 'no-outer)))))
+
+(fiveam:test nested-one-of-hole-alternatives-names-the-outer-element
+  (fiveam:is (equal '((no-inner no-other))
+                     (%mode-hole-alternatives (find-mode-descriptor 'no-outer)))))
+
+(fiveam:test nested-one-of-choices-report-the-outermost-alternative
+  ;; "5" matches via NO-INNER's own NO-INNER-A -- but CHOICES must report
+  ;; NO-OUTER's own chosen alternative, NO-INNER, discarding what the nested
+  ;; match itself found.
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5") 'no-outer)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(no-inner) (mapcar #'mode-descriptor-name choices)))))
+
+(fiveam:test nested-one-of-choices-report-the-outermost-alternative-via-inner-b
+  ;; "[5]" matches via NO-INNER's own NO-INNER-B -- CHOICES still reports
+  ;; NO-INNER, not NO-INNER-B: the nested match's own choice is discarded
+  ;; regardless of which inner alternative actually matched.
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "[5]") 'no-outer)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(no-inner) (mapcar #'mode-descriptor-name choices)))))
+
+;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
+;;; references so the reference loops back to it must signal, not recurse
+;;; forever. A plain file reload can't create one (it replays the same
+;;; patterns in the same order); this exercises the hand-written case.
+
+(defmode cyc-base-1 expr)
+(defmode cyc-base-2 "[" expr "]")
+(defmode cyc-mode-a (one-of cyc-base-1 cyc-base-2))
+(defmode cyc-mode-b (one-of cyc-mode-a cyc-base-2))
+
+(fiveam:test one-of-cycle-signals-rather-than-recursing-forever
+  ;; Redefining CYC-BASE-1 to route back through CYC-MODE-B -> CYC-MODE-A ->
+  ;; CYC-BASE-1 doesn't create a *live* cycle until something recomputes a
+  ;; hole count through it -- REGISTER time only validates the new mode's own
+  ;; alternatives (CYC-MODE-B, CYC-BASE-2), neither of which is cyclic yet at
+  ;; that instant, since *MODES* isn't updated until DEFMODE's SETF returns.
+  (eval '(defmode cyc-base-1 (one-of cyc-mode-b cyc-base-2)))
+  (fiveam:signals error (%mode-hole-count (find-mode-descriptor 'cyc-mode-a)))
+  ;; Restore CYC-BASE-1 for any test run after this one in the same image.
+  (eval '(defmode cyc-base-1 expr)))
