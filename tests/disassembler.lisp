@@ -150,6 +150,22 @@
       (variant (choice disasm-oo-ind) inline :range (0 15) :bias 16)))
   (semantics (set! (reg 0) val)))
 
+;; COOM (#118): a *mixed* field, unlike COO above -- DISASM-OO-REG is
+;; CHOICE-selected, but DISASM-OO-IND has no (choice ...) variant of its
+;; own; %CHECK-WORD-VARIANT-CHOICES! stamps the value-selected (range 16 31)
+;; variant with DISASM-OO-IND. %RENDER-OPERAND-TEXT must render the real
+;; matched alternative back for *both* rows, not just the CHOICE-selected
+;; one -- see DISASSEMBLE-ONE-OF-RENDERS-THE-MATCHED-ALTERNATIVE-ON-A-MIXED-
+;; FIELD below.
+(definstruction disasm-word-machine coom
+  (modes disasm-oo)
+  (encoding
+    (opcode 6)
+    (operand val :field a
+      (variant (choice disasm-oo-reg) inline :range (0 15) :bias 0)
+      (variant (range 16 31) inline)))
+  (semantics (set! (reg 0) val)))
+
 ;; Shared opcode (#105): two mnemonics, decode-distinguishable purely by
 ;; their field A's own disjoint bias range -- what returned :DECODE-FAILURE
 ;; for one form and mis-decoded the other before this ticket.
@@ -294,6 +310,17 @@ ldsr $2,S" :machine 'disasm-test-machine))
                                           :machine 'disasm-word-machine :labels nil)))
     (fiveam:is (string= "coo $5" (disassembly-line-text (first bare))))
     (fiveam:is (string= "coo [$5]" (disassembly-line-text (first indirect))))))
+
+(fiveam:test disassemble-one-of-renders-the-matched-alternative-on-a-mixed-field
+  ;; #118: COOM mixes a CHOICE-selected row (DISASM-OO-REG) with a
+  ;; value-selected one stamped DISASM-OO-IND -- both must render their own
+  ;; matched syntax back, not just the CHOICE-selected one.
+  (let* ((bare (disassemble-assembly (assemble "coom 5" :machine 'disasm-word-machine)
+                                      :machine 'disasm-word-machine :labels nil))
+         (indirect (disassemble-assembly (assemble "coom [20]" :machine 'disasm-word-machine)
+                                          :machine 'disasm-word-machine :labels nil)))
+    (fiveam:is (string= "coom $5" (disassembly-line-text (first bare))))
+    (fiveam:is (string= "coom [$14]" (disassembly-line-text (first indirect))))))
 
 (fiveam:test disassemble-no-operand-instruction
   (let* ((a (assemble "hlt" :machine 'disasm-test-machine))

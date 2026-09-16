@@ -758,6 +758,24 @@ hlt" :machine 'word-test-machine)))
     (fiveam:is (string= "WCC" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'b)))))
 
+(fiveam:test step-machine-choice-case-dispatches-differently-per-alternative-on-a-mixed-field
+  ;; #118: WCM (tests/instruction.lisp, MIXED-FIELD-TEST-MACHINE) mixes a
+  ;; CHOICE-selected WC-REG variant with a value-selected WC-IND one on one
+  ;; field -- CHOICE-CASE dispatches on the stamped WC-IND name for the
+  ;; value-selected row exactly as it would for a CHOICE-selected one, so
+  ;; "wcm [50]" reaches B, not A, despite WC-IND never declaring its own
+  ;; (choice ...) variant.
+  (let ((m (make-machine 'mixed-field-test-machine))
+        (a (assemble "wcm 5
+wcm [50]
+hlt" :machine 'mixed-field-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "WCM" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 0 (sref m 'b)))
+    (fiveam:is (string= "WCM" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 50 (sref m 'b)))))
+
 (fiveam:test step-machine-word-encoded-decode-failure-on-unregistered-opcode
   (let ((m (make-machine 'word-test-machine)))
     (setf (mref m 'ram 0) 0)

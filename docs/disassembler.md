@@ -140,14 +140,21 @@ carries its matched alternative forward from `decode-instruction-at`, the
 same way a word-encoded machine's own `word-alternatives`-based decode
 already tells an inline value from an escaped extra-word marker apart, and
 the disassembler renders that alternative's own syntax instead of always the
-first. This has no equivalent on a byte-encoded machine, or for a hole whose
-field is value-selected rather than `choice`-selected — a decoded value
+first. This has no equivalent on a byte-encoded machine — a decoded value
 there carries no such record at all (that only ever existed at assembly
-time, as `try-match-operand-mode`'s `choices` return value), so those cases
-still fall back to rendering a `one-of`'s first alternative, a known,
-documented limitation rather than a best-effort guess. See
+time, as `try-match-operand-mode`'s `choices` return value), so it still
+falls back to rendering a `one-of`'s first alternative, a known, documented
+limitation rather than a best-effort guess. A field mixing `choice`-selected
+and value-selected variants (#118, [Instructions, "CHOICE-selected word
+fields"](instructions.md#choice-selected-word-fields)) is *not* this case,
+though: `definstruction` resolves every value-selected variant's own record
+to the one `one-of` alternative no `choice`-selected variant there claims,
+so a hole on a mixed field still carries a real record either way, and
+renders its own actually-matched syntax same as a `choice`-selected one.
+Only a field with *no* `choice`-selected variant at all still leaves a hole
+with no record to fall back from. See
 [`examples/anima16.lisp`](../examples/anima16.lisp) for the round-trip where
-a real record exists, and
+a real record exists — including the mixed-field case — and
 [`examples/orthogonal.lisp`](../examples/orthogonal.lisp) for the
 byte-encoded fallback case.
 

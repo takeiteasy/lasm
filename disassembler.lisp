@@ -217,10 +217,14 @@ to the same hole position throughout the walk.
 Falls back to always rendering the first alternative -- #103's original
 behaviour -- whenever HOLE-CHOICES is NIL (the default, and always true on a
 byte-encoded machine, where no WORD-FIELD-CHOICE record exists at all) or
-carries no non-NIL entry for this particular hole (a value-selected field, or
-one CHOICE-selected field's record sitting alongside an ordinary EXPR hole
-elsewhere in the same instruction) -- a decoded word simply carries no record
-to disambiguate with in either case."
+carries no non-NIL entry for this particular hole -- a decoded word simply
+carries no record to disambiguate with. #118: a field mixing CHOICE-selected
+and value-selected variants stamps every variant's own WORD-FIELD-CHOICE-CHOICE
+(instruction.lisp's %CHECK-WORD-VARIANT-CHOICES!), so a value-selected row on
+a *mixed* field still names its own alternative here, same as a CHOICE-
+selected one -- only a field with no CHOICE variant at all still leaves this
+NIL, and a hole with a CHOICE-selected field elsewhere in the same
+instruction but no record of its own is unaffected either way."
   (with-output-to-string (s)
     (let ((vals render-values) (choices hole-choices))
       (labels ((render-pattern (pattern)

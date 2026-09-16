@@ -650,7 +650,11 @@
 
 (defmode wc-reg expr)
 (defmode wc-ind "[" expr "]")
+(defmode wc-mem "(" expr ")")
 (defmode wc-two (one-of wc-reg wc-ind))
+;; #118: a third alternative, used only by the multiple-unclaimed-alternative
+;; error test below (choice-and-value-selected-mix-multiple-unclaimed-signals-error).
+(defmode wc-three (one-of wc-reg wc-ind wc-mem))
 
 (definstruction word-test-machine wcx
   (modes wc-two)
@@ -716,14 +720,51 @@
                          (variant (choice wc-ind) inline :range (8 15))))
              (semantics nil)))))
 
-(fiveam:test choice-and-value-selected-variants-may-not-mix
+(fiveam:test choice-and-value-selected-variants-may-mix
+  ;; #118: WC-TWO's only unclaimed alternative (WC-REG is claimed by the
+  ;; CHOICE-selected variant) is WC-IND -- the value-selected (RANGE 8 15)
+  ;; variant is stamped with it, rather than signalling the old no-mixing
+  ;; error.
+  (eval '(definstruction word-test-machine bogus
+           (modes wc-two)
+           (encoding (opcode 5)
+                     (operand value :field src
+                       (variant (choice wc-reg) inline :range (0 7))
+                       (variant (range 8 15) inline)))
+           (semantics nil)))
+  (let* ((variants (find-instruction-variants 'word-test-machine "BOGUS"))
+         (choices (sort (mapcar (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d))))
+                                 variants)
+                         #'string< :key #'symbol-name)))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (equal '(wc-ind wc-reg) choices))))
+
+(fiveam:test choice-and-value-selected-mix-every-alternative-claimed-signals-error
+  ;; WC-TWO has only two alternatives (WC-REG, WC-IND); claiming both with
+  ;; CHOICE-selected variants leaves no unclaimed alternative for the
+  ;; value-selected (:ELSE) one to be stamped with.
   (fiveam:signals error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
                        (operand value :field src
                          (variant (choice wc-reg) inline :range (0 7))
-                         (variant (range 8 15) inline)))
+                         (variant (choice wc-ind) inline :range (8 15))
+                         (variant :else (extra-word :escape #x3ff))))
+             (semantics nil)))))
+
+(fiveam:test choice-and-value-selected-mix-multiple-unclaimed-signals-error
+  ;; WC-THREE (below) has three alternatives; claiming only one with a
+  ;; CHOICE-selected variant leaves two unclaimed for the value-selected
+  ;; variants -- nothing tells decode which of the two they belong to.
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-three)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7))
+                         (variant (range 8 15) inline)
+                         (variant :else (extra-word :escape #x3ff))))
              (semantics nil)))))
 
 (fiveam:test choice-overlapping-inline-ranges-signal-error
@@ -814,6 +855,47 @@
       (variant (choice wc-reg) inline :range (0 7) :bias #x00)
       (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
   (semantics (set! a dst)))
+
+;; WCM (#118): a *mixed* field -- WC-REG is CHOICE-selected, but WC-TWO's
+;; other alternative (WC-IND) has no (choice ...) variant of its own at all;
+;; %CHECK-WORD-VARIANT-CHOICES! stamps the value-selected (RANGE 8 100)
+;; variant with WC-IND, the one ONE-OF alternative no CHOICE-selected variant
+;; here claims. WC-REG's own range (0 7) still packs by CHOICE (syntax
+;; alone); WC-IND's range (8 100) now packs by the *value* actually written,
+;; scoped to WC-IND's own syntax the same way a CHOICE-selected variant
+;; would be. CHOICE-CASE dispatches on both names, exactly as if WC-IND's
+;; row were CHOICE-selected too.
+;;
+;; A dedicated tiny machine, not WORD-TEST-MACHINE, for the same reason
+;; MIXED-KIND-TEST-MACHINE (below) is: WORD-TEST-MACHINE's own 4-bit (0-15)
+;; opcode space has opcodes 1-14 already claimed and 15 reserved unregistered
+;; (tests/emulator.lisp's STEP-MACHINE-WORD-ENCODED-DECODE-FAILURE-ON-
+;; UNREGISTERED-OPCODE), leaving no room.
+(defmachine mixed-field-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(definstruction mixed-field-test-machine wcm
+  (modes wc-two)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7))
+      (variant (range 8 100) inline)))
+  (semantics
+    (choice-case value
+      (wc-reg (set! a value))
+      (wc-ind (set! b value)))))
+
+(definstruction mixed-field-test-machine hlt
+  (encoding (opcode 2))
+  (semantics (trap :halt)))
 
 ;; WCC's two sibling descriptors (one per matched CHOICE) share one identical
 ;; semantics-fn (%SEMANTICS-FN-FORM builds it once per DEFINSTRUCTION variant,

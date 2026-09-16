@@ -648,13 +648,18 @@ SUBCLAUSES)."
   (bias 0 :type integer)                 ; :inline only
   (range nil :type (or null cons))       ; :inline only, pre-bias (lo . hi)
   (escape nil :type (or null integer))   ; :extra-word only
-  ;; #104: non-NIL only for a (CHOICE M) selector -- the ONE-OF alternative
+  ;; #104: non-NIL for a (CHOICE M) selector -- the ONE-OF alternative
   ;; mode-name symbol M that must be this hole's matched alternative
   ;; (mode.lisp's hole-aligned CHOICES) for this variant to apply, rather
   ;; than the operand's own folded VALUE choosing between a (RANGE LO HI)
-  ;; variant and an :ELSE one. A field's variants are either all CHOICE-
-  ;; selected or all value-selected (%CHECK-WORD-VARIANTS rejects mixing) --
-  ;; never both on the same operand.
+  ;; variant and an :ELSE one. #118: a field may mix CHOICE-selected
+  ;; variants with value-selected (RANGE/:ELSE) ones -- when it does,
+  ;; %CHECK-WORD-VARIANT-CHOICES! stamps this slot on every value-selected
+  ;; variant too, with the one ONE-OF alternative no (CHOICE ...) variant
+  ;; already claims, so a value-selected variant on a mixed field is no
+  ;; longer NIL here by the time %EXPAND-WORD-COMBOS/%WORD-FIELD-CHOICE-FORM
+  ;; (below) see it. A field with no CHOICE variant at all is left alone --
+  ;; every variant there stays NIL, exactly as before #118.
   (choice nil :type (or null symbol)))
 
 (defstruct word-operand-spec
@@ -860,14 +865,18 @@ or (choice mode), got ~S" field-name selector)))))
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
 variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
 :EXTRA-WORD variant's escape value falls inside another variant's biased
-inline range; if two :INLINE variants' biased ranges overlap; if two
-:EXTRA-WORD variants share one escape value; or if VARIANTS mixes CHOICE-
-selected (#104) and value-selected (RANGE/:ELSE) variants on one operand --
-every one of these is an ambiguity a decoder reading a raw field value could
-never resolve (the RANGE/:ELSE-only versions of the first two checks predate
-#104; a field with only one value-selected :INLINE and one :ELSE, the only
-shape possible before #104, could never trigger the overlap/duplicate-escape
-cases, so this doesn't change any existing DEFINSTRUCTION's validity)."
+inline range; if two :INLINE variants' biased ranges overlap; or if two
+:EXTRA-WORD variants share one escape value -- every one of these is an
+ambiguity a decoder reading a raw field value could never resolve (the
+RANGE/:ELSE-only versions of the first two checks predate #104; a field with
+only one value-selected :INLINE and one :ELSE, the only shape possible
+before #104, could never trigger the overlap/duplicate-escape cases, so
+this doesn't change any existing DEFINSTRUCTION's validity). #118: CHOICE-
+selected and value-selected variants may now share one field -- see
+%CHECK-WORD-VARIANT-CHOICES!, which resolves which ONE-OF alternative the
+value-selected ones belong to, and runs after this function, so every
+range/escape here (CHOICE-selected or not) is still checked against every
+other regardless of kind."
   (let ((max (1- (ash 1 field-width))) inline-ranges escapes)
     (dolist (v variants)
       (ecase (word-variant-kind v)
@@ -905,21 +914,33 @@ an encoded field value in the overlap could never be told apart"
     (let ((dup (loop for (e . later) on escapes when (member e later) return e)))
       (when dup
         (error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant"
-               field-name dup)))
-    ;; #104: a field is either all CHOICE-selected or all value-selected --
-    ;; never both, so %CHOOSE-VARIANT's eligibility filter never has to
-    ;; reason about a mix.
-    (let ((choice-count (count-if #'word-variant-choice variants)))
-      (when (and (plusp choice-count) (/= choice-count (length variants)))
-        (error "DEFINSTRUCTION: field ~S: CHOICE-selected and value-selected ~
-(RANGE/:ELSE) variants may not be mixed on the same operand" field-name)))))
+               field-name dup)))))
 
 (defun %check-word-variant-choices! (variants field-name hole-alternatives)
   "Signal an error if any of VARIANTS' non-NIL WORD-VARIANT-CHOICE (#104)
 names a mode not registered (FIND-MODE-DESCRIPTOR signals), or one not among
 HOLE-ALTERNATIVES -- this operand hole's actual ONE-OF alternatives, per
 mode.lisp's %MODE-HOLE-ALTERNATIVES (NIL when the hole isn't a ONE-OF at
-all, which makes any (CHOICE M) on it an error unconditionally)."
+all, which makes any (CHOICE M) on it an error unconditionally).
+
+#118: also resolves a *mixed* field -- one with both CHOICE-selected
+variants and value-selected (RANGE/:ELSE) ones. VARIANTS is wholly
+CHOICE-selected, wholly value-selected, or mixed; only the mixed case does
+anything below. When mixed, every value-selected variant is selected, at
+decode/assemble time, by whichever ONE-OF alternative no CHOICE-selected
+variant here already claims -- there must be exactly one such
+UNCLAIMED alternative, since a decoder reading a raw field value has
+nothing else to disambiguate the value-selected rows by: zero unclaimed
+alternatives means the value-selected variants could never be selected at
+all (every alternative already routes to a CHOICE-selected variant
+instead); two or more means nothing tells decode which of them the
+value-selected rows belong to. Once resolved, every value-selected
+variant's own WORD-VARIANT-CHOICE is SETF to that one alternative -- so
+%WORD-CHOICES-ELIGIBLE-P (assembler.lisp), %MATCHED-CHOICE-NAME
+(CHOICE-CASE dispatch, above) and %RENDER-OPERAND-TEXT (disassembler.lisp)
+all see a real, non-NIL choice for a value-selected row on a mixed field
+and need no separate mixed-field logic of their own; a field with no
+CHOICE variant at all is untouched, exactly as before #118."
   (dolist (v variants)
     (let ((choice (word-variant-choice v)))
       (when choice
@@ -930,7 +951,22 @@ not a ONE-OF pattern element -- CHOICE only selects between ONE-OF alternatives"
                  field-name choice))
         (unless (member choice hole-alternatives)
           (error "DEFINSTRUCTION: field ~S: (choice ~S) is not one of this hole's ONE-OF ~
-alternatives ~S" field-name choice hole-alternatives))))))
+alternatives ~S" field-name choice hole-alternatives)))))
+  (let* ((choice-selected (remove-if-not #'word-variant-choice variants))
+         (value-selected (remove-if #'word-variant-choice variants)))
+    (when (and choice-selected value-selected)
+      (let ((unclaimed (set-difference hole-alternatives (mapcar #'word-variant-choice choice-selected))))
+        (cond
+          ((null unclaimed)
+           (error "DEFINSTRUCTION: field ~S: every ONE-OF alternative ~S is already claimed ~
+by a (choice ...) variant, so this field's value-selected variant~P could never be selected"
+                  field-name hole-alternatives (length value-selected)))
+          ((rest unclaimed)
+           (error "DEFINSTRUCTION: field ~S: value-selected (RANGE/:ELSE) variants would be ~
+selected by more than one unclaimed ONE-OF alternative ~S -- nothing could tell them apart ~
+at decode" field-name unclaimed))
+          (t (dolist (v value-selected)
+               (setf (word-variant-choice v) (first unclaimed)))))))))
 
 (defun %parse-word-operand-subclause (subclause machine-name hole-alternatives)
   "SUBCLAUSE is one whole (operand [NAME] :field FIELD-NAME (variant ...)*)

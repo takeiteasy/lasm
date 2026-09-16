@@ -290,14 +290,20 @@ narrowest (fewest extra words) combo a value actually fits."
 CHOICES -- mode.lisp's hole-aligned per-hole list of the ONE-OF alternative
 each operand hole actually matched, NIL for a hole not governed by any
 ONE-OF (#104). For each of DESCRIPTOR's WORD-FIELDS, paired positionally
-with CHOICES: a field whose own WORD-FIELD-CHOICE-CHOICE is non-NIL (a
-(CHOICE M) variant, instruction.lisp) is eligible only when that hole's
-CHOICES entry is the same mode M actually matched; a field with no CHOICE
-of its own (value-selected, RANGE/:ELSE) is always eligible regardless of
-CHOICES -- %CHECK-WORD-VARIANTS' no-mixing rule guarantees a field's own
-variant menu is either wholly CHOICE-selected or wholly value-selected, so
-there is no per-variant \"does some other variant of this field claim this
-choice\" case to also consider here.
+with CHOICES: a field whose own WORD-FIELD-CHOICE-CHOICE is non-NIL is
+eligible only when that hole's CHOICES entry is the same mode M actually
+matched; a field with no CHOICE of its own at all is always eligible
+regardless of CHOICES. #118: a field mixing CHOICE-selected (CHOICE M)
+variants with value-selected (RANGE/:ELSE) ones has every variant's own
+WORD-FIELD-CHOICE-CHOICE stamped by %CHECK-WORD-VARIANT-CHOICES!
+(instruction.lisp) -- the value-selected ones with the one ONE-OF
+alternative no CHOICE-selected variant already claims -- so this function
+sees a uniformly non-NIL WORD-FIELD-CHOICE-CHOICE across a mixed field's
+whole menu and needs no separate mixed-field case: the filter above already
+does the right thing once every variant carries its own CHOICE. Only a
+field with *no* CHOICE variant at all (still, as before #118, always
+eligible regardless of CHOICES) is left with a NIL WORD-FIELD-CHOICE-CHOICE
+by the time this runs.
 
 A byte-encoded DESCRIPTOR (WORD-FIELDS NIL) and a word-encoded one with no
 CHOICE-selected field anywhere are both vacuously eligible for any CHOICES,

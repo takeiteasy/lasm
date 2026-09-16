@@ -808,6 +808,43 @@ target: hlt" :machine 'word-test-machine)))
       (fiveam:is (integerp (lasm-syntax-error-column c))))
     (:no-error (&rest _) (declare (ignore _)) (fiveam:fail "expected ASSEMBLY-ERROR"))))
 
+;;; #118: WCM (tests/instruction.lisp, MIXED-FIELD-TEST-MACHINE) mixes a
+;;; CHOICE-selected variant (WC-REG, range 0-7) with a value-selected one
+;;; (range 8-100, stamped WC-IND) on one field -- syntax alone still picks
+;;; which variant is eligible, exactly as for a wholly CHOICE-selected field,
+;;; and the eligible value-selected variant then filters by value like any
+;;; ordinary field.
+
+(fiveam:test mixed-field-choice-selected-row-encodes-by-syntax
+  ;; WC-REG (bare syntax): raw field = value, no bias -- opcode 1, dst 0,
+  ;; src 5 -> word #x1005.
+  (let ((a (assemble "wcm 5" :machine 'mixed-field-test-machine)))
+    (fiveam:is (equalp #(#x05 #x10) (assembly-cells a)))))
+
+(fiveam:test mixed-field-value-selected-row-encodes-by-value-within-its-own-syntax
+  ;; WC-IND ("[" expr "]" syntax): raw field = the value itself, packed by
+  ;; the stamped value-selected variant's own (unbiased) range -- opcode 1,
+  ;; dst 0, src 50 -> word #x1032.
+  (let ((a (assemble "wcm [50]" :machine 'mixed-field-test-machine)))
+    (fiveam:is (equalp #(#x32 #x10) (assembly-cells a)))))
+
+(fiveam:test mixed-field-choice-selected-row-overflow-signals-assembly-error
+  ;; 9 doesn't fit WC-REG's own (0 7) range, and WC-IND's variant never
+  ;; became eligible in the first place (bare "9" never matched WC-IND's
+  ;; bracketed syntax) -- same ASSEMBLY-ERROR, not silent WRAP-VALUE, as the
+  ;; wholly CHOICE-selected WCX above.
+  (fiveam:signals assembly-error
+    (assemble "wcm 9" :machine 'mixed-field-test-machine)))
+
+(fiveam:test mixed-field-value-selected-row-overflow-signals-assembly-error
+  ;; 200 doesn't fit the stamped WC-IND variant's (8 100) range either, and
+  ;; -- because #118 stamps it with a real CHOICE -- it has no wider
+  ;; CHOICE-selected sibling to relax into any more than WC-REG's row does:
+  ;; this must also be an ASSEMBLY-ERROR, not a WRAP-VALUE into bits that
+  ;; would decode as a WC-REG register value instead.
+  (fiveam:signals assembly-error
+    (assemble "wcm [200]" :machine 'mixed-field-test-machine)))
+
 ;;; Cell-width-typed assembler output (#53) -- WORDADDR-TEST-MACHINE
 ;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory with an ordinary
 ;;; (not INSTRUCTION-WORD/#20) opcode-plus-operand-cells encoding. The

@@ -458,11 +458,18 @@ value's own trailing word **unconditionally** once `MODE` is the matched
 alternative, regardless of what the value actually is — unlike `:else`,
 which only escapes when no inline variant's range fits.
 
-A field's variants must be either all `choice`-selected or all
-value-selected (`range`/`:else`) — never a mix; declaring both on one
-operand is an error (see the tracker for the follow-up that would lift
-this, needed for an ISA whose real operand table packs both kinds into one
-field, e.g. ANIMA-16's own — see `examples/anima16.lisp`'s header). Every
+A field's variants may freely mix `choice`-selected and value-selected
+(`range`/`:else`) ones (#118) — the value-selected variants are then
+selected, at both assemble and decode time, by whichever `one-of`
+alternative no `choice`-selected variant on this field already claims.
+There must be exactly one such unclaimed alternative: zero means every
+alternative already routes to a `choice`-selected variant, so the
+value-selected ones could never be selected at all; two or more means
+nothing tells decode which of them the value-selected variants belong to —
+both are `definstruction`-time errors. Given exactly one, `definstruction`
+resolves the value-selected variants' own choice to it silently — no syntax
+marks this in the `(variant ...)` form itself, since there is nothing left
+to disambiguate once every other alternative is claimed. Every
 `choice`-selected range and escape must fit
 `FIELD-NAME`'s bit width the same as a value-selected one, and — reachable
 now that several variants of one kind can share a field — no two inline
@@ -473,7 +480,8 @@ the existing inline-vs-escape ambiguity check, all at `definstruction` time.
 (defmode a-reg expr)
 (defmode a-ind "[" expr "]")
 (defmode a-mem "(" expr ")")
-(defmode ld-mode expr "," (one-of a-mem a-ind a-reg))
+(defmode a-lit "#" expr)
+(defmode ld-mode expr "," (one-of a-mem a-ind a-lit a-reg))
 
 (definstruction anima16foo ld
   (modes ld-mode)
@@ -483,25 +491,38 @@ the existing inline-vs-escape ambiguity check, all at `definstruction` time.
     (operand src :field a
       (variant (choice a-reg) inline :range (0 7) :bias #x00)
       (variant (choice a-ind) inline :range (0 7) :bias #x08)
-      (variant (choice a-mem) (extra-word :escape #x1e))))
+      (variant (choice a-mem) (extra-word :escape #x1e))
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f))))
   (semantics (set! (reg dst) src)))
 ```
 
-`ld 1, 0` and `ld 1, [0]` now encode into *different* field codes for the
-identical value 0 (disjoint biased halves of `a`'s 0–15 sub-range); `ld 1,
-(0)` always spends a trailing word, however small the address. Selection
-among these at assemble time is `%choose-variant`'s job, same as the
-value-selected case (see [Assembler](assembler.md#choosing-a-mode)) — a
-candidate whose field is `choice`-selected is dropped outright unless its
-`MODE` is the alternative the hole actually matched, before the ordinary
-floor/value filters ever run. Unlike the value-selected case, a
-`choice`-selected field's matched-but-out-of-range value has no wider
-`choice`-selected sibling to relax into, so this is an `assembly-error`
-rather than a silent wrap.
+`a-reg`, `a-ind`, and `a-mem` are `choice`-selected; `a-lit` — the one
+`ld-mode` alternative none of them claims — is not, so its two
+value-selected variants are resolved to it. `ld 1, 0` and `ld 1, [0]` encode
+into *different* field codes for the identical value 0 (disjoint biased
+halves of `a`'s 0–15 sub-range); `ld 1, (0)` always spends a trailing word,
+however small the address; `ld 1, #5` packs its literal inline in a third
+sub-range, purely because `#5`'s syntax matched `a-lit`, exactly the way the
+other three rows are chosen by syntax — the only difference is that its own
+variant then also filters by *value*, same as an ordinary value-selected
+field would. Selection among all five variants at assemble time is
+`%choose-variant`'s job (see [Assembler](assembler.md#choosing-a-mode)) — a
+candidate whose field is `choice`-selected (which, after resolution, means
+every variant on a mixed field) is dropped outright unless its `MODE` is
+the alternative the hole actually matched, before the ordinary floor/value
+filters ever run. A matched-but-out-of-range value — whether the field code
+is nominally `choice`-selected or a resolved value-selected one — has no
+wider sibling on this field to relax into, so this is an `assembly-error`
+rather than a silent wrap; `a-lit`'s own inline/`:else` pair is exactly the
+value filter's ordinary business, so `ld 1, #5` still packs inline and
+`ld 1, #1000` still escapes to its own word, purely by value, once `a-lit`'s
+variant is the eligible one.
 
-Encoding is only half the picture — every sibling descriptor `ld`'s three
-`choice` variants expand into still shares one *body*, but that body can
-read back which alternative was actually matched: `choice-case` (see
+Encoding is only half the picture — every sibling descriptor `ld`'s five
+variants expand into still shares one *body*, but that body can read back
+which alternative was actually matched, `a-lit` included: `choice-case`
+(see
 [Semantics vocabulary](semantics.md#choice-case--dispatching-on-a-matched-addressing-mode-alternative))
 dispatches on it directly, so `[reg]` really means "dereference" while a
 bare `reg` means "use the value directly" (see [Semantics vocabulary,
@@ -515,13 +536,15 @@ read back):
     (choice-case src
       (a-reg (reg src))
       (a-ind (mref machine 'ram (reg src)))
-      (a-mem (mref machine 'ram src)))))
+      (a-mem (mref machine 'ram src))
+      (a-lit src))))
 ```
 
 See [`examples/anima16.lisp`](../examples/anima16.lisp) for this run end to
 end, including the decode/disassemble round-trip — the matched
-alternative's own syntax renders back, not always the `one-of`'s first
-alternative (see [Disassembler](disassembler.md)).
+alternative's own syntax renders back for every one of the five forms,
+`choice`-selected or resolved value-selected alike, not always the
+`one-of`'s first alternative (see [Disassembler](disassembler.md)).
 
 A `:relative` addressing mode is not supported on a word-encoded machine —
 its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
