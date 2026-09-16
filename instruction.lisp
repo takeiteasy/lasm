@@ -83,7 +83,12 @@ which no CHOICE-CASE clause names, and no OTHERWISE clause was given"
    (other-mnemonic :initarg :other-mnemonic :reader opcode-conflict-other-mnemonic)
    ;; #105: NIL for the original "different mnemonic, same opcode" case
    ;; (below); :UNDECODABLE-BYTE-MACHINE or :INDISTINGUISHABLE otherwise --
-   ;; see REGISTER-INSTRUCTION-VARIANTS!/%CHECK-OPCODE-DECODABLE!.
+   ;; see REGISTER-INSTRUCTION-VARIANTS!/%CHECK-OPCODE-DECODABLE!. #125 adds
+   ;; two more, both byte-machine-only: :SUB-OPCODE-REQUIRED (one co-tenant
+   ;; declares (opcode n :sub s), the other doesn't -- decode could not tell
+   ;; whether cell+1 is a sub-opcode or an operand) and :DUPLICATE-SUB-OPCODE
+   ;; (both declare a :SUB, but the same value, so cell+1 still can't tell
+   ;; them apart).
    (reason :initarg :reason :initform nil :reader opcode-conflict-reason))
   (:documentation "Signalled by REGISTER-INSTRUCTION-VARIANTS! when a
 descriptor's opcode is already claimed by another descriptor on the same
@@ -93,21 +98,37 @@ entry, and a later redefinition of the earlier mnemonic can then delete the
 winner's entry outright as an apparently orphaned opcode -- or, on a
 byte-encoded machine, even the *same* mnemonic under a different mode (#105:
 a byte encoding carries no per-field discriminator to decode two modes
-apart, unlike a word-encoded machine's operand fields), or, on a
-word-encoded machine, two descriptors whose operand fields accept
-overlapping raw bit patterns at every hole (#105's
-%CHECK-OPCODE-DECODABLE!, which is what REASON :INDISTINGUISHABLE names).")
+apart, unlike a word-encoded machine's operand fields, unless every co-tenant
+declares its own distinct sub-opcode -- #125), or, on a word-encoded machine,
+two descriptors whose operand fields accept overlapping raw bit patterns at
+every hole (#105's %CHECK-OPCODE-DECODABLE!, which is what REASON
+:INDISTINGUISHABLE names).")
   (:report (lambda (c s)
              (case (opcode-conflict-reason c)
                (:undecodable-byte-machine
                 (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S -- ~
 a byte-encoded machine has no per-field discriminator to decode two modes ~
-of one mnemonic apart, so they may not share an opcode"
+of one mnemonic apart, so they may not share an opcode unless every mode ~
+declares its own distinct (opcode ~S :sub s)"
                         (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
-                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)
+                        (opcode-conflict-opcode c)))
                (:indistinguishable
                 (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S with ~
 an indistinguishable encoding -- no operand field's raw bits tell the two apart at decode time"
+                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
+               (:sub-opcode-required
+                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S -- ~
+one of the two declares a :SUB sub-opcode and the other doesn't, so decode ~
+could not tell whether the cell after the opcode is a sub-opcode or an operand; ~
+give both a distinct (opcode ~S :sub s)"
+                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
+                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)
+                        (opcode-conflict-opcode c)))
+               (:duplicate-sub-opcode
+                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S ~
+under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct :SUB values"
                         (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
                         (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
                (t
@@ -155,7 +176,18 @@ an indistinguishable encoding -- no operand field's raw bits tell the two apart 
   ;; Count of :EXTRA-WORD fields in WORD-FIELDS -- this combo's extra encoded
   ;; words, each one INSTRUCTION-WORD-LAYOUT-WIDTH-BYTES wide. 0 for a
   ;; byte-encoded descriptor and for an all-inline word combo alike.
-  (extra-words 0 :type (integer 0)))
+  (extra-words 0 :type (integer 0))
+  ;; #125 (M4): non-NIL only on a byte-encoded machine, and only when this
+  ;; descriptor's own (opcode n :sub s) subclause gave one. Lets several
+  ;; DESCRIPTORs share one OPCODE on a byte-encoded machine -- normally
+  ;; impossible there (#105: a byte encoding has no per-field discriminator
+  ;; the way a word-encoded machine's operand fields give it one) -- by
+  ;; reserving the cell right after the opcode as a second, purely
+  ;; discriminating value REGISTER-INSTRUCTION-VARIANTS! requires every
+  ;; co-tenant at that opcode to declare distinctly. Selected per (MODES ...)
+  ;; clause, not per operand hole -- see #126 for a hole-selected analogue,
+  ;; the byte-machine counterpart of #104's (CHOICE MODE).
+  (sub-opcode nil :type (or null (integer 0))))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -179,18 +211,21 @@ rationale as INSTRUCTION-DESCRIPTOR-WORD-LAYOUT."
   (%machine-cell-width (instruction-descriptor-machine descriptor)))
 
 (defun instruction-descriptor-size (descriptor)
-  "Total encoded cells for one use of DESCRIPTOR -- 1 (opcode cell) plus
-operand cell widths on an ordinary byte/cell-encoded machine, or
+  "Total encoded cells for one use of DESCRIPTOR -- 1 (opcode cell), plus 1
+more for a sub-opcode cell when SUB-OPCODE is non-NIL (#125), plus operand
+cell widths on an ordinary byte/cell-encoded machine, or
 INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS * (1 + EXTRA-WORDS) on a word-encoded one
-(#20). Centralizes what used to be five separate \"1 + operand width\"
-computations scattered across the assembler's layout/relaxation, its
-relative-branch offset arithmetic, and the emulator's fetch loop, so a
-word-encoded descriptor's size is computed identically everywhere rather than
-each caller assuming a byte opcode."
+(#20; SUB-OPCODE is always NIL there -- #125's sub-opcode cell is a
+byte-machine-only mechanism). Centralizes what used to be five separate
+\"1 + operand width\" computations scattered across the assembler's
+layout/relaxation, its relative-branch offset arithmetic, and the emulator's
+fetch loop, so a word-encoded descriptor's size is computed identically
+everywhere rather than each caller assuming a byte opcode."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
         (* (instruction-word-layout-width-cells layout) (1+ (instruction-descriptor-extra-words descriptor)))
-        (1+ (instruction-descriptor-total-operand-width descriptor)))))
+        (+ 1 (if (instruction-descriptor-sub-opcode descriptor) 1 0)
+           (instruction-descriptor-total-operand-width descriptor)))))
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
@@ -273,13 +308,23 @@ actually match, regardless of which specific combo it's looking at. Two
 descriptors that are *not* siblings -- a different mnemonic, or the same
 mnemonic under a different (MODES ...) clause -- may also coexist at one
 opcode on a word-encoded machine, but only once %CHECK-OPCODE-DECODABLE!
-(below) confirms some operand field's raw bits tell them apart; a
-byte-encoded machine has no per-field discriminator to decode by at all, so
-any second descriptor at an opcode there -- same mnemonic or different -- is
-an unconditional OPCODE-CONFLICT (#26 for the cross-mnemonic case; #105 for
-the same-mnemonic-different-mode case, previously silent: it registered with
-no error and then mis-decoded, since the opcode table held exactly one
-descriptor, last-write-wins)."
+(below) confirms some operand field's raw bits tell them apart.
+
+A byte-encoded machine has no per-field discriminator to decode by at all, so
+by default any second descriptor at an opcode there -- same mnemonic or
+different -- is an unconditional OPCODE-CONFLICT (#26 for the cross-mnemonic
+case; #105 for the same-mnemonic-different-mode case, previously silent: it
+registered with no error and then mis-decoded, since the opcode table held
+exactly one descriptor, last-write-wins). #125 opens one exception: when
+*every* descriptor sharing a byte-machine opcode declares its own SUB-OPCODE
+(an (opcode n :sub s) subclause), and those values are pairwise distinct, the
+sub-opcode cell right after the opcode gives decode (%DECODE-CELL-INSTRUCTION,
+decoder.lisp) something to discriminate on, so they coexist just like a
+word-encoded machine's field-distinguished co-tenants. Mixing a SUB-OPCODE
+descriptor with a SUB-OPCODE-less one at the same byte-machine opcode is still
+an OPCODE-CONFLICT (:SUB-OPCODE-REQUIRED) -- decode could not tell whether the
+cell after the opcode is a sub-opcode or the first operand -- and so is a
+collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
          (wordp (%word-machine-p machine-name)))
@@ -295,14 +340,31 @@ descriptor, last-write-wins)."
     ;; DESCRIPTORS (not just a pre-existing bucket) can share an opcode.
     (dolist (descriptor descriptors)
       (let* ((opcode (instruction-descriptor-opcode descriptor))
-             (bucket (gethash opcode (machine-descriptor-opcodes md))))
+             (bucket (gethash opcode (machine-descriptor-opcodes md)))
+             (sub (instruction-descriptor-sub-opcode descriptor)))
         (dolist (other bucket)
-          (if wordp
-              (%check-opcode-decodable! machine-name name descriptor other)
-              (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
-                                       :other-mnemonic (instruction-descriptor-name other)
-                                       :reason (when (string= name (instruction-descriptor-name other))
-                                                 :undecodable-byte-machine))))
+          (cond
+            (wordp (%check-opcode-decodable! machine-name name descriptor other))
+            ;; #125: both co-tenants declare a SUB-OPCODE -- fine as long as
+            ;; they're pairwise distinct; a collision still can't be told
+            ;; apart at decode time.
+            ((and sub (instruction-descriptor-sub-opcode other))
+             (when (= sub (instruction-descriptor-sub-opcode other))
+               (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
+                                        :other-mnemonic (instruction-descriptor-name other)
+                                        :reason :duplicate-sub-opcode)))
+            ;; #125: exactly one of the two declares a SUB-OPCODE -- decode
+            ;; couldn't tell whether the cell after the opcode is a
+            ;; sub-opcode or the first operand.
+            ((or sub (instruction-descriptor-sub-opcode other))
+             (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
+                                      :other-mnemonic (instruction-descriptor-name other)
+                                      :reason :sub-opcode-required))
+            (t
+             (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
+                                      :other-mnemonic (instruction-descriptor-name other)
+                                      :reason (when (string= name (instruction-descriptor-name other))
+                                                :undecodable-byte-machine)))))
         (setf (gethash opcode (machine-descriptor-opcodes md)) (append bucket (list descriptor)))))
     (setf (gethash name (machine-descriptor-instructions md)) descriptors)
     descriptors))
@@ -335,15 +397,18 @@ unregistered, or if MODE names none of its variants."
 (defun find-instruction-descriptors-by-opcode (machine-name opcode)
   "Look up every INSTRUCTION-DESCRIPTOR registered under OPCODE on machine
 MACHINE-NAME, in declaration order -- the decode direction an emulator loop
-needs. More than one entry only on a word-encoded machine (#105): either
-sibling combos of one DEFINSTRUCTION mode clause (%EXPAND-WORD-COMBOS), which
-share an EQUALP WORD-ALTERNATIVES menu, or distinct co-tenant descriptors
+needs. More than one entry on a word-encoded machine (#105): either sibling
+combos of one DEFINSTRUCTION mode clause (%EXPAND-WORD-COMBOS), which share an
+EQUALP WORD-ALTERNATIVES menu, or distinct co-tenant descriptors
 REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE! has already
 confirmed are pairwise distinguishable by some operand field's raw bits --
 %DECODE-WORD-INSTRUCTION (decoder.lisp) tries each in turn against the bits
-actually fetched. A byte-encoded machine's opcode table holds exactly one
-entry per key, enforced at registration time. Signals UNKNOWN-INSTRUCTION if
-none is registered."
+actually fetched. Also more than one on a byte-encoded machine (#125), but
+only when every entry declares its own distinct SUB-OPCODE --
+%DECODE-CELL-INSTRUCTION (decoder.lisp) then reads the cell after the opcode
+to pick which. A byte-encoded machine's opcode table otherwise holds exactly
+one entry per key, enforced at registration time. Signals UNKNOWN-INSTRUCTION
+if none is registered."
   (let ((md (find-machine-descriptor machine-name)))
     (or (gethash opcode (machine-descriptor-opcodes md))
         (error 'unknown-instruction :machine machine-name :opcode opcode))))
@@ -351,12 +416,13 @@ none is registered."
 (defun find-instruction-by-opcode (machine-name opcode)
   "Look up the first INSTRUCTION-DESCRIPTOR registered under OPCODE on
 machine MACHINE-NAME -- see FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE for the
-full candidate list this picks from. Correct for a byte-encoded machine
-(exactly one candidate, always) and for a word-encoded opcode with only
-sibling combos at it (every sibling decodes any one candidate's bits
-equivalently, per REGISTER-INSTRUCTION-VARIANTS!'s docstring) -- not a
-substitute for FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE's own decode-by-actual-
-bits behavior when distinct co-tenants share an opcode."
+full candidate list this picks from. Correct for an ordinary byte-encoded
+opcode with no SUB-OPCODE co-tenants (exactly one candidate, always) and for
+a word-encoded opcode with only sibling combos at it (every sibling decodes
+any one candidate's bits equivalently, per REGISTER-INSTRUCTION-VARIANTS!'s
+docstring) -- not a substitute for FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE's
+own decode-by-actual-bits (or, on a byte-encoded machine, decode-by-
+sub-opcode-cell, #125) behavior when distinct co-tenants share an opcode."
   (first (find-instruction-descriptors-by-opcode machine-name opcode)))
 
 ;; A mode's default operand width, when neither the mode itself nor the
@@ -604,12 +670,13 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
-                          &optional hole-alternatives-list)
+                          &optional hole-alternatives-list sub-opcode)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
     :mode ,mode-form
     :opcode ,opcode
+    :sub-opcode ,sub-opcode
     :operand-widths ',operand-widths
     :operand-names ',operand-names
     :cycles ,cycles
@@ -1138,12 +1205,48 @@ this once relative branching on a word machine has a design."
     (error "DEFINSTRUCTION ~S ~S: a :RELATIVE addressing mode is not yet ~
 supported on word-encoded machine ~S" machine name machine-name)))
 
+(defun %parse-opcode-subclause (machine name opcode-subclause)
+  "Parse one (opcode n [:sub s]) subclause -- the same shape at all three
+DEFINSTRUCTION sites that accept one (the multi-mode (modes ...) form, the
+no-mode (encoding ...) form, and the single-mode sugar's (encoding ...) form)
+-- into (VALUES opcode sub), SUB NIL when no :SUB was given. #125's byte-machine
+sub-opcode cell: SUB reserves the cell right after OPCODE as a second,
+purely discriminating value, letting several DESCRIPTORs coexist at one
+byte-machine OPCODE (REGISTER-INSTRUCTION-VARIANTS!) the way a word-encoded
+machine's operand fields already let them. Signals an error for any plist key
+other than :SUB, or for a :SUB value that's negative or doesn't fit MACHINE's
+code cell width (%MACHINE-CELL-WIDTH) -- an out-of-range sub-opcode would
+register under one value but wrap to a different one when %ENCODE-VALUE-CELLS
+writes it, same rationale as %CHECK-WORD-OPCODE for the word-encoded OPCODE
+field itself. Also signals an error when :SUB is given on a word-encoded
+machine (%WORD-MACHINE-P) -- #125's sub-opcode cell is a byte-machine-only
+mechanism; a word-encoded machine already has %CHECK-OPCODE-DECODABLE!'s
+per-field discrimination and has no use for a second, separate cell."
+  (destructuring-bind (opcode &rest plist) (rest opcode-subclause)
+    (loop for key in plist by #'cddr
+          unless (eq key :sub)
+            do (error "DEFINSTRUCTION ~S ~S: unknown (opcode ...) option ~S" machine name key))
+    (let ((sub (getf plist :sub)))
+      (when sub
+        (when (%word-machine-p machine)
+          (error "DEFINSTRUCTION ~S ~S: (opcode ~S :sub ~S) -- a sub-opcode is a ~
+byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
+                 machine name opcode sub machine))
+        (let ((width (%machine-cell-width machine)))
+          (when (or (minusp sub) (>= sub (ash 1 width)))
+            (error "DEFINSTRUCTION ~S ~S: sub-opcode ~D does not fit machine ~S's ~D-bit code cell"
+                   machine name sub machine width))))
+      (values opcode sub))))
+
 (defun %parse-mode-variant-clause-forms (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
-(MODE-NAME (opcode n) (operand ...)* [(semantics form...)] [(cycles n)]).
+(MODE-NAME (opcode n [:sub s]) (operand ...)* [(semantics form...)] [(cycles n)]).
 Returns a list of INSTRUCTION-DESCRIPTOR forms for this variant -- more than
 one only on a word-encoded machine (#20), where a variant-bearing operand
-field expands into several descriptors sharing this one mode/opcode.
+field expands into several descriptors sharing this one mode/opcode. :SUB
+(#125, byte-machine-only) is this variant's own sub-opcode, letting it share
+its OPCODE with another mode's own :SUB-bearing variant -- see
+%PARSE-OPCODE-SUBCLAUSE.
 
 #75: a variant's own (cycles n) subclause overrides the shared top-level
 CYCLES-FORM for this mode alone -- e.g. a zero-page mode costing less than
@@ -1164,24 +1267,24 @@ its absolute-mode sibling."
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
-      (let ((opcode (second opcode-subclause))
-            (cycles-form (if cycles-subclause (second cycles-subclause) cycles-form))
-            (semantics-forms (cond
-                                (semantics-subclause (rest semantics-subclause))
-                                (default-semantics-forms default-semantics-forms)
-                                (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
+      (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+        (let ((cycles-form (if cycles-subclause (second cycles-subclause) cycles-form))
+              (semantics-forms (cond
+                                  (semantics-subclause (rest semantics-subclause))
+                                  (default-semantics-forms default-semantics-forms)
+                                  (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
 (semantics ...) of its own and no shared top-level (semantics ...) default"
-                                          machine name mode-sym)))))
-        (%check-word-opcode machine name opcode)
-        (if (%word-machine-p machine)
-            (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                          opcode operand-subclauses mode mode-sym machine
-                                          cycles-form semantics-forms)
-            (multiple-value-bind (operand-widths operand-names)
-                (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
-              (list (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                       opcode operand-widths operand-names cycles-form semantics-forms
-                                       (%mode-hole-alternatives mode)))))))))
+                                            machine name mode-sym)))))
+          (%check-word-opcode machine name opcode)
+          (if (%word-machine-p machine)
+              (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                            opcode operand-subclauses mode mode-sym machine
+                                            cycles-form semantics-forms)
+              (multiple-value-bind (operand-widths operand-names)
+                  (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
+                (list (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                         opcode operand-widths operand-names cycles-form semantics-forms
+                                         (%mode-hole-alternatives mode) sub)))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -1337,13 +1440,14 @@ signals NO-MATCHING-CHOICE rather than silently falling through."
            (when operand-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
 but no (modes ...) clause declares an addressing mode" machine name))
-           (%check-word-opcode machine name (second opcode-subclause))
-           `(eval-when (:compile-toplevel :load-toplevel :execute)
-              (register-instruction-variants!
-               ',machine
-               (list ,(%descriptor-form machine name nil (second opcode-subclause) nil nil
-                                         cycles-form (rest semantics-clause))))
-              ',name)))
+           (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+             (%check-word-opcode machine name opcode)
+             `(eval-when (:compile-toplevel :load-toplevel :execute)
+                (register-instruction-variants!
+                 ',machine
+                 (list ,(%descriptor-form machine name nil opcode nil nil
+                                           cycles-form (rest semantics-clause) nil sub)))
+                ',name))))
         ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
         ((consp (first mode-forms))
          (when encoding-clause
@@ -1386,27 +1490,28 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
            (unless operand-subclauses
              (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
 (encoding ...) has no (operand ...) subclause" machine name mode-sym))
-           (%check-word-opcode machine name (second opcode-subclause))
-           (if (%word-machine-p machine)
-               `(eval-when (:compile-toplevel :load-toplevel :execute)
-                  (register-instruction-variants!
-                   ',machine
-                   (list ,@(%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                                         (second opcode-subclause) operand-subclauses
-                                                         mode mode-sym machine
-                                                         cycles-form (rest semantics-clause))))
-                  ',name)
-               (multiple-value-bind (operand-widths operand-names)
-                   (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
+           (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+             (%check-word-opcode machine name opcode)
+             (if (%word-machine-p machine)
                  `(eval-when (:compile-toplevel :load-toplevel :execute)
                     (register-instruction-variants!
                      ',machine
-                     (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                               (second opcode-subclause)
-                                               operand-widths operand-names
-                                               cycles-form (rest semantics-clause)
-                                               (%mode-hole-alternatives mode))))
-                    ',name)))))))))
+                     (list ,@(%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                           opcode operand-subclauses
+                                                           mode mode-sym machine
+                                                           cycles-form (rest semantics-clause))))
+                    ',name)
+                 (multiple-value-bind (operand-widths operand-names)
+                     (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
+                   `(eval-when (:compile-toplevel :load-toplevel :execute)
+                      (register-instruction-variants!
+                       ',machine
+                       (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
+                                                 opcode
+                                                 operand-widths operand-names
+                                                 cycles-form (rest semantics-clause)
+                                                 (%mode-hole-alternatives mode) sub)))
+                      ',name))))))))))
 
 ;;; Encoding / execution
 
@@ -1451,25 +1556,28 @@ already-evaluated integers, one per operand encoding field, in the same
 order -- NIL for a no-operand instruction) into a list of
 (unsigned-byte cell-width) cells, CELL-WIDTH being DESCRIPTOR's machine's own
 code cell width (#53, INSTRUCTION-DESCRIPTOR-CELL-WIDTH). On an ordinary
-cell-encoded machine: the opcode, followed by each value's cells
-little-endian in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a word-encoded
-machine (#20, INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one instruction
-word packing the opcode and every inline operand's biased value or
-extra-word escape by bit field, little-endian, followed by each extra-word
-operand's own value, also little-endian, in declaration order
-(%ENCODE-WORD-INSTRUCTION). VALUES shorter than DESCRIPTOR declares silently
-encodes fewer fields, rather than erroring -- every caller in this codebase
-(%ENCODE, assembler.lisp) always supplies exactly one value per field, so
-this is unreachable internally, but a caller of this exported function on
-its own should supply the same."
+cell-encoded machine: the opcode, then, when DESCRIPTOR declares a SUB-OPCODE
+(#125), that sub-opcode as its own cell, then each value's cells little-endian
+in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a word-encoded machine (#20,
+INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one instruction word packing the
+opcode and every inline operand's biased value or extra-word escape by bit
+field, little-endian, followed by each extra-word operand's own value, also
+little-endian, in declaration order (%ENCODE-WORD-INSTRUCTION; SUB-OPCODE is
+always NIL here -- #125's sub-opcode cell is byte-machine-only). VALUES
+shorter than DESCRIPTOR declares silently encodes fewer fields, rather than
+erroring -- every caller in this codebase (%ENCODE, assembler.lisp) always
+supplies exactly one value per field, so this is unreachable internally, but
+a caller of this exported function on its own should supply the same."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
         (%encode-word-instruction descriptor layout values)
-        (let ((cell-width (instruction-descriptor-cell-width descriptor)))
+        (let ((cell-width (instruction-descriptor-cell-width descriptor))
+              (sub (instruction-descriptor-sub-opcode descriptor)))
           (cons (wrap-value (instruction-descriptor-opcode descriptor) cell-width)
-                (loop for value in values
-                      for width in (instruction-descriptor-operand-widths descriptor)
-                      append (%encode-value-cells value width cell-width)))))))
+                (append (when sub (list (wrap-value sub cell-width)))
+                        (loop for value in values
+                              for width in (instruction-descriptor-operand-widths descriptor)
+                              append (%encode-value-cells value width cell-width))))))))
 
 (defun execute-instruction (descriptor machine values &optional choices)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing

@@ -199,6 +199,7 @@
    #:instruction-descriptor-machine
    #:instruction-descriptor-mode
    #:instruction-descriptor-opcode
+   #:instruction-descriptor-sub-opcode
    #:instruction-descriptor-operand-widths
    #:instruction-descriptor-operand-names
    #:instruction-descriptor-total-operand-width

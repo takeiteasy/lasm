@@ -48,6 +48,15 @@
   (encoding (opcode #x00))
   (semantics (trap :halt)))
 
+;; Sub-opcode cell (#125): IMMEDIATE and ABSOLUTE share opcode #xB0, told
+;; apart at decode time by their own :SUB value rather than by opcode --
+;; proves STEP-MACHINE (via DECODE-INSTRUCTION-AT) runs the *right* mode's
+;; semantics for each, not just that decode picks the right descriptor.
+(definstruction emu-test-machine subop
+  (modes
+    (immediate (opcode #xB0 :sub 0) (operand :mode) (semantics (set! x operand)))
+    (absolute (opcode #xB0 :sub 1) (operand :mode) (semantics (set! x (mref machine 'ram operand))))))
+
 ;; Multi-mode (mode.lisp, #18): LDA's IMMEDIATE and ZERO-PAGE variants share
 ;; one mnemonic but distinct opcodes/semantics -- proves opcode decode
 ;; (FIND-INSTRUCTION-BY-OPCODE) stays 1:1 per variant once a mnemonic
@@ -162,6 +171,19 @@ target: hlt" :machine 'emu-test-machine)))
     ;; must win over step-machine's own post-fetch increment.
     (step-machine m)
     (fiveam:is (= 6 (sref m 'pc)))))
+
+(fiveam:test step-machine-sub-opcode-runs-each-mode-own-semantics
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "subop #10
+subop $2000" :machine 'emu-test-machine)))
+    (load-program m a)
+    (setf (mref m 'ram #x2000) 99)
+    (let ((descriptor (step-machine m)))                       ; subop #10 -- IMMEDIATE
+      (fiveam:is (eq (find-instruction 'emu-test-machine 'subop :mode 'immediate) descriptor))
+      (fiveam:is (= 10 (sref m 'x))))
+    (let ((descriptor (step-machine m)))                       ; subop $2000 -- ABSOLUTE
+      (fiveam:is (eq (find-instruction 'emu-test-machine 'subop :mode 'absolute) descriptor))
+      (fiveam:is (= 99 (sref m 'x))))))
 
 (fiveam:test step-machine-branch-not-taken-falls-through
   (let ((m (make-machine 'emu-test-machine))

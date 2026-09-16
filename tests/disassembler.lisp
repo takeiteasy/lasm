@@ -88,6 +88,17 @@
   (encoding (opcode #x04) (operand :mode))
   (semantics (set! x operand)))
 
+;; Sub-opcode cell (#125): IMMEDIATE and ABSOLUTE share opcode #x03, told
+;; apart by their own :SUB value rather than by opcode -- the disassembler
+;; and listing (both routing through DECODE-INSTRUCTION-AT and its
+;; accumulated SIZE, per #125's design) need no code of their own to render
+;; this correctly; ROUND-TRIP-SUB-OPCODE-DECODES-EACH-MODE-BACK-TO-ITSELF
+;; below is what actually checks that claim rather than trusting it.
+(definstruction disasm-test-machine subop
+  (modes
+    (immediate (opcode #x03 :sub 0) (operand :mode) (semantics (set! x operand)))
+    (absolute (opcode #x03 :sub 1) (operand :mode) (semantics (set! x (mref machine 'ram operand))))))
+
 ;;; Word-encoded fixture -- DCPU-16-shaped (examples/dcpu16.lisp): a 6-bit
 ;;; field A, a 5-bit field B, a 5-bit OPCODE field, MSB-first. SET's operand
 ;;; order (dst = field B, shift 5; src = field A, shift 10) is declared
@@ -514,6 +525,27 @@ hlt" :machine 'disasm-word-machine))
          (text (disassembly-text lines))
          (a2 (assemble text :machine 'disasm-word-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
+(fiveam:test round-trip-sub-opcode-decodes-each-mode-back-to-itself
+  ;; #125's own reproduction, at the disassembler level: SUBOP's IMMEDIATE
+  ;; and ABSOLUTE modes share opcode #x03 and are told apart only by their
+  ;; own :SUB cell -- each must decode and render back to its *own* mode
+  ;; (distinguishable here by syntax, "#n" vs "$n", same as LDX/LDA above),
+  ;; and the listing's sizes must reflect the extra sub-opcode cell.
+  (let* ((a (assemble "subop #10
+subop $20
+hlt" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "subop #$A" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "subop $20" (disassembly-line-text (second lines))))
+    ;; IMMEDIATE: 1 (opcode) + 1 (sub) + 1 (operand) = 3 cells.
+    (fiveam:is (= 3 (disassembly-line-size (first lines))))
+    ;; ABSOLUTE's default operand width is 2 cells here (RAM is :ADDR-WIDTH
+    ;; 16 over an 8-bit cell): 1 + 1 + 2 = 4 cells.
+    (fiveam:is (= 4 (disassembly-line-size (second lines))))
+    (let* ((text (disassembly-text lines))
+           (a2 (assemble text :machine 'disasm-test-machine)))
+      (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
 
 (fiveam:test round-trip-shared-opcode-decodes-each-mnemonic-back-to-itself
   ;; #105's own reproduction, at the disassembler level: SH1 and SH2 share

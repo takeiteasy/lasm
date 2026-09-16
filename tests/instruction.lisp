@@ -1436,3 +1436,126 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
                (modes (immediate (opcode #x77) (operand :mode) (semantics (set! a operand)))
                       (absolute (opcode #x77) (operand :mode) (semantics (set! a operand))))))
     (opcode-conflict (c) (fiveam:is (eq :undecodable-byte-machine (opcode-conflict-reason c))))))
+
+;;; Byte-machine sub-opcode cell (#123's design, implemented per #125): an
+;;; explicit (opcode n :sub s) subclause reserves the cell right after the
+;;; opcode as a second, purely discriminating value, giving decode something
+;;; to key off two modes of one mnemonic (or two different mnemonics) sharing
+;;; one opcode on a byte-encoded machine -- the case #105 above otherwise
+;;; forbids outright, since a byte encoding alone has no per-field
+;;; discriminator.
+
+;; One mnemonic, two modes, one opcode, distinct :SUB values -- both modes
+;; register cleanly and the bucket holds both descriptors.
+(definstruction instr-test-machine subld
+  (modes
+    (immediate (opcode #xB5 :sub 0) (operand :mode) (semantics (set! a operand)))
+    (absolute  (opcode #xB5 :sub 1) (operand :mode) (semantics (set! a (mref machine 'ram operand))))))
+
+(fiveam:test sub-opcode-two-modes-one-mnemonic-share-opcode
+  (fiveam:is (= 2 (length (find-instruction-descriptors-by-opcode 'instr-test-machine #xB5))))
+  (let ((imm (find-instruction 'instr-test-machine 'subld :mode 'immediate))
+        (abs (find-instruction 'instr-test-machine 'subld :mode 'absolute)))
+    (fiveam:is (= 0 (instruction-descriptor-sub-opcode imm)))
+    (fiveam:is (= 1 (instruction-descriptor-sub-opcode abs)))
+    (fiveam:is (= #xB5 (instruction-descriptor-opcode imm) (instruction-descriptor-opcode abs)))))
+
+;; Two *different* mnemonics sharing one opcode, told apart the same way.
+(definstruction instr-test-machine subfoo
+  (modes immediate)
+  (encoding (opcode #xB6 :sub 0) (operand :mode))
+  (semantics (set! a operand)))
+
+(definstruction instr-test-machine subbar
+  (modes immediate)
+  (encoding (opcode #xB6 :sub 1) (operand :mode))
+  (semantics (set! x operand)))
+
+(fiveam:test sub-opcode-two-mnemonics-share-opcode
+  (fiveam:is (= 2 (length (find-instruction-descriptors-by-opcode 'instr-test-machine #xB6))))
+  (fiveam:is (find "SUBFOO" (find-instruction-descriptors-by-opcode 'instr-test-machine #xB6)
+                    :key #'instruction-descriptor-name :test #'string=))
+  (fiveam:is (find "SUBBAR" (find-instruction-descriptors-by-opcode 'instr-test-machine #xB6)
+                    :key #'instruction-descriptor-name :test #'string=)))
+
+(fiveam:test sub-opcode-duplicate-value-signals-error
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction instr-test-machine subdup
+             (modes
+               (immediate (opcode #xB7 :sub 0) (operand :mode) (semantics (set! a operand)))
+               (absolute (opcode #xB7 :sub 0) (operand :mode) (semantics (set! a operand)))))))
+  (handler-case
+      (eval '(definstruction instr-test-machine subdup
+               (modes
+                 (immediate (opcode #xB7 :sub 0) (operand :mode) (semantics (set! a operand)))
+                 (absolute (opcode #xB7 :sub 0) (operand :mode) (semantics (set! a operand))))))
+    (opcode-conflict (c) (fiveam:is (eq :duplicate-sub-opcode (opcode-conflict-reason c))))))
+
+;; Mixing a :SUB-bearing mode with a :SUB-less one at the same opcode is still
+;; an error -- decode couldn't tell whether the cell after the opcode is a
+;; sub-opcode or the first operand. Both orderings (sub-first, sub-second).
+(fiveam:test sub-opcode-mixed-with-sub-less-signals-error
+  (handler-case
+      (eval '(definstruction instr-test-machine submix1
+               (modes
+                 (immediate (opcode #xB8 :sub 0) (operand :mode) (semantics (set! a operand)))
+                 (absolute (opcode #xB8) (operand :mode) (semantics (set! a operand))))))
+    (opcode-conflict (c) (fiveam:is (eq :sub-opcode-required (opcode-conflict-reason c))))
+    (:no-error (&rest values) (declare (ignore values)) (fiveam:fail "expected OPCODE-CONFLICT")))
+  (handler-case
+      (eval '(definstruction instr-test-machine submix2
+               (modes
+                 (immediate (opcode #xB9) (operand :mode) (semantics (set! a operand)))
+                 (absolute (opcode #xB9 :sub 0) (operand :mode) (semantics (set! a operand))))))
+    (opcode-conflict (c) (fiveam:is (eq :sub-opcode-required (opcode-conflict-reason c))))
+    (:no-error (&rest values) (declare (ignore values)) (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+(fiveam:test sub-opcode-on-word-machine-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine subwrong
+             (modes wc-two)
+             (encoding (opcode 15 :sub 0) (operand v :field src))
+             (semantics (set! a v))))))
+
+(fiveam:test sub-opcode-too-wide-for-cell-width-signals-error
+  ;; INSTR-TEST-MACHINE's code cell is 8 bits wide (its sole memory element,
+  ;; RAM, is :WIDTH 8) -- 256 doesn't fit.
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine subwide
+             (modes immediate)
+             (encoding (opcode #xBA :sub 256) (operand :mode))
+             (semantics (set! a operand))))))
+
+(fiveam:test sub-opcode-adds-one-cell-to-descriptor-size
+  (let ((imm (find-instruction 'instr-test-machine 'subld :mode 'immediate)))
+    ;; 1 (opcode) + 1 (sub) + 1 (operand width) = 3
+    (fiveam:is (= 3 (instruction-descriptor-size imm)))))
+
+(fiveam:test sub-opcode-encode-instruction-emits-opcode-sub-then-operands
+  (let ((imm (find-instruction 'instr-test-machine 'subld :mode 'immediate)))
+    (fiveam:is (equal (list #xB5 0 #x42) (encode-instruction imm '(#x42))))))
+
+(fiveam:test sub-opcode-decode-round-trips-both-modes
+  ;; INSTR-TEST-MACHINE's RAM is :ADDR-WIDTH 16 over an 8-bit cell, so
+  ;; ABSOLUTE's default operand width (no explicit (operand :width n) given
+  ;; here) is 2 cells, unlike IMMEDIATE's own declared :WIDTH 1 -- SUBLD's
+  ;; two modes are genuinely different sizes, both still 1 (opcode) + 1 (sub)
+  ;; wider than their SUB-less equivalent would be.
+  (let ((cells (make-array 7 :element-type '(unsigned-byte 8)
+                             :initial-contents (list #xB5 0 #x42 #xB5 1 #x10 0))))
+    (multiple-value-bind (descriptor values size)
+        (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
+      (fiveam:is (string= "SUBLD" (instruction-descriptor-name descriptor)))
+      (fiveam:is (eq (find-mode-descriptor 'immediate) (instruction-descriptor-mode descriptor)))
+      (fiveam:is (equal '(#x42) values))
+      (fiveam:is (= 3 size)))
+    (multiple-value-bind (descriptor values size)
+        (decode-instruction-at (vector-cell-reader cells) 3 'instr-test-machine)
+      (fiveam:is (string= "SUBLD" (instruction-descriptor-name descriptor)))
+      (fiveam:is (eq (find-mode-descriptor 'absolute) (instruction-descriptor-mode descriptor)))
+      (fiveam:is (equal '(#x10) values))
+      (fiveam:is (= 4 size)))))
+
+(fiveam:test sub-opcode-decode-unmatched-sub-value-is-decode-failure
+  (let ((cells (make-array 3 :element-type '(unsigned-byte 8) :initial-contents (list #xB5 99 0))))
+    (fiveam:is (eq :decode-failure (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)))))

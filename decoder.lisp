@@ -146,7 +146,8 @@ extend. This mirrors that asymmetry rather than unifying it."
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width)
   "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- unchanged in shape
-from before #20/#21, only reading through READ-CELL rather than always MREF.
+from before #20/#21, only reading through READ-CELL rather than always MREF,
+plus #125's sub-opcode cell below.
 
 A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies SIGNEDP) was
 assembled as a signed quantity (a RELATIVE operand specifically as an
@@ -155,26 +156,44 @@ unsigned WIDTH-cell quantity, like every other operand -- reinterpret each
 hole by its own width so callers see a plain signed integer. Unlike RELATIVE
 (%CHECK-RELATIVE-MODE-HOLES, instruction.lisp), a SIGNED mode may have more
 than one hole, so this maps over every VALUE/WIDTH pair rather than assuming
-a single element."
-  (let ((opcode (funcall read-cell address)))
-    (handler-case
-        (let* ((descriptor (find-instruction-by-opcode machine-name opcode))
-               (mode (instruction-descriptor-mode descriptor))
-               (widths (instruction-descriptor-operand-widths descriptor))
-               (values (loop with offset = 1
-                             for width in widths
-                             collect (loop with v = 0
-                                           for i below width
-                                           do (setf v (logior v (ash (funcall read-cell (+ address offset i))
-                                                                      (* cell-width i))))
-                                           finally (return v))
-                             do (incf offset width))))
-          (when (and mode (mode-descriptor-signedp mode))
-            (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
-          ;; #104: no fourth CHOICES value on the byte-encoded path -- there
-          ;; is no WORD-FIELD-CHOICE here at all, CHOICE-selected or not.
-          (values descriptor values (instruction-descriptor-size descriptor) nil))
-      (unknown-instruction () (values :decode-failure nil nil)))))
+a single element.
+
+#125: OPCODE's bucket (FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE) holds more than
+one candidate only when every one of them declares its own SUB-OPCODE
+(REGISTER-INSTRUCTION-VARIANTS! guarantees they're pairwise distinct when it
+does) -- in that case the cell right after OPCODE is read and matched against
+each candidate's SUB-OPCODE to pick the one to decode, and operands start one
+cell later than usual. A bucket with no SUB-OPCODE at all (the ordinary case)
+has exactly one candidate, unaffected by any of this."
+  (let* ((opcode (funcall read-cell address))
+         (candidates (handler-case (find-instruction-descriptors-by-opcode machine-name opcode)
+                       (unknown-instruction () nil))))
+    (if (null candidates)
+        (values :decode-failure nil nil)
+        (let* ((subbed (some #'instruction-descriptor-sub-opcode candidates))
+               (sub-offset (if subbed 1 0))
+               (descriptor (if subbed
+                               (let ((sub (funcall read-cell (+ address 1))))
+                                 (find sub candidates :key #'instruction-descriptor-sub-opcode))
+                               (first candidates))))
+          (if (null descriptor)
+              (values :decode-failure nil nil)
+              (let* ((mode (instruction-descriptor-mode descriptor))
+                     (widths (instruction-descriptor-operand-widths descriptor))
+                     (values (loop with offset = (+ 1 sub-offset)
+                                   for width in widths
+                                   collect (loop with v = 0
+                                                 for i below width
+                                                 do (setf v (logior v (ash (funcall read-cell (+ address offset i))
+                                                                            (* cell-width i))))
+                                                 finally (return v))
+                                   do (incf offset width))))
+                (when (and mode (mode-descriptor-signedp mode))
+                  (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
+                ;; #104: no fourth CHOICES value on the byte-encoded path --
+                ;; there is no WORD-FIELD-CHOICE here at all, CHOICE-selected
+                ;; or not.
+                (values descriptor values (instruction-descriptor-size descriptor) nil)))))))
 
 (defun decode-instruction-at (read-cell address machine-name &key memory)
   "Decode one instruction at ADDRESS by reading cells through READ-CELL, a
@@ -197,7 +216,9 @@ callers (STEP-MACHINE, emulator.lisp) that only bind the first three values
 are unaffected; DISASSEMBLE-CELLS (disassembler.lisp, #117) reads it to
 render the ONE-OF alternative that was actually encoded.
 
-Returns (VALUES :DECODE-FAILURE NIL NIL) on an unregistered opcode, or, on a
+Returns (VALUES :DECODE-FAILURE NIL NIL) on an unregistered opcode, on a
+byte-encoded machine's opcode whose candidates all declare a SUB-OPCODE
+(#125) when the fetched sub-opcode cell matches none of them, or, on a
 word-encoded machine, a raw operand field matching none of the descriptor's
 WORD-ALTERNATIVES -- an encoding no DEFINSTRUCTION on this machine declared.
 

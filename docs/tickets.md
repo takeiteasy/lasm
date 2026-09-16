@@ -19,9 +19,7 @@ dependency chain, plus a couple of loose couplings:
 
 ```mermaid
 graph TD
-    T123["#123 Decode discriminator for\nbyte-encoded mode-distinguished variants\n(design done, ready to implement)"]
-    T125["#125 Byte-machine sub-opcode cell\n(implements #123's design)"]
-    T126["#126 Hole-selected sub-opcode\nfor byte machines"]
+    T126["#126 Hole-selected sub-opcode\nfor byte machines\n(ready to implement -- #125 landed)"]
     T124b["#124 (byte-machine half):\nper-hole :width/:signed on byte machines"]
     T122["#122 Semantics dispatch on a\ncell-encoded machine's ONE-OF alternative"]
     T120["#120 Varying hole counts\nacross ONE-OF alternatives"]
@@ -30,11 +28,8 @@ graph TD
     T124s["#124 (:suffix item)"]
     T127["#127 Per-hole :signed on\nword-encoded machines\n(independent, implementable now)"]
 
-    T123 --> T125
-    T125 --> T126
     T126 --> T124b
     T126 -.likely unblocker.-> T122
-    T123 -.shared prerequisite.-> T120
     T120 -.may subsume/depend on.-> T119
     T124s -.folds into.-> T85
 
@@ -42,10 +37,12 @@ graph TD
     style T85 fill:#ffd
 ```
 
-Reading order for whoever picks up this cluster: **#123 → #125 → #126**,
-then #124's byte-machine half and #122 can start. #127 (word-machine
-`:signed`) was split out of #124 specifically because it has no dependency
-on this chain and can be picked up independently at any time.
+#123 (decode discriminator design) and #125 (its implementation, the
+byte-machine sub-opcode cell) have both landed. Reading order for whoever
+picks up this cluster now: **#126**, then #124's byte-machine half and #122
+can start. #127 (word-machine `:signed`) was split out of #124 specifically
+because it has no dependency on this chain and can be picked up independently
+at any time.
 
 Other open M4 tickets and what they follow up on (no blocking dependency
 between them or on the chain above):

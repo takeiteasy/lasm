@@ -143,6 +143,44 @@ Encoded cells are little-endian and each field's cells are masked with the
 existing `wrap-value` (see [Machine model](machine-model.md)) at the
 machine's own cell width, so an over-wide value wraps rather than erroring.
 
+### `(opcode n :sub s)` — sub-opcode cell
+
+A byte-encoded machine's only per-instruction bits are the opcode cell
+itself, so two modes of one mnemonic (or two different mnemonics) normally
+can't share an opcode there — see "Opcode to descriptor decode" below. `:sub`
+gives decode a second, purely discriminating value to key off: `(opcode n
+:sub s)` reserves the cell right after the opcode for `s`, so the instruction
+encodes as `[n][s][operand cells...]` instead of the usual `[n][operand
+cells...]`. Valid wherever a plain `(opcode n)` is — the multi-mode
+`(modes (MODE (opcode n :sub s) ...) ...)` form, `(encoding (opcode n :sub
+s) ...)`, and the single-mode `(modes MODE)` sugar's own `(encoding ...)`.
+
+`s` must fit the machine's code cell width, the same requirement `(opcode n)`
+itself is held to on a word-encoded machine's `opcode` field. `:sub` is a
+byte-machine-only mechanism — a `definstruction`-time error on a machine
+declaring an `instruction-word` clause, since a word-encoded machine already
+has its own operand-field discrimination (below) and no use for a second,
+separate cell.
+
+```lisp
+(definstruction sixtyfoo lda
+  (modes
+    (immediate (opcode #x10 :sub 0) (operand :mode) (semantics (set! a operand)))
+    (absolute  (opcode #x10 :sub 1) (operand :mode)
+      (semantics (set! a (mref machine 'ram operand))))))
+```
+
+`lda #5` and `lda $2000` now share opcode `#x10` on a byte-encoded machine,
+told apart purely by the cell after it — `:sub 0` for the immediate form,
+`:sub 1` for the absolute one. See
+[`examples/subopcode.lisp`](../examples/subopcode.lisp) for this run end to
+end, including a second mnemonic sharing an opcode the same way; this is the
+byte-machine counterpart of `examples/sharedopcode.lisp`'s word-machine
+story.
+
+`:sub` is selected per `(modes ...)` clause, not per operand hole — there is
+no byte-machine analogue of `(choice mode)` (below) yet.
+
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
 A mode's pattern (`defmode`, [Addressing modes](modes.md)) may declare more
@@ -287,28 +325,36 @@ resolving a stale opcode to a descriptor that no longer exists.
 `(find-instruction-by-opcode machine-name opcode)` returns one descriptor
 registered under `opcode`; `(find-instruction-descriptors-by-opcode
 machine-name opcode)` returns every descriptor registered there. On a
-byte-encoded machine these always agree — an opcode has exactly one
-descriptor, enforced at `definstruction` time. On a word-encoded machine an
-opcode can carry several: sibling combos one `(modes ...)` clause's own
-operand-field variants expand into (`%expand-word-combos`, always
-compatible with each other), and, independently, several genuinely distinct
-descriptors — different mnemonics, or one mnemonic's different modes — that
-`definstruction` has verified are *decode-distinguishable*: some operand
-field's raw bits accept disjoint value sets between every such pair. Decode
-(`decode-instruction-at`) tries each candidate registered at an opcode in
-turn and returns the first whose fields the fetched bits actually match;
-since co-tenants are pairwise disjoint at some hole, at most one can ever
-match a given word, so this is never a race between overlapping candidates.
+byte-encoded machine these agree whenever `opcode`'s bucket has no `:sub`
+co-tenancy (below) — the ordinary case, exactly one descriptor, enforced at
+`definstruction` time. On a word-encoded machine an opcode can carry several:
+sibling combos one `(modes ...)` clause's own operand-field variants expand
+into (`%expand-word-combos`, always compatible with each other), and,
+independently, several genuinely distinct descriptors — different mnemonics,
+or one mnemonic's different modes — that `definstruction` has verified are
+*decode-distinguishable*: some operand field's raw bits accept disjoint value
+sets between every such pair. Decode (`decode-instruction-at`) tries each
+candidate registered at an opcode in turn and returns the first whose fields
+the fetched bits actually match; since co-tenants are pairwise disjoint at
+some hole, at most one can ever match a given word, so this is never a race
+between overlapping candidates.
 
 Declaring two descriptors at one opcode that are *not* decode-distinguishable
 is a `definstruction`-time `opcode-conflict` error, not a silent
 last-write-wins overwrite: an unrelated mnemonic already claiming the opcode
 (as before); the same mnemonic under a second `(modes ...)` clause whose
 fields can't be told apart from the first's; or, on a byte-encoded machine,
-*any* second descriptor at all — a byte encoding has no per-field
-discriminator for decode to key off, so two modes of one mnemonic (or two
-different mnemonics) may never share an opcode there regardless of what
-their operand syntax looks like.
+a second descriptor at all when neither one declares its own `:sub` — a byte
+encoding has no per-field discriminator for decode to key off there, so two
+modes of one mnemonic (or two different mnemonics) may not share an opcode
+regardless of what their operand syntax looks like, *unless* every descriptor
+sharing that opcode gives itself a distinct `:sub` value (see `(opcode n
+:sub s)` above) — that sub-opcode cell is exactly the per-instruction
+discriminator a byte encoding otherwise lacks. Mixing a `:sub`-bearing
+descriptor with a `:sub`-less one at the same opcode is still an error
+(`opcode-conflict`'s `:sub-opcode-required` reason) — decode couldn't tell
+whether the cell after the opcode is a sub-opcode or the first operand —
+and so is reusing the same `:sub` value twice (`:duplicate-sub-opcode`).
 
 ```lisp
 (defmode a-reg expr)
@@ -331,7 +377,9 @@ values field `a` falls into (0–7 for the register form, 33–63 for the
 literal form) — `ld 1, 0` decodes back to the register mode, `ld 1, #5` to
 the literal mode, neither `:decode-failure` nor the other's mode. See
 [`examples/sharedopcode.lisp`](../examples/sharedopcode.lisp) for this run
-end to end, including a second mnemonic sharing an opcode the same way.
+end to end, including a second mnemonic sharing an opcode the same way, and
+[`examples/subopcode.lisp`](../examples/subopcode.lisp) for the byte-machine
+`:sub`-opcode counterpart.
 
 ## Operand pipeline
 
