@@ -1,6 +1,6 @@
 ;;;; examples/stack.lisp
 ;;;;
-;;;; The M3 milestone target (LASM-plan.md sec. 2): "A stack-based fantasy
+;;;; The M3 milestone target: "A stack-based fantasy
 ;;;; CPU built entirely through the same defmachine/definstruction forms as
 ;;;; M1/M2, to validate the storage abstraction actually generalizes rather
 ;;;; than being register-shaped in disguise." STACKFOO below declares no
@@ -16,30 +16,17 @@
 ;;;;   general-purpose registers" does not mean "no registers at all" -- the
 ;;;;   ticket's own wording ("enough memory/PC to hold a program") already
 ;;;;   expects this.
-;;;; - LASM-plan.md sec. 3.3's mockup ADD, `(push (+ (pop) (pop)))`, does not
-;;;;   compile as written: PUSH/POP take an explicit stack name (`(push value
-;;;;   stack-name)` / `(pop stack-name)`), since a machine can declare more
-;;;;   than one stack. See "Deviation from the design draft" in
-;;;;   docs/semantics.md. ADD below is written the way LASM actually requires:
-;;;;   (push (wrap-value (+ (pop ds) (pop ds)) 8) ds).
+;;;; - A form like `(push (+ (pop) (pop)))` does not compile as written:
+;;;;   PUSH/POP take an explicit stack name (`(push value stack-name)` /
+;;;;   `(pop stack-name)`), since a machine can declare more than one stack.
+;;;;   See docs/semantics.md. ADD below is written the way LASM actually
+;;;;   requires: (push (wrap-value (+ (pop ds) (pop ds)) 8) ds).
 ;;;;
 ;;;; Bottom line: no register-shaped workarounds were needed anywhere below.
 ;;;;
 ;;;; Run with:  sbcl --script examples/stack.lisp
 
-(require :asdf)
-;; #75 gave LASM its first dependency (trivial-high-precision-timer, itself
-;; depending on CFFI on SBCL) -- both are Quicklisp libraries, so a bare
-;; `sbcl --script` run (no ~/.sbclrc) needs Quicklisp bootstrapped explicitly
-;; before ASDF can resolve them, same as docs/getting-started.md's install
-;; instructions assume.
-(let ((quicklisp-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
-  (if (probe-file quicklisp-setup)
-      (load quicklisp-setup)
-      (error "Quicklisp not found at ~A -- see docs/getting-started.md" quicklisp-setup)))
-(let ((here (make-pathname :name nil :type nil :defaults *load-pathname*)))
-  (asdf:load-asd (merge-pathnames "../lasm.asd" here))
-  (asdf:load-system :lasm))
+(load (merge-pathnames "boot.lisp" *load-pathname*))
 
 (in-package #:lasm)
 
@@ -72,9 +59,8 @@
   (encoding (opcode #x03) (operand :mode))
   (semantics (setf (mref machine 'ram operand) (pop ds))))
 
-;; ADD/SUB pop both operands and push the (wrapped) result -- the actual
-;; shape LASM-plan.md sec. 3.3 was gesturing at, modulo the explicit stack
-;; name PUSH/POP require. Second-popped is the left-hand operand, so
+;; ADD/SUB pop both operands and push the (wrapped) result. Second-popped
+;; is the left-hand operand, so
 ;; (ldm a)(psh b)(sub) computes a - b.
 (definstruction stackfoo add
   (encoding (opcode #x04))

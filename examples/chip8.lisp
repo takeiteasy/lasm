@@ -1,7 +1,7 @@
 ;;;; examples/chip8.lisp
 ;;;;
-;;;; #54 (M4): a CHIP8-shaped machine -- LASM-plan.md sec. 3.7's mockup --
-;;;; validating the M4 target's first half: per-register :width that
+;;;; #54 (M4): a CHIP8-shaped machine, validating the M4 target's first
+;;;; half: per-register :width that
 ;;;; differs across elements, with a *banked* register in the mix (V0-VF,
 ;;;; #13's indexed regref/(setf regref) and its (v idx) semantics form).
 ;;;; CHIP8FOO has an 8-bit banked V register (16 elements) and a 12-bit I
@@ -19,19 +19,7 @@
 ;;;;
 ;;;; Run with:  sbcl --script examples/chip8.lisp
 
-(require :asdf)
-;; #75 gave LASM its first dependency (trivial-high-precision-timer, itself
-;; depending on CFFI on SBCL) -- both are Quicklisp libraries, so a bare
-;; `sbcl --script` run (no ~/.sbclrc) needs Quicklisp bootstrapped explicitly
-;; before ASDF can resolve them, same as docs/getting-started.md's install
-;; instructions assume.
-(let ((quicklisp-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))
-  (if (probe-file quicklisp-setup)
-      (load quicklisp-setup)
-      (error "Quicklisp not found at ~A -- see docs/getting-started.md" quicklisp-setup)))
-(let ((here (make-pathname :name nil :type nil :defaults *load-pathname*)))
-  (asdf:load-asd (merge-pathnames "../lasm.asd" here))
-  (asdf:load-system :lasm))
+(load (merge-pathnames "boot.lisp" *load-pathname*))
 
 (in-package #:lasm)
 
