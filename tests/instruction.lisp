@@ -390,6 +390,24 @@
              (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
              (semantics nil)))))
 
+;; A whole-mode :RELATIVE whose single hole is itself a ONE-OF (#130) has no
+;; coherent meaning either, even though it has only one hole: %BYTE-
+;; RELATIVE-HOLE-INDEX resolves a ONE-OF hole from its own matched
+;; alternative first, never falling back to MODE's own RELATIVEP -- so
+;; MODE's own :RELATIVE T would be silently dropped (encoding as an
+;; absolute value) rather than erroring where the contradiction is written.
+(defmode relative-one-of-hole-test-a expr)
+(defmode relative-one-of-hole-test-b "[" expr "]")
+(defmode relative-one-of-hole-test-mode
+    (one-of relative-one-of-hole-test-a relative-one-of-hole-test-b) :relative t)
+
+(fiveam:test relative-mode-whose-single-hole-is-a-one-of-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes relative-one-of-hole-test-mode)
+             (encoding (opcode #xFE) (operand :width 1))
+             (semantics nil)))))
+
 (fiveam:test unknown-clause-head-signals-error
   (fiveam:signals error
     (eval '(definstruction instr-test-machine bogus
@@ -2096,6 +2114,188 @@ widthd #300" :machine 'instr-test-machine)
                          (variant (choice wi-instr-narrow) inline :range (0 511))
                          (variant (choice wi-instr-wide) inline :range (0 511))))
              (semantics nil)))))
+
+;;; Per-hole :RELATIVE on a ONE-OF alternative, byte half (#130) --
+;;; RL-INSTR-ABS/RL-INSTR-REL disagree on :RELATIVE, and RELD's carrying
+;;; hole (the same (variant (choice m) (sub s)) selector mechanism #124/
+;;; #127/#129 above reuse) is what makes the disagreement decodable, and
+;;; both encode (%RELATIVE-OFFSET) and disassembly rendering
+;;; (%OPERAND-RENDER-VALUES) correct, at all.
+
+(defmode rl-instr-abs expr :width 1)
+(defmode rl-instr-rel "#" expr :width 1 :relative t)
+(defmode rl-instr-one (one-of rl-instr-abs rl-instr-rel))
+
+(definstruction instr-test-machine reld
+  (modes rl-instr-one)
+  (encoding (opcode #x65)
+            (operand val :width 1
+              (variant (choice rl-instr-abs) (sub 0))
+              (variant (choice rl-instr-rel) (sub 1))))
+  (semantics (choice-case val
+               (rl-instr-abs (set! pc val))
+               (rl-instr-rel (set! pc (+ pc val))))))
+
+(fiveam:test one-of-relative-stamps-relative-hole-index-per-descriptor
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x65))
+         (abs (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (rel (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index abs)))
+    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index rel)))))
+
+(fiveam:test one-of-relative-encode-decode-round-trips-the-absolute-alternative
+  (fiveam:is (equalp #(#x65 0 200) (assembly-cells (assemble "reld 200" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld 200" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "RELD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(200) values))
+    (fiveam:is (eq 'rl-instr-abs (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-relative-encode-decode-round-trips-the-relative-alternative
+  ;; "reld #*" behaves like a self-referencing RELD: RELD is 3 bytes
+  ;; (opcode, sub, 1-cell operand), so the offset from its own next
+  ;; instruction (address 3) back to itself (address 0) is -3.
+  (fiveam:is (equalp #(#x65 1 #xFD) (assembly-cells (assemble "reld #*" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld #*" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "RELD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(-3) values))
+    (fiveam:is (eq 'rl-instr-rel (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-relative-disassembles-both-alternatives
+  ;; RL-INSTR-ABS's hole renders its plain decoded value; RL-INSTR-REL's
+  ;; renders the resolved absolute target (address 3 + size 3 + offset -3
+  ;; = 3, RELD's own address -- "reld #*" is self-referencing).
+  (let ((lines (disassemble-assembly (assemble "reld 200
+reld #*" :machine 'instr-test-machine)
+                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "reld $C8" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "reld #$3" (disassembly-line-text (second lines))))))
+
+;; A hole whose ONE-OF alternatives disagree on :RELATIVE but carries no
+;; hole-selected sub-opcode selector at all has no decode-time record of
+;; which alternative matched -- %CHECK-BYTE-ONE-OF-RELATIVE must reject it,
+;; mirroring %CHECK-BYTE-ONE-OF-SIGNED's own selector requirement.
+(fiveam:test one-of-relative-disagreement-without-selector-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine reldbad1
+             (modes rl-instr-one)
+             (encoding (opcode #x66)
+                       (operand val :width 1))
+             (semantics nil)))))
+
+;; A hole whose ONE-OF alternatives *agree* on :RELATIVE needs no selector
+;; at all -- the hole's relativeness is static regardless of which one
+;; matched. Both agree on being non-relative here.
+(defmode rl-instr-agree-a expr :width 1)
+(defmode rl-instr-agree-b "[" expr "]" :width 1)
+(defmode rl-instr-agree (one-of rl-instr-agree-a rl-instr-agree-b))
+
+(definstruction instr-test-machine reldok
+  (modes rl-instr-agree)
+  (encoding (opcode #x67)
+            (operand val :width 1))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-relative-agreeing-alternatives-need-no-selector
+  (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x67)))
+    (fiveam:is (= 1 (length descs)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index (first descs))))))
+
+;; Two holes each independently resolving relative for the SAME expanded
+;; descriptor has no coherent meaning -- %RELATIVE-OFFSET applies to one
+;; hole only. %CHECK-BYTE-ONE-OF-RELATIVE's positional rule must reject
+;; this even though each hole individually carries a valid selector.
+(defmode rl-instr-two-abs expr :width 1)
+(defmode rl-instr-two-rel "#" expr :width 1 :relative t)
+(defmode rl-instr-two (one-of rl-instr-two-abs rl-instr-two-rel) ","
+                       (one-of rl-instr-two-abs rl-instr-two-rel))
+
+(fiveam:test one-of-relative-two-holes-in-one-sibling-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine reldbad2
+             (modes rl-instr-two)
+             (encoding (opcode #x68)
+                       (operand v1 :mode)
+                       (operand v2 :mode)
+                       (sub-opcode
+                         (variant (choice rl-instr-two-abs rl-instr-two-abs) (sub 0))
+                         (variant (choice rl-instr-two-abs rl-instr-two-rel) (sub 1))
+                         (variant (choice rl-instr-two-rel rl-instr-two-abs) (sub 2))
+                         (variant (choice rl-instr-two-rel rl-instr-two-rel) (sub 3))))
+             (semantics nil)))))
+
+;; Per-hole :RELATIVE is out of scope on a word-encoded machine, same as a
+;; whole-mode :RELATIVE -- %RELATIVE-OFFSET's arithmetic assumes a
+;; cell-counted operand width; any ONE-OF hole whose alternatives declare
+;; :RELATIVE at all (agreeing or not) is a DEFINSTRUCTION-time error.
+(fiveam:test one-of-relative-on-word-machine-signals-error
+  (fiveam:signals error
+    (eval '(definstruction mixed-field-test-machine reldword
+             (modes rl-instr-one)
+             (encoding (opcode 8)
+                       (operand value :field src
+                         (variant (choice rl-instr-abs) inline :range (0 511))
+                         (variant (choice rl-instr-rel) inline :range (0 511))))
+             (semantics nil)))))
+
+;; :RELATIVE and :WIDTH disagreeing at the SAME hole (not two different
+;; holes, the way BRW above puts them -- examples/subtable.lisp) -- one
+;; sub-opcode selector satisfying both %CHECK-BYTE-ONE-OF-WIDTH and
+;; %CHECK-BYTE-ONE-OF-RELATIVE at once, since each reads SUB-CHOICES
+;; independently. Left open by #130's own design comment as unverified
+;; composition; this confirms it composes cleanly with no new machinery.
+(defmode rw-narrow-abs expr :width 1)
+(defmode rw-wide-rel "#" expr :width 2 :relative t)
+(defmode rw-one (one-of rw-narrow-abs rw-wide-rel))
+
+(definstruction instr-test-machine relwd
+  (modes rw-one)
+  (encoding (opcode #x6A)
+            (operand val :mode
+              (variant (choice rw-narrow-abs) (sub 0))
+              (variant (choice rw-wide-rel) (sub 1))))
+  (semantics (choice-case val
+               (rw-narrow-abs (set! a val))
+               (rw-wide-rel (set! pc (+ pc val))))))
+
+(fiveam:test one-of-relative-and-width-disagreeing-at-the-same-hole-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x6A))
+         (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths narrow)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index narrow)))
+    (fiveam:is (equal '(2) (instruction-descriptor-operand-widths wide)))
+    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index wide)))))
+
+(fiveam:test one-of-relative-and-width-round-trips-the-narrow-non-relative-alternative
+  (fiveam:is (equalp #(#x6A 0 200) (assembly-cells (assemble "relwd 200" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd 200" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (fiveam:is (string= "RELWD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(200) values))
+    (fiveam:is (= 3 size))
+    (fiveam:is (eq 'rw-narrow-abs (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-relative-and-width-round-trips-the-wide-relative-alternative
+  ;; "relwd #*" is self-referencing: RELWD is 4 bytes (opcode, sub, 2-cell
+  ;; operand), so the offset from its own next-instruction address (4) back
+  ;; to itself (0) is -4, encoded 2's-complement over 2 cells (little-endian
+  ;; #xFC #xFF) -- RW-WIDE-REL's own 2-cell width, not the 1-cell width its
+  ;; RW-NARROW-ABS sibling declares.
+  (fiveam:is (equalp #(#x6A 1 #xFC #xFF) (assembly-cells (assemble "relwd #*" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd #*" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (fiveam:is (string= "RELWD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(-4) values))
+    (fiveam:is (= 4 size))
+    (fiveam:is (eq 'rw-wide-rel (%matched-choice-name choices 0)))))
 
 ;;; Multi-hole sub-opcode selection, a (sub-opcode ...) table (#128, the
 ;;; follow-up #126 filed for itself) -- several ONE-OF holes jointly

@@ -217,7 +217,27 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; same as an all-NIL one of the right length -- see the callers in
   ;; decoder.lisp and assembler.lisp for the shared (OR ... (MAKE-LIST ...))
   ;; guard.
-  (operand-signedness nil :type list))
+  (operand-signedness nil :type list)
+  ;; #130 (M4): byte-encoded machine only. NIL when no hole of this
+  ;; descriptor is a PC-relative offset; else the 0-based index, into
+  ;; OPERAND-WIDTHS/OPERAND-NAMES/etc, of the one hole that is. Unlike
+  ;; OPERAND-SIGNEDNESS (a per-hole BOOLEAN list, since any number of holes
+  ;; may independently be signed), :RELATIVE is POSITIONAL -- at most one
+  ;; hole per pattern may be relative (%CHECK-RELATIVE-MODE-HOLES /
+  ;; %CHECK-BYTE-ONE-OF-RELATIVE, below), so a single index suffices. Also
+  ;; where a whole-mode :RELATIVE (MODE-DESCRIPTOR-RELATIVEP) folds in: a
+  ;; whole-mode relative descriptor always has exactly one hole
+  ;; (%CHECK-RELATIVE-MODE-HOLES), so it is always index 0 here -- every
+  ;; consumer (assembler.lisp's %CHOOSE-VARIANT/%ENCODE/
+  ;; %CHECK-STRICT-OPERAND-RANGE!, disassembler.lisp's
+  ;; %OPERAND-RENDER-VALUES) reads this single slot instead of branching on
+  ;; MODE-DESCRIPTOR-RELATIVEP separately. Precomputed at DEFINSTRUCTION time
+  ;; (%BYTE-DESCRIPTOR-FORMS, %BYTE-RELATIVE-HOLE-INDEX), mirroring
+  ;; OPERAND-SIGNEDNESS's own precomputation rationale. Always NIL on a
+  ;; word-encoded descriptor -- :RELATIVE stays banned outright there
+  ;; (%CHECK-WORD-RELATIVE/%CHECK-WORD-ONE-OF-RELATIVE), unrelated to this
+  ;; ticket's arithmetic, which assumes a cell-counted operand width.
+  (relative-hole-index nil :type (or null (integer 0))))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -797,18 +817,41 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
             mode-specified)))
 
 (defun %check-relative-mode-holes (mode machine name)
-  ;; A RELATIVE mode (mode.lisp) marks its *whole* pattern's operand as a
-  ;; single PC-relative offset -- there is no way to say "only this hole is
-  ;; the offset" yet (a per-hole attribute is a follow-up), so a RELATIVE
-  ;; mode with more than one hole has no coherent meaning and is rejected
-  ;; here rather than silently offset-adjusting the wrong (or every) field.
-  ;; This restriction is specific to RELATIVE's offset computation, not to
+  ;; A whole-mode RELATIVE mode (mode.lisp, MODE-DESCRIPTOR-RELATIVEP) marks
+  ;; its *entire* pattern's operand as a single PC-relative offset -- there
+  ;; is no ONE-OF here naming which hole that is, so MODE's own :RELATIVE
+  ;; applies to all of its holes at once, which only has a coherent meaning
+  ;; when there is exactly one. A per-hole relative marking on a ONE-OF's
+  ;; alternatives (#130) is a different, narrower declaration -- it names
+  ;; *its own* hole specifically, checked instead by
+  ;; %CHECK-BYTE-ONE-OF-RELATIVE below -- and is unaffected by this
+  ;; restriction, which is specific to a whole-mode :RELATIVE. This
+  ;; restriction is also specific to RELATIVE's offset computation, not to
   ;; signedness in general -- a plain SIGNED mode (#30) may have any number
   ;; of holes; each is sign-extended independently (emulator.lisp).
   (when (and (mode-descriptor-relativep mode) (> (%mode-hole-count mode) 1))
     (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE and has ~
 more than one EXPR hole -- a RELATIVE mode's offset applies to its whole ~
-operand, so per-hole relative marking is not supported"
+operand, so a whole-mode :RELATIVE mode may only have one hole (a ONE-OF ~
+alternative's own :RELATIVE, naming just its own hole, has no such ~
+restriction)"
+           machine name (mode-descriptor-name mode)))
+  ;; A whole-mode :RELATIVE whose single hole is itself a ONE-OF has no
+  ;; coherent meaning either, even though %MODE-HOLE-COUNT is 1: %BYTE-
+  ;; RELATIVE-HOLE-INDEX (and %BYTE-OPERAND-SIGNEDNESS before it, #124/#127,
+  ;; the same shape) resolves a ONE-OF hole from its own matched alternative
+  ;; first, never falling back to MODE's own RELATIVEP/SIGNEDP at all -- so
+  ;; MODE's own :RELATIVE T would be silently dropped in favor of whichever
+  ;; alternative matched (or agreed on not being relative), rather than
+  ;; erroring where the contradiction is written. Rejected here rather than
+  ;; left to silently encode as an absolute value.
+  (when (and (mode-descriptor-relativep mode)
+             (some #'identity (%mode-hole-alternatives mode)))
+    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE, but its ~
+one hole is itself a ONE-OF -- a whole-mode :RELATIVE has no coherent ~
+meaning there, since which alternative matched would silently override it; ~
+give the ONE-OF's own alternative :RELATIVE T instead (per-hole :RELATIVE, ~
+#130)"
            machine name (mode-descriptor-name mode))))
 
 ;; The semantics body has no WITH-MACHINE form of its own to name its machine
@@ -937,7 +980,8 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
-                          &optional hole-alternatives-list sub-opcode sub-choices operand-signedness)
+                          &optional hole-alternatives-list sub-opcode sub-choices operand-signedness
+                            relative-hole-index)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -948,6 +992,7 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
     :operand-widths ',operand-widths
     :operand-names ',operand-names
     :operand-signedness ',operand-signedness
+    :relative-hole-index ',relative-hole-index
     :cycles ,cycles
     :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
 
@@ -973,6 +1018,35 @@ common value is what matters there)."
                   (chosen (mode-descriptor-signedp (find-mode-descriptor chosen)))
                   (alts (mode-descriptor-signedp (find-mode-descriptor (first alts))))
                   (t (mode-descriptor-signedp mode)))))
+
+(defun %byte-relative-hole-index (mode hole-alternatives-list sub-choices n)
+  "This descriptor's own RELATIVE-HOLE-INDEX (#130) -- the 0-based index of
+the one hole (of N) whose operand is a PC-relative offset, or NIL if none
+is. Built on %BYTE-RELATIVE-FLAGS (below), the same per-hole resolution
+%BYTE-OPERAND-SIGNEDNESS uses, projected to a single index since :RELATIVE
+is positional rather than a per-hole flag. %CHECK-RELATIVE-MODE-HOLES and
+%CHECK-BYTE-ONE-OF-RELATIVE (below) together guarantee at most one flag is
+ever T here -- across both a whole-mode :RELATIVE (always hole 0, since a
+relative MODE may only have one hole) and a per-hole ONE-OF :RELATIVE
+alternative -- so POSITION's first match is the only one there could be."
+  (position t (%byte-relative-flags mode hole-alternatives-list sub-choices n)))
+
+(defun %byte-relative-flags (mode hole-alternatives-list sub-choices n)
+  "Hole-aligned list of N booleans -- entry I is T when hole I resolves to a
+:RELATIVE operand for this specific SUB-CHOICES combination (one expanded
+sibling descriptor). Same per-hole CHOSEN/ALTS/ungoverned resolution as
+%BYTE-OPERAND-SIGNEDNESS and %BYTE-RELATIVE-HOLE-INDEX, kept as its own
+function (rather than folding straight into a POSITION call) so
+%CHECK-BYTE-ONE-OF-RELATIVE can COUNT how many holes of *this one sibling*
+resolve T -- %BYTE-RELATIVE-HOLE-INDEX itself only reports the first, which
+would silently swallow a second one instead of erroring."
+  (loop for i below n
+        for alts = (nth i hole-alternatives-list)
+        for chosen = (nth i sub-choices)
+        collect (cond
+                  (chosen (mode-descriptor-relativep (find-mode-descriptor chosen)))
+                  (alts (mode-descriptor-relativep (find-mode-descriptor (first alts))))
+                  (t (mode-descriptor-relativep mode)))))
 
 (defun %byte-operand-widths (hole-alternatives-list sub-choices declared-widths mode-specified)
   "Hole-aligned list, one entry per DECLARED-WIDTHS -- this descriptor's own
@@ -1056,16 +1130,18 @@ HOLE-INDICES/PAIRS name (#126's single carrying hole, or #128's several)
 for the word-encoded path, generalized here from \"one per field-variant
 combination\" to \"one per matched-alternative-tuple pair\". Every expanded
 descriptor shares OPCODE, OPERAND-NAMES, and SEMANTICS-FORMS -- SUB-OPCODE,
-SUB-CHOICES, OPERAND-SIGNEDNESS (#124/#127, %BYTE-OPERAND-SIGNEDNESS), and
-OPERAND-WIDTHS (#129, %BYTE-OPERAND-WIDTHS) all differ, computed fresh per
-expanded descriptor since SUB-CHOICES itself does. MODE (the MODE-DESCRIPTOR
+SUB-CHOICES, OPERAND-SIGNEDNESS (#124/#127, %BYTE-OPERAND-SIGNEDNESS),
+OPERAND-WIDTHS (#129, %BYTE-OPERAND-WIDTHS), and RELATIVE-HOLE-INDEX (#130,
+%BYTE-RELATIVE-HOLE-INDEX) all differ, computed fresh per expanded
+descriptor since SUB-CHOICES itself does. MODE (the MODE-DESCRIPTOR
 MODE-FORM names, already resolved by both call sites) is needed only for
-OPERAND-SIGNEDNESS's own MODE-DESCRIPTOR-SIGNEDP reads; OPERAND-WIDTHS
-itself is the shared, declared widths list (whatever %OPERAND-WIDTH resolved
-per hole from its own (operand ...) subclause) that %BYTE-OPERAND-WIDTHS
-falls back to at a hole whose alternatives don't override it. MODE-SPECIFIED
-(#129, %PARSE-OPERAND-SUBCLAUSES/%RESOLVE-OPERAND-FIELDS) is the hole-aligned
-gate %BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
+OPERAND-SIGNEDNESS's and RELATIVE-HOLE-INDEX's own MODE-DESCRIPTOR-SIGNEDP/
+-RELATIVEP reads; OPERAND-WIDTHS itself is the shared, declared widths list
+(whatever %OPERAND-WIDTH resolved per hole from its own (operand ...)
+subclause) that %BYTE-OPERAND-WIDTHS falls back to at a hole whose
+alternatives don't override it. MODE-SPECIFIED (#129,
+%PARSE-OPERAND-SUBCLAUSES/%RESOLVE-OPERAND-FIELDS) is the hole-aligned gate
+%BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
   (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
   (let ((n (length operand-widths)))
     (if (null sub-spec)
@@ -1073,7 +1149,8 @@ gate %BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
                                  (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified)
                                  operand-names cycles
                                  semantics-forms hole-alternatives-list explicit-sub nil
-                                 (%byte-operand-signedness mode hole-alternatives-list nil n)))
+                                 (%byte-operand-signedness mode hole-alternatives-list nil n)
+                                 (%byte-relative-hole-index mode hole-alternatives-list nil n)))
         (destructuring-bind (hole-indices . pairs) sub-spec
           (mapcar (lambda (pair)
                     (let ((sub-choices (make-list n :initial-element nil)))
@@ -1085,7 +1162,8 @@ gate %BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
                                                                 mode-specified)
                                          operand-names cycles
                                          semantics-forms hole-alternatives-list (cdr pair) sub-choices
-                                         (%byte-operand-signedness mode hole-alternatives-list sub-choices n))))
+                                         (%byte-operand-signedness mode hole-alternatives-list sub-choices n)
+                                         (%byte-relative-hole-index mode hole-alternatives-list sub-choices n))))
                   pairs)))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
@@ -1699,6 +1777,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
              (hole-alternatives-list (%mode-hole-alternatives mode)))
         (%check-word-one-of-signed specs hole-alternatives-list machine name)
         (%check-word-one-of-width hole-alternatives-list machine name)
+        (%check-word-one-of-relative hole-alternatives-list machine name)
         (let ((alternatives-form (%word-alternatives-form specs))
               (combos (%expand-word-combos specs)))
           (mapcar (lambda (combo)
@@ -1725,8 +1804,12 @@ kind %CHECK-WORD-VARIANTS already guards against for operand fields."
 (defun %check-word-relative (mode machine name machine-name)
   "A :RELATIVE mode's offset arithmetic (%RELATIVE-OFFSET, assembler.lisp)
 assumes a byte operand width -- rejected outright on a word-encoded machine
-rather than silently computing nonsense; a follow-up ticket tracks lifting
-this once relative branching on a word machine has a design."
+rather than silently computing nonsense. This only tests MODE's own
+whole-mode :RELATIVE; a ONE-OF alternative declaring :RELATIVE under a
+non-relative outer mode is a separate case %CHECK-WORD-ONE-OF-RELATIVE
+(below) covers -- both stay unconditional bans on a word-encoded machine,
+since :RELATIVE branching there remains undesigned regardless of whether
+it's whole-mode or per-hole (#130)."
   (when (and (mode-descriptor-relativep mode) (%word-machine-p machine-name))
     (error "DEFINSTRUCTION ~S ~S: a :RELATIVE addressing mode is not yet ~
 supported on word-encoded machine ~S" machine name machine-name)))
@@ -1739,10 +1822,16 @@ mode-name symbols when they disagree, i.e. exactly the holes #124/#127's
 per-hole :SIGNED needs a decode-time discriminator for. Alternatives that
 agree need no discriminator at all -- the hole's signedness is static
 regardless of which one matched, mode.lisp's %CHECK-ONE-OF-ELEMENTS! having
-already ensured none of them declares :RELATIVE/:SUFFIX to disagree about
-instead (:WIDTH, #129, may disagree here just as freely as :SIGNED does --
-its own decode-time gate is %CHECK-BYTE-ONE-OF-WIDTH, below, entirely
-independent of this one)."
+already ensured none of them declares a whole-mode :SUFFIX to disagree about
+instead (:WIDTH, #129, and :RELATIVE, #130, may each disagree here just as
+freely as :SIGNED does -- their own decode-time gates are
+%CHECK-BYTE-ONE-OF-WIDTH and %CHECK-BYTE-ONE-OF-RELATIVE, below, each
+entirely independent of this one; note MODE-DESCRIPTOR-SIGNEDP is itself
+(OR RELATIVE SIGNED), so a hole whose alternatives disagree only on
+:RELATIVE, not on a plain :SIGNED, already shows up as a disagreement
+here too -- %CHECK-BYTE-ONE-OF-SIGNED and %CHECK-BYTE-ONE-OF-RELATIVE both
+then require the same selector for it, which is harmless: satisfying one
+satisfies both)."
   (mapcar (lambda (alts)
             (and alts
                  (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-signedp (find-mode-descriptor m)))
@@ -1809,6 +1898,65 @@ disagree on :WIDTH, but this hole carries no sub-opcode selector -- per-hole :WI
 decode-time record of which alternative matched"
                       machine name i alts))))
 
+(defun %one-of-relative-disagreement (hole-alternatives-list)
+  "Hole-aligned list, one entry per HOLE-ALTERNATIVES-LIST -- NIL for a hole
+not governed by any ONE-OF, or for a ONE-OF hole whose alternatives all
+declare the same MODE-DESCRIPTOR-RELATIVEP; the hole's own alternative
+mode-name symbols when they disagree, i.e. exactly the holes #130's per-hole
+:RELATIVE needs a decode-time discriminator for. Tests RELATIVEP directly,
+not SIGNEDP -- two alternatives can both be (plain, non-relative) :SIGNED,
+agreeing on SIGNEDP and so invisible to %ONE-OF-SIGNED-DISAGREEMENT, while
+still disagreeing on RELATIVEP, which is what actually governs whether
+%RELATIVE-OFFSET's PC-relative arithmetic applies to this hole's value.
+Alternatives that agree need no discriminator at all -- the hole's
+relativeness is static regardless of which one matched."
+  (mapcar (lambda (alts)
+            (and alts
+                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-relativep (find-mode-descriptor m)))
+                                                   alts)))
+                 alts))
+          hole-alternatives-list))
+
+(defun %check-byte-one-of-relative (mode hole-alternatives-list sub-spec machine name)
+  "Byte-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED, for #130's per-hole
+:RELATIVE, plus the one rule :SIGNED/:WIDTH have no analogue for: :RELATIVE
+is positional, not a per-hole boolean, so beyond the selector requirement
+every disagreeing hole shares with :SIGNED/:WIDTH, at most one hole of any
+one expanded sibling descriptor may ever resolve relative. Selector rule
+first (mirrors %CHECK-BYTE-ONE-OF-SIGNED exactly): a hole whose ONE-OF
+alternatives disagree on :RELATIVE must carry a sub-opcode selector, since
+that is the only decode-time record of which alternative matched. Positional
+rule second: walks the same SUB-SPEC pairs %BYTE-DESCRIPTOR-FORMS will
+expand into descriptors (or the single no-SUB-SPEC case), and for each one
+counts %BYTE-RELATIVE-FLAGS' T entries -- more than one means this sibling's
+own operand would need its PC-relative offset applied to two different
+holes at once, which %RELATIVE-OFFSET has no way to do."
+  (let ((carrying-indices (and sub-spec (car sub-spec)))
+        (n (length hole-alternatives-list)))
+    (loop for alts in (%one-of-relative-disagreement hole-alternatives-list)
+          for i from 0
+          when (and alts (not (member i carrying-indices)))
+            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+disagree on :RELATIVE, but this hole carries no sub-opcode selector -- per-hole :RELATIVE needs a ~
+(variant (choice ...) (sub ...)) selector, alone or inside a (sub-opcode ...) table, as its ~
+decode-time record of which alternative matched"
+                      machine name i alts))
+    (flet ((check-sibling (sub-choices)
+             (when (> (count t (%byte-relative-flags mode hole-alternatives-list sub-choices n)) 1)
+               (error "DEFINSTRUCTION ~S ~S: more than one operand hole resolves to a :RELATIVE ~
+alternative for the same addressing-mode use -- a RELATIVE operand's offset applies to one hole ~
+only, so at most one hole may ever be the relative one"
+                      machine name))))
+      (if (null sub-spec)
+          (check-sibling nil)
+          (destructuring-bind (hole-indices . pairs) sub-spec
+            (dolist (pair pairs)
+              (let ((sub-choices (make-list n :initial-element nil)))
+                (loop for idx in hole-indices
+                      for chosen-name in (car pair)
+                      do (setf (nth idx sub-choices) chosen-name))
+                (check-sibling sub-choices))))))))
+
 (defun %check-word-one-of-signed (specs hole-alternatives-list machine name)
   "Word-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED (#127): signal a
 DEFINSTRUCTION-time error unless every hole whose ONE-OF alternatives
@@ -1845,6 +1993,25 @@ rather than silently ignoring an inert declaration."
           do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
 :WIDTH, but per-hole :WIDTH is permanently out of scope on word-encoded machine ~S -- operand ~
 sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
+                      machine name i alts machine)))
+
+(defun %check-word-one-of-relative (hole-alternatives-list machine name)
+  "Per-hole :RELATIVE (#130) is out of scope on a word-encoded machine, same
+as %CHECK-WORD-RELATIVE's whole-mode ban -- %RELATIVE-OFFSET's arithmetic
+assumes a cell-counted operand width, unrelated to which hole declared it.
+%CHECK-WORD-RELATIVE alone is not enough to catch this: it tests only the
+*outer* MODE's own MODE-DESCRIPTOR-RELATIVEP, so a ONE-OF alternative
+declaring :RELATIVE under a non-relative outer mode reaches this function's
+site untested otherwise. Signal a DEFINSTRUCTION-time error, naming
+MACHINE/NAME, if any ONE-OF hole's alternatives declare :RELATIVE at all --
+agreeing or not, mirroring %CHECK-WORD-ONE-OF-WIDTH's same choice for the
+same reason: even an agreeing declaration has nothing to mean here."
+  (loop for alts in hole-alternatives-list
+        for i from 0
+        when (and alts (some (lambda (m) (mode-descriptor-relativep (find-mode-descriptor m))) alts))
+          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
+:RELATIVE, but a :RELATIVE addressing mode is not yet supported on word-encoded machine ~S, ~
+per-hole or whole-mode alike"
                       machine name i alts machine)))
 
 (defun %parse-opcode-subclause (machine name opcode-subclause)
@@ -1942,6 +2109,7 @@ mechanism (#128), not supported on word-encoded machine ~S" machine name mode-sy
                                             sub-opcode-subclause)
                 (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
                 (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
+                (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
                 (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                          opcode sub operand-widths operand-names cycles-form semantics-forms
                                          (%mode-hole-alternatives mode) sub-spec mode mode-specified))))))))
@@ -2196,6 +2364,7 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                                                  sub-opcode-subclause)
                    (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
                    (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
+                   (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
                    `(eval-when (:compile-toplevel :load-toplevel :execute)
                       (register-instruction-variants!
                        ',machine

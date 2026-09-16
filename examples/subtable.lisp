@@ -171,4 +171,77 @@ each statement's own combination dispatched correctly.~%" (mref m 'ram 20) (mref
     (assert (eq 'sw-wide (%matched-choice-name choices 1))))
   (format t "~%Each hole's own width is read independently at decode, not fixed once per mode.~%"))
 
+;; #130: per-hole :RELATIVE, alongside a second hole disagreeing on
+;; something else entirely (:WIDTH here), both jointly selecting the
+;; sub-opcode cell via the same (sub-opcode ...) table MOV/MOVW use above.
+;; ST-TGT-ABS/ST-TGT-REL disagree on :RELATIVE at hole 0; ST-NARROW/ST-WIDE
+;; disagree on :WIDTH at hole 1 -- two *different* attributes, each needing
+;; its own decode-time discriminator, sharing one table because a byte-
+;; encoded machine has only one sub-opcode cell to spend (#125). Every
+;; combination must still be claimed (the same permanent-error rule
+;; subchoice.lisp's single-hole selector holds every alternative to) --
+;; including (ST-TGT-REL ST-WIDE), which resolves relative at hole 0 and
+;; nothing at hole 1, never both at once, so %CHECK-BYTE-ONE-OF-RELATIVE's
+;; positional rule (at most one relative hole per expanded sibling) is
+;; satisfied by every one of the four combinations.
+(defmode st-tgt-abs expr :width 1)
+(defmode st-tgt-rel "&" expr :width 1 :relative t)
+(defmode st-narrow expr :width 1)
+(defmode st-wide "#" expr :width 2)
+(defmode st-two (one-of st-tgt-abs st-tgt-rel) "," (one-of st-narrow st-wide))
+
+;; BRW target, n -- branches to TARGET (absolute, or a "&"-prefixed
+;; PC-relative offset) after loading N into A, purely to exercise both
+;; holes' own semantics.
+(definstruction subtablefoo brw
+  (modes st-two)
+  (encoding (opcode #x30)
+            (operand tgt :mode)
+            (operand n :mode)
+            (sub-opcode
+              (variant (choice st-tgt-abs st-narrow) (sub 0))
+              (variant (choice st-tgt-abs st-wide)   (sub 1))
+              (variant (choice st-tgt-rel st-narrow) (sub 2))
+              (variant (choice st-tgt-rel st-wide)   (sub 3))))
+  (semantics (progn
+               (set! a n)
+               (choice-case tgt
+                 (st-tgt-abs (set! pc tgt))
+                 (st-tgt-rel (set! pc (+ pc tgt)))))))
+
+(format t "~%BRW's target hole disagrees on :RELATIVE (#130) while its N hole ~
+independently disagrees on :WIDTH (#129), sharing one sub-opcode table:~%")
+(let ((abs-narrow (assembly-cells (assemble "brw 10, 5" :machine 'subtablefoo)))
+      (abs-wide (assembly-cells (assemble "brw 10, #300" :machine 'subtablefoo))))
+  (format t "  brw 10, 5     -> ~{~2,'0X~^ ~}~%" (coerce abs-narrow 'list))
+  (format t "  brw 10, #300  -> ~{~2,'0X~^ ~}~%" (coerce abs-wide 'list))
+  (assert (equalp #(#x30 #x00 #x0A #x05) abs-narrow))
+  (assert (equalp #(#x30 #x01 #x0A #x2C #x01) abs-wide)))
+
+(let* ((source "brw &target, 7
+hlt
+target: hlt")
+       (assembly (assemble source :machine 'subtablefoo)))
+  (format t "  brw &target, 7 -> ~{~2,'0X~^ ~}~%" (coerce (assembly-cells assembly) 'list))
+  ;; BRW is 4 bytes (opcode, sub, 1-cell tgt, 1-cell n); TARGET sits after
+  ;; it and one HLT byte, at address 5 -- offset relative to BRW's *next*
+  ;; instruction (address 4) is 5 - 4 = 1.
+  (assert (equalp #(#x30 #x02 #x01 #x07 #x00 #x00) (assembly-cells assembly)))
+  (format t "~%Decoding reads TGT's raw (still-relative) offset and N plainly, ~
+each independently, via CHOICES naming both holes' own matched alternative:~%")
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'subtablefoo)
+    (assert (string= "BRW" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 1 7) values))
+    (assert (= 4 size))
+    (assert (eq 'st-tgt-rel (%matched-choice-name choices 0)))
+    (assert (eq 'st-narrow (%matched-choice-name choices 1))))
+  (format t "~%Disassembling renders only TGT's hole as the resolved absolute target ~
+(address 0 + size 4 + offset 1 = 5); N's sibling hole renders plainly:~%")
+  (let ((lines (disassemble-assembly assembly :machine 'subtablefoo :labels nil :suffixes nil)))
+    (dolist (l lines) (format t "  ~A~%" (disassembly-line-text l)))
+    (assert (string= "brw &$5,$7" (disassembly-line-text (first lines)))))
+  (format t "~%TGT's own offset resolves to TARGET's address; N's own value is untouched ~
+by that adjustment.~%"))
+
 (format t "~%All assertions passed.~%")

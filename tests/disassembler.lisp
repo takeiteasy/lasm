@@ -99,6 +99,28 @@
     (immediate (opcode #x03 :sub 0) (operand :mode) (semantics (set! x operand)))
     (absolute (opcode #x03 :sub 1) (operand :mode) (semantics (set! x (mref machine 'ram operand))))))
 
+;; Per-hole :RELATIVE (#130), alongside a plain sibling hole -- the one
+;; surface #124/#127/#129's own per-hole work never touched, since all
+;; three were pure encode/decode-VALUE changes; none of them changed how a
+;; value is *rendered* at disassembly time. BRM's TGT hole (DISASM-REL-ABS/
+;; DISASM-REL-REL, a hole-selected sub-opcode selector) is either an
+;; absolute value or a PC-relative offset; its sibling N hole is always
+;; plain -- %OPERAND-RENDER-VALUES must adjust only TGT's own value.
+(defmode disasm-rel-abs expr :width 1)
+(defmode disasm-rel-rel "#" expr :width 1 :relative t)
+(defmode disasm-rel-two (one-of disasm-rel-abs disasm-rel-rel) "," expr :width 1)
+
+(definstruction disasm-test-machine brm
+  (modes disasm-rel-two)
+  (encoding (opcode #x05)
+            (operand tgt :mode
+              (variant (choice disasm-rel-abs) (sub 0))
+              (variant (choice disasm-rel-rel) (sub 1)))
+            (operand n :width 1))
+  (semantics (choice-case tgt
+               (disasm-rel-abs (set! x tgt))
+               (disasm-rel-rel (set! pc (+ pc tgt))))))
+
 ;;; Word-encoded fixture -- DCPU-16-shaped (examples/dcpu16.lisp): a 6-bit
 ;;; field A, a 5-bit field B, a 5-bit OPCODE field, MSB-first. SET's operand
 ;;; order (dst = field B, shift 5; src = field A, shift 10) is declared
@@ -296,6 +318,20 @@ ldsr $2,S" :machine 'disasm-test-machine))
          (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "movi $10,$20" (disassembly-line-text (first lines))))
     (fiveam:is (equal (list #x10 #x20) (disassembly-line-values (first lines))))))
+
+(fiveam:test disassemble-relative-sibling-hole-renders-only-its-own-hole
+  ;; BRM is 4 cells (opcode, sub, 1-cell TGT, 1-cell N); "brm #*, 9" is
+  ;; self-referencing, so TGT's offset from the next instruction (address 4)
+  ;; back to BRM's own address (0) is -4 -- rendered back as the absolute
+  ;; target 0 + 4 + -4 = 0. N's own value (9) renders plainly, untouched by
+  ;; that adjustment.
+  (let* ((a (assemble "brm #*, 9" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+    (fiveam:is (string= "brm #$0,$9" (disassembly-line-text (first lines))))
+    ;; DISASSEMBLY-LINE-VALUES holds DECODE-INSTRUCTION-AT's raw values --
+    ;; TGT's still-relative offset (-4), not the rendered absolute target
+    ;; (0) the line's own TEXT shows.
+    (fiveam:is (equal (list -4 9) (disassembly-line-values (first lines))))))
 
 (fiveam:test disassemble-one-of-with-no-choice-record-renders-first-alternative
   ;; #103/#117: MOO is byte-encoded (DISASM-TEST-MACHINE, plain (operand
@@ -543,6 +579,21 @@ hlt" :machine 'disasm-test-machine))
     ;; ABSOLUTE's default operand width is 2 cells here (RAM is :ADDR-WIDTH
     ;; 16 over an 8-bit cell): 1 + 1 + 2 = 4 cells.
     (fiveam:is (= 4 (disassembly-line-size (second lines))))
+    (let* ((text (disassembly-text lines))
+           (a2 (assemble text :machine 'disasm-test-machine)))
+      (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
+
+(fiveam:test round-trip-relative-sibling-hole-decodes-back-to-itself
+  ;; #130's own reproduction, at the disassembler level: BRM's TGT hole
+  ;; (relative or absolute, chosen by "#" syntax) and its plain sibling N
+  ;; hole must each round-trip through their own text -- TGT via its
+  ;; resolved absolute target, N untouched.
+  (let* ((a (assemble "brm 10, 5
+loop: brm #loop, 9
+hlt" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "brm $A,$5" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "brm #$4,$9" (disassembly-line-text (second lines))))
     (let* ((text (disassembly-text lines))
            (a2 (assemble text :machine 'disasm-test-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))

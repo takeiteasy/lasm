@@ -331,6 +331,51 @@ loop:   dex
       (fiveam:is (= 0 (sref m 'x)))
       (fiveam:is (= 0 (mref m 'ram #x1000))))))
 
+;;; Per-hole :RELATIVE on a ONE-OF alternative (#130) -- EMU-REL-ABS/
+;;; EMU-REL-REL disagree on :RELATIVE; BRR's carrying hole (a hole-selected
+;;; sub-opcode selector) is what makes the disagreement decodable and, at
+;;; execution time, is what tells STEP-MACHINE's fetch/decode path
+;;; (DECODE-INSTRUCTION-AT, sign-extension via OPERAND-SIGNEDNESS) that this
+;;; particular decode's operand is signed -- unconditional jump/branch, kept
+;;; simple to isolate the per-hole :RELATIVE mechanism from BRA's own
+;;; zero-flag condition above.
+
+(defmode emu-rel-abs expr :width 1)
+(defmode emu-rel-rel "#" expr :width 1 :relative t)
+(defmode emu-rel-one (one-of emu-rel-abs emu-rel-rel))
+
+(definstruction emu-test-machine brr
+  (modes emu-rel-one)
+  (encoding (opcode #x91)
+            (operand tgt :width 1
+              (variant (choice emu-rel-abs) (sub 0))
+              (variant (choice emu-rel-rel) (sub 1))))
+  (semantics (choice-case tgt
+               (emu-rel-abs (set! pc tgt))
+               (emu-rel-rel (set! pc (+ pc tgt))))))
+
+(fiveam:test step-machine-per-hole-relative-branch-sign-extends-backward
+  ;; target: dex (address 0, 1 byte) / brr #target (address 1, 3 bytes) --
+  ;; next-pc after BRR is 4, target is 0, so the encoded offset is -4
+  ;; (#xFC); taking the branch must land back on pc=0, proving the per-hole
+  ;; :RELATIVE alternative sign-extends the fetched operand exactly as a
+  ;; whole-mode RELATIVE mode's single hole already does.
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "target: dex
+brr #target" :machine 'emu-test-machine)))
+    (load-program m a)
+    (step-machine m)  ; dex, address 0 -> 1
+    (step-machine m)  ; brr, unconditional -> back to 0
+    (fiveam:is (= 0 (sref m 'pc)))))
+
+(fiveam:test step-machine-per-hole-relative-absolute-alternative-jumps-plainly
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "brr 5
+hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (step-machine m)  ; brr, absolute alternative -> jumps to 5
+    (fiveam:is (= 5 (sref m 'pc)))))
+
 ;;; SIGNED, non-RELATIVE (#30)
 
 (fiveam:test step-machine-signed-non-relative-operand-sign-extends

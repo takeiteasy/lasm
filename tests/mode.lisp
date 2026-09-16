@@ -276,9 +276,15 @@ looks like."
   (fiveam:finishes (eval '(defmode oo-ok-signed (one-of oo-reg oo-signed))))
   (fiveam:is (mode-descriptor-signedp (find-mode-descriptor 'oo-signed))))
 
-(fiveam:test one-of-alternative-with-relative-signals-error
-  (fiveam:signals error
-    (eval '(defmode oo-bad-relative (one-of oo-reg oo-relative)))))
+(fiveam:test one-of-alternative-with-relative-is-accepted
+  ;; #130: :RELATIVE is exempt from ONE-OF's whole-mode-attribute
+  ;; restriction, like :STRICT (#115), :SIGNED (#124/#127), and :WIDTH
+  ;; (#129) -- honored per hole once a DEFINSTRUCTION site gives that hole a
+  ;; decode-time discriminator (instruction.lisp's %CHECK-BYTE-ONE-OF-
+  ;; RELATIVE), which this DEFMODE-time check cannot know about, so it must
+  ;; accept :RELATIVE unconditionally.
+  (fiveam:finishes (eval '(defmode oo-ok-relative (one-of oo-ind oo-relative))))
+  (fiveam:is (mode-descriptor-relativep (find-mode-descriptor 'oo-relative))))
 
 (fiveam:test one-of-alternative-with-width-is-accepted
   ;; #129: :WIDTH is exempt from ONE-OF's whole-mode-attribute restriction,
@@ -423,6 +429,20 @@ looks like."
 (fiveam:test nested-one-of-with-width-alternative-signals-error
   (fiveam:signals error
     (eval '(defmode no-widthed-outer (one-of no-widthed-inner no-other)))))
+
+;;; Nested ONE-OF with a :RELATIVE alternative (#130) -- MODE-DESCRIPTOR-
+;;; SIGNEDP is (OR RELATIVE SIGNED), so %PATTERN-NESTED-ONE-OF-SIGNED-P
+;;; (mode.lisp) already catches a nested :RELATIVE alternative with no new
+;;; predicate of its own; this only needed its error message widened to
+;;; name :RELATIVE alongside :SIGNED, not a new check.
+
+(defmode no-relative-inner-a expr :relative t)
+(defmode no-relative-inner-b "[" expr "]")
+(defmode no-relative-inner (one-of no-relative-inner-a no-relative-inner-b))
+
+(fiveam:test nested-one-of-with-relative-alternative-signals-error
+  (fiveam:signals error
+    (eval '(defmode no-relative-outer (one-of no-relative-inner no-other)))))
 
 ;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
 ;;; references so the reference loops back to it must signal, not recurse

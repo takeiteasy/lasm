@@ -256,18 +256,29 @@ included, where wrapping silently instead of erroring would run the wrong
   (let ((bound (ash 1 (1- (* cell-width width)))))
     (and (>= value (- bound)) (< value bound))))
 
-(defun %relative-fits-p (value address descriptor cell-width)
-  "T if VALUE -- the absolute target a RELATIVE candidate's hole folds to --
-encodes as an offset that fits DESCRIPTOR's operand width, computed the same
-way %RELATIVE-OFFSET (below) will at encode time: relative to the address of
+(defun %relative-fits-p (value address descriptor width cell-width)
+  "T if VALUE -- the absolute target a RELATIVE hole's value folds to --
+encodes as an offset that fits WIDTH cells, computed the same way
+%RELATIVE-OFFSET (below) will at encode time: relative to the address of
 the *next* instruction, not this one's own. Used by %CHOOSE-VARIANT's value
 filter so a RELATIVE candidate can compete on width like any other once an
 address is available to compute its offset from, rather than always winning
 by default as the widest candidate. :RELATIVE is rejected on a word-encoded
-machine (instruction.lisp's %CHECK-WORD-RELATIVE, #20), so DESCRIPTOR here
-is always cell-encoded and WIDTH is its operand cell width."
-  (let* ((width (instruction-descriptor-total-operand-width descriptor))
-         (next-address (+ address (instruction-descriptor-size descriptor))))
+machine (instruction.lisp's %CHECK-WORD-RELATIVE/%CHECK-WORD-ONE-OF-RELATIVE,
+#20), so DESCRIPTOR here is always cell-encoded.
+
+WIDTH is deliberately the relative hole's *own* OPERAND-WIDTHS entry, not
+INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (the sum across every hole, #130):
+a multi-hole descriptor with, say, a 1-cell relative hole beside a 2-cell
+plain one would otherwise let a 3-cell-wide offset silently pass this filter
+and then fail %RELATIVE-OFFSET's own (correctly 1-cell) check at encode
+time -- or worse, pick this candidate over a narrower one during relaxation
+on the strength of a fit test that was never really testing this hole's
+width. ADDRESS and DESCRIPTOR's own SIZE, by contrast, describe the whole
+encoded instruction and stay as-is regardless of which hole is relative --
+see %RELATIVE-OFFSET's docstring for why that half was never per-hole to
+begin with."
+  (let ((next-address (+ address (instruction-descriptor-size descriptor))))
     (%fits-signed-width-p (- value next-address) width cell-width)))
 
 (defun %word-variant-fits-p (values descriptor)
@@ -531,7 +542,6 @@ accepts ~A"
            (narrowest (first (stable-sort (copy-list candidates) #'< :key width-key)))
            (resolvedp (lambda (c)
                         (let* ((descriptor (first c))
-                               (mode (instruction-descriptor-mode descriptor))
                                (word-fields (instruction-descriptor-word-fields descriptor)))
                           (handler-case
                               (let ((widths (instruction-descriptor-operand-widths descriptor))
@@ -545,22 +555,28 @@ accepts ~A"
                                   ;; these, so none of the byte-encoded
                                   ;; branches below apply.
                                   (word-fields (%word-variant-fits-p vals descriptor))
-                                  ((and mode (mode-descriptor-relativep mode))
-                                   (%relative-fits-p (first vals) address descriptor cell-width))
-                                  ;; #124/#127: per hole, not per whole mode --
-                                  ;; DESCRIPTOR's own OPERAND-SIGNEDNESS
-                                  ;; (instruction.lisp) already folds in
-                                  ;; MODE-DESCRIPTOR-SIGNEDP for an ungoverned
-                                  ;; hole, so this one branch replaces what
-                                  ;; used to be two (a whole-mode :SIGNED
-                                  ;; branch and a plain unsigned fallback).
+                                  ;; #124/#127/#130: per hole, not per whole
+                                  ;; mode -- DESCRIPTOR's own OPERAND-
+                                  ;; SIGNEDNESS (instruction.lisp) already
+                                  ;; folds in MODE-DESCRIPTOR-SIGNEDP for an
+                                  ;; ungoverned hole, and RELATIVE-HOLE-INDEX
+                                  ;; already folds in a whole-mode :RELATIVE
+                                  ;; as hole 0, so this one branch replaces
+                                  ;; what used to be three (a whole-mode
+                                  ;; :RELATIVE branch, a whole-mode :SIGNED
+                                  ;; branch, and a plain unsigned fallback).
                                   (t (let ((signedness (or (instruction-descriptor-operand-signedness descriptor)
-                                                            (make-list (length widths)))))
-                                       (every (lambda (v w signedp)
-                                                (if signedp
-                                                    (%fits-signed-width-p v w cell-width)
-                                                    (%fits-width-p v w cell-width)))
-                                              vals widths signedness)))))
+                                                            (make-list (length widths))))
+                                           (relative-index (instruction-descriptor-relative-hole-index descriptor)))
+                                       (loop for v in vals
+                                             for w in widths
+                                             for signedp in signedness
+                                             for i from 0
+                                             always (if (eql i relative-index)
+                                                        (%relative-fits-p v address descriptor w cell-width)
+                                                        (if signedp
+                                                            (%fits-signed-width-p v w cell-width)
+                                                            (%fits-width-p v w cell-width))))))))
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
@@ -1051,15 +1067,28 @@ pass chose different widths than the trial pass it followed"))
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
 (defun %relative-offset (address descriptor value line cell-width)
-  "VALUE is the absolute target address a RELATIVE-mode operand (mode.lisp)
-folded to; ADDRESS is this instruction's own address and DESCRIPTOR its
-chosen INSTRUCTION-DESCRIPTOR. Returns the signed offset to encode, computed
-from the address of the *next* instruction -- STEP-MACHINE (emulator.lisp)
-advances PC past the whole instruction before running its semantics, so that
-is the base a branch's own (set! pc (+ pc operand)) actually adds to.
-Signals ASSEMBLY-ERROR if the offset doesn't fit the operand's width, rather
-than silently wrapping to a branch at the wrong address (#23)."
-  (let* ((width (instruction-descriptor-total-operand-width descriptor))
+  "VALUE is the absolute target address the RELATIVE hole named by
+DESCRIPTOR's own RELATIVE-HOLE-INDEX folded to; ADDRESS is this
+instruction's own address and DESCRIPTOR its chosen INSTRUCTION-DESCRIPTOR.
+Returns the signed offset to encode, computed from the address of the
+*next* instruction -- STEP-MACHINE (emulator.lisp) advances PC past the
+whole instruction before running its semantics, so that is the base a
+branch's own (set! pc (+ pc operand)) actually adds to. Signals
+ASSEMBLY-ERROR if the offset doesn't fit the relative hole's own width,
+rather than silently wrapping to a branch at the wrong address (#23).
+
+WIDTH here is the relative hole's own OPERAND-WIDTHS entry, not
+INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (#130): on a multi-hole
+descriptor (the relative hole's own siblings, #130) TOTAL-OPERAND-WIDTH is
+the *sum* across every hole, which would silently accept an offset too wide
+for this hole alone to encode. NEXT-ADDRESS, by contrast, is computed from
+DESCRIPTOR's own SIZE -- the whole encoded instruction's width -- which
+stays correct per-hole for the same reason #129's fixpoint argument holds:
+descriptor size is constant per descriptor regardless of which hole is
+relative, so it was never operand-width-relative to begin with; don't
+\"fix\" this half into a per-hole computation too."
+  (let* ((width (nth (instruction-descriptor-relative-hole-index descriptor)
+                      (instruction-descriptor-operand-widths descriptor)))
          (next-address (+ address (instruction-descriptor-size descriptor)))
          (offset (- value next-address)))
     (unless (%fits-signed-width-p offset width cell-width)
@@ -1106,9 +1135,14 @@ OPERAND-RANGE* alone, as before #115.
 A no-op by design for a word-encoded DESCRIPTOR (WORD-FIELDS non-NIL -- an
 :INLINE field's own RANGE is already a hard boundary chosen at
 DEFINSTRUCTION time, not a WRAP-VALUE truncation, and per-hole :WIDTH
-remains unsupported there regardless of :STRICT) and for a RELATIVE mode
-(%RELATIVE-OFFSET below already range-checks it unconditionally, strict or
-not, since a wrapped branch is a correctness bug regardless).
+remains unsupported there regardless of :STRICT). #130: DESCRIPTOR's own
+RELATIVE-HOLE-INDEX hole, if any, is skipped the same way a whole-mode
+RELATIVE descriptor's single hole used to skip this entire function --
+%RELATIVE-OFFSET below already range-checks that hole unconditionally,
+strict or not, since a wrapped branch is a correctness bug regardless -- but
+every *other* hole of the same descriptor is checked normally, since a
+relative hole's sibling is an ordinary operand with no such unconditional
+check of its own.
 
 #124/#127: the SIGNEDP passed to %OPERAND-RANGE is DESCRIPTOR's own
 per-hole OPERAND-SIGNEDNESS (instruction.lisp), the same source
@@ -1119,24 +1153,26 @@ SIGNED-WIDTH-P's bounds exactly so a strict range check and the ordinary
 value filter never disagree about what \"fits\" -- reading a second,
 possibly NIL (CHOICES is NIL on the forced-suffix path) source here would
 risk exactly that disagreement."
-  (when (and (not (instruction-descriptor-word-fields descriptor))
-             (not (and mode (mode-descriptor-relativep mode))))
-    (loop for value in values
-          for width in (instruction-descriptor-operand-widths descriptor)
-          for choice in (or choices (make-list (length values)))
-          for signedp in (or (instruction-descriptor-operand-signedness descriptor)
-                              (make-list (length values)))
-          for hole-strictp = (or *strict-operand-range*
-                                  (and mode (mode-descriptor-strictp mode))
-                                  (and choice (mode-descriptor-strictp choice)))
-          when hole-strictp
-            do (multiple-value-bind (lo hi)
-                   (%operand-range width cell-width signedp)
-                 (unless (<= lo value hi)
-                   (%assembly-error line
-                                     "~A: operand value ~D out of range for ~D-cell operand ~
+  (unless (instruction-descriptor-word-fields descriptor)
+    (let ((relative-index (instruction-descriptor-relative-hole-index descriptor)))
+      (loop for value in values
+            for width in (instruction-descriptor-operand-widths descriptor)
+            for choice in (or choices (make-list (length values)))
+            for signedp in (or (instruction-descriptor-operand-signedness descriptor)
+                                (make-list (length values)))
+            for i from 0
+            for hole-strictp = (and (not (eql i relative-index))
+                                     (or *strict-operand-range*
+                                         (and mode (mode-descriptor-strictp mode))
+                                         (and choice (mode-descriptor-strictp choice))))
+            when hole-strictp
+              do (multiple-value-bind (lo hi)
+                     (%operand-range width cell-width signedp)
+                   (unless (<= lo value hi)
+                     (%assembly-error line
+                                       "~A: operand value ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
-                                     (instruction-descriptor-name descriptor) value width lo hi))))))
+                                       (instruction-descriptor-name descriptor) value width lo hi)))))))
 
 (defun %make-growable-cells (size cell-width)
   (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
@@ -1172,16 +1208,23 @@ emits two different words."
          (destructuring-bind (kind address descriptor asts line choices) entry
            (declare (ignore kind))
            (let* ((mode (instruction-descriptor-mode descriptor))
+                  (relative-index (instruction-descriptor-relative-hole-index descriptor))
                   (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
-             (if (and mode (mode-descriptor-relativep mode))
-                 ;; %CHECK-RELATIVE-MODE-HOLES (instruction.lisp) guarantees a
-                 ;; RELATIVE mode has exactly one hole, so VALUES here is
-                 ;; always a single-element list.
-                 (setf values (list (%relative-offset address descriptor (first values) line cell-width)))
-                 ;; #74: strict range-checking runs on every other mode --
-                 ;; RELATIVE's own unconditional check above already covers
-                 ;; it, and running both would double-report the same value.
-                 (%check-strict-operand-range! descriptor mode values line cell-width choices))
+             ;; #130: RELATIVE-INDEX names the one hole (of possibly several)
+             ;; whose value is a PC-relative offset -- updated in place,
+             ;; leaving every other hole's value as ASTS folded it. A
+             ;; whole-mode RELATIVE descriptor's RELATIVE-HOLE-INDEX is
+             ;; always 0 (%CHECK-RELATIVE-MODE-HOLES guarantees exactly one
+             ;; hole there), so this subsumes the old single-hole case.
+             (when relative-index
+               (setf (nth relative-index values)
+                     (%relative-offset address descriptor (nth relative-index values) line cell-width)))
+             ;; #74/#130: strict range-checking runs on every hole except
+             ;; RELATIVE-INDEX -- %RELATIVE-OFFSET above already range-checks
+             ;; that hole unconditionally, and %CHECK-STRICT-OPERAND-RANGE!
+             ;; itself now skips it (DESCRIPTOR's own RELATIVE-HOLE-INDEX) so
+             ;; the two checks never double-report the same value.
+             (%check-strict-operand-range! descriptor mode values line cell-width choices)
              (loop with i = (- address origin)
                    for cell in (encode-instruction descriptor values)
                    do (setf (aref cells i) cell) (incf i)))))

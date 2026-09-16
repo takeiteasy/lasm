@@ -234,6 +234,57 @@ target: nop" :machine 'instr-test-machine)))
                       :machine 'instr-test-machine)))
     (fiveam:is (= #x92 (aref (assembly-cells a) 0)))))
 
+;;; Per-hole :RELATIVE (#130) alongside a plain sibling hole -- RELD2's
+;;; relative hole (RF-ABS/RF-REL, a hole-selected sub-opcode selector) is
+;;; only 1 cell wide, but its sibling N hole is 2, so the descriptor's
+;;; TOTAL-OPERAND-WIDTH is 3 -- the fit check and %RELATIVE-OFFSET must
+;;; both use the relative hole's own 1-cell width, not the 3-cell total,
+;;; or an offset that only fits 3 cells would silently pass and then wrap
+;;; instead of erroring.
+
+(defmode rf-abs expr :width 1)
+(defmode rf-rel "#" expr :width 1 :relative t)
+(defmode rf-two (one-of rf-abs rf-rel) "," expr)
+
+(definstruction instr-test-machine reld2
+  (modes rf-two)
+  (encoding (opcode #x69)
+            (operand tgt :mode
+              (variant (choice rf-abs) (sub 0))
+              (variant (choice rf-rel) (sub 1)))
+            (operand cnt :width 2))
+  (semantics (choice-case tgt
+               (rf-abs (set! pc tgt))
+               (rf-rel (set! pc (+ pc tgt))))))
+
+(fiveam:test relative-sibling-hole-fit-check-uses-its-own-width-not-the-total
+  ;; A small forward offset fits RF-REL's own 1-cell width -- ordinary case.
+  ;; RELD2 is 5 bytes (opcode, sub, 1-cell tgt, 2-cell cnt); NEAR sits right
+  ;; after it, so the offset from RELD2's own next-instruction address (5)
+  ;; back to NEAR (also 5) is 0.
+  (let ((a (assemble "reld2 #near, 5
+near: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x69 1 0 5 0 #xEA) (assembly-cells a))))
+  ;; 200 filler NOPs put "end" far out of RF-REL's 1-cell signed range
+  ;; (-128..127), but comfortably inside a 3-cell one (TOTAL-OPERAND-WIDTH,
+  ;; the pre-#130 bug's width) -- must still signal ASSEMBLY-ERROR, not
+  ;; silently wrap RF-REL's own 1-cell offset to the wrong branch target.
+  (fiveam:signals assembly-error
+    (assemble (format nil "reld2 #end, 5~%~{~A~%~}end: nop"
+                       (make-list 200 :initial-element "nop"))
+              :machine 'instr-test-machine)))
+
+(fiveam:test relative-sibling-hole-round-trips-through-a-forward-reference
+  ;; A forward-referenced label through RELD2's relative hole, alongside its
+  ;; plain sibling N -- confirms %LAYOUT's relaxation converges normally for
+  ;; a multi-hole per-hole-relative descriptor (its size is fixed by syntax
+  ;; alone, #130 mirroring #129's own fixpoint argument), not just for a
+  ;; whole-mode RELATIVE mode's single hole.
+  (let ((a (assemble "reld2 #target, 5
+nop
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x69 1 1 5 0 #xEA #xEA) (assembly-cells a)))))
+
 ;;; SIGNED, non-RELATIVE (#30) mode selection -- LDSI (tests/instruction.lisp)
 ;;; declares the signed 1-byte mode before a wider unsigned one, sharing the
 ;;; same "#" expr syntax, mirroring the BRX case above but for the signed

@@ -257,6 +257,13 @@ n)`, also lets it disagree on `:width` (see [Addressing modes, "Per-hole
 for, so a `ldw 200`/`ldw #300`-shaped pair of statements can encode and
 decode with genuinely different operand sizes while sharing one opcode.
 
+It similarly lets a hole disagree on `:relative` (see [Addressing modes,
+"Per-hole `:relative`"](modes.md#per-hole-relative)) — each expanded
+descriptor's own `relative-hole-index` (below) is stamped from which
+alternative it was claimed for, so a `jmr 10`/`jmr #target`-shaped pair of
+statements can encode one operand plainly and the other as a PC-relative
+offset while sharing one opcode.
+
 ### `(sub-opcode ...)` — multi-hole sub-opcode selection
 
 The above selects the sub-opcode cell by *one* hole's matched alternative. A
@@ -343,6 +350,35 @@ lookup `operand-signedness` uses — so two sibling descriptors sharing one
 opcode can have genuinely different total sizes. Computed once per expanded
 descriptor (`%byte-descriptor-forms`), for the same reason
 `operand-signedness` is.
+
+### `relative-hole-index`
+
+Every byte-encoded `instruction-descriptor` also carries a single
+`relative-hole-index` slot — `nil` when no hole of this descriptor is a
+PC-relative offset, else the 0-based index of the one hole that is. Unlike
+`operand-signedness`/`operand-widths`, which are hole-aligned *lists* (any
+number of holes may independently be signed, or independently disagree on
+width), `:relative` is **positional** — at most one hole of a pattern may
+ever be the relative one (`%check-relative-mode-holes`/
+`%check-byte-one-of-relative`, `instruction.lisp`) — so a single index
+suffices. A whole-mode `relative` mode (`mode-descriptor-relativep`) always
+has exactly one hole, so it always stamps `relative-hole-index` as `0`; a
+`one-of` alternative declaring its own `:relative` (see [Addressing modes,
+"Per-hole `:relative`"](modes.md#per-hole-relative)) stamps whichever hole
+it belongs to, or `nil` for a sibling descriptor whose matched alternative
+at that hole isn't relative. Both cases fold into this one slot, so every
+consumer — the assembler's mode selector and `%encode` (see [Assembler,
+"PC-relative offsets"](assembler.md#pc-relative-offsets)), and the
+disassembler's operand rendering (see
+[Disassembler](disassembler.md#relative-operand-rendering)) — reads
+`relative-hole-index` uniformly rather than branching on
+`mode-descriptor-relativep` separately. Computed once per expanded
+descriptor (`%byte-descriptor-forms`, `%byte-relative-hole-index`), for the
+same reason `operand-signedness`/`operand-widths` are. Always `nil` on a
+word-encoded descriptor — `:relative` stays banned outright there
+(`%check-word-relative`/`%check-word-one-of-relative`), since
+`%relative-offset`'s arithmetic assumes a cell-counted operand width a
+word-encoded operand doesn't have.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 

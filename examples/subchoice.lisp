@@ -217,4 +217,64 @@ next: hlt")
   (assert (= 7 (gethash "next" (assembly-symbols assembly))))
   (assert (equalp #(#x30 #x00 #x05 #x30 #x01 #x2C #x01 #x00) (assembly-cells assembly))))
 
+;; #130: per-hole :RELATIVE on a ONE-OF alternative. SC-JMP-ABS and
+;; SC-JMP-REL disagree on :RELATIVE -- JMR's operand is either a plain
+;; absolute jump target (SC-JMP-ABS) or an "#"-prefixed PC-relative branch
+;; offset (SC-JMP-REL) -- legal now that mode.lisp's %CHECK-ONE-OF-ELEMENTS!
+;; no longer rejects :RELATIVE inside ONE-OF, and decodable via the same
+;; (variant (choice m) (sub s)) selector #126 gave the direct/indirect hole
+;; above. Unlike :SIGNED/:WIDTH, which alternative matched changes not just
+;; how the hole decodes but what its *value even means* -- an absolute
+;; target vs. a next-instruction-relative offset -- so both encode
+;; (%RELATIVE-OFFSET, assembler.lisp) and disassembly rendering
+;; (%OPERAND-RENDER-VALUES, disassembler.lisp) consult this descriptor's own
+;; RELATIVE-HOLE-INDEX, precomputed once per expanded descriptor exactly like
+;; OPERAND-SIGNEDNESS/OPERAND-WIDTHS above.
+(defmode sc-jmp-abs expr :width 1)
+(defmode sc-jmp-rel "#" expr :width 1 :relative t)
+(defmode sc-jmp-any (one-of sc-jmp-abs sc-jmp-rel))
+
+(definstruction subchoicefoo jmr
+  (modes sc-jmp-any)
+  (encoding (opcode #x40)
+            (operand tgt :width 1
+              (variant (choice sc-jmp-abs) (sub 0))
+              (variant (choice sc-jmp-rel) (sub 1))))
+  (semantics (choice-case tgt
+               (sc-jmp-abs (set! pc tgt))
+               (sc-jmp-rel (set! pc (+ pc tgt))))))
+
+(format t "~%JMR's two ONE-OF-matched forms disagree on :RELATIVE (#130):~%")
+(let* ((source "jmr #target
+hlt
+target: hlt")
+       (assembly (assemble source :machine 'subchoicefoo))
+       (abs-form (assembly-cells (assemble "jmr 10" :machine 'subchoicefoo))))
+  (format t "  jmr 10      -> ~{~2,'0X~^ ~}~%" (coerce abs-form 'list))
+  (format t "  jmr #target -> ~{~2,'0X~^ ~}~%" (coerce (assembly-cells assembly) 'list))
+  (assert (equalp #(#x40 #x00 #x0A) abs-form))
+  ;; JMR is 3 bytes; TARGET sits after it and one HLT byte, at address 4 --
+  ;; the offset encoded is relative to the *next* instruction's address (3),
+  ;; not JMR's own (0), so 4 - 3 = 1.
+  (assert (equalp #(#x40 #x01 #x01 #x00 #x00) (assembly-cells assembly)))
+  (format t "~%Decoding reads the SC-JMP-ABS-matched hole as a plain value and the ~
+SC-JMP-REL-matched one as a raw (still-relative) offset:~%")
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader abs-form) 0 'subchoicefoo)
+    (declare (ignore size))
+    (assert (string= "JMR" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 10) values))
+    (assert (eq 'sc-jmp-abs (%matched-choice-name choices 0))))
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'subchoicefoo)
+    (declare (ignore size))
+    (assert (string= "JMR" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 1) values))
+    (assert (eq 'sc-jmp-rel (%matched-choice-name choices 0))))
+  (format t "~%Disassembling renders SC-JMP-REL's hole as the resolved absolute target, ~
+same as a whole-mode RELATIVE mode always has:~%")
+  (let ((lines (disassemble-assembly assembly :machine 'subchoicefoo :labels nil :suffixes nil)))
+    (dolist (l lines) (format t "  ~A~%" (disassembly-line-text l)))
+    (assert (string= "jmr #$4" (disassembly-line-text (first lines)))))
+  (format t "~%jmr 10 stays absolute; jmr #target round-trips through its resolved ~
+target address, not its raw encoded offset.~%"))
+
 (format t "~%All assertions passed.~%")

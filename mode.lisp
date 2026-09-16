@@ -259,36 +259,37 @@ reason."
     "Validate every (:ONE-OF ...) element of PATTERN, the DEFMODE NAME is
 building: at least two alternatives; each must already be a registered mode
 (FIND-MODE-DESCRIPTOR signals if not); none may declare a whole-mode
-:RELATIVE/:SUFFIX attribute -- honoring one of those per hole rather than
-per statement needs a byte-encoded machine to have some way to decode which
-alternative was actually written, and (for :RELATIVE) which hole of a
-multi-hole pattern is the relative one, neither of which is designed yet, so
-it stays a follow-up. :STRICT (#115), :SIGNED (#124/#127), and :WIDTH (#129)
-are exempt from this restriction: :STRICT is a pure encode-time range check
-with no size, value, or decode consequence, so it is meaningful and honored
-per hole regardless of encoding scheme (see %CHECK-STRICT-OPERAND-RANGE!,
-assembler.lisp); :SIGNED and :WIDTH are each honored per hole when a
-decode-time record of which alternative matched exists for that hole -- a
-byte-encoded hole carrying a (variant (choice m) (sub s)) selector, or a
-word-encoded hole whose every field variant is (choice m)-selected --
-checked at DEFINSTRUCTION time (instruction.lisp's %CHECK-ONE-OF-SIGNED and
-%CHECK-BYTE-ONE-OF-WIDTH), not here, since this function has no machine or
-encoding scheme in scope. :WIDTH is honored only on a byte-encoded machine;
-a word-encoded one rejects a width-disagreeing hole at DEFINSTRUCTION time
-too, since a word-encoded operand's size always comes from its own field
-width, never from OPERAND-WIDTHS (permanently empty there) -- a per-hole
-:WIDTH has nothing to mean on that scheme. Note the test below is
-MODE-DESCRIPTOR-RELATIVEP, not -SIGNEDP -- SIGNEDP is (OR RELATIVE SIGNED),
-so testing SIGNEDP here would also reject a plain :SIGNED alternative, which
-is exactly what this relaxation is meant to allow; RELATIVE is still caught
-by its own explicit test, and WIDTH is no longer tested here at all. Every
-alternative must have the same hole count as every other, since the
-positional hole <-> operand-field parallel the rest of the pipeline depends
-on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room for a
-:ONE-OF that yields a different field count depending which alternative
-matched; and no two alternatives may share identical (EQUALP, since a
-:LITERAL matches case-insensitively) syntax, since nothing could ever
-disambiguate between them."
+:SUFFIX attribute -- honoring that per hole rather than per statement needs
+a byte-encoded machine to have some way to decode which alternative was
+actually written, which is not designed yet, so it stays a follow-up.
+:STRICT (#115), :SIGNED (#124/#127), :WIDTH (#129), and :RELATIVE (#130) are
+exempt from this restriction: :STRICT is a pure encode-time range check with
+no size, value, or decode consequence, so it is meaningful and honored per
+hole regardless of encoding scheme (see %CHECK-STRICT-OPERAND-RANGE!,
+assembler.lisp); :SIGNED, :WIDTH, and :RELATIVE are each honored per hole
+when a decode-time record of which alternative matched exists for that hole
+-- a byte-encoded hole carrying a (variant (choice m) (sub s)) selector, or
+a word-encoded hole whose every field variant is (choice m)-selected --
+checked at DEFINSTRUCTION time (instruction.lisp's %CHECK-BYTE-ONE-OF-SIGNED,
+%CHECK-BYTE-ONE-OF-WIDTH, and %CHECK-BYTE-ONE-OF-RELATIVE), not here, since
+this function has no machine or encoding scheme in scope. :WIDTH is honored
+only on a byte-encoded machine; a word-encoded one rejects a
+width-disagreeing hole at DEFINSTRUCTION time too, since a word-encoded
+operand's size always comes from its own field width, never from
+OPERAND-WIDTHS (permanently empty there) -- a per-hole :WIDTH has nothing to
+mean on that scheme. :RELATIVE is likewise byte-machine-only -- a
+word-encoded hole whose alternatives declare it at all is rejected at
+DEFINSTRUCTION time (%CHECK-WORD-ONE-OF-RELATIVE) -- and, beyond the
+selector requirement it shares with :SIGNED/:WIDTH, carries its own
+positional rule (at most one hole per expanded descriptor may resolve
+relative), also checked at DEFINSTRUCTION time since it spans more than one
+hole. Every alternative must have the same hole count as every other, since
+the positional hole <-> operand-field parallel the rest of the pipeline
+depends on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room
+for a :ONE-OF that yields a different field count depending which
+alternative matched; and no two alternatives may share identical (EQUALP,
+since a :LITERAL matches case-insensitively) syntax, since nothing could
+ever disambiguate between them."
     (dolist (element pattern)
       (when (eq (first element) :one-of)
         (let* ((alt-names (rest element))
@@ -297,15 +298,16 @@ disambiguate between them."
             (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
                    name alt-names))
           (dolist (alt alts)
-            (when (or (mode-descriptor-relativep alt) (mode-descriptor-suffix alt))
+            (when (mode-descriptor-suffix alt)
               (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
-(:RELATIVE/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
+(:SUFFIX) -- not yet supported per-hole inside ONE-OF"
                      name (mode-descriptor-name alt)))
             (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
               (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
-alternative declares :SIGNED T -- only the outermost ONE-OF a hole belongs to keeps its ~
-CHOICES entry, so a nested :SIGNED can never be recovered at decode time; give ~S itself ~
-:SIGNED T instead, or move the :SIGNED alternative up to this ONE-OF directly"
+alternative declares :SIGNED T or :RELATIVE T -- only the outermost ONE-OF a hole belongs ~
+to keeps its CHOICES entry, so a nested :SIGNED/:RELATIVE can never be recovered at decode ~
+time; give ~S itself :SIGNED T or :RELATIVE T instead, or move the alternative up to this ~
+ONE-OF directly"
                      name (mode-descriptor-name alt) (mode-descriptor-name alt)))
             (when (%pattern-nested-one-of-width-p (mode-descriptor-pattern alt))
               (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
@@ -352,14 +354,18 @@ see \"Per-operand modes\" in docs/modes.md) -- each hole an addressing mode
 declares may independently pick its own syntax from a set of other modes,
 e.g. a bare register or \"[\" expr \"]\" indirection at the same operand
 position. Every ONE-OF alternative must have the same hole count as every
-other and may declare neither :RELATIVE nor :SUFFIX itself (a follow-up
-extends per-hole attributes further); :STRICT, :SIGNED, and :WIDTH are the
-exceptions -- an alternative may declare any of the three on its own,
-honored per hole rather than per statement (see docs/modes.md's \"Per-hole
-:strict\"/\"Per-hole :signed\"/\"Per-hole :width\" sections). A per-hole
-:SIGNED or :WIDTH still needs a way to recover, at decode time, which
-alternative a hole actually matched when its siblings disagree --
-DEFINSTRUCTION (instruction.lisp) enforces that, not this macro. Optionally
+other and may declare neither :SUFFIX itself (a follow-up extends per-hole
+attributes further) nor -- on a word-encoded machine -- :RELATIVE, which
+stays byte-machine-only; :STRICT, :SIGNED, :WIDTH, and :RELATIVE (on a
+byte-encoded machine) are the exceptions -- an alternative may declare any
+of the four on its own, honored per hole rather than per statement (see
+docs/modes.md's \"Per-hole :strict\"/\"Per-hole :signed\"/\"Per-hole
+:width\"/\"PC-relative modes\" sections). A per-hole :SIGNED, :WIDTH, or
+:RELATIVE still needs a way to recover, at decode time, which alternative a
+hole actually matched when its siblings disagree -- DEFINSTRUCTION
+(instruction.lisp) enforces that, not this macro; :RELATIVE additionally
+needs to know, per expanded descriptor, which hole of a multi-hole pattern
+is the relative one, also enforced there. Optionally
 followed by
 :WIDTH n (a default operand byte width instructions using this
 mode may omit from their own encoding), :SIGNED t (this mode's operand is a
