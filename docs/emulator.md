@@ -98,7 +98,12 @@ always has exactly one field (`definstruction` rejects one with more,
 [Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)), so
 this reinterprets the sole fetched value for it, never several — but an
 ordinary (non-`relative`) `:signed` mode may have more than one field, and
-each is reinterpreted independently.
+each is reinterpreted independently. This is per hole, not just per whole
+mode: a `one-of` hole with per-hole `:signed` ([Addressing modes, "Per-hole
+`:signed`"](modes.md#per-hole-signed)) is reinterpreted only when the
+matched descriptor's own `operand-signedness` (instruction.lisp) says that
+hole is signed — a sibling descriptor claimed for the mode's unsigned
+alternative leaves the same hole untouched.
 
 Returns `(values result cost)`: `result` is the executed
 `instruction-descriptor`, or the keyword `:decode-failure` (without
@@ -133,10 +138,16 @@ words consumed — the matched candidate's instruction word plus one per
 `extra-words` count, since decode reconstructs the real encoding from the
 fetched bits rather than trusting which combo it happened to try first.
 
-No `:signed`-mode sign extension happens on this path — a word-encoded
-field's negative-value handling is entirely its variant's `:bias` (see
-[Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)),
-already undone by the debiasing above.
+A value-selected field's negative-value handling is entirely its variant's
+`:bias` (see [Instructions, "Word-encoded
+instructions"](instructions.md#word-encoded-instructions-20)), already
+undone by the debiasing above — no sign extension happens there. A
+`choice`-selected field's own matched `MODE` may declare `:signed t`
+instead (see [Instructions, "`CHOICE`-selected fields and
+`:SIGNED`"](instructions.md#choice-selected-fields-and-signed)): its raw
+field bits (or, for an `extra-word` variant, the fetched extra word) are
+reinterpreted as two's-complement before debiasing, the word-encoded
+analogue of the whole-mode `:signed` reinterpretation above.
 
 `decode-instruction-at` returns a fourth value on both paths: `choices`, the
 `one-of` alternative each operand hole actually matched (a word-encoded

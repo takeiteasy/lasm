@@ -20,32 +20,35 @@ dependency chain, plus a couple of loose couplings:
 ```mermaid
 graph TD
     T128["#128 Multi-hole sub-opcode\nselection (follow-up from #126)"]
-    T124b["#124 (byte-machine half):\nper-hole :width/:signed on byte machines"]
+    T129["#129 Per-hole :width on\nbyte-encoded machines\n(follow-up from #124)"]
     T120["#120 Varying hole counts\nacross ONE-OF alternatives"]
     T119["#119 Zero-hole addressing modes"]
     T85["#85 Forced-variant syntax for\nword machines' inline-vs-extra-word choice"]
-    T124s["#124 (:suffix item)"]
-    T127["#127 Per-hole :signed on\nword-encoded machines\n(independent, implementable now)"]
+    T130["#130 Per-hole :relative on\nONE-OF alternatives\n(follow-up from #124)"]
 
     T120 -.may subsume/depend on.-> T119
-    T124s -.folds into.-> T85
     T128 -.relates to.-> T120
+    T129 -.gated on the same\nFLOOR-fixpoint question as.-> T120
 
-    style T127 fill:#dfd
     style T85 fill:#ffd
 ```
 
 #123 (decode discriminator design), #125 (its implementation, the
 byte-machine sub-opcode cell), #126 (hole-selected sub-opcode, the byte
-analogue of #104's `(choice mode)`), and #122 (`choice-case` dispatch on a
+analogue of #104's `(choice mode)`), #122 (`choice-case` dispatch on a
 cell-encoded machine's `one-of` alternative, unblocked by and closed
-alongside #126) have all landed. #124's byte-machine half (`:width`/
-`:signed` per `one-of` alternative) is next — the per-hole decode record it
-needed now exists. #128 (multi-hole sub-opcode selection, filed as a
-follow-up while implementing #126: today at most one hole per mode may
-carry a sub selector) is worth reading together with #120. #127
-(word-machine `:signed`) remains independent of this chain and can be
-picked up at any time.
+alongside #126), and #124/#127 (per-hole `:signed` on `one-of`
+alternatives, both encoding schemes) have all landed. #124's remaining
+items split into their own tickets: #129 (`:width`, gated on `%layout`'s
+monotone-widening FLOOR fixpoint tolerating a per-hole operand size — the
+open design question, not the decode-side plumbing, which #126 already
+supplied) and #130 (`:relative`, whose own gate — needing `:signed`'s
+decode-time discriminator first — #124/#127 already opened; its remaining
+open question is which hole of a multi-hole pattern is the relative one).
+`:suffix` folds into #85 rather than getting its own ticket. #128
+(multi-hole sub-opcode selection, filed as a follow-up while implementing
+#126: today at most one hole per mode may carry a sub selector) is worth
+reading together with #120.
 
 Other open M4 tickets and what they follow up on (no blocking dependency
 between them or on the chain above):

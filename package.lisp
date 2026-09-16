@@ -219,6 +219,7 @@
    #:word-field-choice-range
    #:word-field-choice-escape
    #:word-field-choice-choice
+   #:word-field-choice-signedp
    #:eval-expr
 
    ;; Assembler

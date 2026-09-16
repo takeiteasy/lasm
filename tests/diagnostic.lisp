@@ -263,3 +263,37 @@ ambi $30" :machine 'diag-test-machine))
   ;; out-of-range value wraps instead of erroring: strictness is a property
   ;; of the matched hole's own alternative, not the whole ONE-OF.
   (fiveam:finishes (assemble "oph [300]" :machine 'diag-test-machine)))
+
+;;; Per-hole :SIGNED on a ONE-OF alternative (#124), interacting with
+;;; per-hole :STRICT (#115) -- %CHECK-STRICT-OPERAND-RANGE! (assembler.lisp)
+;;; reads DESCRIPTOR's own OPERAND-SIGNEDNESS, the same source %CHOOSE-
+;;; VARIANT's value filter uses, so the strict range error quotes the signed
+;;; bound for a hole whose matched alternative is signed, and the unsigned
+;;; one for its sibling -- never a mix of the two sources.
+
+(defmode diag-oo-strict-signed "#" expr :strict t :signed t)
+(defmode diag-oo-strict-unsigned expr :strict t)
+(defmode diag-oo-signed-ph (one-of diag-oo-strict-signed diag-oo-strict-unsigned))
+
+(definstruction diag-test-machine ophs
+  (modes diag-oo-signed-ph)
+  (encoding (opcode #x09)
+            (operand :width 1
+              (variant (choice diag-oo-strict-signed) (sub 0))
+              (variant (choice diag-oo-strict-unsigned) (sub 1))))
+  (semantics (set! a operand)))
+
+(fiveam:test one-of-per-hole-signed-strict-range-quotes-signed-bound
+  (handler-case (progn (assemble "ophs #-200" :machine 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
+    (assembly-error (c) (fiveam:is (search "-128 and 127" (lasm-syntax-error-message c))))))
+
+(fiveam:test one-of-per-hole-signed-strict-in-signed-range-does-not-signal
+  (fiveam:finishes (assemble "ophs #-100" :machine 'diag-test-machine)))
+
+(fiveam:test one-of-per-hole-signed-strict-sibling-quotes-unsigned-bound
+  ;; %OPERAND-RANGE's own unsigned branch accepts the union of the signed
+  ;; and unsigned ranges (-128..255 for a 1-cell operand), matching
+  ;; %FITS-WIDTH-P -- unrelated to this ticket, just the pre-existing bound
+  ;; an unsigned hole's strict check quotes.
+  (handler-case (progn (assemble "ophs 300" :machine 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
+    (assembly-error (c) (fiveam:is (search "-128 and 255" (lasm-syntax-error-message c))))))

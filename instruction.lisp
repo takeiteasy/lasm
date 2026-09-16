@@ -201,7 +201,22 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; work on a byte-encoded machine exactly as they already do on a
   ;; word-encoded one. NIL throughout for a plain (opcode n :sub s) or a
   ;; SUB-OPCODE-less descriptor alike.
-  (sub-choices nil :type list))
+  (sub-choices nil :type list)
+  ;; #124/#127 (M4): byte-encoded machine only, always the same length as
+  ;; OPERAND-WIDTHS when non-NIL -- one boolean per operand hole, T when that
+  ;; hole's operand is a signed quantity. Precomputed at DEFINSTRUCTION time
+  ;; (%BYTE-DESCRIPTOR-FORMS) rather than re-derived per decode (a
+  ;; FIND-MODE-DESCRIPTOR lookup against SUB-CHOICES would work too, but the
+  ;; decoder is the emulator's hot path -- see #84 for this class of
+  ;; per-decode re-derivation this avoids). Always NIL on a word-encoded
+  ;; descriptor, like OPERAND-WIDTHS itself -- #127's per-hole signedness
+  ;; lives on WORD-FIELD-CHOICE-SIGNEDP instead, since a word-encoded
+  ;; descriptor's signedness can differ by *which field-variant combo* this
+  ;; descriptor is, not just by hole. A reader must treat a NIL list here the
+  ;; same as an all-NIL one of the right length -- see the callers in
+  ;; decoder.lisp and assembler.lisp for the shared (OR ... (MAKE-LIST ...))
+  ;; guard.
+  (operand-signedness nil :type list))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -791,7 +806,7 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
-                          &optional hole-alternatives-list sub-opcode sub-choices)
+                          &optional hole-alternatives-list sub-opcode sub-choices operand-signedness)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -801,8 +816,32 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
     :sub-choices ',sub-choices
     :operand-widths ',operand-widths
     :operand-names ',operand-names
+    :operand-signedness ',operand-signedness
     :cycles ,cycles
     :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
+
+(defun %byte-operand-signedness (mode hole-alternatives-list sub-choices n)
+  "Hole-aligned list of N booleans -- this descriptor's own per-hole
+signedness (#124/#127's byte half), computed once per expanded descriptor
+since SUB-CHOICES (and so which ONE-OF alternative a hole selected) can
+differ between sibling descriptors sharing one carrying hole. Entry I is T
+when hole I's operand is a signed quantity: the alternative SUB-CHOICES
+names for that hole, when non-NIL (%CHECK-ONE-OF-SIGNED, below, guarantees a
+descriptor's own SUB-CHOICES entry is populated at the one hole, if any,
+whose alternatives disagree on signedness); else -- an ungoverned hole, or a
+ONE-OF hole whose alternatives all agree, %CHECK-ONE-OF-SIGNED's other
+branch -- MODE's own SIGNEDP for an ungoverned hole, or, for an agreeing
+ONE-OF hole, MODE's own SIGNEDP together with the alternatives' shared one
+(a ONE-OF pattern element contributes no operand syntax of MODE's own, so
+MODE itself never declares :SIGNED at a ONE-OF hole; the alternatives'
+common value is what matters there)."
+  (loop for i below n
+        for alts = (nth i hole-alternatives-list)
+        for chosen = (nth i sub-choices)
+        collect (cond
+                  (chosen (mode-descriptor-signedp (find-mode-descriptor chosen)))
+                  (alts (mode-descriptor-signedp (find-mode-descriptor (first alts))))
+                  (t (mode-descriptor-signedp mode)))))
 
 (defun %resolve-operand-fields (mode operand-subclauses machine name mode-name machine-name)
   "Resolve the (operand ...) subclauses (zero or more whole forms, in
@@ -835,7 +874,7 @@ hole-selected one would both be trying to write it."
            machine name)))
 
 (defun %byte-descriptor-forms (machine name mode-form opcode explicit-sub operand-widths operand-names cycles
-                                semantics-forms hole-alternatives-list sub-spec)
+                                semantics-forms hole-alternatives-list sub-spec mode)
   "One INSTRUCTION-DESCRIPTOR form per byte-encoded addressing-mode use for
 one (MODES ...) variant or single-mode (ENCODING ...) clause -- a single one
 when SUB-SPEC is NIL (the ordinary case, sharing EXPLICIT-SUB, #125's plain
@@ -846,20 +885,25 @@ word-encoded path, generalized here from \"one per field-variant
 combination\" to \"one per matched-alternative pair\" since a byte-encoded
 mode has at most one sub-selected hole (%PARSE-OPERAND-SUBCLAUSES enforces
 this). Every expanded descriptor shares OPCODE, OPERAND-WIDTHS, OPERAND-
-NAMES, and SEMANTICS-FORMS -- only SUB-OPCODE and SUB-CHOICES differ, one
-entry apiece naming this descriptor's own matched alternative at the
-carrying hole (NIL at every other hole)."
+NAMES, and SEMANTICS-FORMS -- only SUB-OPCODE, SUB-CHOICES, and
+OPERAND-SIGNEDNESS (#124/#127, %BYTE-OPERAND-SIGNEDNESS) differ, computed
+fresh per expanded descriptor since SUB-CHOICES itself does. MODE (the
+MODE-DESCRIPTOR MODE-FORM names, already resolved by both call sites) is
+needed only for OPERAND-SIGNEDNESS's own MODE-DESCRIPTOR-SIGNEDP reads."
   (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
-  (if (null sub-spec)
-      (list (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
-                               semantics-forms hole-alternatives-list explicit-sub))
-      (destructuring-bind (hole-index . pairs) sub-spec
-        (mapcar (lambda (pair)
-                  (let ((sub-choices (make-list (length operand-widths) :initial-element nil)))
-                    (setf (nth hole-index sub-choices) (car pair))
-                    (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
-                                       semantics-forms hole-alternatives-list (cdr pair) sub-choices)))
-                pairs))))
+  (let ((n (length operand-widths)))
+    (if (null sub-spec)
+        (list (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+                                 semantics-forms hole-alternatives-list explicit-sub nil
+                                 (%byte-operand-signedness mode hole-alternatives-list nil n)))
+        (destructuring-bind (hole-index . pairs) sub-spec
+          (mapcar (lambda (pair)
+                    (let ((sub-choices (make-list n :initial-element nil)))
+                      (setf (nth hole-index sub-choices) (car pair))
+                      (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+                                         semantics-forms hole-alternatives-list (cdr pair) sub-choices
+                                         (%byte-operand-signedness mode hole-alternatives-list sub-choices n))))
+                  pairs)))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
 ;;; operand encoding, kept as its own code path parallel to the byte-encoded
@@ -920,20 +964,45 @@ carrying hole (NIL at every other hole)."
   ;; choice (decoder.lisp) gives the disassembler (disassembler.lisp, #117)
   ;; a record of which alternative was really encoded, instead of always
   ;; rendering a ONE-OF's first alternative.
-  (choice nil :type (or null symbol)))
+  (choice nil :type (or null symbol))
+  ;; #127 (M4): T when this field's operand is a signed quantity --
+  ;; stamped, at DEFINSTRUCTION time (%WORD-FIELD-CHOICE-FORM), from CHOICE's
+  ;; own MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL, else NIL. Scoped to
+  ;; CHOICE-selected fields only, matching #127's own design: a per-hole
+  ;; :SIGNED needs the same decode-time discriminator per-hole :SIGNED needs
+  ;; on the byte path (SUB-CHOICES, #124) -- a value-selected field (CHOICE
+  ;; NIL) has no ONE-OF alternative of its own to read :SIGNED off in the
+  ;; first place. %WORD-CHOICE-MATCHES-P, %TRY-DECODE-WORD-CANDIDATE
+  ;; (decoder.lisp), and %WORD-FIELD-CHOICE-VALUES all reinterpret a signed
+  ;; field's raw bits as two's-complement before comparing against its
+  ;; (biased) RANGE.
+  (signedp nil :type boolean))
 
 (defun %word-choice-matches-p (raw-value choice)
   "T if RAW-VALUE -- a field's bits as actually fetched or, at
 DEFINSTRUCTION time (#105's %CHECK-OPCODE-DECODABLE!), enumerated -- is what
 CHOICE (a WORD-FIELD-CHOICE) would encode: its exact ESCAPE for an
-:EXTRA-WORD choice, or a value in its (biased) RANGE for an :INLINE one.
-Lives here, not in decoder.lisp (which loads after this file), so
+:EXTRA-WORD choice, or a value in its (biased) RANGE for an :INLINE one --
+reinterpreted as two's-complement over CHOICE's own WIDTH first when
+CHOICE-SIGNEDP (#127), the exact inverse of how a signed field's value is
+encoded (WRAP-VALUE of a biased, possibly negative value -- ENCODE-
+INSTRUCTION, below): without this, a negative-range signed field could never
+match its own encoding, since a wrapped negative value's raw bits, read
+unsigned, fall outside its biased RANGE entirely. Only the :INLINE branch
+reinterprets -- an :EXTRA-WORD choice's ESCAPE is a fixed marker bit pattern
+in the same small field, compared as unsigned regardless of SIGNEDP; the
+signed reinterpretation of the *value itself* on that path happens once the
+following word is fetched (%TRY-DECODE-WORD-CANDIDATE, decoder.lisp), not
+here. Lives here, not in decoder.lisp (which loads after this file), so
 REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
 (decoder.lisp) still uses it for its own, original purpose."
   (ecase (word-field-choice-kind choice)
     (:extra-word (= raw-value (word-field-choice-escape choice)))
-    (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
-               (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice)))))))
+    (:inline (let ((raw-value (if (word-field-choice-signedp choice)
+                                   (signed-value raw-value (word-field-choice-width choice))
+                                   raw-value)))
+               (destructuring-bind (lo . hi) (word-field-choice-range choice)
+                 (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice))))))))
 
 (defun %matched-choice-name (choices index)
   "The mode-name symbol INDEX's hole actually matched, from CHOICES (a
@@ -985,17 +1054,25 @@ as any other sibling pair."
 (defun %word-field-choice-values (choice)
   "Every raw field value CHOICE (a WORD-FIELD-CHOICE) accepts: its ESCAPE
 alone for an :EXTRA-WORD choice, or the whole (biased) RANGE, inclusive, for
-an :INLINE one. Used at DEFINSTRUCTION time by %CHECK-OPCODE-DECODABLE! to
-test two co-tenant descriptors' field menus for disjointness -- field widths
-in practice are small (a handful of bits), so enumerating is simpler than
-range algebra over RANGE/BIAS/ESCAPE together, and cheap: called only when
-two descriptors are about to share an opcode, not on any hot path."
+an :INLINE one -- each already WRAP-VALUEd to CHOICE-SIGNEDP's own field
+width when SIGNEDP (#127), i.e. the actual raw bit pattern decode would fetch
+for that value, not the value itself; %WORD-CHOICE-MATCHES-P (the only
+caller of these, via %HOLE-DISJOINT-P below) expects raw values and does its
+own signed reinterpretation from there, so a mismatch here would silently
+compare the wrong value set. Used at DEFINSTRUCTION time by
+%CHECK-OPCODE-DECODABLE! to test two co-tenant descriptors' field menus for
+disjointness -- field widths in practice are small (a handful of bits), so
+enumerating is simpler than range algebra over RANGE/BIAS/ESCAPE together,
+and cheap: called only when two descriptors are about to share an opcode,
+not on any hot path."
   (ecase (word-field-choice-kind choice)
     (:extra-word (list (word-field-choice-escape choice)))
     (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
                (loop for v from (+ lo (word-field-choice-bias choice))
                        to (+ hi (word-field-choice-bias choice))
-                     collect v)))))
+                     collect (if (word-field-choice-signedp choice)
+                                 (wrap-value v (word-field-choice-width choice))
+                                 v))))))
 
 (defun %hole-disjoint-p (alternatives-a alternatives-b)
   "T if the raw field values ALTERNATIVES-A and ALTERNATIVES-B (two
@@ -1091,32 +1168,98 @@ own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range o
       (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
 or (choice mode), got ~S" field-name selector)))))
 
+(defun %word-variant-signedp-at-parse (v)
+  "V's own signedness (#127), as far as it is knowable at the point
+%CHECK-WORD-VARIANTS runs -- before %CHECK-WORD-VARIANT-CHOICES! (below) has
+backfilled a mixed field's value-selected variants with the one leftover
+ONE-OF alternative. Only a variant already carrying an explicit
+(variant (choice m) ...) form -- WORD-VARIANT-CHOICE already non-NIL at
+parse time -- can be signed; a value-selected (RANGE/:ELSE) variant with no
+CHOICE of its own is always unsigned here, by construction (there is no
+ONE-OF alternative to read :SIGNED off before it is claimed), so it needs no
+raw-chunk splitting below regardless of what it is later backfilled to."
+  (and (word-variant-choice v) (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice v)))))
+
+(define-condition signed-range-out-of-field (error)
+  ((lo :initarg :lo) (hi :initarg :hi) (low-bound :initarg :low-bound) (high-bound :initarg :high-bound))
+  (:documentation "Internal to %WORD-VARIANT-RAW-CHUNKS/%CHECK-WORD-VARIANTS
+(#127) -- a signed :INLINE variant's declared (biased) range doesn't fit its
+field's signed bound. Always caught and re-signalled with FIELD-NAME context
+by %CHECK-WORD-VARIANTS; never escapes to a DEFINSTRUCTION caller directly."))
+
+(defun %word-variant-raw-chunks (lo hi signedp field-width)
+  "The RAW (wrapped, unsigned) bit-pattern interval(s) an :INLINE variant's
+already-biased value-space range [LO, HI] occupies in a FIELD-WIDTH-bit
+field (#127) -- one contiguous (raw-lo . raw-hi) chunk for an unsigned
+variant (raw is just value, so LO and HI must already be within [0, MAX]),
+or, for a signed one, up to two chunks: two's-complement wraps a negative
+value up by 2^FIELD-WIDTH, so a range spanning zero splits into a
+non-negative chunk (0..HI) and a negative-turned-high chunk
+(LO+2^FIELD-WIDTH..MAX) that are not adjacent in raw space, while a range
+entirely on one side of zero wraps to one contiguous chunk same as the
+unsigned case (a non-negative range is already its own raw chunk; an
+all-negative one just shifts up by 2^FIELD-WIDTH, preserving order). Also
+validates LO/HI themselves fit FIELD-WIDTH bits -- the signed bound
+[-2^(FIELD-WIDTH-1), 2^(FIELD-WIDTH-1)-1] rather than the unsigned
+[0, 2^FIELD-WIDTH-1] %CHECK-WORD-VARIANTS used unconditionally before #127 --
+signalling FIELD-NAME-less callers must catch and re-signal with context, or
+just calling this from within %CHECK-WORD-VARIANTS' own error-reporting
+scope."
+  (let ((max (1- (ash 1 field-width))))
+    (if (not signedp)
+        (list (cons lo hi))
+        (let ((low-bound (- (ash 1 (1- field-width)))) (high-bound (1- (ash 1 (1- field-width)))))
+          (unless (and (<= low-bound lo) (<= hi high-bound))
+            (error 'signed-range-out-of-field :lo lo :hi hi :low-bound low-bound :high-bound high-bound))
+          (cond
+            ((>= lo 0) (list (cons lo hi)))
+            ((< hi 0) (list (cons (+ lo (ash 1 field-width)) (+ hi (ash 1 field-width)))))
+            (t (list (cons 0 hi) (cons (+ lo (ash 1 field-width)) max))))))))
+
 (defun %check-word-variants (variants field-width field-name)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
 variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
 :EXTRA-WORD variant's escape value falls inside another variant's biased
-inline range; if two :INLINE variants' biased ranges overlap; or if two
-:EXTRA-WORD variants share one escape value -- every one of these is an
-ambiguity a decoder reading a raw field value could never resolve (the
-RANGE/:ELSE-only versions of the first two checks predate #104; a field with
-only one value-selected :INLINE and one :ELSE, the only shape possible
-before #104, could never trigger the overlap/duplicate-escape cases, so
-this doesn't change any existing DEFINSTRUCTION's validity). #118: CHOICE-
-selected and value-selected variants may now share one field -- see
-%CHECK-WORD-VARIANT-CHOICES!, which resolves which ONE-OF alternative the
-value-selected ones belong to, and runs after this function, so every
+inline range; if two :INLINE variants' raw bit-pattern footprints overlap;
+or if two :EXTRA-WORD variants share one escape value -- every one of these
+is an ambiguity a decoder reading a raw field value could never resolve
+(the RANGE/:ELSE-only versions of the first two checks predate #104; a
+field with only one value-selected :INLINE and one :ELSE, the only shape
+possible before #104, could never trigger the overlap/duplicate-escape
+cases, so this doesn't change any existing DEFINSTRUCTION's validity).
+#118: CHOICE-selected and value-selected variants may now share one field --
+see %CHECK-WORD-VARIANT-CHOICES!, which resolves which ONE-OF alternative
+the value-selected ones belong to, and runs after this function, so every
 range/escape here (CHOICE-selected or not) is still checked against every
-other regardless of kind."
-  (let ((max (1- (ash 1 field-width))) inline-ranges escapes)
+other regardless of kind.
+
+#127: a CHOICE-selected :INLINE variant's fit/overlap checks operate in RAW
+bit-pattern space via %WORD-VARIANT-RAW-CHUNKS, not directly on its
+(possibly negative) value-space RANGE/BIAS the way an unsigned variant's do
+-- a signed variant's declared range is validated against the field's
+*signed* bound, and, since two's complement can split a range spanning zero
+into two non-adjacent raw chunks, overlap is checked chunk-against-chunk,
+not variant-against-variant, so a signed variant correctly collides with an
+unsigned one that shares its high (negative-wrapped) raw values even though
+their value-space ranges never numerically overlap."
+  (let ((max (1- (ash 1 field-width))) inline-chunks escapes)
     (dolist (v variants)
       (ecase (word-variant-kind v)
         (:inline
          (let* ((lo (+ (car (word-variant-range v)) (word-variant-bias v)))
-                (hi (+ (cdr (word-variant-range v)) (word-variant-bias v))))
-           (when (or (< lo 0) (> hi max))
-             (error "DEFINSTRUCTION: field ~S: biased inline range ~D..~D does ~
-not fit its ~D-bit field" field-name lo hi field-width))
-           (cl:push (cons lo hi) inline-ranges)))
+                (hi (+ (cdr (word-variant-range v)) (word-variant-bias v)))
+                (signedp (%word-variant-signedp-at-parse v)))
+           (handler-case
+               (dolist (chunk (%word-variant-raw-chunks lo hi signedp field-width))
+                 (cl:push chunk inline-chunks))
+             (signed-range-out-of-field (c)
+               (error "DEFINSTRUCTION: field ~S: signed inline range ~D..~D does not fit its ~
+~D-bit field (must be between ~D and ~D)"
+                      field-name lo hi field-width (slot-value c 'low-bound) (slot-value c 'high-bound))))
+           (unless signedp
+             (when (or (< lo 0) (> hi max))
+               (error "DEFINSTRUCTION: field ~S: biased inline range ~D..~D does ~
+not fit its ~D-bit field" field-name lo hi field-width)))))
         (:extra-word
          (let ((e (word-variant-escape v)))
            (when (or (< e 0) (> e max))
@@ -1124,20 +1267,20 @@ not fit its ~D-bit field" field-name lo hi field-width))
                     field-name e field-width))
            (cl:push e escapes)))))
     (dolist (e escapes)
-      (dolist (r inline-ranges)
+      (dolist (r inline-chunks)
         (when (<= (car r) e (cdr r))
           (error "DEFINSTRUCTION: field ~S: escape value ~D is inside inline ~
 range ~D..~D -- an encoded field value of ~D can never be told apart from a ~
 genuine inline value" field-name e (car r) (cdr r) e))))
-    ;; #104: reachable now that several CHOICE-selected :INLINE variants can
-    ;; share one field -- unreachable before, when a field had at most one
-    ;; value-selected :INLINE variant.
-    (loop for (r . later) on inline-ranges
+    ;; #104/#127: reachable now that several CHOICE-selected :INLINE
+    ;; variants -- signed or not -- can share one field -- unreachable
+    ;; before, when a field had at most one value-selected :INLINE variant.
+    (loop for (r . later) on inline-chunks
           do (dolist (r2 later)
                (when (<= (max (car r) (car r2)) (min (cdr r) (cdr r2)))
-                 (error "DEFINSTRUCTION: field ~S: inline ranges ~D..~D and ~D..~D overlap -- ~
+                 (error "DEFINSTRUCTION: field ~S: inline ranges overlap in raw field value ~D..~D -- ~
 an encoded field value in the overlap could never be told apart"
-                        field-name (car r) (cdr r) (car r2) (cdr r2)))))
+                        field-name (max (car r) (car r2)) (min (cdr r) (cdr r2))))))
     ;; #104: reachable now that several CHOICE-selected :EXTRA-WORD variants
     ;; can share one field -- unreachable before, when a field had at most
     ;; one :ELSE.
@@ -1170,7 +1313,16 @@ variant's own WORD-VARIANT-CHOICE is SETF to that one alternative -- so
 (CHOICE-CASE dispatch, above) and %RENDER-OPERAND-TEXT (disassembler.lisp)
 all see a real, non-NIL choice for a value-selected row on a mixed field
 and need no separate mixed-field logic of their own; a field with no
-CHOICE variant at all is untouched, exactly as before #118."
+CHOICE variant at all is untouched, exactly as before #118.
+
+#127: this backfill is also why a mixed field may not resolve to a SIGNED
+unclaimed alternative -- %WORD-FIELD-CHOICE-FORM stamps a variant's own
+SIGNEDP from whatever mode its (now-backfilled) CHOICE names, but
+VALUE-SELECTED's own (RANGE lo hi) was validated as unsigned by
+%CHECK-WORD-VARIANTS, which runs before this backfill and so cannot know
+what the eventual unclaimed alternative's signedness will turn out to be.
+Signalled here, once the unclaimed alternative is actually known, rather
+than left to silently skew encode and decode apart."
   (dolist (v variants)
     (let ((choice (word-variant-choice v)))
       (when choice
@@ -1195,6 +1347,25 @@ by a (choice ...) variant, so this field's value-selected variant~P could never 
            (error "DEFINSTRUCTION: field ~S: value-selected (RANGE/:ELSE) variants would be ~
 selected by more than one unclaimed ONE-OF alternative ~S -- nothing could tell them apart ~
 at decode" field-name unclaimed))
+          ;; #127: the unclaimed alternative backfilled onto VALUE-SELECTED
+          ;; below has no (CHOICE ...) of its own -- %WORD-FIELD-CHOICE-FORM
+          ;; (below) would otherwise read this backfilled CHOICE's own
+          ;; MODE-DESCRIPTOR-SIGNEDP and stamp a value-selected variant
+          ;; SIGNEDP T purely because the one alternative left over happens
+          ;; to be signed, even though nothing about VALUE-SELECTED's own
+          ;; (RANGE lo hi) declares a signed range or was validated as one
+          ;; (%CHECK-WORD-VARIANTS, above, runs before this backfill and so
+          ;; validates it as unsigned) -- raw field bits would then be
+          ;; sign-extended on decode against an unsigned-declared range,
+          ;; and %WORD-FIELD-CHOICE-VALUES/%HOLE-DISJOINT-P would silently
+          ;; compare the wrong raw value set. Rejected here rather than
+          ;; left to skew encode/decode apart.
+          ((mode-descriptor-signedp (find-mode-descriptor (first unclaimed)))
+           (error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
+field's value-selected variant~P declares :SIGNED T -- a value-selected variant has no (CHOICE ~
+...) of its own to read :SIGNED from, so a mixed field cannot carry a signed fallback; give ~S ~
+its own (CHOICE ...) variant instead"
+                  field-name (first unclaimed) (length value-selected) (first unclaimed)))
           (t (dolist (v value-selected)
                (setf (word-variant-choice v) (first unclaimed)))))))))
 
@@ -1265,6 +1436,11 @@ extra word."
                  :key (lambda (combo) (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))))
 
 (defun %word-field-choice-form (spec variant)
+  "#127: VARIANT's own SIGNEDP is stamped from its CHOICE alternative's
+MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL -- a value-selected variant
+(CHOICE NIL) has no ONE-OF alternative of its own to read :SIGNED off, so it
+is always NIL, matching #127's design (per-hole :SIGNED is scoped to
+CHOICE-selected fields, the only ones with a decode-time discriminator)."
   `(make-word-field-choice
     :width ,(word-operand-spec-width spec)
     :shift ,(word-operand-spec-shift spec)
@@ -1272,7 +1448,9 @@ extra word."
     :bias ,(word-variant-bias variant)
     :range ',(word-variant-range variant)
     :escape ,(word-variant-escape variant)
-    :choice ',(word-variant-choice variant)))
+    :choice ',(word-variant-choice variant)
+    :signedp ,(and (word-variant-choice variant)
+                    (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant))))))
 
 (defun %word-alternatives-form (specs)
   "One (quoted) form building SPECS' full per-operand variant menu -- shared
@@ -1335,13 +1513,14 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
               :cycles ,cycles
               :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
       (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name))
-             (alternatives-form (%word-alternatives-form specs))
-             (combos (%expand-word-combos specs))
              (hole-alternatives-list (%mode-hole-alternatives mode)))
-        (mapcar (lambda (combo)
-                  (%word-descriptor-form machine name mode-form opcode alternatives-form combo
-                                          cycles semantics-forms hole-alternatives-list))
-                combos))))
+        (%check-word-one-of-signed specs hole-alternatives-list machine name)
+        (let ((alternatives-form (%word-alternatives-form specs))
+              (combos (%expand-word-combos specs)))
+          (mapcar (lambda (combo)
+                    (%word-descriptor-form machine name mode-form opcode alternatives-form combo
+                                            cycles semantics-forms hole-alternatives-list))
+                  combos)))))
 
 (defun %check-word-opcode (machine name opcode)
   "Signal an error if OPCODE doesn't fit MACHINE's instruction-word OPCODE
@@ -1367,6 +1546,63 @@ this once relative branching on a word machine has a design."
   (when (and (mode-descriptor-relativep mode) (%word-machine-p machine-name))
     (error "DEFINSTRUCTION ~S ~S: a :RELATIVE addressing mode is not yet ~
 supported on word-encoded machine ~S" machine name machine-name)))
+
+(defun %one-of-signed-disagreement (hole-alternatives-list)
+  "Hole-aligned list, one entry per HOLE-ALTERNATIVES-LIST -- NIL for a hole
+not governed by any ONE-OF, or for a ONE-OF hole whose alternatives all
+declare the same MODE-DESCRIPTOR-SIGNEDP; the hole's own alternative
+mode-name symbols when they disagree, i.e. exactly the holes #124/#127's
+per-hole :SIGNED needs a decode-time discriminator for. Alternatives that
+agree need no discriminator at all -- the hole's signedness is static
+regardless of which one matched, mode.lisp's %CHECK-ONE-OF-ELEMENTS! having
+already ensured none of them declares :WIDTH/:RELATIVE/:SUFFIX to disagree
+about instead."
+  (mapcar (lambda (alts)
+            (and alts
+                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-signedp (find-mode-descriptor m)))
+                                                   alts)))
+                 alts))
+          hole-alternatives-list))
+
+(defun %check-byte-one-of-signed (hole-alternatives-list sub-spec machine name)
+  "Signal a DEFINSTRUCTION-time error unless every hole whose ONE-OF
+alternatives disagree on signedness (#124's byte half) is the one hole
+SUB-SPEC (#126, %RESOLVE-OPERAND-FIELDS) names as carrying a hole-selected
+(variant (choice m) (sub s)) sub-opcode selector -- that selector is this
+scheme's only per-hole decode record, so it is the only thing that can tell
+apart which alternative's signedness applies once bits are on the wire. A
+byte-encoded mode has at most one sub-selected hole
+(%PARSE-OPERAND-SUBCLAUSES), so at most one disagreeing hole can ever be
+discriminated this way -- a second one is unconditionally an error (#128
+tracks lifting the one-hole restriction this inherits)."
+  (let ((carrying-index (and sub-spec (car sub-spec))))
+    (loop for alts in (%one-of-signed-disagreement hole-alternatives-list)
+          for i from 0
+          when (and alts (not (eql i carrying-index)))
+            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+disagree on :SIGNED, but this hole carries no (variant (choice ...) (sub ...)) selector -- ~
+per-hole :SIGNED needs that selector as its decode-time record of which alternative matched"
+                      machine name i alts))))
+
+(defun %check-word-one-of-signed (specs hole-alternatives-list machine name)
+  "Word-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED (#127): signal a
+DEFINSTRUCTION-time error unless every hole whose ONE-OF alternatives
+disagree on signedness has every one of its field variants CHOICE-selected
+(WORD-VARIANT-CHOICE non-NIL) by the time %PARSE-WORD-OPERAND-SUBCLAUSES
+returns SPECS -- %CHECK-WORD-VARIANT-CHOICES! (above) has already run by
+then, so a mixed field's value-selected variants carry the one alternative
+left unclaimed by its CHOICE-selected siblings; a variant with no CHOICE at
+all (a field with no CHOICE variant whatsoever) leaves decode with no record
+of which alternative a raw value came from, so that case is what this
+rejects."
+  (loop for alts in (%one-of-signed-disagreement hole-alternatives-list)
+        for spec in specs
+        for i from 0
+        when (and alts (notevery #'word-variant-choice (word-operand-spec-variants spec)))
+          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+disagree on :SIGNED, but not every field variant at that hole is CHOICE-selected -- ~
+per-hole :SIGNED needs a (choice m) selector on every variant as its decode-time record ~
+of which alternative matched" machine name i alts)))
 
 (defun %parse-opcode-subclause (machine name opcode-subclause)
   "Parse one (opcode n [:sub s]) subclause -- the same shape at all three
@@ -1447,11 +1683,17 @@ its absolute-mode sibling."
               (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                             opcode operand-subclauses mode mode-sym machine
                                             cycles-form semantics-forms)
+              ;; #124/#127: the word path's own gate runs inside
+              ;; %WORD-MODE-DESCRIPTOR-FORMS itself (unlike the byte path's,
+              ;; called here) -- it needs SPECS, which only that function
+              ;; computes, and there is exactly one call site for it, unlike
+              ;; %BYTE-DESCRIPTOR-FORMS' two.
               (multiple-value-bind (operand-widths operand-names sub-spec)
                   (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
+                (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
                 (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                          opcode sub operand-widths operand-names cycles-form semantics-forms
-                                         (%mode-hole-alternatives mode) sub-spec))))))))
+                                         (%mode-hole-alternatives mode) sub-spec mode))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -1696,13 +1938,14 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                     ',name)
                  (multiple-value-bind (operand-widths operand-names sub-spec)
                      (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
+                   (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
                    `(eval-when (:compile-toplevel :load-toplevel :execute)
                       (register-instruction-variants!
                        ',machine
                        (list ,@(%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                                         opcode sub operand-widths operand-names
                                                         cycles-form (rest semantics-clause)
-                                                        (%mode-hole-alternatives mode) sub-spec)))
+                                                        (%mode-hole-alternatives mode) sub-spec mode)))
                       ',name))))))))))
 
 ;;; Encoding / execution

@@ -74,7 +74,18 @@ the caller (%DECODE-WORD-INSTRUCTION) tries the next candidate at this
 opcode rather than failing outright, since #105's %CHECK-OPCODE-DECODABLE!
 (instruction.lisp) only guarantees candidates are pairwise distinguishable,
 not that every raw bit pattern at the opcode names exactly one of them --
-this trial-and-reject is what actually does the telling-apart."
+this trial-and-reject is what actually does the telling-apart.
+
+#127: a MATCH whose own WORD-FIELD-CHOICE-SIGNEDP is T reinterprets its raw
+bits as two's-complement before debiasing (:INLINE, over its own field
+WIDTH) or the fetched extra word (:EXTRA-WORD, over WIDTH-CELLS*CELL-WIDTH
+bits) -- the exact inverse of how ENCODE-INSTRUCTION's %ENCODE-WORD-
+INSTRUCTION writes a signed value (WRAP-VALUE of a possibly negative,
+already-biased quantity). SIGNEDP is only ever T on a CHOICE-selected MATCH
+(instruction.lisp's %WORD-FIELD-CHOICE-FORM), so an ungoverned or
+value-selected field is unaffected -- unlike the byte path
+(%DECODE-CELL-INSTRUCTION below), word decode was previously never signed at
+all; this is the first case where it is."
   (loop with offset = width-cells
         for alternatives in (instruction-descriptor-word-alternatives descriptor)
         for choice0 = (first alternatives)
@@ -82,9 +93,15 @@ this trial-and-reject is what actually does the telling-apart."
         for match = (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives)
         do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
         collect (ecase (word-field-choice-kind match)
-                  (:inline (- raw (word-field-choice-bias match)))
+                  (:inline (- (if (word-field-choice-signedp match)
+                                   (signed-value raw (word-field-choice-width match))
+                                   raw)
+                              (word-field-choice-bias match)))
                   (:extra-word
-                   (prog1 (%fetch-cells read-cell (+ address offset) width-cells cell-width)
+                   (prog1 (let ((v (%fetch-cells read-cell (+ address offset) width-cells cell-width)))
+                            (if (word-field-choice-signedp match)
+                                (signed-value v (* width-cells cell-width))
+                                v))
                      (incf offset width-cells))))
           into values
         collect match into matches
@@ -125,10 +142,13 @@ alternative mode-name that was actually encoded, instruction.lisp) survives
 to the disassembler (disassembler.lisp, #117). NIL entries mix in freely for
 a value-selected field (WORD-FIELD-CHOICE-CHOICE NIL there).
 
-Word machines never sign-extend a decoded value, unlike the byte path below
--- %CHECK-WORD-RELATIVE (instruction.lisp) forbids a :RELATIVE mode on a
-word-encoded machine outright, so there is no signed word-machine operand to
-extend. This mirrors that asymmetry rather than unifying it."
+Word machines never sign-extend a :RELATIVE decoded value the way the byte
+path below does -- %CHECK-WORD-RELATIVE (instruction.lisp) forbids a
+:RELATIVE mode on a word-encoded machine outright, so there is no signed
+:RELATIVE word-machine operand to extend. A CHOICE-selected field's own
+per-hole :SIGNED (#127) is a separate, narrower case %TRY-DECODE-WORD-
+CANDIDATE handles on its own, via WORD-FIELD-CHOICE-SIGNEDP -- see that
+function."
   (let* ((width-cells (instruction-word-layout-width-cells layout))
          (cell-width (instruction-word-layout-cell-width layout))
          (word (%fetch-cells read-cell address width-cells cell-width))
@@ -153,10 +173,17 @@ A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies SIGNEDP) was
 assembled as a signed quantity (a RELATIVE operand specifically as an
 offset, assembler.lisp's %RELATIVE-OFFSET) but is fetched here as an
 unsigned WIDTH-cell quantity, like every other operand -- reinterpret each
-hole by its own width so callers see a plain signed integer. Unlike RELATIVE
-(%CHECK-RELATIVE-MODE-HOLES, instruction.lisp), a SIGNED mode may have more
-than one hole, so this maps over every VALUE/WIDTH pair rather than assuming
-a single element.
+hole by its own width so callers see a plain signed integer. Per hole, not
+per whole mode (#124/#127): DESCRIPTOR's own OPERAND-SIGNEDNESS
+(instruction.lisp, precomputed at DEFINSTRUCTION time) says which holes are
+signed -- for an ungoverned hole this is just MODE's own SIGNEDP (unchanged
+from before #124), but a ONE-OF hole whose alternatives disagree can differ
+by which alternative a hole-selected (variant (choice m) (sub s)) selector
+resolved to, which is exactly what OPERAND-SIGNEDNESS bakes in per
+descriptor. A NIL OPERAND-SIGNEDNESS (a word-encoded descriptor never
+reaches this function at all, so in practice always non-NIL here, but
+guarded the same way assembler.lisp's readers are) is treated as
+all-unsigned, not an error.
 
 #125: OPCODE's bucket (FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE) holds more than
 one candidate only when every one of them declares its own SUB-OPCODE
@@ -187,8 +214,9 @@ unconditionally before #126."
                                (first candidates))))
           (if (null descriptor)
               (values :decode-failure nil nil)
-              (let* ((mode (instruction-descriptor-mode descriptor))
-                     (widths (instruction-descriptor-operand-widths descriptor))
+              (let* ((widths (instruction-descriptor-operand-widths descriptor))
+                     (signedness (or (instruction-descriptor-operand-signedness descriptor)
+                                      (make-list (length widths))))
                      (values (loop with offset = (+ 1 sub-offset)
                                    for width in widths
                                    collect (loop with v = 0
@@ -197,8 +225,8 @@ unconditionally before #126."
                                                                             (* cell-width i))))
                                                  finally (return v))
                                    do (incf offset width))))
-                (when (and mode (mode-descriptor-signedp mode))
-                  (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
+                (setf values (mapcar (lambda (v w signedp) (if signedp (signed-value v (* cell-width w)) v))
+                                      values widths signedness))
                 (values descriptor values (instruction-descriptor-size descriptor)
                         (instruction-descriptor-sub-choices descriptor))))))))
 
@@ -213,7 +241,10 @@ they cannot decode the same encoding two different ways.
 
 Returns (VALUES descriptor values size choices) on success: the matched
 INSTRUCTION-DESCRIPTOR, its decoded operand VALUES in hole order (already
-sign-extended per mode where applicable -- see %DECODE-CELL-INSTRUCTION), and
+sign-extended per hole where applicable -- see %DECODE-CELL-INSTRUCTION's
+OPERAND-SIGNEDNESS on a byte-encoded machine, #124/#127, and
+%TRY-DECODE-WORD-CANDIDATE's WORD-FIELD-CHOICE-SIGNEDP on a word-encoded
+one), and
 SIZE, the instruction's width in cells, accumulated during decode rather than
 taken from INSTRUCTION-DESCRIPTOR-SIZE (see %DECODE-WORD-INSTRUCTION's
 docstring for why that matters on a word-encoded machine). CHOICES is the

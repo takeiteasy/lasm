@@ -242,6 +242,28 @@ return value — the same hole-aligned record a word-encoded machine's
 reachable on a byte-encoded machine for the first time, not only a
 word-encoded one.
 
+This selector is also what lets the carrying hole's `one-of` alternatives
+disagree on `:signed` (see [Addressing modes, "Per-hole
+`:signed`"](modes.md#per-hole-signed)) — each expanded descriptor's own
+`operand-signedness` (a hole-aligned list of booleans, precomputed at
+`definstruction` time from which alternative it was claimed for) tells
+`decode-instruction-at` which holes to sign-extend, per descriptor rather
+than per whole mode.
+
+### `operand-signedness`
+
+Every byte-encoded `instruction-descriptor` carries a hole-aligned
+`operand-signedness` list, parallel to `operand-widths` — entry *i* is `t`
+when hole *i*'s operand is a signed quantity. For a hole not governed by any
+`one-of`, this is just the mode's own `signedp`, unchanged from before
+per-hole `:signed`. For a `one-of` hole whose alternatives agree on
+signedness, it's their shared value. For a `one-of` hole whose alternatives
+*disagree*, it's whichever alternative this particular sibling descriptor
+was claimed for — the value in `sub-choices` at the same hole. Computed once
+per expanded descriptor (`%byte-descriptor-forms`), not re-derived at decode
+time, so the emulator's hot decode path never re-resolves a mode name per
+instruction.
+
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
 A mode's pattern (`defmode`, [Addressing modes](modes.md)) may declare more
@@ -668,11 +690,53 @@ alternative's own syntax renders back for every one of the five forms,
 
 A `:relative` addressing mode is not supported on a word-encoded machine —
 its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
-assumes a cell-counted operand width. A word-encoded field also has no `:signed`
-mode of its own to sign-extend on decode the way a cell-encoded operand
-does — a negative inline value's sign is carried entirely by its variant's
-`:bias`, decoded back by subtracting the same bias, not by two's-complement
-reinterpretation.
+assumes a cell-counted operand width.
+
+#### `CHOICE`-selected fields and `:SIGNED`
+
+A `choice`-selected variant's own `MODE` may declare `:signed t` — see
+[Addressing modes, "Per-hole `:signed`"](modes.md#per-hole-signed). Unlike a
+plain value-selected variant, whose negative-value sign is carried entirely
+by its `:bias` (decoded back by subtracting the same bias, no
+two's-complement reinterpretation involved), a `choice`-selected variant's
+raw field bits are reinterpreted as two's-complement — over its own field
+width for an `inline` variant, or over the fetched extra word's own width
+for an `(extra-word ...)` one — before debiasing or handing the value back,
+whenever the matched `MODE` says `:signed t`. This is stamped once per
+`word-field-choice`, at `definstruction` time, from the `choice`d mode's own
+`signedp`; a value-selected variant (no `choice` of its own) is never
+signed, even after #118's mixed-field resolution gives it a `choice`
+retroactively — there is no `one-of` alternative for it to read `:signed`
+off in the first place, so a mixed field combining a value-selected
+fallback with a signed `one-of` alternative is rejected at `definstruction`
+time rather than silently doing nothing.
+
+```lisp
+(defmode a-pos expr)
+(defmode a-neg "#" expr :signed t)
+(defmode a-mix (one-of a-pos a-neg))
+
+(definstruction anima16foo seta
+  (modes a-mix)
+  (encoding
+    (opcode 3)
+    (operand val :field a
+      (variant (choice a-pos) inline :range (0 31) :bias 0)
+      (variant (choice a-neg) inline :range (-32 -1) :bias 0)))
+  (semantics (set! (reg 0) val)))
+```
+
+`seta 20` decodes back as the plain unsigned `20`; `seta #-10` decodes back
+as the signed `-10` — the same field, two different reinterpretations,
+decided purely by which alternative was written (see
+[`examples/anima16.lisp`](../examples/anima16.lisp) for this run end to
+end, disassembly included).
+
+A `one-of` hole whose alternatives disagree on `:signed` must have *every*
+one of its field variants `choice`-selected — `definstruction` signals an
+error otherwise, since a value-selected fallback has no decode-time record
+of which alternative, and so which signedness, a raw value came from.
+Alternatives that agree on `:signed` need no such coverage at all.
 
 Unlike the cell-encoded multi-mode form, a single-hole mode may **not** omit
 `(operand ...)` here even though the mode itself has only one hole — there

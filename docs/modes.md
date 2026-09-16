@@ -131,12 +131,14 @@ name). At `defmode` time, every alternative:
   of the pipeline depends on (see [Instructions](instructions.md)) has no
   room for a `one-of` that yields a different field count depending on which
   alternative matched;
-- may declare `:strict` — see [Per-hole `:strict`](#per-hole-strict) below —
-  but none of `:width`, `:signed`, `:relative`, or `:suffix` itself: each of
-  those needs some way to recover, at decode time, which alternative a hole
-  actually matched, and a byte-encoded machine has only the opcode to decode
-  from — honoring them per hole, rather than per statement, is a follow-up
-  (see the tracker);
+- may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below)
+  or `:signed` (see [Per-hole `:signed`](#per-hole-signed) below) — but none
+  of `:width`, `:relative`, or `:suffix` itself: each of those needs some
+  way to recover, at decode time, which alternative a hole actually
+  matched, which honoring them per hole (rather than per statement) doesn't
+  yet have a design for — honoring `:width` per hole specifically would also
+  make an instruction's own size depend on which alternative was written,
+  which the assembler's relaxation pass doesn't support (see the tracker);
 - must not share identical syntax with another alternative in the same
   `one-of` (checked case-insensitively, since a `:literal` element already
   matches that way) — nothing could ever choose between two alternatives
@@ -236,7 +238,7 @@ alternative when it doesn't — see [Disassembler](disassembler.md).
 
 ### Per-hole `:strict`
 
-Unlike `:width`/`:signed`/`:relative`/`:suffix`, a `one-of` alternative *may*
+Unlike `:width`/`:relative`/`:suffix`, a `one-of` alternative *may*
 declare `:strict t` — it needs no decode-time record of which alternative
 matched, since it is a pure encode-time range check with no bearing on size,
 value, or decode at all (see [Diagnostics, "Strict operand
@@ -256,6 +258,60 @@ matched `oo-strict`) but silently wraps the identical value written
 bracketed (it matched `oo-loose`, which declares no `:strict` of its own) —
 the same operand width, two different outcomes, decided purely by which
 syntax was written.
+
+### Per-hole `:signed`
+
+Like `:strict`, a `one-of` alternative may also declare `:signed t` on its
+own — but unlike `:strict`, `:signed` genuinely does need a decode-time
+record of which alternative matched (see [Signed operands](#signed-operands)
+below for what `:signed` affects): a fetched raw value is either
+sign-extended or not, and that choice has to be recoverable from the
+encoding itself, not just known at assemble time. A `one-of` hole only
+needs that record when its alternatives actually *disagree*: `definstruction`
+signals an error only when a `one-of` hole's alternatives declare different
+`:signed` values *and* that hole has no decode-time discriminator — when
+every alternative agrees, the hole's signedness is static regardless of
+which one matched, and no discriminator is required at all.
+
+The discriminator is scheme-specific:
+
+- On a **byte-encoded** machine, the hole must carry a hole-selected
+  `(variant (choice m) (sub s))` selector (see [Instructions, "hole-selected
+  sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+  — the same mechanism `choice-case` and the disassembler already use to
+  recover which alternative was written. Since a byte-encoded mode may carry
+  at most one sub-selected hole, at most one hole per mode can have
+  disagreeing-signedness alternatives.
+- On a **word-encoded** machine, every field variant at that hole must be
+  `(choice m)`-selected (see [Instructions, "CHOICE-selected word
+  fields"](instructions.md#choice-selected-word-fields)) — a plain
+  value-selected fallback variant (no `(choice ...)` of its own) has no
+  alternative of its own to read `:signed` off.
+
+```lisp
+(defmode oo-uval expr)
+(defmode oo-sval "#" expr :signed t)
+(defmode oo-signed (one-of oo-uval oo-sval))
+```
+
+Given a byte-encoded instruction whose sole operand hole uses `oo-signed`
+and carries a `(variant (choice oo-uval) (sub 0)) (variant (choice oo-sval)
+(sub 1))` selector, `ldb 200` decodes back as the plain unsigned `200`
+(matched `oo-uval`) while `ldb #-100` decodes back as the signed `-100`
+(matched `oo-sval`) — the identical field width, two different
+reinterpretations, decided purely by which alternative was written (see
+[`examples/subchoice.lisp`](../examples/subchoice.lisp) for this run end to
+end, and [`examples/anima16.lisp`](../examples/anima16.lisp) for the
+word-encoded equivalent).
+
+Per-hole `:width` remains unsupported inside `one-of` on both encoding
+schemes — on a byte-encoded machine it is a real gap (a per-hole width would
+make an instruction's own size depend on which alternative was written,
+which the assembler's relaxation pass doesn't support yet); on a
+**word-encoded** machine it is permanently, intentionally out of scope
+instead, since a word-encoded operand's size always comes from its own
+field width, never from `operand-widths` (which is always empty there) —
+there is nothing for a per-hole `:width` to mean on that scheme.
 
 ## Signed operands
 

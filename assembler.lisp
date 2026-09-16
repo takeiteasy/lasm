@@ -544,9 +544,20 @@ accepts ~A"
                                   (word-fields (%word-variant-fits-p vals descriptor))
                                   ((and mode (mode-descriptor-relativep mode))
                                    (%relative-fits-p (first vals) address descriptor cell-width))
-                                  ((and mode (mode-descriptor-signedp mode))
-                                   (every (lambda (v w) (%fits-signed-width-p v w cell-width)) vals widths))
-                                  (t (every (lambda (v w) (%fits-width-p v w cell-width)) vals widths))))
+                                  ;; #124/#127: per hole, not per whole mode --
+                                  ;; DESCRIPTOR's own OPERAND-SIGNEDNESS
+                                  ;; (instruction.lisp) already folds in
+                                  ;; MODE-DESCRIPTOR-SIGNEDP for an ungoverned
+                                  ;; hole, so this one branch replaces what
+                                  ;; used to be two (a whole-mode :SIGNED
+                                  ;; branch and a plain unsigned fallback).
+                                  (t (let ((signedness (or (instruction-descriptor-operand-signedness descriptor)
+                                                            (make-list (length widths)))))
+                                       (every (lambda (v w signedp)
+                                                (if signedp
+                                                    (%fits-signed-width-p v w cell-width)
+                                                    (%fits-width-p v w cell-width)))
+                                              vals widths signedness)))))
                             (unresolved-label () :unresolved)))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
@@ -1091,21 +1102,33 @@ OPERAND-RANGE* alone, as before #115.
 
 A no-op by design for a word-encoded DESCRIPTOR (WORD-FIELDS non-NIL -- an
 :INLINE field's own RANGE is already a hard boundary chosen at
-DEFINSTRUCTION time, not a WRAP-VALUE truncation, and per-hole :WIDTH/
-:SIGNED remain unsupported there regardless of :STRICT) and for a RELATIVE
-mode (%RELATIVE-OFFSET below already range-checks it unconditionally,
-strict or not, since a wrapped branch is a correctness bug regardless)."
+DEFINSTRUCTION time, not a WRAP-VALUE truncation, and per-hole :WIDTH
+remains unsupported there regardless of :STRICT) and for a RELATIVE mode
+(%RELATIVE-OFFSET below already range-checks it unconditionally, strict or
+not, since a wrapped branch is a correctness bug regardless).
+
+#124/#127: the SIGNEDP passed to %OPERAND-RANGE is DESCRIPTOR's own
+per-hole OPERAND-SIGNEDNESS (instruction.lisp), the same source
+%CHOOSE-VARIANT's value filter reads (assembler.lisp, above) -- not CHOICES,
+even though CHOICES is already threaded through this loop for :STRICT.
+%OPERAND-RANGE's own docstring promises it mirrors %FITS-WIDTH-P/%FITS-
+SIGNED-WIDTH-P's bounds exactly so a strict range check and the ordinary
+value filter never disagree about what \"fits\" -- reading a second,
+possibly NIL (CHOICES is NIL on the forced-suffix path) source here would
+risk exactly that disagreement."
   (when (and (not (instruction-descriptor-word-fields descriptor))
              (not (and mode (mode-descriptor-relativep mode))))
     (loop for value in values
           for width in (instruction-descriptor-operand-widths descriptor)
           for choice in (or choices (make-list (length values)))
+          for signedp in (or (instruction-descriptor-operand-signedness descriptor)
+                              (make-list (length values)))
           for hole-strictp = (or *strict-operand-range*
                                   (and mode (mode-descriptor-strictp mode))
                                   (and choice (mode-descriptor-strictp choice)))
           when hole-strictp
             do (multiple-value-bind (lo hi)
-                   (%operand-range width cell-width (and mode (mode-descriptor-signedp mode)))
+                   (%operand-range width cell-width signedp)
                  (unless (<= lo value hi)
                    (%assembly-error line
                                      "~A: operand value ~D out of range for ~D-cell operand ~

@@ -193,7 +193,14 @@ declared in `(modes ...)`:
      candidate, even though `200` would fit an ordinary (non-`:signed`) mode
      of the same width. Only `relative` errors instead of falling back at
      encode time (see "PC-relative offsets" below); a `:signed` operand that
-     doesn't fit any candidate falls back and wraps like any other mode.
+     doesn't fit any candidate falls back and wraps like any other mode. This
+     is a *per-hole*, not per-candidate, check: a candidate whose mode has a
+     `one-of` hole with per-hole `:signed` ([Addressing modes, "Per-hole
+     `:signed`"](modes.md#per-hole-signed)) fits each hole against
+     `%fits-signed-width-p` or `%fits-width-p` individually, reading the
+     descriptor's own `operand-signedness` (precomputed at `definstruction`
+     time from which `one-of` alternative that hole was claimed for) rather
+     than one signed/unsigned choice for the whole candidate.
    - A **word-encoded** candidate (#20, `instruction-descriptor-word-fields`
      non-`nil` — see "Word-encoded instructions" below) fits by a different
      rule entirely: each hole's value must fall inside that candidate's own

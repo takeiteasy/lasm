@@ -63,6 +63,26 @@
   (encoding (opcode #x00))
   (semantics (trap :halt)))
 
+;; #124/#127: per-hole :SIGNED on a ONE-OF alternative. SC-UVAL and SC-SVAL
+;; disagree on signedness (unsigned bare literal vs. a "#"-prefixed signed
+;; one) -- legal now that mode.lisp's %CHECK-ONE-OF-ELEMENTS! no longer
+;; rejects :SIGNED inside ONE-OF, *and* actually decodable, since this hole
+;; carries the same (variant (choice m) (sub s)) selector #126 gave the
+;; direct/indirect hole above -- the decode-time record instruction.lisp's
+;; %CHECK-BYTE-ONE-OF-SIGNED requires whenever a ONE-OF hole's alternatives
+;; disagree on :SIGNED.
+(defmode sc-uval expr)
+(defmode sc-sval "#" expr :signed t)
+(defmode sc-mixed (one-of sc-uval sc-sval))
+
+(definstruction subchoicefoo ldb
+  (modes sc-mixed)
+  (encoding (opcode #x20)
+            (operand val :width 1
+              (variant (choice sc-uval) (sub 0))
+              (variant (choice sc-sval) (sub 1))))
+  (semantics (set! a val)))
+
 (format t "~&LDA's two ONE-OF-matched forms, sharing opcode #x10 and one mode:~%")
 (let ((direct-form (assembly-cells (assemble "lda 5" :machine 'subchoicefoo)))
       (indirect-form (assembly-cells (assemble "lda [5]" :machine 'subchoicefoo))))
@@ -115,5 +135,26 @@ CHOICE-CASE took the indirect branch.~%" (sref m 'a)))))
     (assert (string= "lda $5" (disassembly-line-text (first lines))))
     (assert (string= "lda [$7]" (disassembly-line-text (second lines))))
     (format t "~%Both round-trip to their own real syntax.~%")))
+
+(format t "~%LDB's two ONE-OF-matched forms disagree on signedness (#124/#127):~%")
+(let ((unsigned-form (assembly-cells (assemble "ldb 200" :machine 'subchoicefoo)))
+      (signed-form (assembly-cells (assemble "ldb #-100" :machine 'subchoicefoo))))
+  (format t "  ldb 200   -> ~{~2,'0X~^ ~}~%" (coerce unsigned-form 'list))
+  (format t "  ldb #-100 -> ~{~2,'0X~^ ~}~%" (coerce signed-form 'list))
+  (assert (equalp #(#x20 #x00 #xC8) unsigned-form))
+  (assert (equalp #(#x20 #x01 #x9C) signed-form))
+  (format t "~%Decoding reinterprets only the SC-SVAL-matched hole as signed:~%")
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader unsigned-form) 0 'subchoicefoo)
+    (declare (ignore size))
+    (assert (string= "LDB" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 200) values))
+    (assert (eq 'sc-uval (%matched-choice-name choices 0))))
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader signed-form) 0 'subchoicefoo)
+    (declare (ignore size))
+    (assert (string= "LDB" (instruction-descriptor-name descriptor)))
+    (assert (equal (list -100) values))
+    (assert (eq 'sc-sval (%matched-choice-name choices 0))))
+  (format t "  ldb 200   decodes back to 200 (SC-UVAL, unsigned)~%")
+  (format t "  ldb #-100 decodes back to -100 (SC-SVAL, signed)~%"))
 
 (format t "~%All assertions passed.~%")

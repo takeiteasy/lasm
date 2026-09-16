@@ -209,23 +209,55 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
   (defun %mode-hole-alternatives (mode &optional seen)
     (%pattern-hole-alternatives (mode-descriptor-pattern mode) seen))
 
+  (defun %pattern-nested-one-of-signed-p (pattern &optional seen)
+    "T if any :ONE-OF element nested anywhere in PATTERN -- at any depth, not
+just PATTERN's own top-level elements -- has an alternative declaring
+:SIGNED T. Used by %CHECK-ONE-OF-ELEMENTS! to reject a nested :ONE-OF's
+:SIGNED alternative: %MATCH-MODE-ELEMENTS' outermost-ONE-OF-wins rule (this
+file) means only the *outermost* :ONE-OF a hole belongs to ever gets that
+hole's CHOICES entry, so a :SIGNED declared on some inner alternative -- two
+:ONE-OF levels down from the hole a DEFINSTRUCTION site actually sees -- has
+no decode-time record anywhere that could recover it; letting it through here
+would silently not honor it later instead of erroring where the mistake is
+made. SEEN guards the same hand-written-redefinition-cycle case
+%MODE-HOLE-COUNT does, for the same reason."
+    (loop for element in pattern
+          thereis (when (eq (first element) :one-of)
+                    (let ((alts (mapcar #'find-mode-descriptor (rest element))))
+                      (or (some #'mode-descriptor-signedp alts)
+                          (some (lambda (alt)
+                                  (let ((alt-name (mode-descriptor-name alt)))
+                                    (unless (member alt-name seen)
+                                      (%pattern-nested-one-of-signed-p
+                                       (mode-descriptor-pattern alt) (cons alt-name seen)))))
+                                alts))))))
+
   (defun %check-one-of-elements! (name pattern)
     "Validate every (:ONE-OF ...) element of PATTERN, the DEFMODE NAME is
 building: at least two alternatives; each must already be a registered mode
 (FIND-MODE-DESCRIPTOR signals if not); none may declare a whole-mode
-:WIDTH/:SIGNED/:RELATIVE/:SUFFIX attribute -- honoring one of those per hole
-rather than per statement needs a byte-encoded machine to have some way to
-decode which alternative was actually written (it has only the opcode
-today), so it stays a follow-up; :STRICT is exempt from this restriction
-(#115) -- it is a pure encode-time range check with no size, value, or
-decode consequence, so it is meaningful and honored per hole regardless of
-encoding scheme (see %CHECK-STRICT-OPERAND-RANGE!, assembler.lisp). Every
-alternative must have the same hole count as every other, since the
-positional hole <-> operand-field parallel the rest of the pipeline depends
-on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room for a
-:ONE-OF that yields a different field count depending which alternative
-matched; and no two alternatives may share identical (EQUALP, since a
-:LITERAL matches case-insensitively) syntax, since nothing could ever
+:WIDTH/:RELATIVE/:SUFFIX attribute -- honoring one of those per hole rather
+than per statement needs a byte-encoded machine to have some way to decode
+which alternative was actually written (it has only the opcode today), so it
+stays a follow-up. :STRICT (#115) and :SIGNED (#124/#127) are exempt from
+this restriction: :STRICT is a pure encode-time range check with no size,
+value, or decode consequence, so it is meaningful and honored per hole
+regardless of encoding scheme (see %CHECK-STRICT-OPERAND-RANGE!,
+assembler.lisp); :SIGNED is honored per hole when a decode-time record of
+which alternative matched exists for that hole -- a byte-encoded hole
+carrying a (variant (choice m) (sub s)) selector, or a word-encoded hole
+whose every field variant is (choice m)-selected -- checked at DEFINSTRUCTION
+time (instruction.lisp's %CHECK-ONE-OF-SIGNED), not here, since this function
+has no machine or encoding scheme in scope. Note the test below is
+MODE-DESCRIPTOR-RELATIVEP, not -SIGNEDP -- SIGNEDP is (OR RELATIVE SIGNED),
+so testing SIGNEDP here would also reject a plain :SIGNED alternative, which
+is exactly what this relaxation is meant to allow; RELATIVE is still caught
+by its own explicit test. Every alternative must have the same hole count as
+every other, since the positional hole <-> operand-field parallel the rest of
+the pipeline depends on (instruction.lisp, decoder.lisp, disassembler.lisp)
+has no room for a :ONE-OF that yields a different field count depending which
+alternative matched; and no two alternatives may share identical (EQUALP,
+since a :LITERAL matches case-insensitively) syntax, since nothing could ever
 disambiguate between them."
     (dolist (element pattern)
       (when (eq (first element) :one-of)
@@ -236,10 +268,16 @@ disambiguate between them."
                    name alt-names))
           (dolist (alt alts)
             (when (or (mode-descriptor-width alt) (mode-descriptor-relativep alt)
-                      (mode-descriptor-signedp alt) (mode-descriptor-suffix alt))
+                      (mode-descriptor-suffix alt))
               (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
-(:WIDTH/:SIGNED/:RELATIVE/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
-                     name (mode-descriptor-name alt))))
+(:WIDTH/:RELATIVE/:SUFFIX) -- not yet supported per-hole inside ONE-OF"
+                     name (mode-descriptor-name alt)))
+            (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
+              (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+alternative declares :SIGNED T -- only the outermost ONE-OF a hole belongs to keeps its ~
+CHOICES entry, so a nested :SIGNED can never be recovered at decode time; give ~S itself ~
+:SIGNED T instead, or move the :SIGNED alternative up to this ONE-OF directly"
+                     name (mode-descriptor-name alt) (mode-descriptor-name alt))))
           (let ((counts (remove-duplicates (mapcar #'%mode-hole-count alts))))
             (when (> (length counts) 1)
               (error "DEFMODE ~S: ONE-OF alternatives ~S have differing hole counts ~S -- ~
@@ -279,8 +317,14 @@ see \"Per-operand modes\" in docs/modes.md) -- each hole an addressing mode
 declares may independently pick its own syntax from a set of other modes,
 e.g. a bare register or \"[\" expr \"]\" indirection at the same operand
 position. Every ONE-OF alternative must have the same hole count as every
-other and may declare none of :WIDTH/:SIGNED/:RELATIVE/:STRICT/:SUFFIX
-itself (a follow-up extends per-hole attributes). Optionally followed by
+other and may declare none of :WIDTH/:RELATIVE/:SUFFIX itself (a follow-up
+extends per-hole attributes further); :STRICT and :SIGNED are the exceptions
+-- an alternative may declare either on its own, honored per hole rather
+than per statement (see docs/modes.md's \"Per-hole :strict\"/\"Per-hole
+:signed\" sections). A per-hole :SIGNED still needs a way to recover, at
+decode time, which alternative a hole actually matched when its siblings
+disagree on signedness -- DEFINSTRUCTION (instruction.lisp) enforces that,
+not this macro. Optionally followed by
 :WIDTH n (a default operand byte width instructions using this
 mode may omit from their own encoding), :SIGNED t (this mode's operand is a
 signed quantity -- the emulator sign-extends it and the assembler

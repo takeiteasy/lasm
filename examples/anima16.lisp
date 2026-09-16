@@ -128,6 +128,31 @@
   (encoding (opcode 0))
   (semantics (trap :halt)))
 
+;; #124/#127: per-hole :SIGNED on a ONE-OF alternative, word-encoded half.
+;; A-POS/A-NEG disagree on signedness -- legal now that mode.lisp's
+;; %CHECK-ONE-OF-ELEMENTS! no longer rejects :SIGNED inside ONE-OF -- and
+;; actually decodable, since both of A-MIX's alternatives are CHOICE-selected
+;; on field A (instruction.lisp's %CHECK-WORD-ONE-OF-SIGNED requires every
+;; variant at a disagreeing-signed hole to be, since that CHOICE is the
+;; decode-time record of which alternative -- and so which signedness --
+;; applies). A-NEG's own WORD-FIELD-CHOICE-SIGNEDP, stamped from its
+;; MODE-DESCRIPTOR-SIGNEDP, is what makes %TRY-DECODE-WORD-CANDIDATE
+;; (decoder.lisp) reinterpret its raw field bits as two's-complement before
+;; comparing against its declared (-16 15) range or reporting the decoded
+;; value.
+(defmode a-pos expr)
+(defmode a-neg "#" expr :signed t)
+(defmode a-mix (one-of a-pos a-neg))
+
+(definstruction anima16foo seta
+  (modes a-mix)
+  (encoding
+    (opcode 3)
+    (operand val :field a
+      (variant (choice a-pos) inline :range (0 31) :bias 0)
+      (variant (choice a-neg) inline :range (-32 -1) :bias 0)))
+  (semantics (set! (reg 0) val)))
+
 (format t "~&Encoding, by matched alternative -- CHOICE-selected and ~
 value-selected sharing one field (LD):~%")
 (let ((reg-form (assembly-cells (assemble "ld 1, 0" :machine 'anima16foo)))
@@ -220,3 +245,30 @@ CHOICE-selected or value-selected):~%")
     (assert (string= "ld $5,#$3E8" (disassembly-line-text (sixth lines))))
     (format t "~%All five LD forms round-trip to their own real syntax, ~
 CHOICE-selected and value-selected rows alike.~%")))
+
+(format t "~%SETA's A-POS/A-NEG disagree on signedness (#124/#127):~%")
+(let ((pos-form (assembly-cells (assemble "seta 20" :machine 'anima16foo)))
+      (neg-form (assembly-cells (assemble "seta #-10" :machine 'anima16foo))))
+  (format t "  seta 20    -> ~{~4,'0X~^ ~}~%" (coerce pos-form 'list))
+  (format t "  seta #-10  -> ~{~4,'0X~^ ~}~%" (coerce neg-form 'list))
+  (format t "~%Decoding reinterprets only the A-NEG-matched field as signed:~%")
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader pos-form) 0 'anima16foo)
+    (declare (ignore size))
+    (assert (string= "SETA" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 20) values))
+    (assert (eq 'a-pos (word-field-choice-choice (first choices)))))
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader neg-form) 0 'anima16foo)
+    (declare (ignore size))
+    (assert (string= "SETA" (instruction-descriptor-name descriptor)))
+    (assert (equal (list -10) values))
+    (assert (eq 'a-neg (word-field-choice-choice (first choices)))))
+  (format t "  seta 20    decodes back to 20 (A-POS, unsigned)~%")
+  (format t "  seta #-10  decodes back to -10 (A-NEG, signed)~%")
+  (format t "~%Disassembling round-trips both forms to their own real syntax:~%")
+  (let ((lines (disassemble-assembly (assemble "seta 20
+seta #-10" :machine 'anima16foo) :machine 'anima16foo :labels nil)))
+    (dolist (l lines) (format t "  ~A~%" (disassembly-line-text l)))
+    (assert (string= "seta $14" (disassembly-line-text (first lines))))
+    (assert (string= "seta #-10" (disassembly-line-text (second lines))))))
+
+(format t "~%All assertions passed.~%")

@@ -897,6 +897,27 @@
   (encoding (opcode 2))
   (semantics (trap :halt)))
 
+;;; Per-hole :SIGNED on a ONE-OF alternative, word half (#127, split from
+;;; #124). WSI-POS/WSI-NEG disagree on signedness -- legal now that
+;;; mode.lisp's %CHECK-ONE-OF-ELEMENTS! no longer rejects :SIGNED inside
+;;; ONE-OF -- and both alternatives are CHOICE-selected on FIELD SRC (10
+;;; bits), which %CHECK-WORD-ONE-OF-SIGNED (instruction.lisp) requires
+;;; whenever a hole's alternatives disagree: it is the decode-time record of
+;;; which alternative -- and so which signedness -- applies.
+
+(defmode wsi-pos expr)
+(defmode wsi-neg "#" expr :signed t)
+(defmode wsi-mix (one-of wsi-pos wsi-neg))
+
+(definstruction mixed-field-test-machine wsi
+  (modes wsi-mix)
+  (encoding
+    (opcode 3)
+    (operand value :field src
+      (variant (choice wsi-pos) inline :range (0 511) :bias 0)
+      (variant (choice wsi-neg) inline :range (-512 -1) :bias 0)))
+  (semantics (set! a value)))
+
 ;; WCC's two sibling descriptors (one per matched CHOICE) share one identical
 ;; semantics-fn (%SEMANTICS-FN-FORM builds it once per DEFINSTRUCTION variant,
 ;; from the same SEMANTICS-FORMS/OPERAND-NAMES/HOLE-ALTERNATIVES-LIST) -- so
@@ -976,6 +997,110 @@
         (m (make-machine 'word-test-machine)))
     (execute-instruction descriptor m (list 5) (list (find-mode-descriptor 'wc-ind)))
     (fiveam:is (= 5 (sref m 'b)))))
+
+;;; Per-hole :SIGNED on a ONE-OF alternative, word half (#127).
+
+(fiveam:test one-of-signed-stamps-word-field-choice-signedp
+  ;; #20's combo expansion doesn't guarantee declaration order, so pick each
+  ;; sibling by which alternative its own WORD-FIELD-CHOICE-CHOICE names,
+  ;; rather than assuming FIRST/SECOND.
+  (let* ((descs (find-instruction-variants 'mixed-field-test-machine "WSI"))
+         (pos (find 'wsi-pos descs :key (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d))))))
+         (neg (find 'wsi-neg descs :key (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d)))))))
+    (fiveam:is (null (word-field-choice-signedp (first (instruction-descriptor-word-fields pos)))))
+    (fiveam:is (eq t (word-field-choice-signedp (first (instruction-descriptor-word-fields neg)))))))
+
+(fiveam:test one-of-signed-word-encode-decode-round-trips-the-negative-alternative
+  (let* ((assembly (assemble "wsi #-100" :machine 'mixed-field-test-machine))
+         (reader (vector-cell-reader (assembly-cells assembly))))
+    (multiple-value-bind (descriptor values size choices) (decode-instruction-at reader 0 'mixed-field-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "WSI" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(-100) values))
+      (fiveam:is (eq 'wsi-neg (%matched-choice-name choices 0))))))
+
+(fiveam:test one-of-signed-word-encode-decode-round-trips-the-unsigned-alternative
+  (let* ((assembly (assemble "wsi 200" :machine 'mixed-field-test-machine))
+         (reader (vector-cell-reader (assembly-cells assembly))))
+    (multiple-value-bind (descriptor values size choices) (decode-instruction-at reader 0 'mixed-field-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "WSI" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(200) values))
+      (fiveam:is (eq 'wsi-pos (%matched-choice-name choices 0))))))
+
+(fiveam:test one-of-signed-word-disassembles-both-alternatives
+  (let ((lines (disassemble-assembly (assemble "wsi 200
+wsi #-100" :machine 'mixed-field-test-machine)
+                                      :machine 'mixed-field-test-machine :labels nil)))
+    (fiveam:is (string= "wsi $C8" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "wsi #-100" (disassembly-line-text (second lines))))))
+
+;; A hole whose ONE-OF alternatives disagree on signedness but has a
+;; value-selected (no CHOICE) variant has no decode-time record of which
+;; alternative -- and so which signedness -- a raw value came from.
+(fiveam:test one-of-signed-word-mixed-field-with-value-selected-fallback-signals-error
+  ;; #118's mixed-field fallback would otherwise let a plain (RANGE ...)
+  ;; variant (no CHOICE of its own) inherit WSI-NEG's signedness once
+  ;; %CHECK-WORD-VARIANT-CHOICES! backfills its CHOICE -- but this signals
+  ;; before that backfill even runs: %CHECK-WORD-VARIANTS validates a
+  ;; not-yet-CHOICE-selected variant's range as unsigned, and -512..-1 has no
+  ;; valid unsigned 10-bit encoding.
+  (fiveam:signals error
+    (eval '(definstruction mixed-field-test-machine wsibad
+             (modes wsi-mix)
+             (encoding (opcode 4)
+                       (operand value :field src
+                         (variant (choice wsi-pos) inline :range (0 511) :bias 0)
+                         (variant (range -512 -1) inline)))
+             (semantics nil)))))
+
+;; A mixed field whose value-selected variant's own declared range is
+;; unsigned-valid on its face (600..700 fits a 10-bit field's 0..1023
+;; unsigned range, so %CHECK-WORD-VARIANTS above raises nothing) still must
+;; not resolve to a SIGNED unclaimed alternative -- %WORD-FIELD-CHOICE-FORM
+;; would otherwise stamp SIGNEDP T from the backfilled CHOICE alone, and
+;; decode would sign-extend a raw value like 650 to -374 before comparing it
+;; against the (unsigned-declared) 600..700 range, a DECODE-FAILURE for an
+;; encoding that assembled cleanly.
+(fiveam:test one-of-signed-word-mixed-field-backfilled-to-a-signed-alternative-signals-error
+  (fiveam:signals error
+    (eval '(definstruction mixed-field-test-machine wsibad3
+             (modes wsi-mix)
+             (encoding (opcode 6)
+                       (operand value :field src
+                         (variant (choice wsi-pos) inline :range (0 100))
+                         (variant (range 600 700) inline)))
+             (semantics nil)))))
+
+;; A hole whose ONE-OF alternatives disagree on signedness but has *no*
+;; CHOICE-selected variant at all (both value-selected) -- there is no
+;; mixed-field backfill to give either one a decode-time record of which
+;; alternative it came from, so %CHECK-WORD-ONE-OF-SIGNED itself (not
+;; %CHECK-WORD-VARIANTS' unsigned-range check above) is what rejects this.
+(fiveam:test one-of-signed-word-wholly-value-selected-signals-error
+  (fiveam:signals error
+    (eval '(definstruction mixed-field-test-machine wsibad2
+             (modes wsi-mix)
+             (encoding (opcode 4)
+                       (operand value :field src
+                         (variant (range 0 511) inline)
+                         (variant :else (extra-word :escape 1023))))
+             (semantics nil)))))
+
+;; A hole whose ONE-OF alternatives *agree* on signedness needs no full
+;; CHOICE coverage at all -- the hole's signedness is static regardless of
+;; which one matched, same shortcut as the byte half.
+(defmode wsi-agree-a expr)
+(defmode wsi-agree-b "[" expr "]")
+(defmode wsi-agree (one-of wsi-agree-a wsi-agree-b))
+
+(definstruction mixed-field-test-machine wsiok
+  (modes wsi-agree)
+  (encoding (opcode 5) (operand value :field src))
+  (semantics (set! a value)))
+
+(fiveam:test one-of-signed-word-agreeing-alternatives-need-no-full-choice-coverage
+  (fiveam:finishes (find-instruction-variants 'mixed-field-test-machine "WSIOK")))
 
 (fiveam:test decode-instruction-at-choices-hole-aligned-with-values
   ;; #73: CHOICE-CASE's whole mechanism depends on this staying true --
@@ -1772,3 +1897,89 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (assemble "scld2 5" :machine 'instr-test-machine))
   (handler-bind ((ambiguous-mode #'muffle-warning))
     (fiveam:is (equalp #(#xCA 0 5) (assembly-cells (assemble "scld2 5" :machine 'instr-test-machine))))))
+
+;;; Per-hole :SIGNED on a ONE-OF alternative, byte half (#124, split from
+;;; #126's hole-selected sub-opcode cell) -- SI-INSTR-POS/SI-INSTR-NEG
+;;; disagree on signedness, and SIGND's carrying hole (a hole-selected
+;;; (variant (choice m) (sub s)) selector, same mechanism #126 gave SCLD
+;;; above) is what makes the disagreement decodable at all.
+
+(defmode si-instr-pos expr)
+(defmode si-instr-neg "#" expr :signed t)
+(defmode si-instr-one (one-of si-instr-pos si-instr-neg))
+
+(definstruction instr-test-machine signd
+  (modes si-instr-one)
+  (encoding (opcode #xC7)
+            (operand val :width 1
+              (variant (choice si-instr-pos) (sub 0))
+              (variant (choice si-instr-neg) (sub 1))))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-signed-stamps-operand-signedness-per-descriptor
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xC7))
+         (pos (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (neg (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-operand-signedness pos)))
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness neg)))))
+
+(fiveam:test one-of-signed-encode-decode-round-trips-the-negative-alternative
+  (fiveam:is (equalp #(#xC7 1 156) (assembly-cells (assemble "signd #-100" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd #-100" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "SIGND" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(-100) values))
+    (fiveam:is (eq 'si-instr-neg (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-signed-encode-decode-round-trips-the-unsigned-alternative
+  (fiveam:is (equalp #(#xC7 0 200) (assembly-cells (assemble "signd 200" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd 200" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "SIGND" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(200) values))
+    (fiveam:is (eq 'si-instr-pos (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-signed-disassembles-both-alternatives
+  (let ((lines (disassemble-assembly (assemble "signd 200
+signd #-100" :machine 'instr-test-machine)
+                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "signd $C8" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "signd #-100" (disassembly-line-text (second lines))))))
+
+;; A hole whose ONE-OF alternatives disagree on signedness but carries no
+;; hole-selected sub-opcode selector at all has no decode-time record of
+;; which alternative matched -- %CHECK-BYTE-ONE-OF-SIGNED must reject it.
+(fiveam:test one-of-signed-disagreement-without-selector-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine signdbad1
+             (modes si-instr-one)
+             (encoding (opcode #xC8)
+                       (operand val :width 1))
+             (semantics nil)))))
+
+;; A hole whose ONE-OF alternatives *agree* on signedness needs no selector
+;; at all -- the hole's signedness is static regardless of which one matched.
+(defmode si-instr-agree-a expr)
+(defmode si-instr-agree-b "[" expr "]")
+(defmode si-instr-agree (one-of si-instr-agree-a si-instr-agree-b))
+
+(definstruction instr-test-machine signdok
+  (modes si-instr-agree)
+  (encoding (opcode #xC9)
+            (operand val :width 1))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-signed-agreeing-alternatives-need-no-selector
+  (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xC9)))
+    (fiveam:is (= 1 (length descs)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-operand-signedness (first descs))))))
+
+;; Nested ONE-OF: SI-INSTR-NESTED-INNER's own :SIGNED alternative is two
+;; levels down from SIGND-NESTED's hole -- mode.lisp's %CHECK-ONE-OF-
+;; ELEMENTS! already rejects this at DEFMODE time (tests/mode.lisp), so it
+;; never reaches DEFINSTRUCTION at all; nothing further to test here beyond
+;; confirming SI-INSTR-ONE itself (a plain, non-nested ONE-OF) works, above.

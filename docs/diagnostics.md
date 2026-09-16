@@ -193,7 +193,14 @@ independently of its siblings and of the mode as a whole — a hole is
 strict when `*strict-operand-range*` is set, the whole mode is `:strict`,
 *or* the specific alternative that hole matched is, so the same instruction
 can error on one written syntax and silently wrap the identical value
-written another way.
+written another way. The *bound* a strict hole is checked against is also
+per hole when `:signed` is (see [Addressing modes, "Per-hole
+`:signed`"](modes.md#per-hole-signed)) — a strict `one-of` hole whose
+matched alternative is signed reports the signed range, a sibling
+alternative's own unsigned range otherwise, read from the same
+`operand-signedness` the ordinary (non-strict) fit test uses, so the two
+never disagree about what "fits" any more than the whole-mode case above
+does.
 
 A `relative` mode is unaffected by either switch — it already range-checks
 unconditionally and errors on overflow (see [Addressing modes, "PC-relative
