@@ -426,14 +426,9 @@ the whole run of tokens after the mnemonic, uncommitted to any comma split.
 - Directives (`.org`, `.byte`/`.word`, `defdirective`) — a separate,
   unrelated grammar; see [Directives](directives.md).
 
-## Deviation from the design draft
+## Note on operand binding
 
-[`LASM-plan.md`](../LASM-plan.md) §3.4 writes each mode's pattern with a
-trailing `-> (tag $1)` arrow (e.g. `(defmode immediate "#" expr -> (imm
-$1))`), suggesting a mode tags its parsed value for the assembler to
-interpret. Nothing in LASM's pipeline reads such a tag — `operand` is always
-bound to the raw decoded integer regardless of mode, and semantics
-dereferences explicitly (see [Instructions](instructions.md#deviation-from-the-design-draft)).
-`defmode`'s pattern accordingly ends at the last pattern element plus an
-optional `:width n`, with no arrow. The draft is left unedited as a rough
-plan; this document reflects what's actually implemented.
+A mode's pattern has no `-> tag` arrow — `defmode`'s pattern ends at the
+last pattern element plus an optional `:width n`. `operand` is always bound
+to the raw decoded integer regardless of mode, and semantics dereferences
+explicitly (see [Instructions](instructions.md#note-on-operand-binding)).

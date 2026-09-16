@@ -15,8 +15,8 @@
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
 - [Debugger](debugger.md) — breakpoints, step/continue, register/memory inspection, a reference REPL
+- [Tickets](tickets.md) — open backlog, grouped by milestone, with dependency graphs
 
-This directory covers what exists today. For the design rationale and the
-milestone roadmap, see [`LASM-plan.md`](../LASM-plan.md) at the repo root —
-that document is a working draft, not reference documentation, and may
-change independently of what's described here.
+This directory covers what exists today. Planned work and its milestone
+grouping live in the tracker (see [Tickets](tickets.md)); this directory
+stays limited to reference documentation for what's implemented.

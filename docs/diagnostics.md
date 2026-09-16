@@ -49,7 +49,7 @@ A condition's `source` slot isn't filled at the point it's signalled — the
 lexer only has the string it's tokenizing, the parser only the token
 stream, and neither necessarily has the *original* source text a caller
 started from (e.g. after `.include` composes several files, a follow-up
-concern — see [`LASM-plan.md`](../LASM-plan.md) §M7). Instead, `tokenize`,
+concern — see [Tickets](tickets.md)). Instead, `tokenize`,
 `parse`, and `assemble` each wrap their own body in:
 
 ```lisp

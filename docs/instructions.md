@@ -94,7 +94,7 @@ here, since each mode supplies its own opcode.
 The per-mode override exists because a mode's syntax doesn't determine its
 semantics: an `immediate` operand is a literal value, ready to use directly,
 while `zero-page`/`absolute`/`indexed-x` etc. are all *addresses* whose value
-has to be dereferenced first (see "Deviation from the design draft" below).
+has to be dereferenced first (see "Note on operand binding" below).
 6502-shaped `LDA` is the standard example:
 
 ```lisp
@@ -587,20 +587,14 @@ combines this mechanism with word-addressed memory (see [Machine model,
 "Cell width and the assembler"](machine-model.md#cell-width-and-the-assembler))
 and a banked register for DCPU-16's eight named registers, end to end.
 
-## Deviation from the design draft
+## Note on operand binding
 
-[`LASM-plan.md`](../LASM-plan.md) §3.2 and §3.4 show semantics
-dereferencing `operand` directly (`(+ A operand C)`) and a mode's pattern
-producing a tagged form (`-> (imm $1)`), implying the assembler picks a
-target memory element and loads it before calling into semantics. LASM
-instead always binds `operand` to the raw decoded integer regardless of
-mode, and semantics dereferences explicitly (`(mref machine 'ram
-operand)`); `defmode`'s pattern accordingly has no `-> tag` arrow to produce
-one (see [Addressing modes](modes.md)). This means `definstruction` never
-has to guess which memory element an address-shaped operand addresses — a
-guess that stops being safe once a machine declares more than one memory
-region (M5) — and it's why a multi-mode instruction like `LDA` above needs a
+`operand` is always bound to the raw decoded integer regardless of mode,
+and semantics dereferences explicitly (`(mref machine 'ram operand)`);
+`defmode`'s pattern accordingly has no `-> tag` arrow to produce one (see
+[Addressing modes](modes.md)). This means `definstruction` never has to
+guess which memory element an address-shaped operand addresses — a guess
+that stops being safe once a machine declares more than one memory region
+(M5) — and it's why a multi-mode instruction like `LDA` above needs a
 per-mode semantics override for `immediate` (a value) while
-`zero-page`/`absolute` share one default (an address). The draft is left
-unedited as a rough plan; this document reflects what's actually
-implemented.
+`zero-page`/`absolute` share one default (an address).

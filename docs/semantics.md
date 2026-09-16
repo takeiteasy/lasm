@@ -132,19 +132,6 @@ meaning). LASM's own source (`storage.lisp`, `machine.lisp`, ...) avoids
 the ambiguity by calling `cl:push`/`cl:pop` explicitly wherever it wants
 list operations.
 
-## Deviation from the design draft
-
-The design draft ([`LASM-plan.md`](../LASM-plan.md) §3.2–3.3) shows `push`/
-`pop` taking no stack argument (`(push (+ (pop) (pop)))`), implying a single
-implicit stack, and a `flags` operator that collides with the `defmachine`
-clause of the same name. For a single-stack machine, the draft's form
-compiles and runs as written — `push`/`pop`'s stack name is optional and
-defaults to the machine's sole stack. The remaining deviations: a machine
-declaring more than one stack still needs the name spelled out explicitly
-(there being no single stack to default to), and the flag-setting operator
-is named `set-flags!` instead of `flags`. The draft is left unedited as a
-rough plan; this document reflects what's actually implemented.
-
 ## `with-machine-bindings`
 
 `with-machine` both creates a fresh machine instance and binds the

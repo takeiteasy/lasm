@@ -21,7 +21,6 @@ architectures, not real silicon.
 - [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](docs/listing.md) — retained address/statement mapping, `print-listing`, scope-aware symbol table
 - [Getting started](docs/getting-started.md) — install, run, test
-- [Design & roadmap draft](LASM-plan.md)
 
 ## Quickstart
 

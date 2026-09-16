@@ -42,8 +42,7 @@ Every `examples/*.lisp` script runs standalone via `sbcl --script` (no
 sbcl --script examples/sixtyfoo.lisp
 ```
 
-This defines a small register machine (`sixtyfoo`, from
-[`LASM-plan.md`](../LASM-plan.md) §3.1) and exercises registers, the stack,
+This defines a small register machine (`sixtyfoo`) and exercises registers, the stack,
 memory, and flags through `with-machine`, printing the resulting state. No
 instruction set or assembler is involved yet — see
 [Semantics vocabulary](semantics.md) for why.
@@ -163,7 +162,7 @@ assembler"](machine-model.md#cell-width-and-the-assembler).
 sbcl --script examples/chip8.lisp
 ```
 
-M4's first validation case (LASM-plan.md §3.7): a CHIP8-shaped machine
+M4's first validation case: a CHIP8-shaped machine
 (`chip8foo`) with a banked 8-bit `V` register (16 elements) and a scalar
 12-bit `I` register sharing one machine — `addi`'s `I += V[x]` moves a
 value from an 8-bit source into a 12-bit destination, wrapping at 12 bits
@@ -175,7 +174,7 @@ model](machine-model.md) and [Semantics vocabulary](semantics.md).
 sbcl --script examples/dcpu16.lisp
 ```
 
-M4's second validation case (LASM-plan.md §3.8): a DCPU-16-shaped machine
+M4's second validation case: a DCPU-16-shaped machine
 (`dcpu16foo`) combining word-addressed memory with bitfield/variant
 instruction-word encoding for the first time — DCPU-16's real instruction
 layout (6-bit `a`, 5-bit `b`, 5-bit `opcode` fields) over `:cell-width 16`

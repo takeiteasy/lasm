@@ -91,14 +91,11 @@ machine, the only kind before this) — the word is still emitted as
 little-endian cells of that width, see "Cell- vs. word-encoded
 instructions" below.
 
-### Deviation from the design draft
+### Note on naming
 
-[`LASM-plan.md`](../LASM-plan.md) §3.1 uses `flags` for both the
-`defmachine` declaration clause and a semantics operator that *sets* flags
-(§3.2: `(flags (C ...) (Z ...))`). LASM resolves that name collision by
-naming the semantics operator `set-flags!` instead — see
-[Semantics vocabulary](semantics.md). The draft itself is left as a rough
-plan and not edited to match.
+`flags` names the `defmachine` declaration clause; the semantics operator
+that *sets* flags is named `set-flags!` instead, to avoid colliding with
+it — see [Semantics vocabulary](semantics.md).
 
 ## Runtime state
 
