@@ -1012,3 +1012,79 @@ nop" :machine 'wordaddr-test-machine)))
 (fiveam:test one-of-mode-assembles-both-holes-bracketed
   (let ((a (assemble "moo [$10], [$20]" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
+
+;;; #62 (M4): PC-relative offsets on a word-encoded machine -- WBRA
+;;; (tests/instruction.lisp, WORD-RELATIVE-TEST-MACHINE) packs its offset
+;;; into SRC's 10-bit field, biased 0, inline -256..255 or escaped to its own
+;;; extra word.
+
+(fiveam:test word-relative-branch-to-itself-packs-minus-two-inline
+  ;; WBRA is 2 cells wide; branching to itself is -2, same as the byte
+  ;; path's RELATIVE-BRANCH-TO-ITSELF-IS-MINUS-TWO.
+  (let ((a (assemble "loop: wbra loop" :machine 'word-relative-test-machine)))
+    ;; opcode 1 << 12 | (wrap-value -2 10) = 0x1000 | 0x3FE = 0x13FE,
+    ;; little-endian.
+    (fiveam:is (equalp #(#xFE #x13) (assembly-cells a)))))
+
+(fiveam:test word-relative-branch-forward-offset-packs-inline
+  (let ((a (assemble "wbra next
+next: wnop" :machine 'word-relative-test-machine)))
+    ;; WBRA at address 0, size 2 -> next-address 2 -> target (NEXT) 2 ->
+    ;; offset 0. Word = 0x1000 -> bytes 00 10, followed by WNOP's 0x7000 ->
+    ;; bytes 00 70.
+    (fiveam:is (equalp #(#x00 #x10 #x00 #x70) (assembly-cells a)))))
+
+(fiveam:test word-relative-branch-backward-offset-packs-inline
+  (let ((a (assemble "start: wnop
+                      wbra start" :machine 'word-relative-test-machine)))
+    ;; WNOP at 0 (2 bytes) -> WBRA at address 2, size 2 -> next-address 4 ->
+    ;; target (START) 0 -> offset -4 -> wrap-value(-4, 10) = 1020 = 0x3FC ->
+    ;; word 0x1000 | 0x3FC = 0x13FC.
+    (fiveam:is (equalp #(#x00 #x70 #xFC #x13) (assembly-cells a)))))
+
+(fiveam:test word-relative-branch-out-of-range-with-no-escape-signals-assembly-error
+  ;; WBRS has no (extra-word ...) fallback (#62) -- an offset that doesn't
+  ;; fit its inline field is an unconditional ASSEMBLY-ERROR, exactly like
+  ;; the byte path's RELATIVE-BRANCH-FORWARD-OUT-OF-RANGE-SIGNALS-ASSEMBLY-
+  ;; ERROR, not a silent WRAP-VALUE truncation to the wrong target.
+  (fiveam:signals assembly-error
+    (assemble (with-output-to-string (s)
+                (format s "start: wbrs target~%")
+                (dotimes (i 10) (format s "wnop~%"))
+                (format s "target: wnop~%"))
+              :machine 'word-relative-test-machine)))
+
+(fiveam:test word-relative-branch-inline-to-extra-word-relaxation
+  ;; WBRA's inline range is -256..255 cells; a target far enough away must
+  ;; relax from the 2-cell inline combo to the 4-cell extra-word one, the
+  ;; word-encoded analogue of RELATIVE-CANDIDATE-WIDENS-WHEN-TARGET-IS-OUT-OF-
+  ;; RANGE. 300 WNOPs (2 cells each -- one 16-bit instruction word) put
+  ;; TARGET well past the inline range.
+  (let* ((source (with-output-to-string (s)
+                   (format s "start: wbra target~%")
+                   (dotimes (i 300) (format s "wnop~%"))
+                   (format s "target: wnop~%")))
+         (a (assemble source :machine 'word-relative-test-machine))
+         (cells (assembly-cells a)))
+    ;; WBRA widened to 4 cells (2-word extra-word form) + 300 WNOPs (2 cells
+    ;; each) + the target's own WNOP (2 cells) = 606 cells total.
+    (fiveam:is (= 606 (length cells)))
+    ;; opcode 1 << 12 | escape #x200 = 0x1200, little-endian, followed by the
+    ;; offset itself: next-address 4, target 604, offset 600 = 0x0258.
+    (fiveam:is (equalp #(#x00 #x12 #x58 #x02) (subseq cells 0 4)))))
+
+(fiveam:test word-relative-branch-decode-round-trips-through-forced-extra-word
+  ;; The relaxed combo above decodes back to the same signed offset --
+  ;; complements the encode-side relaxation test with the decode-side
+  ;; guarantee %TRY-DECODE-WORD-CANDIDATE's SIGNEDP fix (#62) exists for.
+  (let* ((source (with-output-to-string (s)
+                   (format s "start: wbra target~%")
+                   (dotimes (i 300) (format s "wnop~%"))
+                   (format s "target: wnop~%")))
+         (a (assemble source :machine 'word-relative-test-machine))
+         (reader (vector-cell-reader (assembly-cells a))))
+    (multiple-value-bind (descriptor values size)
+        (decode-instruction-at reader 0 'word-relative-test-machine)
+      (fiveam:is (string= "WBRA" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(600) values))
+      (fiveam:is (= 4 size)))))

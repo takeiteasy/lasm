@@ -447,12 +447,13 @@ pass](assembler.md#convergence), for the same reason per-hole `:width`
 doesn't (above): which sibling descriptor a statement uses is decided purely
 by syntax, not by a value that might still be provisional mid-relaxation.
 
-On a **word-encoded** machine, per-hole `:relative` is out of scope, same as
-a whole-mode `:relative` mode (see [PC-relative
-modes](#pc-relative-modes)) — `%relative-offset`'s arithmetic assumes a
-cell-counted operand width, which a word-encoded operand doesn't have.
-`definstruction` rejects any `one-of` hole whose alternatives declare
-`:relative` at all (agreeing or not) rather than silently ignoring it.
+On a **word-encoded** machine, per-hole `:relative` works the same way
+(#62) — the same `(choice m)` selector requirement applies when a hole's
+`one-of` alternatives disagree on `:relative`, and the same one-hole-only
+restriction applies across a whole combo (see [Instructions, "PC-relative
+operands"](instructions.md#pc-relative-operands-62) and [Assembler,
+"PC-relative offsets"](assembler.md#pc-relative-offsets) for how the offset
+itself packs into an instruction-word field there).
 
 ## Signed operands
 

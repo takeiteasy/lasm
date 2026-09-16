@@ -429,11 +429,15 @@ disassembler's operand rendering (see
 `relative-hole-index` uniformly rather than branching on
 `mode-descriptor-relativep` separately. Computed once per expanded
 descriptor (`%byte-descriptor-forms`, `%byte-relative-hole-index`), for the
-same reason `operand-signedness`/`operand-widths` are. Always `nil` on a
-word-encoded descriptor — `:relative` stays banned outright there
-(`%check-word-relative`/`%check-word-one-of-relative`), since
-`%relative-offset`'s arithmetic assumes a cell-counted operand width a
-word-encoded operand doesn't have.
+same reason `operand-signedness`/`operand-widths` are.
+
+A word-encoded descriptor carries `relative-hole-index` too (#62,
+`%word-relative-hole-index`) — computed once per `%expand-word-combos`
+combo rather than once per mode, since sibling combos may pick different
+`(choice m)`-selected variants at the same hole and so disagree on which
+hole, if any, is relative. See ["Word-encoded
+instructions"](#word-encoded-instructions-20) below for how a relative hole
+packs into an instruction-word field.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
@@ -746,6 +750,41 @@ the same raw bits. Both are checked at `definstruction`'s macroexpansion
 time, not left as an encode- or decode-time surprise. The `opcode` value
 itself is checked the same way, against the `opcode` field's own width.
 
+### PC-relative operands (#62)
+
+A `:relative` addressing mode (whole-mode or per-hole, see [Addressing
+modes, "PC-relative modes"](modes.md#pc-relative-modes) and ["Per-hole
+`:relative`"](modes.md#per-hole-relative)) works on a word-encoded machine
+the same way it does on a byte-encoded one: the operand's own *syntax*
+still names an absolute target, and the assembler folds it to a signed
+offset from the address of the *next* instruction before packing it into
+its instruction-word field (see [Assembler, "PC-relative
+offsets"](assembler.md#pc-relative-offsets)). Two things are specific to
+the word-encoded case:
+
+- The field's declared `:range`/`:bias` describe the **encoded offset**,
+  never the absolute target — a target-space reading would be incoherent
+  with `:bias`, exactly as a value-selected field's range always describes
+  what actually gets packed.
+- The offset counts **cells**, not bytes — on a `:cell-width 16` machine an
+  offset of 3 means three 16-bit words, not three bytes.
+
+A relative field may declare an `(extra-word :escape n)` fallback exactly
+like any other word field's `(variant ...)` forms above: an offset outside
+the inline range's own bounds spills into its own following word, relaxed
+into by the same narrow-before-wide combo ordering (`%expand-word-combos`,
+[Assembler](assembler.md#choosing-a-mode)) that already relaxes an ordinary
+value-selected field. A relative field is implicitly signed regardless of
+whether it names a `(choice m)` alternative or is plain value-selected —
+its own `MODE`'s `:relative t` already implies `:signed t`
+(`mode-descriptor-signedp`, [Addressing modes](modes.md#signed-operands)) —
+so an offset outside its declared inline range, with no escape to relax
+into, is an unconditional `assembly-error` (see [Assembler, "PC-relative
+offsets"](assembler.md#pc-relative-offsets)), never a silent `wrap-value`
+truncation to the wrong branch target. See
+[`examples/dcpu16.lisp`](../examples/dcpu16.lisp) for a relative branch run
+end to end on a word-addressed, word-encoded machine.
+
 ### CHOICE-selected word fields (#104)
 
 Both `(variant ...)` forms above pick an encoding purely from the operand's
@@ -858,10 +897,6 @@ end, including the decode/disassemble round-trip — the matched
 alternative's own syntax renders back for every one of the five forms,
 `choice`-selected or resolved value-selected alike, not always the
 `one-of`'s first alternative (see [Disassembler](disassembler.md)).
-
-A `:relative` addressing mode is not supported on a word-encoded machine —
-its offset arithmetic (`%relative-offset`, [Assembler](assembler.md))
-assumes a cell-counted operand width.
 
 #### `CHOICE`-selected fields and `:SIGNED`
 

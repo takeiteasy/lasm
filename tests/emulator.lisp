@@ -858,6 +858,50 @@ hlt" :machine 'word-test-machine)))
       (fiveam:is (= 3 steps))
       (fiveam:is (= 1000 (sref m 'a))))))
 
+;;; #62 (M4): PC-relative branching on a word-encoded machine -- WBRA
+;;; (tests/instruction.lisp, WORD-RELATIVE-TEST-MACHINE) folds its 10-bit
+;;; SRC field back to a signed offset from the *next* instruction's address
+;;; exactly like the byte path's BRA, just packed into an instruction-word
+;;; bit field instead of its own operand cell.
+
+(fiveam:test step-machine-word-relative-branch-taken-backward
+  ;; loop: wbra loop -- WBRA is 2 cells wide, so the next-instruction address
+  ;; is 2; the encoded offset is -2, landing back on PC 0.
+  (let ((m (make-machine 'word-relative-test-machine))
+        (a (assemble "loop: wbra loop" :machine 'word-relative-test-machine)))
+    (load-program m a)
+    (step-machine m)
+    (fiveam:is (= 0 (sref m 'pc)))))
+
+(fiveam:test word-relative-branch-loop-cycles-between-two-addresses
+  ;; A two-node cycle -- loop: wbra other / other: wbra loop -- proves
+  ;; STEP-MACHINE lands on the right PC across repeated word-encoded relative
+  ;; branches, not just a single self-branch.
+  (let ((m (make-machine 'word-relative-test-machine))
+        (a (assemble "loop:  wbra other
+other: wbra loop" :machine 'word-relative-test-machine)))
+    (load-program m a)
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'pc)))
+    (step-machine m)
+    (fiveam:is (= 0 (sref m 'pc)))
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'pc)))))
+
+(fiveam:test word-relative-branch-loop-end-to-end-with-halt
+  ;; loop: wbra next / next: whlt -- a forward branch landing exactly on a
+  ;; halting instruction, run to completion rather than stepped by hand.
+  (let ((m (make-machine 'word-relative-test-machine))
+        (a (assemble "loop: wbra next
+next: whlt" :machine 'word-relative-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 2 steps))
+      ;; PC advances past WHLT (address 2, size 2) before its TRAP runs, so
+      ;; the final PC is 4, not 2 -- STEP-MACHINE's own documented ordering.
+      (fiveam:is (= 4 (sref m 'pc))))))
+
 (fiveam:test step-machine-choice-selected-inline-round-trip
   ;; #104: WCX's field is CHOICE-selected, not value-selected -- WC-REG
   ;; syntax packs inline biased #x00.

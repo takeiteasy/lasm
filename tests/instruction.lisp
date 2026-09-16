@@ -1178,12 +1178,147 @@ wsi #-100" :machine 'mixed-field-test-machine)
              (encoding (opcode 16))
              (semantics nil)))))
 
-(fiveam:test word-relative-mode-signals-error
+;;; #62 (M4): whole-mode and per-hole :RELATIVE on a word-encoded machine --
+;;; replaces the old unconditional ban (WORD-RELATIVE-MODE-SIGNALS-ERROR). A
+;;; dedicated machine, not WORD-TEST-MACHINE (whose 4-bit opcode field is
+;;; already saturated by every other word-path suite above), so these tests'
+;;; own opcode space can't collide with siblings elsewhere in this file or
+;;; in tests/emulator.lisp.
+
+(defmachine word-relative-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(definstruction word-relative-test-machine wbra
+  (modes relative)
+  (encoding (opcode 1) (operand value :field src
+                          (variant (range -256 255) inline :bias 0)
+                          (variant :else (extra-word :escape #x200))))
+  (semantics (set! pc (+ pc value))))
+
+;; Inline-only, no (extra-word ...) fallback -- for assembler tests proving
+;; an out-of-range relative offset is an unconditional ASSEMBLY-ERROR when
+;; there is nowhere wider to relax into (#62).
+(definstruction word-relative-test-machine wbrs
+  (modes relative)
+  (encoding (opcode 6) (operand value :field src (variant (range -8 7) inline :bias 0)))
+  (semantics (set! a (wrap-value (+ a value) 16))))
+
+;; Filler with a known, fixed size -- pads a program out far enough to force
+;; WBRA's inline variant out of range and its extra-word one to relax in.
+(definstruction word-relative-test-machine wnop
+  (encoding (opcode 7))
+  (semantics nil))
+
+(definstruction word-relative-test-machine whlt
+  (encoding (opcode 8))
+  (semantics (trap :halt)))
+
+(fiveam:test word-whole-mode-relative-descriptors-carry-relative-hole-index
+  (let ((variants (find-instruction-variants 'word-relative-test-machine "WBRA")))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (every (lambda (d) (eql 0 (instruction-descriptor-relative-hole-index d))) variants))))
+
+(fiveam:test word-whole-mode-relative-stamps-signedp-on-word-fields-and-alternatives
+  (let ((inline-d (first (find-instruction-variants 'word-relative-test-machine "WBRA"))))
+    (fiveam:is (word-field-choice-signedp (first (instruction-descriptor-word-fields inline-d))))
+    (fiveam:is (every (lambda (l) (every #'word-field-choice-signedp l))
+                       (instruction-descriptor-word-alternatives inline-d)))))
+
+(fiveam:test word-relative-mode-with-no-explicit-variant-defaults-to-full-signed-range
+  ;; #62: the implicit no-(variant...) default is the field's *signed* bound
+  ;; for a relative hole, not its unsigned one -- else a backward branch
+  ;; could never encode at all.
+  (eval '(definstruction word-relative-test-machine wbra-default
+           (modes relative)
+           (encoding (opcode 2) (operand value :field src))
+           (semantics (set! pc (+ pc value)))))
+  (let* ((d (find-instruction 'word-relative-test-machine 'wbra-default))
+         (choice (first (instruction-descriptor-word-fields d))))
+    (fiveam:is (word-field-choice-signedp choice))
+    (fiveam:is (equal '(-512 . 511) (word-field-choice-range choice)))))
+
+(defmode wrel-abs expr)
+(defmode wrel-rel "#" expr :relative t)
+(defmode wrel-two (one-of wrel-abs wrel-rel))
+
+(fiveam:test word-per-hole-relative-one-of-requires-choice-selector-on-disagreement
   (fiveam:signals error
-    (eval '(definstruction word-test-machine bogus
-             (modes relative)
-             (encoding (opcode 3) (operand value :field src))
+    (eval '(definstruction word-relative-test-machine bogus
+             (modes wrel-two)
+             (encoding (opcode 3)
+                       (operand value :field src
+                         (variant (range 0 15) inline :bias 0)
+                         (variant :else (extra-word :escape #x200))))
              (semantics nil)))))
+
+(definstruction word-relative-test-machine wjmr
+  (modes wrel-two)
+  (encoding
+    (opcode 4)
+    (operand value :field src
+      (variant (choice wrel-abs) inline :range (256 511) :bias 0)
+      (variant (choice wrel-rel) inline :range (-256 255) :bias 0)))
+  (semantics (choice-case value
+               (wrel-abs (set! a value))
+               (wrel-rel (set! a (wrap-value (+ a value) 16))))))
+
+(fiveam:test word-per-hole-relative-one-of-relative-hole-index-follows-matched-choice
+  (let* ((variants (find-instruction-variants 'word-relative-test-machine "WJMR"))
+         (abs-d (find-if (lambda (d) (eq 'wrel-abs (word-field-choice-choice (first (instruction-descriptor-word-fields d)))))
+                          variants))
+         (rel-d (find-if (lambda (d) (eq 'wrel-rel (word-field-choice-choice (first (instruction-descriptor-word-fields d)))))
+                          variants)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index abs-d)))
+    (fiveam:is (eql 0 (instruction-descriptor-relative-hole-index rel-d)))
+    (fiveam:is (not (word-field-choice-signedp (first (instruction-descriptor-word-fields abs-d)))))
+    (fiveam:is (word-field-choice-signedp (first (instruction-descriptor-word-fields rel-d))))))
+
+(defmode wrel-both (one-of wrel-abs wrel-rel) "," (one-of wrel-abs wrel-rel))
+
+(fiveam:test word-two-relative-holes-in-one-combo-signals-error
+  ;; #62's positional rule -- mirrors %CHECK-BYTE-ONE-OF-RELATIVE: at most
+  ;; one hole of a given expanded word combo may ever resolve relative. Both
+  ;; holes here can independently choose WREL-REL, so %EXPAND-WORD-COMBOS'
+  ;; Cartesian product includes a combo where they both do.
+  (fiveam:signals error
+    (eval '(definstruction word-relative-test-machine bogus
+             (modes wrel-both)
+             (encoding (opcode 5)
+                       (operand a-val :field dst
+                         (variant (choice wrel-abs) inline :range (0 3) :bias 0)
+                         (variant (choice wrel-rel) inline :range (-2 1) :bias 0))
+                       (operand b-val :field src
+                         (variant (choice wrel-abs) inline :range (0 511) :bias 0)
+                         (variant (choice wrel-rel) inline :range (-256 255) :bias 0)))
+             (semantics nil)))))
+
+;; #105/#62: %CHECK-OPCODE-DECODABLE!'s co-tenant ambiguity analysis
+;; (%WORD-FIELD-CHOICE-VALUES enumerating raw field values) must enumerate a
+;; RELATIVE-stamped signed field's wrapped negative chunk the same way it
+;; already does for an explicitly :SIGNED one (#127) -- WBRA's own inline
+;; range (-256..255) wraps to raw 768..1023, so a co-tenant claiming any of
+;; that range at opcode 1 is indistinguishable, while one claiming 256..511
+;; (untouched by WBRA's own inline chunks or WBOTHER's own escape at #x200)
+;; is not.
+(fiveam:test word-relative-signed-field-co-tenant-overlap-signals-opcode-conflict
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction word-relative-test-machine wbra-collide
+             (modes word-abs)
+             (encoding (opcode 1) (operand v :field src (variant (range 800 900) inline :bias 0)))
+             (semantics nil)))))
+
+(fiveam:test word-relative-signed-field-co-tenant-disjoint-range-registers-cleanly
+  (eval '(definstruction word-relative-test-machine wbra-fine
+           (modes word-abs)
+           (encoding (opcode 1) (operand v :field src (variant (range 256 400) inline :bias 0)))
+           (semantics nil)))
+  (fiveam:is (find-instruction 'word-relative-test-machine 'wbra-fine)))
 
 (fiveam:test word-multi-mode-single-hole-without-operand-subclause-signals-error
   ;; unlike the byte-encoded multi-mode form, a word-encoded single-hole mode

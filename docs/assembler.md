@@ -372,10 +372,12 @@ the same `%choose-variant` pipeline described above, generalized via
   width (#53, the target memory's `:cell-width`) times `1 +` its chosen
   variant's extra-word count — replaces `1 + total-operand-width` everywhere
   layout and relative-offset arithmetic used to assume a single-cell opcode.
-- A `:relative` addressing mode is rejected at `definstruction` time on a
-  word-encoded machine, whole-mode or per-hole alike (see
-  [Instructions](instructions.md#word-encoded-instructions-20)), so
-  "PC-relative offsets" below never applies to one.
+- A `:relative` addressing mode, whole-mode or per-hole alike, works the
+  same as on a byte-encoded machine (#62, see
+  [Instructions, "PC-relative operands"](instructions.md#pc-relative-operands-62))
+  — "PC-relative offsets" below covers both encodings; the only difference
+  is what the offset is range-checked against (a `word-field-choice`'s own
+  declared field, not a cell width).
 
 `encode-instruction` packs the opcode and every inline field's (biased)
 value into one instruction word by bit shift, then appends each
@@ -424,6 +426,22 @@ hole of the same descriptor is left exactly as `eval-expr` folded it, and is
 still strict-range-checked normally (see [Diagnostics, "Strict operand
 range"](diagnostics.md#strict-operand-range)) — only the relative hole's own
 value gets this adjustment and its own unconditional check.
+
+On a word-encoded descriptor (#62), `relative-hole-index` names a hole into
+`word-fields` rather than `operand-widths` (`operand-widths` is always
+`nil` there), and the "width the offset is range-checked against" above is
+that hole's own `word-field-choice` instead: an `:inline` field's own
+(pre-bias) `range`, or, for an `:extra-word` field, a signed fit within the
+whole instruction word's own `width-cells * cell-width` bits
+(`%word-relative-offset-fits-p`, `assembler.lisp`). The check is just as
+unconditional as the byte-encoded one above — `%check-strict-operand-range!`
+is already a no-op for a word-encoded descriptor regardless of `:strict`,
+so `%relative-offset`'s own check is the *only* thing standing between an
+out-of-range branch and a silently wrapped one. `%choose-variant`'s own
+value filter (above) and its `#104` overflow diagnostic both need the same
+target → offset conversion *before* deciding whether any candidate fits at
+all, i.e. without `%relative-offset`'s own range check — `%relative-adjusted-values`
+factors that unchecked arithmetic out for both call sites.
 
 ## `eval-expr`
 

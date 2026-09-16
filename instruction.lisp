@@ -1506,17 +1506,23 @@ own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range o
       (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
 or (choice mode), got ~S" field-name selector)))))
 
-(defun %word-variant-signedp-at-parse (v)
+(defun %word-variant-signedp-at-parse (v hole-relativep)
   "V's own signedness (#127), as far as it is knowable at the point
 %CHECK-WORD-VARIANTS runs -- before %CHECK-WORD-VARIANT-CHOICES! (below) has
 backfilled a mixed field's value-selected variants with the one leftover
-ONE-OF alternative. Only a variant already carrying an explicit
+ONE-OF alternative. A variant already carrying an explicit
 (variant (choice m) ...) form -- WORD-VARIANT-CHOICE already non-NIL at
-parse time -- can be signed; a value-selected (RANGE/:ELSE) variant with no
-CHOICE of its own is always unsigned here, by construction (there is no
-ONE-OF alternative to read :SIGNED off before it is claimed), so it needs no
-raw-chunk splitting below regardless of what it is later backfilled to."
-  (and (word-variant-choice v) (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice v)))))
+parse time -- reads M's own MODE-DESCRIPTOR-SIGNEDP (which already folds in
+RELATIVEP, mode.lisp) directly. A value-selected (RANGE/:ELSE) variant with
+no CHOICE of its own has no ONE-OF alternative to read :SIGNED off before it
+is claimed, so it falls back to HOLE-RELATIVEP (#62,
+%WORD-HOLE-RELATIVEP-LIST) -- this hole's own resolved relativeness when
+ungoverned by a disagreeing ONE-OF -- rather than always NIL as it did
+before #62: a relative hole's plain (range lo hi) variant needs signed
+raw-chunk splitting below the same as any other signed variant would."
+  (if (word-variant-choice v)
+      (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice v)))
+      hole-relativep))
 
 (define-condition signed-range-out-of-field (error)
   ((lo :initarg :lo) (hi :initarg :hi) (low-bound :initarg :low-bound) (high-bound :initarg :high-bound))
@@ -1554,7 +1560,7 @@ scope."
             ((< hi 0) (list (cons (+ lo (ash 1 field-width)) (+ hi (ash 1 field-width)))))
             (t (list (cons 0 hi) (cons (+ lo (ash 1 field-width)) max))))))))
 
-(defun %check-word-variants (variants field-width field-name)
+(defun %check-word-variants (variants field-width field-name hole-relativep)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
 variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
 :EXTRA-WORD variant's escape value falls inside another variant's biased
@@ -1579,14 +1585,19 @@ bit-pattern space via %WORD-VARIANT-RAW-CHUNKS, not directly on its
 into two non-adjacent raw chunks, overlap is checked chunk-against-chunk,
 not variant-against-variant, so a signed variant correctly collides with an
 unsigned one that shares its high (negative-wrapped) raw values even though
-their value-space ranges never numerically overlap."
+their value-space ranges never numerically overlap.
+
+HOLE-RELATIVEP (#62) is this hole's own resolved relativeness when
+ungoverned by a disagreeing ONE-OF (%WORD-HOLE-RELATIVEP-LIST) -- passed
+through to %WORD-VARIANT-SIGNEDP-AT-PARSE so a relative hole's
+value-selected variant is treated as signed here too."
   (let ((max (1- (ash 1 field-width))) inline-chunks escapes)
     (dolist (v variants)
       (ecase (word-variant-kind v)
         (:inline
          (let* ((lo (+ (car (word-variant-range v)) (word-variant-bias v)))
                 (hi (+ (cdr (word-variant-range v)) (word-variant-bias v)))
-                (signedp (%word-variant-signedp-at-parse v)))
+                (signedp (%word-variant-signedp-at-parse v hole-relativep)))
            (handler-case
                (dolist (chunk (%word-variant-raw-chunks lo hi signedp field-width))
                  (cl:push chunk inline-chunks))
@@ -1707,15 +1718,52 @@ its own (CHOICE ...) variant instead"
           (t (dolist (v value-selected)
                (setf (word-variant-choice v) (first unclaimed)))))))))
 
-(defun %parse-word-operand-subclause (subclause machine-name hole-alternatives)
+(defun %word-hole-relativep-list (mode hole-alternatives-list n)
+  "Hole-aligned list of N booleans -- this MODE's per-hole relativeness (#62)
+as it applies to a value-selected word-field variant (one with no (CHOICE m)
+selector of its own): the hole's own ONE-OF alternatives' shared RELATIVEP
+when the hole has alternatives (they either agree, or %CHECK-WORD-ONE-OF-
+RELATIVE requires every variant at a disagreeing hole to be CHOICE-selected,
+so this fallback is never actually consulted for a disagreeing hole), else
+MODE's own MODE-DESCRIPTOR-RELATIVEP for an ungoverned hole. Mirrors
+%BYTE-RELATIVE-FLAGS' same CHOSEN/ALTS/ungoverned resolution, minus CHOSEN --
+a word-field variant's own choice, when it has one, already carries its own
+alternative's RELATIVEP via %WORD-FIELD-CHOICE-FORM (MODE-DESCRIPTOR-SIGNEDP
+already folds RELATIVEP in, mode.lisp), so this list is only ever read for
+the no-CHOICE case -- both at DEFINSTRUCTION-time parsing (below, so a
+signed inline range is accepted for a relative hole's value-selected
+variant) and at %WORD-FIELD-CHOICE-FORM (further down). MODE's own RELATIVEP
+contributes at exactly one hole in practice -- a whole-mode :RELATIVE mode
+always has exactly one hole (%CHECK-RELATIVE-MODE-HOLES) -- same as
+%BYTE-RELATIVE-FLAGS' identical fallback."
+  (loop for i below n
+        for alts = (nth i hole-alternatives-list)
+        collect (if alts
+                    (mode-descriptor-relativep (find-mode-descriptor (first alts)))
+                    (mode-descriptor-relativep mode))))
+
+(defun %parse-word-operand-subclause (subclause machine-name hole-alternatives hole-relativep)
   "SUBCLAUSE is one whole (operand [NAME] :field FIELD-NAME (variant ...)*)
 form on a word-encoded machine. Returns a WORD-OPERAND-SPEC. With no
 (variant ...) forms at all, the operand is plain inline over the field's
-full unsigned range (bias 0) -- the word-encoded equivalent of a byte-encoded
-(operand :mode)'s implicit default. HOLE-ALTERNATIVES (#104) is this hole's
-own ONE-OF alternative mode-name list (mode.lisp's %MODE-HOLE-ALTERNATIVES),
-or NIL for a plain EXPR hole -- validated against any (CHOICE M) variant
-here (%CHECK-WORD-VARIANT-CHOICES!)."
+full range, bias 0 -- the word-encoded equivalent of a byte-encoded
+(operand :mode)'s implicit default. #62: that full range is the field's
+*signed* bound, [-2^(FWIDTH-1), 2^(FWIDTH-1)-1], when HOLE-RELATIVEP, rather
+than its unsigned one, [0, 2^FWIDTH-1] -- a relative hole's offset can be
+negative, and there is no bias here to carry a negative value the way a
+plain value-selected relative variant's own declared :BIAS could, so the
+implicit default must already be signed or a backward branch could never
+encode at all. HOLE-ALTERNATIVES (#104) is this hole's own ONE-OF
+alternative mode-name list (mode.lisp's %MODE-HOLE-ALTERNATIVES), or NIL for
+a plain EXPR hole -- validated against any (CHOICE M) variant here
+(%CHECK-WORD-VARIANT-CHOICES!). HOLE-RELATIVEP (%WORD-HOLE-RELATIVEP-LIST)
+is this hole's own resolved relativeness when ungoverned by a disagreeing
+ONE-OF -- also threaded into %CHECK-WORD-VARIANTS so an explicit
+value-selected variant's signed (negative-LO) range is validated against
+the field's *signed* bound rather than rejected as an unsigned range with a
+negative LO; without this, a whole-mode :RELATIVE mode's plain
+(variant (range -128 127) inline) would fail at DEFINSTRUCTION time before
+ever reaching the relative-offset machinery it's meant to feed."
   (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
     (destructuring-bind (field-kw field-name &rest variant-forms) spec
       (unless (eq field-kw :field)
@@ -1731,9 +1779,12 @@ here (%CHECK-WORD-VARIANT-CHOICES!)."
           (declare (ignore fname))
           (let ((variants (if variant-forms
                                (mapcar (lambda (f) (%parse-word-variant-form f field-name)) variant-forms)
-                               (list (make-word-variant :kind :inline :bias 0
-                                                         :range (cons 0 (1- (ash 1 fwidth))))))))
-            (%check-word-variants variants fwidth field-name)
+                               (list (make-word-variant
+                                      :kind :inline :bias 0
+                                      :range (if hole-relativep
+                                                 (cons (- (ash 1 (1- fwidth))) (1- (ash 1 (1- fwidth))))
+                                                 (cons 0 (1- (ash 1 fwidth)))))))))
+            (%check-word-variants variants fwidth field-name hole-relativep)
             (%check-word-variant-choices! variants field-name hole-alternatives)
             (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
                                      :variants variants)))))))
@@ -1742,16 +1793,20 @@ here (%CHECK-WORD-VARIANT-CHOICES!)."
   "Like %PARSE-OPERAND-SUBCLAUSES but for a word-encoded machine -- one
 WORD-OPERAND-SPEC per MODE hole, in hole order. Threads MODE's own
 hole-by-hole ONE-OF alternatives (mode.lisp's %MODE-HOLE-ALTERNATIVES, #104)
+and, for #62, MODE's own per-hole relativeness (%WORD-HOLE-RELATIVEP-LIST)
 through to each subclause so a (CHOICE M) variant can be checked against
-what its hole can actually match."
+what its hole can actually match, and a relative hole's value-selected
+variant is parsed as signed."
   (let ((holes (%mode-hole-count mode)) (n (length subclauses)))
     (unless (= holes n)
       (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
 but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
 per hole" machine name mode-name holes n (= n 1))))
   (let* ((hole-alternatives (%mode-hole-alternatives mode))
-         (specs (mapcar (lambda (s alts) (%parse-word-operand-subclause s machine-name alts))
-                         subclauses hole-alternatives)))
+         (hole-relativep-list (%word-hole-relativep-list mode hole-alternatives (%mode-hole-count mode)))
+         (specs (mapcar (lambda (s alts hole-relativep)
+                          (%parse-word-operand-subclause s machine-name alts hole-relativep))
+                         subclauses hole-alternatives hole-relativep-list)))
     (%check-operand-names (mapcar #'word-operand-spec-name specs) machine name mode-name)
     specs))
 
@@ -1773,12 +1828,18 @@ extra word."
     (stable-sort combos #'<
                  :key (lambda (combo) (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))))
 
-(defun %word-field-choice-form (spec variant)
-  "#127: VARIANT's own SIGNEDP is stamped from its CHOICE alternative's
-MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL -- a value-selected variant
-(CHOICE NIL) has no ONE-OF alternative of its own to read :SIGNED off, so it
-is always NIL, matching #127's design (per-hole :SIGNED is scoped to
-CHOICE-selected fields, the only ones with a decode-time discriminator)."
+(defun %word-field-choice-form (spec variant hole-relativep)
+  "#127/#62: VARIANT's own SIGNEDP is stamped from its CHOICE alternative's
+MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL -- MODE-DESCRIPTOR-SIGNEDP is
+itself (OR RELATIVEP SIGNEDP) (mode.lisp), so a CHOICE-selected :RELATIVE
+alternative is already signed here with no extra work. A value-selected
+variant (CHOICE NIL) has no ONE-OF alternative of its own to read :SIGNED
+off, so it falls back to HOLE-RELATIVEP -- this hole's own resolved
+relativeness when ungoverned by a disagreeing ONE-OF
+(%WORD-HOLE-RELATIVEP-LIST, below) -- rather than always NIL as it did
+before #62: an ungoverned or agreeing-ONE-OF :RELATIVE hole's offset is
+signed regardless of which value-selected variant a given combo happens to
+pick."
   `(make-word-field-choice
     :width ,(word-operand-spec-width spec)
     :shift ,(word-operand-spec-shift spec)
@@ -1787,28 +1848,42 @@ CHOICE-selected fields, the only ones with a decode-time discriminator)."
     :range ',(word-variant-range variant)
     :escape ,(word-variant-escape variant)
     :choice ',(word-variant-choice variant)
-    :signedp ,(and (word-variant-choice variant)
-                    (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant))))))
+    :signedp ,(if (word-variant-choice variant)
+                  (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant)))
+                  hole-relativep)))
 
-(defun %word-alternatives-form (specs)
+(defun %word-alternatives-form (specs hole-relativep-list)
   "One (quoted) form building SPECS' full per-operand variant menu -- shared
 by every sibling combo of one word-field operand list, since decode
 (emulator.lisp's %STEP-WORD-MACHINE) needs every alternative, not just
 whichever combo happens to occupy the opcode table, to tell an inline value
 from an escaped extra-word marker apart by comparing against the actually
-fetched bits."
-  `(list ,@(mapcar (lambda (spec)
-                      `(list ,@(mapcar (lambda (variant) (%word-field-choice-form spec variant))
+fetched bits. HOLE-RELATIVEP-LIST (#62, %WORD-HOLE-RELATIVEP-LIST) is
+hole-aligned with SPECS -- %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) reads
+SIGNEDP off *this* menu, not a chosen descriptor's own WORD-FIELDS, so a
+relative hole's signedness must be stamped here too, identically to
+%WORD-DESCRIPTOR-FORM's own WORD-FIELDS below -- else encode would sign a
+relative offset that decode then reads back unsigned."
+  `(list ,@(mapcar (lambda (spec hole-relativep)
+                      `(list ,@(mapcar (lambda (variant) (%word-field-choice-form spec variant hole-relativep))
                                        (word-operand-spec-variants spec))))
-                    specs)))
+                    specs hole-relativep-list)))
 
 (defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms
-                               hole-alternatives-list)
+                               hole-alternatives-list hole-relativep-list)
   "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
-. VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order)."
+. VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order). RELATIVE-HOLE-
+INDEX (#62) is COMBO's own %WORD-RELATIVE-HOLE-INDEX -- computed per combo,
+not once per mode, since sibling combos may pick different CHOICE-selected
+variants at the same hole and so disagree on which hole (if any) is
+relative, same reason WORD-FIELDS itself is computed per combo rather than
+shared."
   (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
-         (word-fields-form `(list ,@(mapcar (lambda (p) (%word-field-choice-form (car p) (cdr p))) combo)))
-         (extra-words (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))
+         (word-fields-form `(list ,@(mapcar (lambda (p hole-relativep)
+                                               (%word-field-choice-form (car p) (cdr p) hole-relativep))
+                                             combo hole-relativep-list)))
+         (extra-words (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo))
+         (relative-index (%word-relative-hole-index combo hole-relativep-list)))
     `(make-instruction-descriptor
       :name ,(string-upcase (symbol-name name))
       :machine ',machine
@@ -1819,6 +1894,7 @@ fetched bits."
       :word-fields ,word-fields-form
       :word-alternatives ,alternatives-form
       :extra-words ,extra-words
+      :relative-hole-index ',relative-index
       :cycles ,cycles
       :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list))))
 
@@ -1851,15 +1927,16 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
               :cycles ,cycles
               :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
       (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name))
-             (hole-alternatives-list (%mode-hole-alternatives mode)))
+             (hole-alternatives-list (%mode-hole-alternatives mode))
+             (hole-relativep-list (%word-hole-relativep-list mode hole-alternatives-list (%mode-hole-count mode))))
         (%check-word-one-of-signed specs hole-alternatives-list machine name)
         (%check-word-one-of-width hole-alternatives-list machine name)
-        (%check-word-one-of-relative hole-alternatives-list machine name)
-        (let ((alternatives-form (%word-alternatives-form specs))
+        (let ((alternatives-form (%word-alternatives-form specs hole-relativep-list))
               (combos (%expand-word-combos specs)))
+          (%check-word-one-of-relative specs combos hole-alternatives-list hole-relativep-list machine name)
           (mapcar (lambda (combo)
                     (%word-descriptor-form machine name mode-form opcode alternatives-form combo
-                                            cycles semantics-forms hole-alternatives-list))
+                                            cycles semantics-forms hole-alternatives-list hole-relativep-list))
                   combos)))))
 
 (defun %check-word-opcode (machine name opcode)
@@ -1877,19 +1954,6 @@ kind %CHECK-WORD-VARIANTS already guards against for operand fields."
       (when (or (minusp opcode) (>= opcode (ash 1 width)))
         (error "DEFINSTRUCTION ~S ~S: opcode ~D does not fit the ~D-bit OPCODE field"
                machine name opcode width)))))
-
-(defun %check-word-relative (mode machine name machine-name)
-  "A :RELATIVE mode's offset arithmetic (%RELATIVE-OFFSET, assembler.lisp)
-assumes a byte operand width -- rejected outright on a word-encoded machine
-rather than silently computing nonsense. This only tests MODE's own
-whole-mode :RELATIVE; a ONE-OF alternative declaring :RELATIVE under a
-non-relative outer mode is a separate case %CHECK-WORD-ONE-OF-RELATIVE
-(below) covers -- both stay unconditional bans on a word-encoded machine,
-since :RELATIVE branching there remains undesigned regardless of whether
-it's whole-mode or per-hole (#130)."
-  (when (and (mode-descriptor-relativep mode) (%word-machine-p machine-name))
-    (error "DEFINSTRUCTION ~S ~S: a :RELATIVE addressing mode is not yet ~
-supported on word-encoded machine ~S" machine name machine-name)))
 
 (defun %one-of-signed-disagreement (hole-alternatives-list)
   "Hole-aligned list, one entry per HOLE-ALTERNATIVES-LIST -- NIL for a hole
@@ -2072,24 +2136,62 @@ rather than silently ignoring an inert declaration."
 sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
                       machine name i alts machine)))
 
-(defun %check-word-one-of-relative (hole-alternatives-list machine name)
-  "Per-hole :RELATIVE (#130) is out of scope on a word-encoded machine, same
-as %CHECK-WORD-RELATIVE's whole-mode ban -- %RELATIVE-OFFSET's arithmetic
-assumes a cell-counted operand width, unrelated to which hole declared it.
-%CHECK-WORD-RELATIVE alone is not enough to catch this: it tests only the
-*outer* MODE's own MODE-DESCRIPTOR-RELATIVEP, so a ONE-OF alternative
-declaring :RELATIVE under a non-relative outer mode reaches this function's
-site untested otherwise. Signal a DEFINSTRUCTION-time error, naming
-MACHINE/NAME, if any ONE-OF hole's alternatives declare :RELATIVE at all --
-agreeing or not, mirroring %CHECK-WORD-ONE-OF-WIDTH's same choice for the
-same reason: even an agreeing declaration has nothing to mean here."
-  (loop for alts in hole-alternatives-list
+(defun %word-relative-flags (combo hole-relativep-list)
+  "Hole-aligned list of booleans, one per COMBO pair (a %EXPAND-WORD-COMBOS
+combo, (SPEC . VARIANT) pairs in hole order) -- entry I is T when hole I
+resolves to a :RELATIVE operand for this specific combo. A variant with its
+own (CHOICE m) selector reads M's own MODE-DESCRIPTOR-RELATIVEP directly
+(word-machine analogue of %BYTE-RELATIVE-FLAGS' CHOSEN branch); a
+value-selected variant (no CHOICE) falls back to HOLE-RELATIVEP-LIST's own
+entry (%WORD-HOLE-RELATIVEP-LIST, above) -- the ALTS/ungoverned branches
+%BYTE-RELATIVE-FLAGS also has, precomputed once per hole rather than
+per-combo since they don't depend on which variant this combo picked."
+  (loop for (nil . variant) in combo
+        for hole-relativep in hole-relativep-list
+        for choice = (word-variant-choice variant)
+        collect (if choice
+                    (mode-descriptor-relativep (find-mode-descriptor choice))
+                    hole-relativep)))
+
+(defun %word-relative-hole-index (combo hole-relativep-list)
+  "This COMBO's own RELATIVE-HOLE-INDEX (#62) -- the 0-based index of the
+one hole whose operand is a PC-relative offset, or NIL if none is. Built on
+%WORD-RELATIVE-FLAGS, mirroring %BYTE-RELATIVE-HOLE-INDEX exactly;
+%CHECK-WORD-ONE-OF-RELATIVE's positional rule (below) guarantees at most one
+flag is ever T here, so POSITION's first match is the only one there could
+be."
+  (position t (%word-relative-flags combo hole-relativep-list)))
+
+(defun %check-word-one-of-relative (specs combos hole-alternatives-list hole-relativep-list machine name)
+  "Word-encoded analogue of %CHECK-BYTE-ONE-OF-RELATIVE (#62, replacing the
+old unconditional word-machine :RELATIVE ban): two rules, mirroring
+%CHECK-WORD-ONE-OF-SIGNED and %CHECK-BYTE-ONE-OF-RELATIVE respectively.
+
+Selector rule first (identical in shape to %CHECK-WORD-ONE-OF-SIGNED): a
+hole whose ONE-OF alternatives disagree on :RELATIVE must have every one of
+its field variants CHOICE-selected -- that is the only decode-time record of
+which alternative matched, without which a raw fetched value could never be
+told apart from an ordinary (non-relative) sibling.
+
+Positional rule second (mirrors %CHECK-BYTE-ONE-OF-RELATIVE): walks every
+COMBO %EXPAND-WORD-COMBOS built and counts %WORD-RELATIVE-FLAGS' T entries --
+more than one means this sibling descriptor's own operand would need its
+PC-relative offset applied to two different holes at once, which
+%RELATIVE-OFFSET has no way to do."
+  (loop for alts in (%one-of-relative-disagreement hole-alternatives-list)
+        for spec in specs
         for i from 0
-        when (and alts (some (lambda (m) (mode-descriptor-relativep (find-mode-descriptor m))) alts))
-          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
-:RELATIVE, but a :RELATIVE addressing mode is not yet supported on word-encoded machine ~S, ~
-per-hole or whole-mode alike"
-                      machine name i alts machine)))
+        when (and alts (notevery #'word-variant-choice (word-operand-spec-variants spec)))
+          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+disagree on :RELATIVE, but not every field variant at that hole is CHOICE-selected -- ~
+per-hole :RELATIVE needs a (choice m) selector on every variant as its decode-time record ~
+of which alternative matched" machine name i alts))
+  (dolist (combo combos)
+    (when (> (count t (%word-relative-flags combo hole-relativep-list)) 1)
+      (error "DEFINSTRUCTION ~S ~S: more than one operand hole resolves to a :RELATIVE ~
+alternative for the same addressing-mode use -- a RELATIVE operand's offset applies to one hole ~
+only, so at most one hole may ever be the relative one"
+             machine name))))
 
 (defun %parse-opcode-subclause (machine name opcode-subclause)
   "Parse one (opcode n [:sub s]) subclause -- the same shape at all three
@@ -2156,7 +2258,6 @@ its absolute-mode sibling."
            ;; here instead.
            (cycles-subclause (find 'cycles body :key #'first)))
       (%check-mode-hole-attributes mode machine name)
-      (%check-word-relative mode machine name machine)
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
@@ -2415,7 +2516,6 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                                                     (rest encoding-clause)))
                 (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first)))
            (%check-mode-hole-attributes mode machine name)
-           (%check-word-relative mode machine name machine)
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                     machine name))

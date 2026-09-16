@@ -562,6 +562,38 @@ hlt" :machine 'disasm-word-machine))
          (a2 (assemble text :machine 'disasm-word-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
+;;; #62 (M4): a word-encoded RELATIVE hole renders as its absolute target on
+;;; disassembly, exactly like the byte path's DISASSEMBLE-RELATIVE-RENDERS-
+;;; ABSOLUTE-TARGET, and round-trips through re-assembly in both its inline
+;;; and extra-word forms (WBRA, tests/instruction.lisp,
+;;; WORD-RELATIVE-TEST-MACHINE).
+
+(fiveam:test disassemble-word-relative-renders-absolute-target
+  ;; A backward branch to its own address: at address 0, WBRA is 2 cells
+  ;; wide, so the next-instruction address is 2 -- an offset of -2 targets 0
+  ;; again.
+  (let* ((a (assemble "wbra *" :machine 'word-relative-test-machine))
+         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil)))
+    (fiveam:is (string= "wbra $0" (disassembly-line-text (first lines))))))
+
+(fiveam:test round-trip-word-relative-inline
+  (let* ((a (assemble "loop: wbra loop" :machine 'word-relative-test-machine))
+         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'word-relative-test-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
+(fiveam:test round-trip-word-relative-extra-word
+  (let* ((source (with-output-to-string (s)
+                   (format s "start: wbra target~%")
+                   (dotimes (i 300) (format s "wnop~%"))
+                   (format s "target: wnop~%")))
+         (a (assemble source :machine 'word-relative-test-machine))
+         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'word-relative-test-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
 (fiveam:test round-trip-sub-opcode-decodes-each-mode-back-to-itself
   ;; #125's own reproduction, at the disassembler level: SUBOP's IMMEDIATE
   ;; and ABSOLUTE modes share opcode #x03 and are told apart only by their

@@ -263,9 +263,13 @@ encodes as an offset that fits WIDTH cells, computed the same way
 the *next* instruction, not this one's own. Used by %CHOOSE-VARIANT's value
 filter so a RELATIVE candidate can compete on width like any other once an
 address is available to compute its offset from, rather than always winning
-by default as the widest candidate. :RELATIVE is rejected on a word-encoded
-machine (instruction.lisp's %CHECK-WORD-RELATIVE/%CHECK-WORD-ONE-OF-RELATIVE,
-#20), so DESCRIPTOR here is always cell-encoded.
+by default as the widest candidate. This is the byte/cell-encoded branch of
+that filter only -- %CHOOSE-VARIANT's word-encoded branch (#20) reaches this
+function's DESCRIPTOR only when WORD-FIELDS is NIL, since a word-encoded
+relative hole is range-checked against its own WORD-FIELD-CHOICE instead
+(%WORD-RELATIVE-OFFSET-FITS-P, #62) -- so DESCRIPTOR here is always
+cell-encoded, by construction of the caller, not because a word-encoded
+:RELATIVE is unsupported.
 
 WIDTH is deliberately the relative hole's *own* OPERAND-WIDTHS entry, not
 INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (the sum across every hole, #130):
@@ -549,12 +553,20 @@ accepts ~A"
                                                     (eval-expr ast :symbols symbols :pc address))
                                                   (second c))))
                                 (cond
-                                  ;; #20: a word-encoded descriptor's fit test
-                                  ;; is per-field range membership, not a
+                                  ;; #20/#62: a word-encoded descriptor's fit
+                                  ;; test is per-field range membership, not a
                                   ;; byte width -- OPERAND-WIDTHS is NIL for
                                   ;; these, so none of the byte-encoded
-                                  ;; branches below apply.
-                                  (word-fields (%word-variant-fits-p vals descriptor))
+                                  ;; branches below apply. %RELATIVE-ADJUSTED-
+                                  ;; VALUES folds VALS' own RELATIVE-HOLE-INDEX
+                                  ;; entry (if any) down to its raw offset
+                                  ;; first, a no-op when there is none, so
+                                  ;; %WORD-VARIANT-FITS-P always tests the
+                                  ;; same space every field's own RANGE is
+                                  ;; declared in.
+                                  (word-fields (%word-variant-fits-p
+                                                (%relative-adjusted-values address descriptor vals)
+                                                descriptor))
                                   ;; #124/#127/#130: per hole, not per whole
                                   ;; mode -- DESCRIPTOR's own OPERAND-
                                   ;; SIGNEDNESS (instruction.lisp) already
@@ -609,9 +621,15 @@ accepts ~A"
 the first :INLINE field whose value falls outside its own (biased) RANGE.
 Returns (VALUES hole-index value lo hi choice-name), or NIL if every field
 does fit (not reachable from %CHOOSE-VARIANT's own call site, which only
-calls this once %WORD-VARIANT-FITS-P has already said no)."
+calls this once %WORD-VARIANT-FITS-P has already said no). #62:
+%RELATIVE-ADJUSTED-VALUES folds a RELATIVE-HOLE-INDEX entry down to its raw
+offset first (a no-op when DESCRIPTOR has none), so a relative hole's own
+overflow, if that's the one that doesn't fit, is reported as the offset it
+actually tried to encode, not the absolute branch target."
   (let* ((descriptor (first candidate))
-         (vals (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) (second candidate))))
+         (vals (%relative-adjusted-values
+                address descriptor
+                (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) (second candidate)))))
     (loop for value in vals
           for field-choice in (instruction-descriptor-word-fields descriptor)
           for i from 0
@@ -1066,6 +1084,44 @@ pass chose different widths than the trial pass it followed"))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
+(defun %relative-adjusted-values (address descriptor values)
+  "VALUES with the entry at DESCRIPTOR's own RELATIVE-HOLE-INDEX, if any,
+replaced by its raw signed offset -- the absolute target it folded to, minus
+the address of the *next* instruction (ADDRESS + DESCRIPTOR's own SIZE),
+exactly the arithmetic %RELATIVE-OFFSET (below) applies at encode time,
+minus that function's own range check. Every other entry is returned
+unchanged. Shared by %CHOOSE-VARIANT's word-encoded RESOLVEDP branch (so the
+value filter tests offset-space membership against the relative hole's own
+WORD-FIELD-CHOICE, not the absolute target against it) and
+%WORD-CHOICE-OVERFLOW-VALUES (so a #104 overflow diagnostic on a relative
+hole reports the offset it actually tried to encode, not the target) -- both
+sites need the unchecked arithmetic, since they run *before* deciding
+whether any candidate fits at all, which is exactly what %RELATIVE-OFFSET's
+own error would otherwise short-circuit."
+  (let ((relative-index (instruction-descriptor-relative-hole-index descriptor)))
+    (if relative-index
+        (let ((next-address (+ address (instruction-descriptor-size descriptor))))
+          (loop for v in values
+                for i from 0
+                collect (if (eql i relative-index) (- v next-address) v)))
+        values)))
+
+(defun %word-relative-offset-fits-p (offset choice layout)
+  "T if OFFSET -- a word-encoded RELATIVE hole's already-computed signed
+offset (#62) -- fits CHOICE, the relative hole's own WORD-FIELD-CHOICE:
+membership in its own (pre-bias) RANGE for an :INLINE choice, exactly
+%WORD-VARIANT-FITS-P's own :INLINE test (above) applied to this one field in
+isolation; signed fit within the instruction word's own extra-word width
+(LAYOUT's WIDTH-CELLS * CELL-WIDTH bits) for an :EXTRA-WORD choice, mirroring
+%RELATIVE-FITS-P's byte-path bound but sized to a whole instruction word
+rather than an OPERAND-WIDTHS cell count, since that's what an escaped
+extra-word actually spills into (ENCODE-INSTRUCTION, instruction.lisp)."
+  (ecase (word-field-choice-kind choice)
+    (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
+               (<= lo offset hi)))
+    (:extra-word (%fits-signed-width-p offset (instruction-word-layout-width-cells layout)
+                                        (instruction-word-layout-cell-width layout)))))
+
 (defun %relative-offset (address descriptor value line cell-width)
   "VALUE is the absolute target address the RELATIVE hole named by
 DESCRIPTOR's own RELATIVE-HOLE-INDEX folded to; ADDRESS is this
@@ -1075,28 +1131,46 @@ Returns the signed offset to encode, computed from the address of the
 whole instruction before running its semantics, so that is the base a
 branch's own (set! pc (+ pc operand)) actually adds to. Signals
 ASSEMBLY-ERROR if the offset doesn't fit the relative hole's own width,
-rather than silently wrapping to a branch at the wrong address (#23).
+rather than silently wrapping to a branch at the wrong address (#23) --
+unconditionally, the same as the byte-encoded branch below, since a wrapped
+branch is a correctness bug regardless of :STRICT
+(%CHECK-STRICT-OPERAND-RANGE! already skips this hole for that reason).
 
-WIDTH here is the relative hole's own OPERAND-WIDTHS entry, not
-INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (#130): on a multi-hole
-descriptor (the relative hole's own siblings, #130) TOTAL-OPERAND-WIDTH is
-the *sum* across every hole, which would silently accept an offset too wide
-for this hole alone to encode. NEXT-ADDRESS, by contrast, is computed from
-DESCRIPTOR's own SIZE -- the whole encoded instruction's width -- which
-stays correct per-hole for the same reason #129's fixpoint argument holds:
-descriptor size is constant per descriptor regardless of which hole is
-relative, so it was never operand-width-relative to begin with; don't
-\"fix\" this half into a per-hole computation too."
-  (let* ((width (nth (instruction-descriptor-relative-hole-index descriptor)
-                      (instruction-descriptor-operand-widths descriptor)))
+#62: on a word-encoded DESCRIPTOR (WORD-FIELDS non-NIL), the offset is
+checked against the relative hole's own WORD-FIELD-CHOICE instead of an
+OPERAND-WIDTHS cell width -- %WORD-RELATIVE-OFFSET-FITS-P, mirroring
+%WORD-VARIANT-FITS-P's per-field test but applied to the offset rather than
+the raw operand value.
+
+WIDTH here (byte-encoded branch) is the relative hole's own OPERAND-WIDTHS
+entry, not INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (#130): on a
+multi-hole descriptor (the relative hole's own siblings, #130)
+TOTAL-OPERAND-WIDTH is the *sum* across every hole, which would silently
+accept an offset too wide for this hole alone to encode. NEXT-ADDRESS, by
+contrast, is computed from DESCRIPTOR's own SIZE -- the whole encoded
+instruction's width -- which stays correct per-hole (and per-encoding) for
+the same reason #129's fixpoint argument holds: descriptor size is constant
+per descriptor regardless of which hole is relative, so it was never
+operand-width-relative to begin with; don't \"fix\" this half into a
+per-hole computation too."
+  (let* ((relative-index (instruction-descriptor-relative-hole-index descriptor))
+         (word-fields (instruction-descriptor-word-fields descriptor))
          (next-address (+ address (instruction-descriptor-size descriptor)))
          (offset (- value next-address)))
-    (unless (%fits-signed-width-p offset width cell-width)
-      (%assembly-error line
-                        "~A: relative branch offset ~D out of range for ~D-cell operand ~
+    (if word-fields
+        (let* ((choice (nth relative-index word-fields))
+               (layout (instruction-descriptor-word-layout descriptor)))
+          (unless (%word-relative-offset-fits-p offset choice layout)
+            (%assembly-error line
+                              "~A: relative branch offset ~D out of range for its instruction-word ~
+field" (instruction-descriptor-name descriptor) offset)))
+        (let ((width (nth relative-index (instruction-descriptor-operand-widths descriptor))))
+          (unless (%fits-signed-width-p offset width cell-width)
+            (%assembly-error line
+                              "~A: relative branch offset ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
-                        (instruction-descriptor-name descriptor) offset width
-                        (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))
+                              (instruction-descriptor-name descriptor) offset width
+                              (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))))
     offset))
 
 (defun %operand-range (width cell-width signedp)

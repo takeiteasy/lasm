@@ -142,13 +142,15 @@ alternative mode-name that was actually encoded, instruction.lisp) survives
 to the disassembler (disassembler.lisp, #117). NIL entries mix in freely for
 a value-selected field (WORD-FIELD-CHOICE-CHOICE NIL there).
 
-Word machines never sign-extend a :RELATIVE decoded value the way the byte
-path below does -- %CHECK-WORD-RELATIVE (instruction.lisp) forbids a
-:RELATIVE mode on a word-encoded machine outright, so there is no signed
-:RELATIVE word-machine operand to extend. A CHOICE-selected field's own
-per-hole :SIGNED (#127) is a separate, narrower case %TRY-DECODE-WORD-
-CANDIDATE handles on its own, via WORD-FIELD-CHOICE-SIGNEDP -- see that
-function."
+A word machine never needs a separate :RELATIVE sign-extension step the way
+the byte path below does -- a word-encoded RELATIVE hole's WORD-FIELD-CHOICE
+is already stamped SIGNEDP (#62, instruction.lisp's %WORD-FIELD-CHOICE-FORM,
+MODE-DESCRIPTOR-SIGNEDP folding in RELATIVEP), so %TRY-DECODE-WORD-CANDIDATE
+sign-extends it the same way it sign-extends any other per-hole :SIGNED
+field (#127), via WORD-FIELD-CHOICE-SIGNEDP -- see that function. The
+resulting signed offset is folded back to an absolute target the same way
+on both encodings: %OPERAND-RENDER-VALUES (disassembler.lisp) for display,
+and a branch's own (set! pc (+ pc operand)) semantics at run time."
   (let* ((width-cells (instruction-word-layout-width-cells layout))
          (cell-width (instruction-word-layout-cell-width layout))
          (word (%fetch-cells read-cell address width-cells cell-width))

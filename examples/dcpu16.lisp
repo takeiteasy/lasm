@@ -20,6 +20,17 @@
 ;;;; register-to-register motion goes through a separate ADDR instruction
 ;;;; that puts a plain register index in both fields instead.
 ;;;;
+;;;; BRA below (#62, M4) is a PC-relative branch -- its operand syntax names
+;;;; an absolute target, same as SET/ADD/STO above, but what packs into
+;;;; field A is the signed offset from the address of the *next*
+;;;; instruction, reusing that same field's inline/escape variant shape (a
+;;;; short branch packs inline; a far one escapes to its own word, exactly
+;;;; like a large literal does). Since DCPU16FOO is word-addressed
+;;;; (:cell-width 16), that offset counts 16-bit words -- the same unit its
+;;;; own addresses already do, so there is no separate byte/word distinction
+;;;; to trip over here the way there would be on a byte-addressed
+;;;; word-encoded machine (see examples/word.lisp).
+;;;;
 ;;;; Run with:  sbcl --script examples/dcpu16.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -96,15 +107,38 @@
   (encoding (opcode 5))
   (semantics (trap :halt)))
 
+;; BRA target -- PC-relative branch (#62): target is an absolute address in
+;; source syntax, same as any other DCPU16FOO operand, but the assembler
+;; folds it to the signed offset from the *next* instruction's own address
+;; before packing it into field A. Unlike SET/ADD/STO's own field-A table
+;; above, BRA's own variant is bias 0, not 33 -- :BIAS is what lets an
+;; *unsigned* field hold a small negative literal (DCPU-16's own -1..30);
+;; a RELATIVE hole is already signed on its own account (its MODE's
+;; :RELATIVE T implies :SIGNED T), so BRA's inline range is the field's own
+;; signed bound directly, -30..30, with the one remaining raw value (31)
+;; free to serve as the extra-word escape.
+(definstruction dcpu16foo bra
+  (modes relative)
+  (encoding
+    (opcode 6)
+    (operand offset :field a
+      (variant (range -30 30) inline :bias 0)
+      (variant :else (extra-word :escape 31))))
+  (semantics (set! pc (wrap-value (+ pc offset) 16))))
+
 ;; SET 1, 1000 exercises the extra-word path (1000 is far outside -1..30);
-;; every other operand here packs inline -- one program exercising both
-;; forms of the same field, mirroring examples/word.lisp's SETA/SETB.
+;; BRA below jumps clean over a dead ADD -- proving it actually branches,
+;; not merely encodes -- and, packing its own small offset inline, shows
+;; the same field-A escape mechanism serving a PC-relative use as it does
+;; SET/ADD's literal one, just over its own signed range.
 (defparameter *source*
   "set 0, 5        ; reg0 = 5, packs inline into A
 set 1, 1000      ; reg1 = 1000, does not fit -- A escapes, value in its own word
 addr 0, 1        ; reg0 = reg0 + reg1 = 1005
 sto result, 0    ; RAM[result] = reg0
-hlt
+bra skip         ; PC-relative jump over the dead ADD below
+add 0, 1         ; dead code -- skipped by BRA; reaching it would corrupt reg0
+skip: hlt
 result: .byte 0  ; one 16-bit cell -- .word would reserve two (#53)")
 
 (format t "~&Source:~%~A~2%" *source*)
@@ -113,11 +147,11 @@ result: .byte 0  ; one 16-bit cell -- .word would reserve two (#53)")
 (let ((assembly (assemble *source* :machine 'dcpu16foo)))
   (format t "  cells:      ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  cell-width: ~D bits~%" (assembly-cell-width assembly))
-  (format t "  length:     ~D cells (1 each for SET reg0/ADDR/STO/HLT/RESULT, 2 for ~
-SET reg1's extra word)~%"
+  (format t "  length:     ~D cells (1 each for SET reg0/ADDR/STO/BRA/ADD(dead)/HLT/RESULT, ~
+2 for SET reg1's extra word)~%"
           (length (assembly-cells assembly)))
   (assert (= 16 (assembly-cell-width assembly)))
-  (assert (= 7 (length (assembly-cells assembly))))
+  (assert (= 9 (length (assembly-cells assembly))))
   (assert (equal '(unsigned-byte 16) (array-element-type (assembly-cells assembly))))
 
   (format t "~%Running:~%")
@@ -125,11 +159,14 @@ SET reg1's extra word)~%"
     (load-program m assembly)
     (multiple-value-bind (reason steps) (run m)
       (format t "  stopped: ~A after ~D step~:P~%" reason steps)
-      (format t "  reg0 = ~D (expected 1005)~%" (regref m 'reg 0))
+      (format t "  reg0 = ~D (expected 1005 -- BRA must have skipped the dead ADD)~%"
+              (regref m 'reg 0))
       (format t "  RAM[result] = ~D (expected 1005)~%"
               (mref m 'ram (gethash "result" (assembly-symbols assembly))))
       (assert (eq :trap reason))
-      (assert (= 5 steps))
+      ;; SET reg0, SET reg1, ADDR, STO, BRA, HLT -- BRA's own jump skips the
+      ;; dead ADD in between, so this is 6 steps, not 7.
+      (assert (= 6 steps))
       (assert (= 1005 (regref m 'reg 0)))
       (assert (= 1005 (mref m 'ram (gethash "result" (assembly-symbols assembly)))))
       (format t "~%All assertions passed.~%"))))

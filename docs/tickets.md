@@ -88,7 +88,6 @@ between them or on the chain above):
 
 | Ticket | Follows up on |
 |---|---|
-| #62 word-encoded `:relative` mode | #20 |
 | #63 word-encoding polish (extra-word width, signed gap, memoization, overlap check) | #20 |
 | #64 non-uniform instruction-word layouts | #20, concrete case from #54 |
 | #65 `.cell`/`.dat` directive | #53 |
@@ -99,6 +98,7 @@ between them or on the chain above):
 | #70 step loop re-resolves cell-width every step | #53 (same shape as #39) |
 | #72 symbolic names for banked register elements | #13, #54, #55 |
 | #114 architecture → CPU family → CPU model tiering | independent (mirrors old rpg/ANIMA-16 tiering) |
+| #134 `:strict` has no effect on a word-encoded machine's non-relative holes | #20, noted while implementing #62 |
 | #116 per-hole ambiguity warning for ONE-OF | #74, #103; neighbors #115/#123/#124 but not blocked by them |
 
 ## Adding to this page
