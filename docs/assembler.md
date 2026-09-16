@@ -163,6 +163,18 @@ declared in `(modes ...)`:
      own `choices` return value, hole-aligned. A candidate with no such
      selector on either encoding scheme is always eligible, so a machine
      using no `one-of` at all is unaffected.
+
+     This is also what keeps per-hole `:width` ([Addressing modes, "Per-hole
+     `:width`"](modes.md#per-hole-width)) from disturbing convergence
+     (below), even though two sibling descriptors of one mode can now have
+     genuinely different `instruction-descriptor-size`s: CHOICE eligibility
+     narrows a sub-opcode-selected hole to its one matching sibling by
+     *syntax* alone, and syntax doesn't change between relaxation passes the
+     way a folded value can, so the chosen size is already constant on the
+     first pass — nothing for the floor step below to widen. This is the
+     opposite situation from `zero-page`/`absolute`, which share *identical*
+     syntax and are told apart only by whether a value fits — exactly where
+     relaxation is meaningful.
 2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
    than this statement's current floor — the size it committed to on an
    earlier pass (0 on the first pass, when nothing has committed to anything

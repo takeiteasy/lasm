@@ -727,12 +727,19 @@ be claimed" machine name (length missing) missing (rest missing))))
                                    &optional sub-opcode-subclause)
   "SUBCLAUSES is every (operand ...) form declared for one variant of
 instruction NAME (on MACHINE) using addressing MODE (named MODE-NAME in
-diagnostics), in declaration order. Returns (VALUES widths names sub-spec),
-one WIDTHS/NAMES entry per subclause -- their count must equal MODE's EXPR
-hole count exactly, since each hole needs somewhere to put its parsed value
-and each operand subclause needs a hole to size itself against; mismatch in
-either direction is an error. Named fields are also checked for collisions
-(%CHECK-OPERAND-NAMES).
+diagnostics), in declaration order. Returns (VALUES widths names sub-spec
+mode-specified), one WIDTHS/NAMES/MODE-SPECIFIED entry per subclause --
+their count must equal MODE's EXPR hole count exactly, since each hole needs
+somewhere to put its parsed value and each operand subclause needs a hole to
+size itself against; mismatch in either direction is an error. Named fields
+are also checked for collisions (%CHECK-OPERAND-NAMES).
+
+MODE-SPECIFIED (#129) is T at hole I when that hole's own (operand ...)
+subclause was (operand :mode) rather than an explicit (operand :width n) --
+the only place %BYTE-OPERAND-WIDTHS (below) may substitute a disagreeing
+ONE-OF alternative's own :WIDTH for WIDTHS' shared entry, since an explicit
+:WIDTH is the author naming a width directly and must not be silently
+overridden.
 
 SUB-SPEC is NIL when neither any subclause carries a (variant (choice ...)
 (sub ...)) selector nor SUB-OPTIONAL-SUBCLAUSE is given -- the common case
@@ -762,9 +769,11 @@ per hole" machine name mode-name holes n (= n 1))))
                                  (list op-name (%operand-width mode spec machine-name)
                                        (%check-byte-sub-variants!
                                         variant-forms alts machine name
-                                        (or op-name (format nil "~D" i)))))))
+                                        (or op-name (format nil "~D" i)))
+                                       (eq (first spec) :mode)))))
          (widths (mapcar #'second parsed))
          (names (mapcar #'first parsed))
+         (mode-specified (mapcar #'fourth parsed))
          (carrying (loop for p in parsed for i from 0 when (third p) collect (cons i (third p)))))
     (%check-operand-names names machine name mode-name)
     (when (rest carrying)
@@ -784,7 +793,8 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
                (destructuring-bind (hole-index . pairs) (first carrying)
                  (cons (list hole-index)
                        (mapcar (lambda (p) (cons (list (car p)) (cdr p))) pairs))))
-              (t nil)))))
+              (t nil))
+            mode-specified)))
 
 (defun %check-relative-mode-holes (mode machine name)
   ;; A RELATIVE mode (mode.lisp) marks its *whole* pattern's operand as a
@@ -964,19 +974,52 @@ common value is what matters there)."
                   (alts (mode-descriptor-signedp (find-mode-descriptor (first alts))))
                   (t (mode-descriptor-signedp mode)))))
 
+(defun %byte-operand-widths (hole-alternatives-list sub-choices declared-widths mode-specified)
+  "Hole-aligned list, one entry per DECLARED-WIDTHS -- this descriptor's own
+per-hole width (#129), computed once per expanded descriptor since
+SUB-CHOICES can differ between sibling descriptors sharing one carrying
+hole, mirroring %BYTE-OPERAND-SIGNEDNESS. Substitution only happens at a
+hole whose MODE-SPECIFIED entry is T, i.e. whose own (operand ...) subclause
+was (operand :mode) rather than an explicit (operand :width n)
+(%PARSE-OPERAND-SUBCLAUSES) -- an explicit :WIDTH is the author naming a
+width directly, and always wins over a matched alternative's own :WIDTH, so
+a hole given one needs no per-hole record at all regardless of whether its
+alternatives agree (%CHECK-BYTE-ONE-OF-WIDTH). At a MODE-SPECIFIED hole,
+entry I is the SUB-CHOICES-named alternative's own MODE-DESCRIPTOR-WIDTH
+when that alternative declares one, else -- an ungoverned hole, a ONE-OF
+hole whose alternatives all agree, or a chosen alternative that itself
+declares no :WIDTH -- DECLARED-WIDTHS' own entry, whatever %OPERAND-WIDTH
+already resolved (the mode's default width, or -- for an agreeing ONE-OF
+hole sharing a common :WIDTH -- that shared value)."
+  (loop for i below (length declared-widths)
+        for alts = (nth i hole-alternatives-list)
+        for chosen = (nth i sub-choices)
+        for declared = (nth i declared-widths)
+        for specified = (nth i mode-specified)
+        collect (if specified
+                    (or (and chosen (mode-descriptor-width (find-mode-descriptor chosen)))
+                        (and alts (mode-descriptor-width (find-mode-descriptor (first alts))))
+                        declared)
+                    declared)))
+
 (defun %resolve-operand-fields (mode operand-subclauses machine name mode-name machine-name
                                  &optional sub-opcode-subclause)
   "Resolve the (operand ...) subclauses (zero or more whole forms, in
 declaration order) given for one addressing-mode use into (VALUES widths
-names sub-spec), one WIDTHS/NAMES entry per MODE hole. With no subclauses at
-all, MODE must have exactly one hole (a bare width can't be inferred for
-more) -- its default width (%MODE-OPERAND-WIDTH) is used, unnamed, and
-SUB-SPEC is NIL, unless SUB-OPCODE-SUBCLAUSE was given, which is an error --
-a defaulted single-hole operand has no (operand ...) subclause to attach a
-per-hole selector to, and a (sub-opcode ...) table has nothing to name
-without explicit per-hole subclauses either. With one or more subclauses,
-their count must match MODE's hole count exactly, and SUB-SPEC (#126/#128)
-is whatever %PARSE-OPERAND-SUBCLAUSES resolved."
+names sub-spec mode-specified), one WIDTHS/NAMES/MODE-SPECIFIED entry per
+MODE hole. With no subclauses at all, MODE must have exactly one hole (a
+bare width can't be inferred for more) -- its default width
+(%MODE-OPERAND-WIDTH) is used, unnamed, SUB-SPEC is NIL, and MODE-SPECIFIED
+is (T) (the default width traces back to :MODE, not an explicit :WIDTH),
+unless SUB-OPCODE-SUBCLAUSE was given, which is an error -- a defaulted
+single-hole operand has no (operand ...) subclause to attach a per-hole
+selector to, and a (sub-opcode ...) table has nothing to name without
+explicit per-hole subclauses either; the same absence of a subclause means a
+width-disagreeing hole can never reach this branch (#129) -- one can only
+exist under an explicit (operand ...) subclause carrying a selector. With
+one or more subclauses, their count must match MODE's hole count exactly,
+and SUB-SPEC (#126/#128) and MODE-SPECIFIED (#129) are whatever
+%PARSE-OPERAND-SUBCLAUSES resolved."
   (if operand-subclauses
       (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name
                                   sub-opcode-subclause)
@@ -986,7 +1029,7 @@ is whatever %PARSE-OPERAND-SUBCLAUSES resolved."
               (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
 (operand ...) subclauses -- a defaulted single-hole operand has no room to declare one"
                      machine name mode-name))
-            (values (list (%mode-operand-width mode machine-name)) (list nil) nil))
+            (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t)))
           (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
 -- an (operand ...) subclause is required per hole" machine name mode-name
                  (%mode-hole-count mode)))))
@@ -1003,7 +1046,7 @@ hole-selected one would both be trying to write it."
            machine name)))
 
 (defun %byte-descriptor-forms (machine name mode-form opcode explicit-sub operand-widths operand-names cycles
-                                semantics-forms hole-alternatives-list sub-spec mode)
+                                semantics-forms hole-alternatives-list sub-spec mode mode-specified)
   "One INSTRUCTION-DESCRIPTOR form per byte-encoded addressing-mode use for
 one (MODES ...) variant or single-mode (ENCODING ...) clause -- a single one
 when SUB-SPEC is NIL (the ordinary case, sharing EXPLICIT-SUB, #125's plain
@@ -1012,16 +1055,23 @@ HOLE-INDICES/PAIRS name (#126's single carrying hole, or #128's several)
 -- mirroring %WORD-MODE-DESCRIPTOR-FORMS' one-descriptor-per-combo shape
 for the word-encoded path, generalized here from \"one per field-variant
 combination\" to \"one per matched-alternative-tuple pair\". Every expanded
-descriptor shares OPCODE, OPERAND-WIDTHS, OPERAND-NAMES, and
-SEMANTICS-FORMS -- only SUB-OPCODE, SUB-CHOICES, and OPERAND-SIGNEDNESS
-(#124/#127, %BYTE-OPERAND-SIGNEDNESS) differ, computed fresh per expanded
-descriptor since SUB-CHOICES itself does. MODE (the MODE-DESCRIPTOR
+descriptor shares OPCODE, OPERAND-NAMES, and SEMANTICS-FORMS -- SUB-OPCODE,
+SUB-CHOICES, OPERAND-SIGNEDNESS (#124/#127, %BYTE-OPERAND-SIGNEDNESS), and
+OPERAND-WIDTHS (#129, %BYTE-OPERAND-WIDTHS) all differ, computed fresh per
+expanded descriptor since SUB-CHOICES itself does. MODE (the MODE-DESCRIPTOR
 MODE-FORM names, already resolved by both call sites) is needed only for
-OPERAND-SIGNEDNESS's own MODE-DESCRIPTOR-SIGNEDP reads."
+OPERAND-SIGNEDNESS's own MODE-DESCRIPTOR-SIGNEDP reads; OPERAND-WIDTHS
+itself is the shared, declared widths list (whatever %OPERAND-WIDTH resolved
+per hole from its own (operand ...) subclause) that %BYTE-OPERAND-WIDTHS
+falls back to at a hole whose alternatives don't override it. MODE-SPECIFIED
+(#129, %PARSE-OPERAND-SUBCLAUSES/%RESOLVE-OPERAND-FIELDS) is the hole-aligned
+gate %BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
   (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
   (let ((n (length operand-widths)))
     (if (null sub-spec)
-        (list (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+        (list (%descriptor-form machine name mode-form opcode
+                                 (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified)
+                                 operand-names cycles
                                  semantics-forms hole-alternatives-list explicit-sub nil
                                  (%byte-operand-signedness mode hole-alternatives-list nil n)))
         (destructuring-bind (hole-indices . pairs) sub-spec
@@ -1030,7 +1080,10 @@ OPERAND-SIGNEDNESS's own MODE-DESCRIPTOR-SIGNEDP reads."
                       (loop for idx in hole-indices
                             for chosen-name in (car pair)
                             do (setf (nth idx sub-choices) chosen-name))
-                      (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+                      (%descriptor-form machine name mode-form opcode
+                                         (%byte-operand-widths hole-alternatives-list sub-choices operand-widths
+                                                                mode-specified)
+                                         operand-names cycles
                                          semantics-forms hole-alternatives-list (cdr pair) sub-choices
                                          (%byte-operand-signedness mode hole-alternatives-list sub-choices n))))
                   pairs)))))
@@ -1645,6 +1698,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
       (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name))
              (hole-alternatives-list (%mode-hole-alternatives mode)))
         (%check-word-one-of-signed specs hole-alternatives-list machine name)
+        (%check-word-one-of-width hole-alternatives-list machine name)
         (let ((alternatives-form (%word-alternatives-form specs))
               (combos (%expand-word-combos specs)))
           (mapcar (lambda (combo)
@@ -1685,8 +1739,10 @@ mode-name symbols when they disagree, i.e. exactly the holes #124/#127's
 per-hole :SIGNED needs a decode-time discriminator for. Alternatives that
 agree need no discriminator at all -- the hole's signedness is static
 regardless of which one matched, mode.lisp's %CHECK-ONE-OF-ELEMENTS! having
-already ensured none of them declares :WIDTH/:RELATIVE/:SUFFIX to disagree
-about instead."
+already ensured none of them declares :RELATIVE/:SUFFIX to disagree about
+instead (:WIDTH, #129, may disagree here just as freely as :SIGNED does --
+its own decode-time gate is %CHECK-BYTE-ONE-OF-WIDTH, below, entirely
+independent of this one)."
   (mapcar (lambda (alts)
             (and alts
                  (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-signedp (find-mode-descriptor m)))
@@ -1715,6 +1771,44 @@ disagree on :SIGNED, but this hole carries no sub-opcode selector -- per-hole :S
 decode-time record of which alternative matched"
                       machine name i alts))))
 
+(defun %one-of-width-disagreement (hole-alternatives-list)
+  "Hole-aligned list, one entry per HOLE-ALTERNATIVES-LIST -- NIL for a hole
+not governed by any ONE-OF, or for a ONE-OF hole whose alternatives all
+declare the same MODE-DESCRIPTOR-WIDTH (including all-NIL, i.e. none of them
+declares :WIDTH at all); the hole's own alternative mode-name symbols when
+they disagree, i.e. exactly the holes #129's per-hole :WIDTH needs a
+decode-time discriminator for. Alternatives that agree need no discriminator
+at all -- the hole's width is static regardless of which one matched."
+  (mapcar (lambda (alts)
+            (and alts
+                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-width (find-mode-descriptor m)))
+                                                   alts)))
+                 alts))
+          hole-alternatives-list))
+
+(defun %check-byte-one-of-width (hole-alternatives-list sub-spec mode-specified machine name)
+  "Byte-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED, for #129's per-hole
+:WIDTH. Signal a DEFINSTRUCTION-time error for a hole whose ONE-OF
+alternatives disagree on :WIDTH, is MODE-SPECIFIED (hole-aligned, T when
+that hole's (operand ...) subclause was (operand :mode) rather than an
+explicit (operand :width n), %PARSE-OPERAND-SUBCLAUSES), and carries no
+sub-opcode selector -- the same decode-time record :SIGNED needs, since
+which alternative was written is otherwise unrecoverable once bits are on
+the wire. A hole given an explicit (operand :width n) is exempt regardless
+of whether its alternatives disagree: an explicit :WIDTH is the author
+naming a width directly, always wins over a matched alternative's own
+:WIDTH (%BYTE-OPERAND-WIDTHS), and so needs no per-hole record at all."
+  (let ((carrying-indices (and sub-spec (car sub-spec))))
+    (loop for alts in (%one-of-width-disagreement hole-alternatives-list)
+          for specified in mode-specified
+          for i from 0
+          when (and alts specified (not (member i carrying-indices)))
+            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+disagree on :WIDTH, but this hole carries no sub-opcode selector -- per-hole :WIDTH needs a ~
+(variant (choice ...) (sub ...)) selector, alone or inside a (sub-opcode ...) table, as its ~
+decode-time record of which alternative matched"
+                      machine name i alts))))
+
 (defun %check-word-one-of-signed (specs hole-alternatives-list machine name)
   "Word-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED (#127): signal a
 DEFINSTRUCTION-time error unless every hole whose ONE-OF alternatives
@@ -1734,6 +1828,24 @@ rejects."
 disagree on :SIGNED, but not every field variant at that hole is CHOICE-selected -- ~
 per-hole :SIGNED needs a (choice m) selector on every variant as its decode-time record ~
 of which alternative matched" machine name i alts)))
+
+(defun %check-word-one-of-width (hole-alternatives-list machine name)
+  "Per-hole :WIDTH (#129) is permanently, intentionally out of scope on a
+word-encoded machine -- OPERAND-WIDTHS is always NIL there since operand
+sizes come from word fields, so a per-hole :WIDTH has nothing to mean.
+Signal a DEFINSTRUCTION-time error, naming MACHINE/NAME, if any ONE-OF
+hole's alternatives declare :WIDTH at all -- agreeing or not, since even an
+agreeing declaration is meaningless here (unlike the byte-encoded path, where
+it constrains OPERAND-WIDTHS whether or not the alternatives disagree) --
+keeping docs/modes.md's \"permanently out of scope\" true by erroring loudly
+rather than silently ignoring an inert declaration."
+  (loop for alts in hole-alternatives-list
+        for i from 0
+        when (and alts (some (lambda (m) (mode-descriptor-width (find-mode-descriptor m))) alts))
+          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
+:WIDTH, but per-hole :WIDTH is permanently out of scope on word-encoded machine ~S -- operand ~
+sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
+                      machine name i alts machine)))
 
 (defun %parse-opcode-subclause (machine name opcode-subclause)
   "Parse one (opcode n [:sub s]) subclause -- the same shape at all three
@@ -1825,13 +1937,14 @@ mechanism (#128), not supported on word-encoded machine ~S" machine name mode-sy
               ;; called here) -- it needs SPECS, which only that function
               ;; computes, and there is exactly one call site for it, unlike
               ;; %BYTE-DESCRIPTOR-FORMS' two.
-              (multiple-value-bind (operand-widths operand-names sub-spec)
+              (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
                   (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine
                                             sub-opcode-subclause)
                 (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
+                (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
                 (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                          opcode sub operand-widths operand-names cycles-form semantics-forms
-                                         (%mode-hole-alternatives mode) sub-spec mode))))))))
+                                         (%mode-hole-alternatives mode) sub-spec mode mode-specified))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -2078,17 +2191,19 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                                                            mode mode-sym machine
                                                            cycles-form (rest semantics-clause))))
                     ',name)
-                 (multiple-value-bind (operand-widths operand-names sub-spec)
+                 (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
                      (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine
                                                  sub-opcode-subclause)
                    (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
+                   (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
                    `(eval-when (:compile-toplevel :load-toplevel :execute)
                       (register-instruction-variants!
                        ',machine
                        (list ,@(%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                                         opcode sub operand-widths operand-names
                                                         cycles-form (rest semantics-clause)
-                                                        (%mode-hole-alternatives mode) sub-spec mode)))
+                                                        (%mode-hole-alternatives mode) sub-spec mode
+                                                        mode-specified)))
                       ',name))))))))))
 
 ;;; Encoding / execution

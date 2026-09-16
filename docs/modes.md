@@ -99,7 +99,8 @@ its *offset* applies to the operand as a whole and there is currently no way
 to mark just one hole of a multi-hole mode as the relative one (see
 [PC-relative modes](#pc-relative-modes) below). A `one-of` element (below)
 contributes as many holes as any one of its alternatives — every alternative
-must share the same count.
+must share the same count, and, on a byte-encoded machine, may disagree on
+its own `:width` (see [Per-hole `:width`](#per-hole-width) below).
 
 ## Per-operand modes
 
@@ -131,14 +132,13 @@ name). At `defmode` time, every alternative:
   of the pipeline depends on (see [Instructions](instructions.md)) has no
   room for a `one-of` that yields a different field count depending on which
   alternative matched;
-- may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below)
-  or `:signed` (see [Per-hole `:signed`](#per-hole-signed) below) — but none
-  of `:width`, `:relative`, or `:suffix` itself: each of those needs some
-  way to recover, at decode time, which alternative a hole actually
-  matched, which honoring them per hole (rather than per statement) doesn't
-  yet have a design for — honoring `:width` per hole specifically would also
-  make an instruction's own size depend on which alternative was written,
-  which the assembler's relaxation pass doesn't support (see the tracker);
+- may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below),
+  `:signed` (see [Per-hole `:signed`](#per-hole-signed) below), or `:width`
+  (see [Per-hole `:width`](#per-hole-width) below) — but not `:relative` or
+  `:suffix` itself: each of those needs some way to recover, at decode time,
+  which alternative a hole actually matched (`:relative` also needs which
+  hole of a multi-hole pattern is the relative one), which honoring them per
+  hole (rather than per statement) doesn't yet have a design for;
 - must not share identical syntax with another alternative in the same
   `one-of` (checked case-insensitively, since a `:literal` element already
   matches that way) — nothing could ever choose between two alternatives
@@ -242,7 +242,7 @@ alternative when it doesn't — see [Disassembler](disassembler.md).
 
 ### Per-hole `:strict`
 
-Unlike `:width`/`:relative`/`:suffix`, a `one-of` alternative *may*
+Unlike `:relative`/`:suffix`, a `one-of` alternative *may*
 declare `:strict t` — it needs no decode-time record of which alternative
 matched, since it is a pure encode-time range check with no bearing on size,
 value, or decode at all (see [Diagnostics, "Strict operand
@@ -312,14 +312,72 @@ reinterpretations, decided purely by which alternative was written (see
 end, and [`examples/anima16.lisp`](../examples/anima16.lisp) for the
 word-encoded equivalent).
 
-Per-hole `:width` remains unsupported inside `one-of` on both encoding
-schemes — on a byte-encoded machine it is a real gap (a per-hole width would
-make an instruction's own size depend on which alternative was written,
-which the assembler's relaxation pass doesn't support yet); on a
-**word-encoded** machine it is permanently, intentionally out of scope
-instead, since a word-encoded operand's size always comes from its own
-field width, never from `operand-widths` (which is always empty there) —
-there is nothing for a per-hole `:width` to mean on that scheme.
+### Per-hole `:width`
+
+Like `:signed`, a `one-of` alternative may also declare its own `:width n`
+on a **byte-encoded** machine — and, also like `:signed`, this genuinely
+does need a decode-time record of which alternative matched, since it
+decides how many operand cells to read, both at encode and at decode. A
+`one-of` hole only needs that record when its alternatives actually
+*disagree* on width: `definstruction` signals an error only when a hole's
+alternatives declare different `:width` values, that hole's own `(operand
+...)` subclause is `(operand :mode)` (so the disagreement actually takes
+effect — see below), *and* the hole has no decode-time discriminator; when
+every alternative agrees, or the hole's `(operand ...)` subclause gives an
+explicit `:width` of its own, the hole's width is static regardless of
+which alternative matched, and no discriminator is required at all.
+
+The discriminator is the same one `:signed` uses on a byte-encoded
+machine: the hole must carry a sub-opcode selector — either its own
+hole-selected `(variant (choice m) (sub s))`, or membership in a
+`(sub-opcode ...)` table's participating holes (see [Instructions,
+"hole-selected
+sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
+and ["multi-hole sub-opcode
+selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection)).
+A table lets any number of a mode's holes have disagreeing-width
+alternatives at once, exactly as it does for `:signed`.
+
+An explicit `(operand :width n)` on the hole's own `(operand ...)`
+subclause always wins over a matched alternative's own `:width` — the
+author naming a width directly overrides whatever the alternatives
+themselves declare, so a hole given one needs no selector at all, even
+when its alternatives disagree:
+
+```lisp
+(defmode oo-narrow expr :width 1)
+(defmode oo-wide "#" expr :width 2)
+(defmode oo-widths (one-of oo-narrow oo-wide))
+```
+
+Given a byte-encoded instruction whose sole operand hole uses `oo-widths`
+with `(operand val :mode (variant (choice oo-narrow) (sub 0)) (variant
+(choice oo-wide) (sub 1)))`, `ldw 200` encodes and decodes as a 1-cell
+operand (matched `oo-narrow`) while `ldw #300` encodes and decodes as a
+2-cell one (matched `oo-wide`) — the instruction's own total size differing
+by which alternative was written (see
+[`examples/subchoice.lisp`](../examples/subchoice.lisp) for this run end to
+end, including a following label's address across the size difference, and
+[`examples/subtable.lisp`](../examples/subtable.lisp) for the two-hole
+`(sub-opcode ...)` case).
+
+This does not disturb [the assembler's relaxation
+pass](assembler.md#convergence): which sibling descriptor a statement uses
+is decided purely by *syntax* — which alternative's own tokens were
+written — not by a value that might still be provisional mid-relaxation,
+so the chosen size is already constant from the first layout pass, with
+nothing for `FLOOR`'s monotone widening to do. This is the opposite
+situation from `zero-page`/`absolute` sharing identical syntax and being
+told apart only by whether a value fits, which is exactly where relaxation
+(narrow-then-widen-if-needed) is meaningful.
+
+On a **word-encoded** machine, per-hole `:width` is permanently,
+intentionally out of scope instead, since a word-encoded operand's size
+always comes from its own field width, never from `operand-widths` (which
+is always empty there) — there is nothing for a per-hole `:width` to mean
+on that scheme, so `definstruction` rejects any `one-of` hole whose
+alternatives declare `:width` at all (agreeing or not) rather than
+silently ignoring it.
 
 ## Signed operands
 

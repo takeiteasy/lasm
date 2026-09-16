@@ -133,4 +133,42 @@ each statement's own combination dispatched correctly.~%" (mref m 'ram 20) (mref
     (assert (string= "mov $15,[$14]" (disassembly-line-text (second lines))))
     (format t "~%Both round-trip to their own real syntax.~%")))
 
+;; #129: per-hole :WIDTH, two holes at once. Each hole independently picks a
+;; 1-byte narrow literal or a "#"-prefixed 2-byte wide one, jointly selecting
+;; the sub-opcode cell via the same (sub-opcode ...) table MOV uses above --
+;; #128 generalized both %CHECK-BYTE-ONE-OF-SIGNED and (with #129)
+;; %CHECK-BYTE-ONE-OF-WIDTH from one carrying hole to a carrying-hole *set*,
+;; so two holes disagreeing on width is exactly as legal as two disagreeing
+;; on signedness.
+(defmode sw-narrow expr :width 1)
+(defmode sw-wide "#" expr :width 2)
+(defmode sw-two (one-of sw-narrow sw-wide) "," (one-of sw-narrow sw-wide))
+
+(definstruction subtablefoo movw
+  (modes sw-two)
+  (encoding (opcode #x20)
+            (operand v1 :mode)
+            (operand v2 :mode)
+            (sub-opcode
+              (variant (choice sw-narrow sw-narrow) (sub 0))
+              (variant (choice sw-narrow sw-wide)   (sub 1))
+              (variant (choice sw-wide sw-narrow)   (sub 2))
+              (variant (choice sw-wide sw-wide)     (sub 3))))
+  (semantics (set! a (wrap-value (+ v1 v2) 8))))
+
+(format t "~%MOVW's four ONE-OF-matched width combinations, sharing opcode #x20:~%")
+(let ((nn (assembly-cells (assemble "movw 5, 10" :machine 'subtablefoo)))
+      (ww (assembly-cells (assemble "movw #300, #400" :machine 'subtablefoo))))
+  (format t "  movw 5, 10        -> ~{~2,'0X~^ ~} (2 narrow operands, 4 bytes total)~%" (coerce nn 'list))
+  (format t "  movw #300, #400   -> ~{~2,'0X~^ ~} (2 wide operands, 6 bytes total)~%" (coerce ww 'list))
+  (assert (equalp #(#x20 #x00 #x05 #x0A) nn))
+  (assert (equalp #(#x20 #x03 #x2C #x01 #x90 #x01) ww))
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader ww) 0 'subtablefoo)
+    (assert (string= "MOVW" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 300 400) values))
+    (assert (= 6 size))
+    (assert (eq 'sw-wide (%matched-choice-name choices 0)))
+    (assert (eq 'sw-wide (%matched-choice-name choices 1))))
+  (format t "~%Each hole's own width is read independently at decode, not fixed once per mode.~%"))
+
 (format t "~%All assertions passed.~%")

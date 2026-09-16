@@ -263,7 +263,7 @@ looks like."
 
 (defmode oo-signed "@" expr :signed t)
 (defmode oo-relative expr :relative t)
-(defmode oo-widthed expr :width 1)
+(defmode oo-widthed "%" expr :width 1)
 (defmode oo-strict expr :strict t)
 (defmode oo-suffixed expr :suffix "oo")
 
@@ -280,9 +280,14 @@ looks like."
   (fiveam:signals error
     (eval '(defmode oo-bad-relative (one-of oo-reg oo-relative)))))
 
-(fiveam:test one-of-alternative-with-width-signals-error
-  (fiveam:signals error
-    (eval '(defmode oo-bad-width (one-of oo-reg oo-widthed)))))
+(fiveam:test one-of-alternative-with-width-is-accepted
+  ;; #129: :WIDTH is exempt from ONE-OF's whole-mode-attribute restriction,
+  ;; like :STRICT (#115) and :SIGNED (#124/#127) -- honored per hole once a
+  ;; DEFINSTRUCTION site gives that hole a decode-time discriminator
+  ;; (instruction.lisp's %CHECK-BYTE-ONE-OF-WIDTH), which this DEFMODE-time
+  ;; check cannot know about, so it must accept :WIDTH unconditionally.
+  (fiveam:finishes (eval '(defmode oo-ok-width (one-of oo-reg oo-widthed))))
+  (fiveam:is (= 1 (mode-descriptor-width (find-mode-descriptor 'oo-widthed)))))
 
 (fiveam:test one-of-alternative-with-strict-is-accepted
   ;; #115: :STRICT is exempt from ONE-OF's whole-mode-attribute restriction
@@ -405,6 +410,19 @@ looks like."
 (fiveam:test nested-one-of-with-signed-alternative-signals-error
   (fiveam:signals error
     (eval '(defmode no-signed-outer (one-of no-signed-inner no-other)))))
+
+;;; Nested ONE-OF with a :WIDTH alternative (#129) -- the same
+;;; outermost-ONE-OF-wins rule means a nested alternative's own :WIDTH would
+;;; never reach any hole's CHOICES entry either, so %CHECK-ONE-OF-ELEMENTS!
+;;; rejects it here too.
+
+(defmode no-widthed-inner-a expr :width 2)
+(defmode no-widthed-inner-b "[" expr "]")
+(defmode no-widthed-inner (one-of no-widthed-inner-a no-widthed-inner-b))
+
+(fiveam:test nested-one-of-with-width-alternative-signals-error
+  (fiveam:signals error
+    (eval '(defmode no-widthed-outer (one-of no-widthed-inner no-other)))))
 
 ;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
 ;;; references so the reference loops back to it must signal, not recurse

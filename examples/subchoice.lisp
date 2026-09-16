@@ -22,6 +22,11 @@
 ;;;; was actually written, and what the disassembler needs to render it back
 ;;;; correctly, both for the first time reachable on a byte-encoded machine.
 ;;;;
+;;;; The same selector also lets two alternatives disagree on :SIGNED (LDB,
+;;;; below) or on :WIDTH (LDW, below) -- decode reads each matched sibling's
+;;;; own OPERAND-SIGNEDNESS/OPERAND-WIDTHS, precomputed once per expanded
+;;;; descriptor rather than assumed constant for the whole mode.
+;;;;
 ;;;; Run with:  sbcl --script examples/subchoice.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -156,5 +161,60 @@ CHOICE-CASE took the indirect branch.~%" (sref m 'a)))))
     (assert (eq 'sc-sval (%matched-choice-name choices 0))))
   (format t "  ldb 200   decodes back to 200 (SC-UVAL, unsigned)~%")
   (format t "  ldb #-100 decodes back to -100 (SC-SVAL, signed)~%"))
+
+;; #129: per-hole :WIDTH on a ONE-OF alternative. SC-NARROW and SC-WIDE
+;; disagree on width (a 1-byte bare literal vs. a "#"-prefixed 2-byte one) --
+;; legal now that mode.lisp's %CHECK-ONE-OF-ELEMENTS! no longer rejects
+;; :WIDTH inside ONE-OF either, and decodable via the same
+;; (variant (choice m) (sub s)) selector #126 gave the direct/indirect hole
+;; above. Unlike :SIGNED, a disagreeing :WIDTH changes each sibling
+;; descriptor's own encoded size -- %LAYOUT's monotone-widening FLOOR
+;; fixpoint (assembler.lisp) never has to widen across this, though, since
+;; which sibling matches is decided purely by syntax (which alternative's
+;; own tokens were written), not by a value that could still be provisional
+;; mid-relaxation the way ZERO-PAGE/ABSOLUTE's shared-syntax widening is.
+(defmode sc-narrow expr :width 1)
+(defmode sc-wide "#" expr :width 2)
+(defmode sc-widths (one-of sc-narrow sc-wide))
+
+(definstruction subchoicefoo ldw
+  (modes sc-widths)
+  (encoding (opcode #x30)
+            (operand val :mode
+              (variant (choice sc-narrow) (sub 0))
+              (variant (choice sc-wide) (sub 1))))
+  (semantics (set! a val)))
+
+(format t "~%LDW's two ONE-OF-matched forms disagree on width (#129):~%")
+(let ((narrow-form (assembly-cells (assemble "ldw 200" :machine 'subchoicefoo)))
+      (wide-form (assembly-cells (assemble "ldw #300" :machine 'subchoicefoo))))
+  (format t "  ldw 200  -> ~{~2,'0X~^ ~}~%" (coerce narrow-form 'list))
+  (format t "  ldw #300 -> ~{~2,'0X~^ ~}~%" (coerce wide-form 'list))
+  (assert (equalp #(#x30 #x00 #xC8) narrow-form))
+  (assert (equalp #(#x30 #x01 #x2C #x01) wide-form))
+  (format t "~%Decoding reads each alternative's own operand width -- 1 byte for ~
+SC-NARROW, 2 for SC-WIDE:~%")
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader narrow-form) 0 'subchoicefoo)
+    (assert (string= "LDW" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 200) values))
+    (assert (= 3 size))
+    (assert (eq 'sc-narrow (%matched-choice-name choices 0))))
+  (multiple-value-bind (descriptor values size choices) (decode-instruction-at (vector-cell-reader wide-form) 0 'subchoicefoo)
+    (assert (string= "LDW" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 300) values))
+    (assert (= 4 size))
+    (assert (eq 'sc-wide (%matched-choice-name choices 0))))
+  (format t "  ldw 200  decodes back to 200 (SC-NARROW, 3 bytes total)~%")
+  (format t "  ldw #300 decodes back to 300 (SC-WIDE, 4 bytes total)~%"))
+
+(format t "~%A following label's address accounts for each LDW's own chosen width, ~
+even across a forward reference relaxation has to lay out first:~%")
+(let* ((source "ldw 5
+ldw #300
+next: hlt")
+       (assembly (assemble source :machine 'subchoicefoo)))
+  (format t "  next: ~D (3 + 4 = 7 bytes before it)~%" (gethash "next" (assembly-symbols assembly)))
+  (assert (= 7 (gethash "next" (assembly-symbols assembly))))
+  (assert (equalp #(#x30 #x00 #x05 #x30 #x01 #x2C #x01 #x00) (assembly-cells assembly))))
 
 (format t "~%All assertions passed.~%")

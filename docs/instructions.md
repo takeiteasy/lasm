@@ -249,6 +249,14 @@ disagree on `:signed` (see [Addressing modes, "Per-hole
 `decode-instruction-at` which holes to sign-extend, per descriptor rather
 than per whole mode.
 
+The same selector, again requiring the carrying hole's `(operand ...)`
+subclause to be `(operand :mode)` rather than an explicit `(operand :width
+n)`, also lets it disagree on `:width` (see [Addressing modes, "Per-hole
+`:width`"](modes.md#per-hole-width)) — each expanded descriptor's own
+`operand-widths` (below) is stamped from which alternative it was claimed
+for, so a `ldw 200`/`ldw #300`-shaped pair of statements can encode and
+decode with genuinely different operand sizes while sharing one opcode.
+
 ### `(sub-opcode ...)` — multi-hole sub-opcode selection
 
 The above selects the sub-opcode cell by *one* hole's matched alternative. A
@@ -303,10 +311,11 @@ of the single-hole selector's own rules above:
   selector on another hole may not both be given, nor may a table and an
   explicit `(opcode n :sub s)` — all would be writing the same cell.
 
-Decode and `operand-signedness` (below) work exactly as the single-hole case
-describes, just across every hole the table names rather than one — any
-number of `one-of` holes may now disagree on `:signed`, as long as each is
-one of the table's participating holes.
+Decode, `operand-signedness`, and `operand-widths` (below) all work exactly
+as the single-hole case describes, just across every hole the table names
+rather than one — any number of `one-of` holes may now disagree on
+`:signed` or `:width` at once, as long as each is one of the table's
+participating holes.
 
 ### `operand-signedness`
 
@@ -321,6 +330,19 @@ was claimed for — the value in `sub-choices` at the same hole. Computed once
 per expanded descriptor (`%byte-descriptor-forms`), not re-derived at decode
 time, so the emulator's hot decode path never re-resolves a mode name per
 instruction.
+
+Every byte-encoded `instruction-descriptor` also carries a hole-aligned
+`operand-widths` list — entry *i* is the encoded cell width of hole *i*'s
+operand. For a hole not governed by any `one-of`, or whose `(operand ...)`
+subclause gives its own width (`(operand :mode)`'s mode default, or an
+explicit `(operand :width n)`), this is just that declared width, exactly
+as before per-hole `:width`. For a `(operand :mode)` hole whose `one-of`
+alternatives disagree on `:width`, it's whichever alternative this
+particular sibling descriptor was claimed for, the same `sub-choices`
+lookup `operand-signedness` uses — so two sibling descriptors sharing one
+opcode can have genuinely different total sizes. Computed once per expanded
+descriptor (`%byte-descriptor-forms`), for the same reason
+`operand-signedness` is.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 

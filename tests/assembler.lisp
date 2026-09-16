@@ -693,6 +693,44 @@ a: nop" :machine 'instr-test-machine)))
     (fiveam:is (= (+ 3 #x101) (gethash "a" (assembly-symbols a))))
     (fiveam:is (equalp #(#x12 4 1) (subseq (assembly-cells a) 3 6)))))
 
+;;; Per-hole :WIDTH on a ONE-OF alternative (#129) does not disrupt %LAYOUT's
+;;; monotone-widening FLOOR fixpoint -- the empirical check the ticket asked
+;;; for before trusting the static argument (assembler.lisp's %CHOOSE-VARIANT
+;;; docstring, point 1.5): a sub-opcode-selected sibling's own descriptor is
+;;; chosen by which ONE-OF alternative's *syntax* matched, and syntax is
+;;; pass-invariant, so the chosen sibling -- and so WIDTHD's own size -- is
+;;; already constant on pass 1, exactly like a forced-suffix statement above,
+;;; with nothing for relaxation to widen. WIDTHD (tests/instruction.lisp)
+;;; is reused here: WI-INSTR-NARROW (bare, 1-byte operand) and WI-INSTR-WIDE
+;;; ("#"-prefixed, 2-byte operand) are told apart purely by which syntax was
+;;; written, never by whether a value fits.
+
+(fiveam:test one-of-width-forward-label-address-accounts-for-both-alternatives-own-size
+  ;; The narrow form is 3 bytes total (opcode+sub+1-byte operand), the wide
+  ;; form 4 (opcode+sub+2-byte operand) -- NEXT's own final address must
+  ;; reflect both, and assembly must converge (no "failed to converge"
+  ;; error) even though NEXT is referenced nowhere here yet -- see the next
+  ;; test for the forward-reference case proper.
+  (let ((a (assemble "widthd 5
+widthd #300
+next: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x60 0 5 #x60 1 44 1 #xEA) (assembly-cells a)))
+    (fiveam:is (= 7 (gethash "next" (assembly-symbols a))))))
+
+(fiveam:test one-of-width-narrow-alternative-forward-references-a-later-label
+  ;; WIDTHD's own operand is a forward label reference -- "target" isn't
+  ;; bound until after a .res gap. Bare syntax picks WI-INSTR-NARROW
+  ;; unconditionally (never WI-INSTR-WIDE, which needs a literal "#" token
+  ;; no relaxation pass could ever add), so WIDTHD's own size is 3 bytes
+  ;; from pass 1 onward regardless of TARGET's still-unresolved value --
+  ;; unlike LABEL-OPERAND-NARROWING-CASCADES-ACROSS-ITERATIONS above, there
+  ;; is no width to cascade here at all.
+  (let ((a (assemble "widthd target
+.res 250
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x60 0) (subseq (assembly-cells a) 0 2)))
+    (fiveam:is (= 253 (gethash "target" (assembly-symbols a))))))
+
 ;; A custom RELATIVE mode with a suffix (#40): LASM's built-in RELATIVE mode
 ;; ships with no suffix (only ZERO-PAGE/ABSOLUTE do), so forcing a RELATIVE
 ;; variant needs a machine that declares its own suffixed relative mode --

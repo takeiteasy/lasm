@@ -435,7 +435,10 @@ syntax (e.g. zero-page before absolute):
    one-immediate mode), so whether their holes resolve is not the same
    question for each.
 
-1.5 (#104/#126) Mode-choice -- between the syntax and floor filters above: on
+1.5 (#104/#126) Mode-choice -- after the syntax and floor filters above (the
+   candidate loop below applies it last of the three, though as a pure
+   predicate with no side effects its position relative to floor is
+   immaterial to the result): on
    a word-encoded candidate (instruction.lisp, #20) whose fields include a
    (CHOICE M) variant, or a byte-encoded candidate (#126) expanded from a
    hole-selected (variant (choice m) (sub s)) selector, drop it unless M is

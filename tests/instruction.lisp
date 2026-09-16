@@ -1984,6 +1984,119 @@ signd #-100" :machine 'instr-test-machine)
 ;; never reaches DEFINSTRUCTION at all; nothing further to test here beyond
 ;; confirming SI-INSTR-ONE itself (a plain, non-nested ONE-OF) works, above.
 
+;;; Per-hole :WIDTH on a ONE-OF alternative, byte half (#129) --
+;;; WI-INSTR-NARROW/WI-INSTR-WIDE disagree on width, and WIDTHD's carrying
+;;; hole (a hole-selected (variant (choice m) (sub s)) selector, the same
+;;; mechanism #126/#127 gave SIGND above) is what makes the disagreement
+;;; decodable, and each sibling descriptor's own size constant, at all.
+
+(defmode wi-instr-narrow expr :width 1)
+(defmode wi-instr-wide "#" expr :width 2)
+(defmode wi-instr-one (one-of wi-instr-narrow wi-instr-wide))
+
+(definstruction instr-test-machine widthd
+  (modes wi-instr-one)
+  (encoding (opcode #x60)
+            (operand val :mode
+              (variant (choice wi-instr-narrow) (sub 0))
+              (variant (choice wi-instr-wide) (sub 1))))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-width-stamps-operand-widths-per-descriptor
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x60))
+         (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths narrow)))
+    (fiveam:is (equal '(2) (instruction-descriptor-operand-widths wide)))))
+
+(fiveam:test one-of-width-encode-decode-round-trips-the-narrow-alternative
+  (fiveam:is (equalp #(#x60 0 200) (assembly-cells (assemble "widthd 200" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd 200" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (fiveam:is (string= "WIDTHD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(200) values))
+    (fiveam:is (= 3 size))
+    (fiveam:is (eq 'wi-instr-narrow (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-width-encode-decode-round-trips-the-wide-alternative
+  (fiveam:is (equalp #(#x60 1 44 1) (assembly-cells (assemble "widthd #300" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd #300" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (fiveam:is (string= "WIDTHD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(300) values))
+    (fiveam:is (= 4 size))
+    (fiveam:is (eq 'wi-instr-wide (%matched-choice-name choices 0)))))
+
+(fiveam:test one-of-width-disassembles-both-alternatives
+  (let ((lines (disassemble-assembly (assemble "widthd 200
+widthd #300" :machine 'instr-test-machine)
+                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "widthd $C8" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "widthd #$12C" (disassembly-line-text (second lines))))))
+
+;; A hole whose ONE-OF alternatives disagree on width, its own (operand ...)
+;; subclause using (operand :mode) (so the disagreement actually takes
+;; effect, %BYTE-OPERAND-WIDTHS), but carrying no hole-selected sub-opcode
+;; selector at all, has no decode-time record of which alternative matched
+;; -- %CHECK-BYTE-ONE-OF-WIDTH must reject it.
+(fiveam:test one-of-width-disagreement-without-selector-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine widthdbad1
+             (modes wi-instr-one)
+             (encoding (opcode #x61)
+                       (operand val :mode))
+             (semantics nil)))))
+
+;; The same disagreement is fine with no selector at all when the hole's own
+;; (operand ...) subclause gives an explicit :WIDTH -- the explicit width
+;; always wins over a matched alternative's own :WIDTH, so there is nothing
+;; for a selector to disambiguate.
+(definstruction instr-test-machine widthdexplicit
+  (modes wi-instr-one)
+  (encoding (opcode #x62)
+            (operand val :width 1))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-width-explicit-override-needs-no-selector
+  (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x62)))
+    (fiveam:is (= 1 (length descs)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths (first descs))))
+    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit 200" :machine 'instr-test-machine))))
+    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit #200" :machine 'instr-test-machine))))))
+
+;; A hole whose ONE-OF alternatives *agree* on width needs no selector at
+;; all -- the hole's width is static regardless of which one matched.
+(defmode wi-instr-agree-a expr :width 1)
+(defmode wi-instr-agree-b "[" expr "]" :width 1)
+(defmode wi-instr-agree (one-of wi-instr-agree-a wi-instr-agree-b))
+
+(definstruction instr-test-machine widthdok
+  (modes wi-instr-agree)
+  (encoding (opcode #x63)
+            (operand val :mode))
+  (semantics (set! a val)))
+
+(fiveam:test one-of-width-agreeing-alternatives-need-no-selector
+  (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x63)))
+    (fiveam:is (= 1 (length descs)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths (first descs))))))
+
+;; Per-hole :WIDTH is permanently out of scope on a word-encoded machine --
+;; OPERAND-WIDTHS is always NIL there, so it has nothing to mean; any ONE-OF
+;; hole whose alternatives declare :WIDTH at all (agreeing or not) is a
+;; DEFINSTRUCTION-time error rather than a silently inert declaration.
+(fiveam:test one-of-width-on-word-machine-signals-error
+  (fiveam:signals error
+    (eval '(definstruction mixed-field-test-machine widthdword
+             (modes wi-instr-one)
+             (encoding (opcode 7)
+                       (operand value :field src
+                         (variant (choice wi-instr-narrow) inline :range (0 511))
+                         (variant (choice wi-instr-wide) inline :range (0 511))))
+             (semantics nil)))))
+
 ;;; Multi-hole sub-opcode selection, a (sub-opcode ...) table (#128, the
 ;;; follow-up #126 filed for itself) -- several ONE-OF holes jointly
 ;;; selecting the sub-opcode cell, rather than #126's single carrying hole.
@@ -2132,6 +2245,51 @@ signd #-100" :machine 'instr-test-machine)
     (declare (ignore size choices))
     (fiveam:is (string= "SIGTAB" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(-100 -56) values))))
+
+;; Per-hole :WIDTH (#129) on TWO holes at once, via a (sub-opcode ...) table
+;; -- the multi-hole generalization %CHECK-BYTE-ONE-OF-WIDTH inherits from
+;; %CHECK-BYTE-ONE-OF-SIGNED (#128 lifted the one-hole cap for both at once,
+;; since both use the same carrying-hole-set selector as their decode-time
+;; discriminator).
+(defmode wit-narrow-a expr :width 1)
+(defmode wit-wide-a "#" expr :width 2)
+(defmode wit-narrow-b expr :width 1)
+(defmode wit-wide-b "[" expr "]" :width 2)
+(defmode wit-two (one-of wit-narrow-a wit-wide-a) "," (one-of wit-narrow-b wit-wide-b))
+
+(definstruction instr-test-machine widthtab
+  (modes wit-two)
+  (encoding (opcode #x64)
+            (operand v1 :mode)
+            (operand v2 :mode)
+            (sub-opcode
+              (variant (choice wit-narrow-a wit-narrow-b) (sub 0))
+              (variant (choice wit-narrow-a wit-wide-b) (sub 1))
+              (variant (choice wit-wide-a wit-narrow-b) (sub 2))
+              (variant (choice wit-wide-a wit-wide-b) (sub 3))))
+  (semantics (set! a v1) (set! x v2)))
+
+(fiveam:test sub-opcode-table-width-disagreement-on-two-holes-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x64))
+         (nn (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (nw (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (wn (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (ww (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(1 1) (instruction-descriptor-operand-widths nn)))
+    (fiveam:is (equal '(1 2) (instruction-descriptor-operand-widths nw)))
+    (fiveam:is (equal '(2 1) (instruction-descriptor-operand-widths wn)))
+    (fiveam:is (equal '(2 2) (instruction-descriptor-operand-widths ww)))))
+
+(fiveam:test sub-opcode-table-width-round-trips-wide-values-at-both-holes
+  (fiveam:is (equalp #(#x64 3 44 1 144 1)
+                      (assembly-cells (assemble "widthtab #300, [400]" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthtab #300, [400]" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore choices))
+    (fiveam:is (string= "WIDTHTAB" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(300 400) values))
+    (fiveam:is (= 6 size))))
 
 ;; Missing combination -- the table's own generalization of #126's "every
 ;; alternative claimed" rule to "every combination claimed".

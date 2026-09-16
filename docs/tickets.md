@@ -19,7 +19,6 @@ dependency chain, plus a couple of loose couplings:
 
 ```mermaid
 graph TD
-    T129["#129 Per-hole :width on\nbyte-encoded machines\n(follow-up from #124)"]
     T120["#120 Varying hole counts\nacross ONE-OF alternatives"]
     T119["#119 Zero-hole addressing modes"]
     T85["#85 Forced-variant syntax for\nword machines' inline-vs-extra-word choice"]
@@ -28,7 +27,6 @@ graph TD
 
     T120 -.may subsume/depend on.-> T119
     T131 -.relates to.-> T120
-    T129 -.gated on the same\nFLOOR-fixpoint question as.-> T120
 
     style T85 fill:#ffd
 ```
@@ -38,21 +36,31 @@ byte-machine sub-opcode cell), #126 (hole-selected sub-opcode, the byte
 analogue of #104's `(choice mode)`), #122 (`choice-case` dispatch on a
 cell-encoded machine's `one-of` alternative, unblocked by and closed
 alongside #126), #124/#127 (per-hole `:signed` on `one-of` alternatives,
-both encoding schemes), and #128 (multi-hole sub-opcode selection, lifting
+both encoding schemes), #128 (multi-hole sub-opcode selection, lifting
 #126's one-carrying-hole cap via an explicit `(sub-opcode ...)` combination
 table, and #124's matching cap on disagreeing-signedness holes alongside
-it) have all landed. #124's remaining items split into their own tickets:
-#129 (`:width`, gated on `%layout`'s monotone-widening FLOOR fixpoint
-tolerating a per-hole operand size — the open design question, not the
-decode-side plumbing, which #126 already supplied) and #130 (`:relative`,
-whose own gate — needing `:signed`'s decode-time discriminator first —
-#124/#127 already opened; its remaining open question is which hole of a
-multi-hole pattern is the relative one). `:suffix` folds into #85 rather
-than getting its own ticket. #131 (subsetting a multi-hole sub-opcode
-table, filed as a follow-up while implementing #128: today every `one-of`
-hole of a mode must participate in a `(sub-opcode ...)` table, with no way
-to have only some of them discriminate) is worth reading together with
-#120, which touches the same `one-of` hole-identity assumptions.
+it), and #129 (per-hole `:width` on byte-encoded machines) have all landed.
+#129's own gate — `%layout`'s monotone-widening FLOOR fixpoint tolerating a
+per-hole operand size — turned out narrower than its original phrasing
+suggested: a sub-opcode-selected sibling is chosen by *syntax* alone
+(`%choices-eligible-p`, before any value ever folds), and syntax is
+pass-invariant, so the chosen sibling's size is already constant on the
+first relaxation pass, with nothing for the FLOOR fixpoint to widen — see
+[Assembler, "Choosing a mode"](assembler.md#choosing-a-mode). This does
+*not* carry over to #120 below, whose own problem (alternatives of one
+`one-of` binding a *different number* of holes) is structural, not a sizing
+question the eligibility argument resolves. `:relative` split into its own
+ticket, #130 (whose gate — needing `:signed`'s decode-time discriminator
+first — #124/#127 already opened; its remaining open question is which
+hole of a multi-hole pattern is the relative one), and `:suffix` folds into
+#85 rather than getting its own ticket. #131 (subsetting a multi-hole
+sub-opcode table, filed as a follow-up while implementing #128: today every
+`one-of` hole of a mode must participate in a `(sub-opcode ...)` table,
+with no way to have only some of them discriminate) is worth reading
+together with #120, which touches the same `one-of` hole-identity
+assumptions — and, since #129 landed, #131 also means a mode with an
+unrelated extra `one-of` hole must enumerate the full cross product just to
+give one hole its own per-hole `:width`.
 
 Other open M4 tickets and what they follow up on (no blocking dependency
 between them or on the chain above):

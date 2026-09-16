@@ -83,6 +83,41 @@
         (emu-oo-reg (setf (mref machine 'ram dst) s))
         (emu-oo-ind (setf (mref machine 'ram (mref machine 'ram dst)) s))))))
 
+;; Per-hole :WIDTH (#129): the hole-selected sub-opcode selector doubling as
+;; a decode-time width discriminator, the same way SUBOP above uses it for
+;; per-mode semantics -- proves STEP-MACHINE runs the right alternative's own
+;; semantics with operand values read at each alternative's own width, not
+;; just that decode picks the right descriptor.
+(defmode emu-wi-narrow expr :width 1)
+(defmode emu-wi-wide "#" expr :width 2)
+(defmode emu-wi-one (one-of emu-wi-narrow emu-wi-wide))
+
+(definstruction emu-test-machine subwid
+  (modes emu-wi-one)
+  (encoding (opcode #xB2)
+            (operand val :mode
+              (variant (choice emu-wi-narrow) (sub 0))
+              (variant (choice emu-wi-wide) (sub 1))))
+  (semantics (set! x (wrap-value val 8))))
+
+(fiveam:test step-machine-sub-opcode-width-runs-each-alternative-own-width
+  (let* ((m (make-machine 'emu-test-machine))
+         (a (assemble "subwid 200
+subwid #300" :machine 'emu-test-machine))
+         (descs (find-instruction-descriptors-by-opcode 'emu-test-machine #xB2))
+         (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (load-program m a)
+    (let ((descriptor (step-machine m)))                       ; subwid 200 -- narrow, 1-byte operand
+      (fiveam:is (eq narrow descriptor))
+      (fiveam:is (= 200 (sref m 'x))))
+    (let ((descriptor (step-machine m)))                       ; subwid #300 -- wide, 2-byte operand
+      (fiveam:is (eq wide descriptor))
+      ;; 300 wraps to 8-bit X via the semantics' own WRAP-VALUE -- what
+      ;; matters here is that VAL itself decoded as 300, not 44 (300 mod
+      ;; 256), proving the wide alternative's own 2-byte width was read.
+      (fiveam:is (= 44 (sref m 'x))))))
+
 ;; Multi-mode (mode.lisp, #18): LDA's IMMEDIATE and ZERO-PAGE variants share
 ;; one mnemonic but distinct opcodes/semantics -- proves opcode decode
 ;; (FIND-INSTRUCTION-BY-OPCODE) stays 1:1 per variant once a mnemonic
