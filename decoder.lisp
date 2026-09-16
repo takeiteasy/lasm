@@ -147,7 +147,7 @@ extend. This mirrors that asymmetry rather than unifying it."
 (defun %decode-cell-instruction (read-cell address machine-name cell-width)
   "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- unchanged in shape
 from before #20/#21, only reading through READ-CELL rather than always MREF,
-plus #125's sub-opcode cell below.
+plus #125's sub-opcode cell and #126's hole-selected CHOICES below.
 
 A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies SIGNEDP) was
 assembled as a signed quantity (a RELATIVE operand specifically as an
@@ -164,7 +164,16 @@ one candidate only when every one of them declares its own SUB-OPCODE
 does) -- in that case the cell right after OPCODE is read and matched against
 each candidate's SUB-OPCODE to pick the one to decode, and operands start one
 cell later than usual. A bucket with no SUB-OPCODE at all (the ordinary case)
-has exactly one candidate, unaffected by any of this."
+has exactly one candidate, unaffected by any of this.
+
+#126: the matched descriptor's own SUB-CHOICES (non-NIL only when its
+SUB-OPCODE was selected by a hole-selected (variant (choice m) (sub s))
+rather than a plain (opcode n :sub s)) is returned as this function's own
+fourth CHOICES value -- already hole-aligned and already a list of bare
+mode-name symbols/NILs, exactly the shape %MATCHED-CHOICE-NAME expects, so
+no further conversion is needed here. NIL throughout for a descriptor with no
+hole-selected sub-opcode selector at all -- the same NIL a caller saw
+unconditionally before #126."
   (let* ((opcode (funcall read-cell address))
          (candidates (handler-case (find-instruction-descriptors-by-opcode machine-name opcode)
                        (unknown-instruction () nil))))
@@ -190,10 +199,8 @@ has exactly one candidate, unaffected by any of this."
                                    do (incf offset width))))
                 (when (and mode (mode-descriptor-signedp mode))
                   (setf values (mapcar (lambda (v w) (signed-value v (* cell-width w))) values widths)))
-                ;; #104: no fourth CHOICES value on the byte-encoded path --
-                ;; there is no WORD-FIELD-CHOICE here at all, CHOICE-selected
-                ;; or not.
-                (values descriptor values (instruction-descriptor-size descriptor) nil)))))))
+                (values descriptor values (instruction-descriptor-size descriptor)
+                        (instruction-descriptor-sub-choices descriptor))))))))
 
 (defun decode-instruction-at (read-cell address machine-name &key memory)
   "Decode one instruction at ADDRESS by reading cells through READ-CELL, a
@@ -209,12 +216,16 @@ INSTRUCTION-DESCRIPTOR, its decoded operand VALUES in hole order (already
 sign-extended per mode where applicable -- see %DECODE-CELL-INSTRUCTION), and
 SIZE, the instruction's width in cells, accumulated during decode rather than
 taken from INSTRUCTION-DESCRIPTOR-SIZE (see %DECODE-WORD-INSTRUCTION's
-docstring for why that matters on a word-encoded machine). CHOICES (#104) is
-the matched WORD-FIELD-CHOICE per hole on a word-encoded machine (see
-%DECODE-WORD-INSTRUCTION), or NIL on the byte-encoded path -- existing
-callers (STEP-MACHINE, emulator.lisp) that only bind the first three values
-are unaffected; DISASSEMBLE-CELLS (disassembler.lisp, #117) reads it to
-render the ONE-OF alternative that was actually encoded.
+docstring for why that matters on a word-encoded machine). CHOICES is the
+matched WORD-FIELD-CHOICE per hole on a word-encoded machine (#104, see
+%DECODE-WORD-INSTRUCTION), or the matched descriptor's own SUB-CHOICES on a
+byte-encoded machine (#126, see %DECODE-CELL-INSTRUCTION) -- NIL throughout
+when the descriptor declares no hole-selected sub-opcode selector, which
+includes every byte-encoded descriptor before #126. Existing callers
+(STEP-MACHINE, emulator.lisp) that only bind the first three values are
+unaffected; DISASSEMBLE-CELLS (disassembler.lisp, #117) and a (semantics ...)
+body's CHOICE-CASE (instruction.lisp, #73/#122) both read it to see which
+ONE-OF alternative was actually encoded, on either encoding scheme alike.
 
 Returns (VALUES :DECODE-FAILURE NIL NIL) on an unregistered opcode, on a
 byte-encoded machine's opcode whose candidates all declare a SUB-OPCODE

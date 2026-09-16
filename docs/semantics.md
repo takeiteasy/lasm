@@ -110,12 +110,16 @@ See [`examples/anima16.lisp`](../examples/anima16.lisp) for this run end to
 end: the three forms of `ld` now produce three genuinely different results
 for the same written value, not just three different encodings.
 
-A **cell-encoded** machine's decoded instruction carries no record of which
-`one-of` alternative was assembled at all (see [Addressing modes, "What
-`one-of` does and does not
-do"](modes.md#what-one-of-does-and-does-not-do)) — `choice-case` there
-always sees every hole as unmatched, so it signals `no-matching-choice`
-unless given an `otherwise` clause.
+A **cell-encoded** machine's decoded instruction carries a record of which
+`one-of` alternative was assembled only for a hole with its own
+hole-selected sub-opcode selector (see [Instructions, "`(variant (choice m)
+(sub s))`"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
+and [Addressing modes, "What `one-of` does and does not
+do"](modes.md#what-one-of-does-and-does-not-do)) — `choice-case` dispatches
+on it exactly as it does on a word-encoded machine's `(choice mode)` field.
+A hole with no such selector still carries no record at all, so `choice-case`
+there always sees it as unmatched, signalling `no-matching-choice` unless
+given an `otherwise` clause.
 
 ## `push`/`pop` and Common Lisp
 

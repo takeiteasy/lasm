@@ -148,14 +148,17 @@ declared in `(modes ...)`:
    statement's operand tokens (`try-match-operand-mode`,
    [Addressing modes](modes.md)) — a no-operand variant's "pattern" is
    simply an empty token run. No match at all is an `assembly-error`.
-   - **CHOICE eligibility** (#104, word-encoded only), applied right after:
-     drop a candidate whose `word-fields` include a `(choice mode)`-selected
-     field (see [Instructions, "CHOICE-selected word
-     fields"](instructions.md#choice-selected-word-fields)) unless `mode` is
-     the alternative that hole actually matched — `try-match-operand-mode`'s
-     own `choices` return value, hole-aligned. A candidate with no
-     `choice`-selected field is always eligible, so a byte-encoded machine,
-     or a word-encoded one using no `one-of` at all, is unaffected.
+   - **CHOICE eligibility** (#104/#126), applied right after: drop a
+     candidate whose `word-fields` include a `(choice mode)`-selected field
+     (see [Instructions, "CHOICE-selected word
+     fields"](instructions.md#choice-selected-word-fields)), or whose own
+     hole-selected sub-opcode (see [Instructions, "hole-selected
+     sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+     names a different alternative, unless `mode` is the alternative that
+     hole actually matched — `try-match-operand-mode`'s own `choices` return
+     value, hole-aligned. A candidate with no such selector on either
+     encoding scheme is always eligible, so a machine using no `one-of` at
+     all is unaffected.
 2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
    than this statement's current floor — the size it committed to on an
    earlier pass (0 on the first pass, when nothing has committed to anything

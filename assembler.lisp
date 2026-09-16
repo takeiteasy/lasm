@@ -285,35 +285,47 @@ narrowest (fewest extra words) combo a value actually fits."
                         (<= lo value hi)))))
          values (instruction-descriptor-word-fields descriptor)))
 
-(defun %word-choices-eligible-p (descriptor choices)
-  "T if DESCRIPTOR (a word-encoded candidate, #20) is eligible given
-CHOICES -- mode.lisp's hole-aligned per-hole list of the ONE-OF alternative
-each operand hole actually matched, NIL for a hole not governed by any
-ONE-OF (#104). For each of DESCRIPTOR's WORD-FIELDS, paired positionally
-with CHOICES: a field whose own WORD-FIELD-CHOICE-CHOICE is non-NIL is
-eligible only when that hole's CHOICES entry is the same mode M actually
-matched; a field with no CHOICE of its own at all is always eligible
-regardless of CHOICES. #118: a field mixing CHOICE-selected (CHOICE M)
-variants with value-selected (RANGE/:ELSE) ones has every variant's own
-WORD-FIELD-CHOICE-CHOICE stamped by %CHECK-WORD-VARIANT-CHOICES!
-(instruction.lisp) -- the value-selected ones with the one ONE-OF
-alternative no CHOICE-selected variant already claims -- so this function
-sees a uniformly non-NIL WORD-FIELD-CHOICE-CHOICE across a mixed field's
-whole menu and needs no separate mixed-field case: the filter above already
-does the right thing once every variant carries its own CHOICE. Only a
-field with *no* CHOICE variant at all (still, as before #118, always
-eligible regardless of CHOICES) is left with a NIL WORD-FIELD-CHOICE-CHOICE
-by the time this runs.
+(defun %choices-eligible-p (descriptor choices)
+  "T if DESCRIPTOR is eligible given CHOICES -- mode.lisp's hole-aligned
+per-hole list of the ONE-OF alternative each operand hole actually matched,
+NIL for a hole not governed by any ONE-OF (#104). Covers both encoding
+schemes with one predicate (formerly %WORD-CHOICES-ELIGIBLE-P, word-only,
+before #126 gave a byte-encoded descriptor's operand holes their own
+selector to filter by): a word-encoded DESCRIPTOR's per-hole selector is its
+WORD-FIELDS' own WORD-FIELD-CHOICE-CHOICE; a byte-encoded one's is its
+SUB-CHOICES (#126) entry, already a bare mode-name symbol or NIL, hole-
+aligned the same way. For each hole, paired positionally with CHOICES: a
+hole whose own selector is non-NIL is eligible only when that hole's CHOICES
+entry is the same mode M actually matched; a hole with no selector of its
+own at all is always eligible regardless of CHOICES. #118: a word-encoded
+field mixing CHOICE-selected (CHOICE M) variants with value-selected
+(RANGE/:ELSE) ones has every variant's own WORD-FIELD-CHOICE-CHOICE stamped
+by %CHECK-WORD-VARIANT-CHOICES! (instruction.lisp) -- the value-selected
+ones with the one ONE-OF alternative no CHOICE-selected variant already
+claims -- so this function sees a uniformly non-NIL selector across a mixed
+field's whole menu and needs no separate mixed-field case. #126's byte path
+has no such mixed case at all: %CHECK-BYTE-SUB-VARIANTS! (instruction.lisp)
+requires every alternative of a sub-selected hole to be claimed, so a
+byte-encoded hole's selector is either NIL (no selector on this hole) or
+non-NIL for every descriptor expanded from it, never a mix within one hole.
 
-A byte-encoded DESCRIPTOR (WORD-FIELDS NIL) and a word-encoded one with no
-CHOICE-selected field anywhere are both vacuously eligible for any CHOICES,
-including the all-NIL CHOICES of a program using no ONE-OF at all -- #104
-changes nothing for either, which is what keeps every pre-#104 DEFINSTRUCTION
-selecting exactly as it always did."
-  (loop for field-choice in (instruction-descriptor-word-fields descriptor)
-        for hole-choice in choices
-        always (let ((wanted (word-field-choice-choice field-choice)))
-                 (or (null wanted)
+A byte-encoded DESCRIPTOR with no SUB-CHOICES entry anywhere, and a
+word-encoded one with no CHOICE-selected field anywhere, are both vacuously
+eligible for any CHOICES, including the all-NIL CHOICES of a program using no
+ONE-OF at all -- neither #104 nor #126 changes selection for a DEFINSTRUCTION
+that doesn't use them."
+  ;; WORD-FIELDS and SUB-CHOICES are mutually exclusive by construction (a
+  ;; descriptor is word-encoded or byte-encoded, never both), so this OR
+  ;; picks whichever one DESCRIPTOR actually has -- an empty/NIL WORD-FIELDS
+  ;; (a byte-encoded descriptor, or a no-operand word-encoded one) correctly
+  ;; falls through to SUB-CHOICES, and a non-empty WORD-FIELDS list (even one
+  ;; whose every entry is NIL, i.e. no CHOICE-selected field at all) is
+  ;; itself a non-NIL list and so is kept, never masked by SUB-CHOICES.
+  (let ((selectors (or (mapcar #'word-field-choice-choice (instruction-descriptor-word-fields descriptor))
+                        (instruction-descriptor-sub-choices descriptor))))
+    (loop for wanted in selectors
+          for hole-choice in choices
+          always (or (null wanted)
                      (and hole-choice (eq wanted (mode-descriptor-name hole-choice)))))))
 
 (defun %choose-forced-variant (statement variants)
@@ -329,21 +341,22 @@ exception is a forced RELATIVE mode: %RELATIVE-OFFSET (below) still
 range-checks unconditionally at encode time and signals ASSEMBLY-ERROR on
 overflow, since that check isn't part of this filter at all.
 
-On a word-encoded machine (#20) whose forced MODE contains a ONE-OF, several
-VARIANTS entries can share that one mode name -- one sibling combo per
-%EXPAND-WORD-COMBOS variant combination (instruction.lisp), same as an
-unforced candidate set. #104's %WORD-CHOICES-ELIGIBLE-P still applies here,
-after matching: the plain (FIND ... :KEY #'MODE-DESCRIPTOR-NAME) below picks
-some same-mode sibling just to size the \"does this mnemonic have this mode
-at all\" check, but the actual return value is re-selected among every
-same-mode sibling for the one whose CHOICE-selected field(s), if any, agree
-with the operand's own matched alternative -- skipping this would let an
-arbitrary sibling's field code win regardless of which ONE-OF alternative
-was actually written, silently encoding the wrong addressing form exactly
-the way an unfiltered candidate set would (see %CHOOSE-VARIANT's own point
-1.5). A byte-encoded mode, or a word-encoded one with no CHOICE-selected
-field, has only one such sibling (or several vacuously all-eligible ones),
-so this changes nothing for those cases.
+Whose forced MODE contains a ONE-OF, several VARIANTS entries can share that
+one mode name -- one sibling combo per %EXPAND-WORD-COMBOS variant
+combination on a word-encoded machine (#20, instruction.lisp), or one per
+claimed ONE-OF alternative on a byte-encoded machine whose sub-opcode is
+hole-selected (#126, %BYTE-DESCRIPTOR-FORMS), same as an unforced candidate
+set either way. %CHOICES-ELIGIBLE-P still applies here, after matching: the
+plain (FIND ... :KEY #'MODE-DESCRIPTOR-NAME) below picks some same-mode
+sibling just to size the \"does this mnemonic have this mode at all\" check,
+but the actual return value is re-selected among every same-mode sibling for
+the one whose own selector, if any, agrees with the operand's own matched
+alternative -- skipping this would let an arbitrary sibling's field code (or
+sub-opcode) win regardless of which ONE-OF alternative was actually written,
+silently encoding the wrong addressing form exactly the way an unfiltered
+candidate set would (see %CHOOSE-VARIANT's own point 1.5). A mode with no
+CHOICE-selected/sub-selected field at all has only one such sibling (or
+several vacuously all-eligible ones), so this changes nothing for that case.
 
 Returns (VALUES chosen-descriptor hole-asts choices), like %CHOOSE-VARIANT
 (#115) -- CHOICES is TRY-MATCH-OPERAND-MODE's own hole-aligned match result
@@ -375,7 +388,7 @@ accepts ~A"
         (values (or (find-if (lambda (v) (and (instruction-descriptor-mode v)
                                                (eq (mode-descriptor-name (instruction-descriptor-mode v))
                                                    (mode-descriptor-name mode))
-                                               (%word-choices-eligible-p v choices)))
+                                               (%choices-eligible-p v choices)))
                               variants)
                     variant)
                 asts
@@ -422,24 +435,31 @@ syntax (e.g. zero-page before absolute):
    one-immediate mode), so whether their holes resolve is not the same
    question for each.
 
-1.5 (#104) Mode-choice -- between the syntax and floor filters above: on a
-   word-encoded candidate (instruction.lisp, #20) whose fields include a
-   (CHOICE M) variant, drop it unless M is the alternative each such field's
-   own hole actually matched (mode.lisp's hole-aligned MATCH-OPERAND-MODE
-   CHOICES, #103/#104 -- see %WORD-CHOICES-ELIGIBLE-P). A candidate with no
-   CHOICE-selected field is always eligible, so a program using no ONE-OF at
-   all is unaffected. Unlike the value filter, a CHOICE-selected field's
-   matched-but-out-of-range value has no wider CHOICE-selected sibling to
-   relax into -- the ambiguity would be silent (ENCODE-INSTRUCTION's
-   WRAP-VALUE would emit bits that decode as a *different* addressing form,
-   not merely a truncated one) -- so once relaxation has converged (FINALP),
-   an eligible-but-unfitting CHOICE-narrowed set signals ASSEMBLY-ERROR
-   instead of falling back to WIDEST. Deferred until FINALP for the same
-   reason %MAYBE-WARN-AMBIGUOUS-MODE is: mode selection is syntax-determined
-   and constant across passes (see the forced-suffix argument below), so
-   eligibility itself never oscillates, but a label's *value* can still be
-   provisional on a trial pass, and erroring off a value that has not
-   settled yet would be a false positive.
+1.5 (#104/#126) Mode-choice -- between the syntax and floor filters above: on
+   a word-encoded candidate (instruction.lisp, #20) whose fields include a
+   (CHOICE M) variant, or a byte-encoded candidate (#126) expanded from a
+   hole-selected (variant (choice m) (sub s)) selector, drop it unless M is
+   the alternative each such hole actually matched (mode.lisp's hole-aligned
+   MATCH-OPERAND-MODE CHOICES, #103/#104 -- see %CHOICES-ELIGIBLE-P). A
+   candidate with no such selector anywhere is always eligible, so a program
+   using no ONE-OF at all is unaffected. On the word path, a CHOICE-narrowed
+   field's matched-but-out-of-range value has no wider CHOICE-selected
+   sibling to relax into -- the ambiguity would be silent (ENCODE-
+   INSTRUCTION's WRAP-VALUE would emit bits that decode as a *different*
+   addressing form, not merely a truncated one) -- so once relaxation has
+   converged (FINALP), an eligible-but-unfitting CHOICE-narrowed set signals
+   ASSEMBLY-ERROR instead of falling back to WIDEST (see the value filter,
+   point 3, and %SIGNAL-WORD-CHOICE-OVERFLOW below). The byte path's
+   sub-opcode selection has no value component to overflow this way at all
+   -- which ONE-OF alternative matched is purely syntactic, so eligibility
+   alone always narrows a sub-selected hole to exactly one surviving
+   sibling, with nothing left for the value filter or FINALP's overflow
+   check to do. Deferred until FINALP for the same reason %MAYBE-WARN-
+   AMBIGUOUS-MODE is: mode selection is syntax-determined and constant
+   across passes (see the forced-suffix argument below), so eligibility
+   itself never oscillates, but a label's *value* can still be provisional
+   on a trial pass, and erroring off a value that has not settled yet would
+   be a false positive.
 
 If STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
 \"lda.w\"), none of the above runs -- %CHOOSE-FORCED-VARIANT resolves the
@@ -479,12 +499,12 @@ alternative's :STRICT once a value exists to check it against."
                                                 (try-match-operand-mode tokens mode)
                                                 (values nil (zerop (length tokens)) nil)))
                  when (and okp (>= (instruction-descriptor-size v) floor)
-                           ;; #104: drop a word-encoded candidate whose
-                           ;; CHOICE-selected field(s) don't match what this
-                           ;; operand's ONE-OF hole(s) actually chose --
-                           ;; vacuously T for a byte-encoded candidate or one
-                           ;; with no CHOICE-selected field.
-                           (%word-choices-eligible-p v choices))
+                           ;; #104/#126: drop a candidate whose CHOICE-
+                           ;; selected word field(s) or hole-selected
+                           ;; sub-opcode don't match what this operand's
+                           ;; ONE-OF hole(s) actually chose -- vacuously T
+                           ;; for a candidate with no such selector at all.
+                           (%choices-eligible-p v choices))
                    ;; #115: CHOICES rides along with each candidate (not just
                    ;; used to filter, above) so %CHECK-STRICT-OPERAND-RANGE!
                    ;; can read a hole's own matched ONE-OF alternative's

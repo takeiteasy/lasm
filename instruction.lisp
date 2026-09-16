@@ -62,9 +62,10 @@ error.")
    (choice :initarg :choice :reader no-matching-choice-choice))
   (:documentation "Signalled by a (SEMANTICS ...) body's CHOICE-CASE (#73)
 when OPERAND's matched alternative -- CHOICE, a mode-name symbol, or NIL when
-none was recorded (a cell-encoded machine, or EXECUTE-INSTRUCTION called
-directly with no CHOICES) -- names none of CHOICE-CASE's own clauses and it
-declares no OTHERWISE clause to fall back to. Distinguishable from any other
+none was recorded (a hole with no hole-selected sub-opcode selector on a
+cell-encoded machine, or EXECUTE-INSTRUCTION called directly with no
+CHOICES) -- names none of CHOICE-CASE's own clauses and it declares no
+OTHERWISE clause to fall back to. Distinguishable from any other
 error a semantics body might signal, the same rationale as UNKNOWN-
 INSTRUCTION being its own condition rather than a generic error. MACHINE and
 INSTRUCTION are kept as separate slots, like UNKNOWN-INSTRUCTION's own
@@ -178,16 +179,29 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; byte-encoded descriptor and for an all-inline word combo alike.
   (extra-words 0 :type (integer 0))
   ;; #125 (M4): non-NIL only on a byte-encoded machine, and only when this
-  ;; descriptor's own (opcode n :sub s) subclause gave one. Lets several
+  ;; descriptor's own (opcode n :sub s) subclause -- or, per #126 below, a
+  ;; hole-selected (variant (choice m) (sub s)) -- gave one. Lets several
   ;; DESCRIPTORs share one OPCODE on a byte-encoded machine -- normally
   ;; impossible there (#105: a byte encoding has no per-field discriminator
   ;; the way a word-encoded machine's operand fields give it one) -- by
   ;; reserving the cell right after the opcode as a second, purely
   ;; discriminating value REGISTER-INSTRUCTION-VARIANTS! requires every
-  ;; co-tenant at that opcode to declare distinctly. Selected per (MODES ...)
-  ;; clause, not per operand hole -- see #126 for a hole-selected analogue,
-  ;; the byte-machine counterpart of #104's (CHOICE MODE).
-  (sub-opcode nil :type (or null (integer 0))))
+  ;; co-tenant at that opcode to declare distinctly.
+  (sub-opcode nil :type (or null (integer 0)))
+  ;; #126 (M4): non-NIL only on a byte-encoded machine, and only when one of
+  ;; this descriptor's operand holes carries a (variant (choice m) (sub s))
+  ;; selector -- the byte-machine analogue of WORD-FIELDS' CHOICE, and of
+  ;; %DECODE-CELL-INSTRUCTION's fourth CHOICES return value. Hole-aligned,
+  ;; parallel to OPERAND-NAMES/OPERAND-WIDTHS: at most one entry is non-NIL
+  ;; (%CHECK-BYTE-SUB-VARIANTS! enforces at most one hole per mode may carry
+  ;; a sub selector), naming the ONE-OF alternative *this* descriptor was
+  ;; expanded for -- %DECODE-CELL-INSTRUCTION hands this list straight back
+  ;; as CHOICES once it has picked the matching descriptor by SUB-OPCODE, so
+  ;; CHOICE-CASE (instruction.lisp) and the disassembler (disassembler.lisp)
+  ;; work on a byte-encoded machine exactly as they already do on a
+  ;; word-encoded one. NIL throughout for a plain (opcode n :sub s) or a
+  ;; SUB-OPCODE-less descriptor alike.
+  (sub-choices nil :type list))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -468,11 +482,30 @@ declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode
 where NAME is the symbol from an (operand NAME :mode) / (operand NAME
 :width n) field, or NIL for the unnamed (operand :mode) / (operand :width
 n) form, and SPEC is the remaining (:mode) or (:width n) tail as
-%OPERAND-WIDTH expects."
+%OPERAND-WIDTH expects. Also used, with its own further splitting, by the
+word-encoded path's %PARSE-WORD-OPERAND-SUBCLAUSE, whose SPEC instead starts
+(:field field-name (variant ...)*) -- this function only tells NAME apart
+from the rest, it doesn't care what shape the rest takes."
   (let ((rest (cdr subclause)))
     (if (keywordp (first rest))
         (values nil rest)
         (values (first rest) (rest rest)))))
+
+(defun %parse-byte-operand-subclause (subclause)
+  "Like %PARSE-OPERAND-SUBCLAUSE, but for the byte-encoded path: returns
+(VALUES name spec variant-forms), further splitting SPEC's own tail off any
+trailing (variant (choice m) (sub s)) forms (#126, byte-encoded machines
+only) -- NIL for the plain (operand :mode)/(operand :width n) forms every
+mnemonic used before #126. :WIDTH's own numeric arg is consumed as part of
+SPEC, not left in VARIANT-FORMS, so a bare :MODE (which takes no arg) and a
+:WIDTH N (which does) are told apart correctly."
+  (multiple-value-bind (name rest) (%parse-operand-subclause subclause)
+    (destructuring-bind (spec-head &rest spec-tail) rest
+      (case spec-head
+        (:mode (values name (list :mode) spec-tail))
+        (:width (values name (list :width (first spec-tail)) (rest spec-tail)))
+        (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)"
+                  subclause))))))
 
 (defun %scalar-bindable-names (machine-name)
   "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds for
@@ -506,28 +539,116 @@ more than once" machine name mode-name dup)))
 which is also a register or flag on ~S -- (semantics ...) can only see one ~
 of them" machine name mode-name n machine)))))
 
+(defun %parse-byte-sub-variant-form (form hole-name)
+  "Parse one (variant (choice m) (sub s)) form (#126) -- the byte-encoded
+counterpart of a word field's (variant (choice m) ...) form
+(%PARSE-WORD-VARIANT-FORM, below). HOLE-NAME identifies the carrying operand
+hole in diagnostics (its own field name, or a synthetic \"hole N\" for an
+unnamed one -- see %CHECK-BYTE-SUB-VARIANTS!). Returns (VALUES mode-name
+sub)."
+  (destructuring-bind (head selector &rest tail) form
+    (unless (eq head 'variant)
+      (error "DEFINSTRUCTION: operand ~A: malformed variant form ~S -- expected ~
+(variant (choice m) (sub s))" hole-name form))
+    (unless (and (consp selector) (eq (first selector) 'choice) (= (length selector) 2))
+      (error "DEFINSTRUCTION: operand ~A: variant selector must be (choice m), got ~S"
+             hole-name selector))
+    (let ((choice-name (second selector)))
+      (unless (and (consp (first tail)) (eq (first (first tail)) 'sub) (= (length (first tail)) 2)
+                   (null (rest tail)))
+        (error "DEFINSTRUCTION: operand ~A: a (choice ~S) variant must be (sub s), got ~S"
+               hole-name choice-name tail))
+      (values choice-name (second (first tail))))))
+
+(defun %check-byte-sub-variants! (variant-forms hole-alternatives machine name hole-name)
+  "Validate VARIANT-FORMS -- the (variant (choice m) (sub s)) forms declared
+for one byte-encoded operand hole (#126), HOLE-NAME in diagnostics -- against
+HOLE-ALTERNATIVES (this hole's own ONE-OF alternative names, mode.lisp's
+%MODE-HOLE-ALTERNATIVES, or NIL for a hole not governed by any ONE-OF). NIL
+VARIANT-FORMS (the common case: an operand hole with no sub selector at all)
+returns NIL with no checking. Otherwise signals a DEFINSTRUCTION-time error,
+naming MACHINE/NAME/HOLE-NAME, if: HOLE-ALTERNATIVES is NIL (a sub selector on
+a plain EXPR hole has nothing to select between); any (choice m) names a mode
+not among HOLE-ALTERNATIVES, or names one more than once; a sub value is
+negative, doesn't fit MACHINE's code cell width, or collides with another
+entry's; or some alternative of HOLE-ALTERNATIVES is claimed by no entry at
+all -- unlike #118's word-machine mixed-field rule, a byte hole's sub selector
+has no value-selected fallback for an unclaimed alternative to resolve into,
+so partial coverage is permanently an error here, not merely a NIL CHOICES
+result at runtime. On success, returns the parsed ((mode-name . sub) ...)
+pairs, in VARIANT-FORMS' own declaration order."
+  (when variant-forms
+    (unless hole-alternatives
+      (error "DEFINSTRUCTION ~S ~S: operand ~A: (variant (choice ...) ...) given for an ~
+operand hole that is not a ONE-OF pattern element -- a sub-opcode selector only ~
+chooses between ONE-OF alternatives" machine name hole-name))
+    (let ((width (%machine-cell-width machine))
+          (pairs (mapcar (lambda (f) (multiple-value-bind (m s) (%parse-byte-sub-variant-form f hole-name)
+                                        (cons m s)))
+                          variant-forms)))
+      (dolist (p pairs)
+        (unless (member (car p) hole-alternatives)
+          (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) is not one of this hole's ~
+ONE-OF alternatives ~S" machine name hole-name (car p) hole-alternatives))
+        (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
+          (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode ~D for (choice ~S) does not fit ~
+machine ~S's ~D-bit code cell" machine name hole-name (cdr p) (car p) machine width)))
+      (let ((dup-mode (loop for (p . later) on pairs when (member (car p) later :key #'car) return (car p))))
+        (when dup-mode
+          (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) given more than once"
+                 machine name hole-name dup-mode)))
+      (let ((dup-sub (loop for (p . later) on pairs when (member (cdr p) later :key #'cdr) return (cdr p))))
+        (when dup-sub
+          (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode value ~D used by more than one ~
+(choice ...) variant" machine name hole-name dup-sub)))
+      (let ((missing (set-difference hole-alternatives (mapcar #'car pairs))))
+        (when missing
+          (error "DEFINSTRUCTION ~S ~S: operand ~A: ONE-OF alternative~P ~S ~:[has~;have~] no ~
+(variant (choice ...) (sub ...)) -- every alternative of a sub-selected hole must be claimed"
+                 machine name hole-name (length missing) missing (rest missing))))
+      pairs)))
+
 (defun %parse-operand-subclauses (mode subclauses machine name mode-name machine-name)
   "SUBCLAUSES is every (operand ...) form declared for one variant of
 instruction NAME (on MACHINE) using addressing MODE (named MODE-NAME in
-diagnostics), in declaration order. Returns (VALUES widths names), one
-entry per subclause -- their count must equal MODE's EXPR hole count
-exactly, since each hole needs somewhere to put its parsed value and each
-operand subclause needs a hole to size itself against; mismatch in either
-direction is an error. Named fields are also checked for collisions
-(%CHECK-OPERAND-NAMES)."
+diagnostics), in declaration order. Returns (VALUES widths names sub-spec),
+one WIDTHS/NAMES entry per subclause -- their count must equal MODE's EXPR
+hole count exactly, since each hole needs somewhere to put its parsed value
+and each operand subclause needs a hole to size itself against; mismatch in
+either direction is an error. Named fields are also checked for collisions
+(%CHECK-OPERAND-NAMES).
+
+SUB-SPEC (#126) is NIL when no subclause carries a (variant (choice ...)
+(sub ...)) selector -- the common case -- or (HOLE-INDEX . PAIRS) when
+exactly one does, PAIRS being %CHECK-BYTE-SUB-VARIANTS!'s own return value
+for that hole. Signals an error if more than one subclause carries a
+selector -- the sub-opcode cell is singular, so two holes each wanting to
+pick it has no coherent meaning without a cartesian product of explicit
+values, which is not supported."
   (let ((holes (%mode-hole-count mode))
         (n (length subclauses)))
     (unless (= holes n)
       (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
 but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
 per hole" machine name mode-name holes n (= n 1))))
-  (multiple-value-bind (widths names)
-      (loop for subclause in subclauses
-            collect (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
-                      (cons name (%operand-width mode spec machine-name))) into pairs
-            finally (return (values (mapcar #'cdr pairs) (mapcar #'car pairs))))
+  (let* ((hole-alternatives (%mode-hole-alternatives mode))
+         (parsed (loop for subclause in subclauses
+                       for alts in hole-alternatives
+                       for i from 0
+                       collect (multiple-value-bind (op-name spec variant-forms)
+                                   (%parse-byte-operand-subclause subclause)
+                                 (list op-name (%operand-width mode spec machine-name)
+                                       (%check-byte-sub-variants!
+                                        variant-forms alts machine name
+                                        (or op-name (format nil "~D" i)))))))
+         (widths (mapcar #'second parsed))
+         (names (mapcar #'first parsed))
+         (carrying (loop for p in parsed for i from 0 when (third p) collect (cons i (third p)))))
     (%check-operand-names names machine name mode-name)
-    (values widths names)))
+    (when (rest carrying)
+      (error "DEFINSTRUCTION ~S ~S: more than one operand hole declares a sub-opcode ~
+selector -- only one hole per mode may select the sub-opcode cell" machine name))
+    (values widths names (first carrying))))
 
 (defun %check-relative-mode-holes (mode machine name)
   ;; A RELATIVE mode (mode.lisp) marks its *whole* pattern's operand as a
@@ -670,13 +791,14 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
-                          &optional hole-alternatives-list sub-opcode)
+                          &optional hole-alternatives-list sub-opcode sub-choices)
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
     :mode ,mode-form
     :opcode ,opcode
     :sub-opcode ,sub-opcode
+    :sub-choices ',sub-choices
     :operand-widths ',operand-widths
     :operand-names ',operand-names
     :cycles ,cycles
@@ -685,18 +807,59 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
 (defun %resolve-operand-fields (mode operand-subclauses machine name mode-name machine-name)
   "Resolve the (operand ...) subclauses (zero or more whole forms, in
 declaration order) given for one addressing-mode use into (VALUES widths
-names), one entry per MODE hole. With no subclauses at all, MODE must have
-exactly one hole (a bare width can't be inferred for more) -- its default
-width (%MODE-OPERAND-WIDTH) is used, unnamed. With one or more subclauses,
-their count must match MODE's hole count exactly (%PARSE-OPERAND-
-SUBCLAUSES)."
+names sub-spec), one WIDTHS/NAMES entry per MODE hole. With no subclauses at
+all, MODE must have exactly one hole (a bare width can't be inferred for
+more) -- its default width (%MODE-OPERAND-WIDTH) is used, unnamed, and
+SUB-SPEC is NIL (a defaulted single-hole operand has no room to declare a
+sub-opcode selector). With one or more subclauses, their count must match
+MODE's hole count exactly, and SUB-SPEC (#126) is whatever
+%PARSE-OPERAND-SUBCLAUSES resolved -- NIL, or (HOLE-INDEX . PAIRS) naming
+the one hole that selects the sub-opcode cell by matched ONE-OF alternative."
   (if operand-subclauses
       (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name)
       (if (= (%mode-hole-count mode) 1)
-          (values (list (%mode-operand-width mode machine-name)) (list nil))
+          (values (list (%mode-operand-width mode machine-name)) (list nil) nil)
           (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
 -- an (operand ...) subclause is required per hole" machine name mode-name
                  (%mode-hole-count mode)))))
+
+(defun %check-byte-sub-conflict! (machine name explicit-sub sub-spec)
+  "Signal a DEFINSTRUCTION-time error if EXPLICIT-SUB (an (opcode n :sub s)
+subclause's own SUB, #125) and SUB-SPEC (a hole-selected sub-opcode
+selector, #126, from %RESOLVE-OPERAND-FIELDS/%PARSE-OPERAND-SUBCLAUSES) are
+both non-NIL -- the sub-opcode cell is one cell, so an explicit value and a
+hole-selected one would both be trying to write it."
+  (when (and explicit-sub sub-spec)
+    (error "DEFINSTRUCTION ~S ~S: an explicit (opcode n :sub s) and a hole-selected ~
+(variant (choice ...) (sub ...)) may not both be given -- they would write the same cell"
+           machine name)))
+
+(defun %byte-descriptor-forms (machine name mode-form opcode explicit-sub operand-widths operand-names cycles
+                                semantics-forms hole-alternatives-list sub-spec)
+  "One INSTRUCTION-DESCRIPTOR form per byte-encoded addressing-mode use for
+one (MODES ...) variant or single-mode (ENCODING ...) clause -- a single one
+when SUB-SPEC is NIL (the ordinary case, sharing EXPLICIT-SUB, #125's plain
+(opcode n :sub s) or NIL), or one per ONE-OF alternative %CHECK-BYTE-SUB-
+VARIANTS! resolved SUB-SPEC's carrying hole to (#126) -- mirroring
+%WORD-MODE-DESCRIPTOR-FORMS' one-descriptor-per-combo shape for the
+word-encoded path, generalized here from \"one per field-variant
+combination\" to \"one per matched-alternative pair\" since a byte-encoded
+mode has at most one sub-selected hole (%PARSE-OPERAND-SUBCLAUSES enforces
+this). Every expanded descriptor shares OPCODE, OPERAND-WIDTHS, OPERAND-
+NAMES, and SEMANTICS-FORMS -- only SUB-OPCODE and SUB-CHOICES differ, one
+entry apiece naming this descriptor's own matched alternative at the
+carrying hole (NIL at every other hole)."
+  (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
+  (if (null sub-spec)
+      (list (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+                               semantics-forms hole-alternatives-list explicit-sub))
+      (destructuring-bind (hole-index . pairs) sub-spec
+        (mapcar (lambda (pair)
+                  (let ((sub-choices (make-list (length operand-widths) :initial-element nil)))
+                    (setf (nth hole-index sub-choices) (car pair))
+                    (%descriptor-form machine name mode-form opcode operand-widths operand-names cycles
+                                       semantics-forms hole-alternatives-list (cdr pair) sub-choices)))
+                pairs))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
 ;;; operand encoding, kept as its own code path parallel to the byte-encoded
@@ -1242,11 +1405,15 @@ byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
 (MODE-NAME (opcode n [:sub s]) (operand ...)* [(semantics form...)] [(cycles n)]).
 Returns a list of INSTRUCTION-DESCRIPTOR forms for this variant -- more than
-one only on a word-encoded machine (#20), where a variant-bearing operand
-field expands into several descriptors sharing this one mode/opcode. :SUB
-(#125, byte-machine-only) is this variant's own sub-opcode, letting it share
-its OPCODE with another mode's own :SUB-bearing variant -- see
-%PARSE-OPCODE-SUBCLAUSE.
+one on a word-encoded machine (#20), where a variant-bearing operand field
+expands into several descriptors sharing this one mode/opcode, and likewise
+on a byte-encoded machine (#126) when an (operand ...) subclause here
+carries a hole-selected (variant (choice m) (sub s)) sub-opcode selector,
+one descriptor per ONE-OF alternative it claims (%BYTE-DESCRIPTOR-FORMS).
+:SUB (#125, byte-machine-only) is this variant's own explicit sub-opcode,
+letting it share its OPCODE with another mode's own :SUB-bearing variant --
+see %PARSE-OPCODE-SUBCLAUSE; it may not be combined with a hole-selected
+selector on the same variant (%CHECK-BYTE-SUB-CONFLICT!).
 
 #75: a variant's own (cycles n) subclause overrides the shared top-level
 CYCLES-FORM for this mode alone -- e.g. a zero-page mode costing less than
@@ -1280,11 +1447,11 @@ its absolute-mode sibling."
               (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                             opcode operand-subclauses mode mode-sym machine
                                             cycles-form semantics-forms)
-              (multiple-value-bind (operand-widths operand-names)
+              (multiple-value-bind (operand-widths operand-names sub-spec)
                   (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine)
-                (list (%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                         opcode operand-widths operand-names cycles-form semantics-forms
-                                         (%mode-hole-alternatives mode) sub)))))))))
+                (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                         opcode sub operand-widths operand-names cycles-form semantics-forms
+                                         (%mode-hole-alternatives mode) sub-spec))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -1336,6 +1503,31 @@ an unnamed field bound only through OPERAND above, or (operand NAME :mode)/
 multi-mode form (its default width applies, unnamed); the (encoding ...)
 form always requires it explicitly. Declaring more or fewer (operand ...)
 subclauses than the mode has holes is an error.
+
+On a byte-encoded machine, an (operand ...) subclause whose hole came from a
+ONE-OF pattern element (mode.lisp) may append one or more
+  (variant (choice MODE) (sub S))
+forms (#126) -- the byte-machine analogue of the word-encoded (choice MODE)
+selector below: MODE must be one of that hole's own ONE-OF alternatives, and
+S becomes the instruction's sub-opcode cell (#125's (opcode n :sub s), but
+chosen by which alternative the hole actually matched rather than written
+once for the whole mode). Every alternative of the carrying hole must be
+claimed by exactly one such variant -- unlike the word-encoded (choice MODE)
+below, there is no value-selected fallback for one left unclaimed, so partial
+coverage is a DEFINSTRUCTION-time error, not a runtime gap. At most one
+operand hole per mode may carry these selectors, and an explicit
+(opcode n :sub s) may not be combined with one on the same mode -- both would
+be trying to write the same cell. DEFINSTRUCTION then registers one
+INSTRUCTION-DESCRIPTOR per claimed alternative, sharing the mnemonic, mode,
+and opcode, each with its own SUB-OPCODE and a hole-aligned SUB-CHOICES
+record naming that alternative -- the same mechanism #125's plain :SUB uses
+to let several descriptors coexist at one byte-machine opcode, but selected
+per operand hole rather than per whole (MODES ...) clause. Once assembled,
+decode (%DECODE-CELL-INSTRUCTION, decoder.lisp) reads the sub-opcode cell
+back and reports the matched descriptor's SUB-CHOICES as DECODE-INSTRUCTION-
+AT's own CHOICES -- so CHOICE-CASE (below) and disassembly both see which
+alternative was actually written, exactly as they already do on a
+word-encoded machine.
 
 MODE names are resolved against DEFMODE's registry (mode.lisp) at
 macroexpansion time, like MACHINE is resolved against DEFMACHINE's.
@@ -1413,8 +1605,9 @@ case no key can ever be validated against anything and the check is skipped.
 At runtime, CHOICE-CASE reads EXECUTE-INSTRUCTION's CHOICES argument (see
 below) for NAME's hole and dispatches like CL:CASE; with no OTHERWISE clause,
 a hole matching none of the given keys -- including a hole with no recorded
-choice at all, e.g. on a cell-encoded machine, which never produces one --
-signals NO-MATCHING-CHOICE rather than silently falling through."
+choice at all, e.g. a cell-encoded machine's hole with no hole-selected
+(variant (choice ...) (sub ...)) selector of its own (#126) -- signals
+NO-MATCHING-CHOICE rather than silently falling through."
   (let (modes-clause encoding-clause semantics-clause cycles-clause)
     (dolist (clause clauses)
       (case (first clause)
@@ -1501,16 +1694,15 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                                                            mode mode-sym machine
                                                            cycles-form (rest semantics-clause))))
                     ',name)
-                 (multiple-value-bind (operand-widths operand-names)
+                 (multiple-value-bind (operand-widths operand-names sub-spec)
                      (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine)
                    `(eval-when (:compile-toplevel :load-toplevel :execute)
                       (register-instruction-variants!
                        ',machine
-                       (list ,(%descriptor-form machine name `(find-mode-descriptor ',mode-sym)
-                                                 opcode
-                                                 operand-widths operand-names
-                                                 cycles-form (rest semantics-clause)
-                                                 (%mode-hole-alternatives mode) sub)))
+                       (list ,@(%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                        opcode sub operand-widths operand-names
+                                                        cycles-form (rest semantics-clause)
+                                                        (%mode-hole-alternatives mode) sub-spec)))
                       ',name))))))))))
 
 ;;; Encoding / execution
@@ -1590,8 +1782,9 @@ CHOICES (#73), when given, is DECODE-INSTRUCTION-AT's fourth return value (or
 the assemble-time equivalent, MATCH-OPERAND-MODE's own CHOICES) -- the ONE-OF
 alternative each operand hole actually matched, positionally hole-aligned.
 STEP-MACHINE (emulator.lisp) always supplies it; a caller with no CHOICES to
-give (or on a cell-encoded machine, which never produces any -- see
-%DECODE-CELL-INSTRUCTION, decoder.lisp) can omit it, in which case a
-(semantics ...) body's CHOICE-CASE (if it has one) sees every hole as
-unmatched, same as an operand not governed by any ONE-OF at all."
+give (or on a cell-encoded machine with no hole-selected sub-opcode selector
+anywhere in this descriptor -- #126, see %DECODE-CELL-INSTRUCTION,
+decoder.lisp) can omit it, in which case a (semantics ...) body's CHOICE-CASE
+(if it has one) sees every hole as unmatched, same as an operand not governed
+by any ONE-OF at all."
   (funcall (instruction-descriptor-semantics-fn descriptor) machine values choices))

@@ -67,12 +67,15 @@
   (cells nil :type list)                                   ; raw cells consumed, in address order
   (descriptor nil :type (or null instruction-descriptor))   ; NIL = undecodable data
   (values nil :type list)                                  ; decoded operand values, hole order
-  ;; #104: DECODE-INSTRUCTION-AT's matched WORD-FIELD-CHOICE per hole, hole
-  ;; order -- NIL on the byte-encoded path or for undecodable data, same as
-  ;; VALUES. %RENDER-OPERAND-TEXT reads a hole's own WORD-FIELD-CHOICE-CHOICE
-  ;; (a CHOICE-selected field's actually-matched ONE-OF alternative mode
-  ;; name, instruction.lisp) to render that alternative's own syntax instead
-  ;; of always a ONE-OF's first one -- see #117.
+  ;; DECODE-INSTRUCTION-AT's matched per-hole record, hole order -- a
+  ;; WORD-FIELD-CHOICE on a word-encoded machine (#104), the descriptor's own
+  ;; SUB-CHOICES bare mode-name symbols on a byte-encoded one with a
+  ;; hole-selected sub-opcode (#126), or NIL throughout for undecodable data
+  ;; or a descriptor with no such selector, same as VALUES.
+  ;; %RENDER-OPERAND-TEXT reads a hole's own matched ONE-OF alternative (via
+  ;; %MATCHED-CHOICE-NAME, instruction.lisp, which normalizes either shape)
+  ;; to render that alternative's own syntax instead of always a ONE-OF's
+  ;; first one -- see #117/#126.
   (choices nil :type list)
   (label nil :type (or null string))                        ; a symbol bound to this address, or NIL
   (text nil :type (or null string)))                        ; rendered source line, sans label
@@ -202,29 +205,36 @@ carry any punctuation (e.g. INDIRECT-Y's pattern renders \"($10),Y\", not
 INSTRUCTION-DESCRIPTOR-OPERAND-NAMES -- an unnamed field's entry there is
 NIL.
 
-HOLE-CHOICES (#104), when given, is DECODE-INSTRUCTION-AT's own hole-aligned
-WORD-FIELD-CHOICE list (decoder.lisp) -- one entry per hole in RENDER-VALUES,
-parallel to it, NIL for a hole with no CHOICE-selected record. A :ONE-OF
-element peeks the entry for its own first hole before recursing: a non-NIL
-WORD-FIELD-CHOICE-CHOICE there names the ONE-OF alternative that was actually
-matched at assemble time (mode.lisp's hole-aligned CHOICES, threaded through
-CHOICE-selected word fields, #104), and that alternative's own pattern is
-rendered instead of always the first. Every :EXPR hole this walk crosses --
-whether directly or inside a :ONE-OF's chosen alternative -- pops one entry
-off HOLE-CHOICES in lockstep with RENDER-VALUES, keeping both lists aligned
-to the same hole position throughout the walk.
+HOLE-CHOICES, when given, is DECODE-INSTRUCTION-AT's own hole-aligned matched
+per-hole record -- a WORD-FIELD-CHOICE list on a word-encoded machine (#104)
+or a bare mode-name-symbol/NIL list (the descriptor's own SUB-CHOICES) on a
+byte-encoded one with a hole-selected sub-opcode (#126) -- one entry per hole
+in RENDER-VALUES, parallel to it, NIL for a hole with no such record. A
+:ONE-OF element peeks the entry for its own first hole before recursing,
+via %MATCHED-CHOICE-NAME (instruction.lisp), which normalizes either shape:
+a non-NIL result names the ONE-OF alternative that was actually matched at
+assemble time (mode.lisp's hole-aligned CHOICES, threaded through a
+CHOICE-selected word field or a hole-selected sub-opcode alike), and that
+alternative's own pattern is rendered instead of always the first. Every
+:EXPR hole this walk crosses -- whether directly or inside a :ONE-OF's
+chosen alternative -- pops one entry off HOLE-CHOICES in lockstep with
+RENDER-VALUES, keeping both lists aligned to the same hole position
+throughout the walk.
 
 Falls back to always rendering the first alternative -- #103's original
-behaviour -- whenever HOLE-CHOICES is NIL (the default, and always true on a
-byte-encoded machine, where no WORD-FIELD-CHOICE record exists at all) or
-carries no non-NIL entry for this particular hole -- a decoded word simply
-carries no record to disambiguate with. #118: a field mixing CHOICE-selected
-and value-selected variants stamps every variant's own WORD-FIELD-CHOICE-CHOICE
+behaviour -- whenever HOLE-CHOICES is NIL (the default, and still true on a
+byte-encoded machine whose descriptor declares no hole-selected sub-opcode
+selector, where no per-hole record exists at all) or carries no non-NIL
+entry for this particular hole -- a decoded word simply carries no record to
+disambiguate with. #118: a word-encoded field mixing CHOICE-selected and
+value-selected variants stamps every variant's own WORD-FIELD-CHOICE-CHOICE
 (instruction.lisp's %CHECK-WORD-VARIANT-CHOICES!), so a value-selected row on
 a *mixed* field still names its own alternative here, same as a CHOICE-
 selected one -- only a field with no CHOICE variant at all still leaves this
 NIL, and a hole with a CHOICE-selected field elsewhere in the same
-instruction but no record of its own is unaffected either way."
+instruction but no record of its own is unaffected either way. #126's byte
+path has no mixed case: every alternative of a sub-selected hole is claimed
+by construction (%CHECK-BYTE-SUB-VARIANTS!)."
   (with-output-to-string (s)
     (let ((vals render-values) (choices hole-choices))
       (labels ((render-pattern (pattern)
@@ -235,9 +245,7 @@ instruction but no record of its own is unaffected either way."
                             (let ((v (cl:pop vals)))
                               (write-string (%render-value v lexer :label (gethash v reverse-symbols)) s)))
                      (:one-of
-                      (let* ((field-choice (first choices))
-                             (chosen-name (and field-choice (word-field-choice-choice field-choice)))
-                             (alt-name (or chosen-name (second el))))
+                      (let ((alt-name (or (%matched-choice-name choices 0) (second el))))
                         (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
 

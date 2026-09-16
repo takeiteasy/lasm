@@ -19,30 +19,33 @@ dependency chain, plus a couple of loose couplings:
 
 ```mermaid
 graph TD
-    T126["#126 Hole-selected sub-opcode\nfor byte machines\n(ready to implement -- #125 landed)"]
+    T128["#128 Multi-hole sub-opcode\nselection (follow-up from #126)"]
     T124b["#124 (byte-machine half):\nper-hole :width/:signed on byte machines"]
-    T122["#122 Semantics dispatch on a\ncell-encoded machine's ONE-OF alternative"]
     T120["#120 Varying hole counts\nacross ONE-OF alternatives"]
     T119["#119 Zero-hole addressing modes"]
     T85["#85 Forced-variant syntax for\nword machines' inline-vs-extra-word choice"]
     T124s["#124 (:suffix item)"]
     T127["#127 Per-hole :signed on\nword-encoded machines\n(independent, implementable now)"]
 
-    T126 --> T124b
-    T126 -.likely unblocker.-> T122
     T120 -.may subsume/depend on.-> T119
     T124s -.folds into.-> T85
+    T128 -.relates to.-> T120
 
     style T127 fill:#dfd
     style T85 fill:#ffd
 ```
 
-#123 (decode discriminator design) and #125 (its implementation, the
-byte-machine sub-opcode cell) have both landed. Reading order for whoever
-picks up this cluster now: **#126**, then #124's byte-machine half and #122
-can start. #127 (word-machine `:signed`) was split out of #124 specifically
-because it has no dependency on this chain and can be picked up independently
-at any time.
+#123 (decode discriminator design), #125 (its implementation, the
+byte-machine sub-opcode cell), #126 (hole-selected sub-opcode, the byte
+analogue of #104's `(choice mode)`), and #122 (`choice-case` dispatch on a
+cell-encoded machine's `one-of` alternative, unblocked by and closed
+alongside #126) have all landed. #124's byte-machine half (`:width`/
+`:signed` per `one-of` alternative) is next — the per-hole decode record it
+needed now exists. #128 (multi-hole sub-opcode selection, filed as a
+follow-up while implementing #126: today at most one hole per mode may
+carry a sub selector) is worth reading together with #120. #127
+(word-machine `:signed`) remains independent of this chain and can be
+picked up at any time.
 
 Other open M4 tickets and what they follow up on (no blocking dependency
 between them or on the chain above):

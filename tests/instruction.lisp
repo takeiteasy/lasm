@@ -1559,3 +1559,216 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 (fiveam:test sub-opcode-decode-unmatched-sub-value-is-decode-failure
   (let ((cells (make-array 3 :element-type '(unsigned-byte 8) :initial-contents (list #xB5 99 0))))
     (fiveam:is (eq :decode-failure (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)))))
+
+;;; Hole-selected sub-opcode (#126): the byte-machine analogue of #104's
+;;; (choice mode) -- a (variant (choice m) (sub s)) form on an (operand ...)
+;;; subclause whose hole came from a ONE-OF pattern element lets that hole's
+;;; own matched alternative choose #125's sub-opcode cell, rather than the
+;;; whole (modes ...) clause fixing it once. Reuses OO-INSTR-REG/OO-INSTR-IND
+;;; (defined above, #103) as the carrying hole's two alternatives.
+
+(defmode sc-instr-one (one-of oo-instr-reg oo-instr-ind))
+
+(definstruction instr-test-machine scld
+  (modes sc-instr-one)
+  (encoding (opcode #xC0)
+            (operand src :width 1
+              (variant (choice oo-instr-reg) (sub 0))
+              (variant (choice oo-instr-ind) (sub 1))))
+  (semantics (choice-case src
+               (oo-instr-reg (set! a src))
+               (oo-instr-ind (set! a (mref machine 'ram src))))))
+
+(fiveam:test hole-selected-sub-opcode-expands-one-descriptor-per-alternative
+  (let ((variants (find-instruction-variants 'instr-test-machine 'scld)))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (every (lambda (v) (eq (find-mode-descriptor 'sc-instr-one) (instruction-descriptor-mode v)))
+                       variants)))
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xC0))
+         (reg (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ind (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (= 2 (length descs)))
+    (fiveam:is (not (null reg)))
+    (fiveam:is (not (null ind)))
+    (fiveam:is (equal '(oo-instr-reg) (instruction-descriptor-sub-choices reg)))
+    (fiveam:is (equal '(oo-instr-ind) (instruction-descriptor-sub-choices ind)))))
+
+;; Registration's own pairwise check (REGISTER-INSTRUCTION-VARIANTS!) has no
+;; sibling exemption on the byte path -- it runs on these two expanded
+;; descriptors the same as any unrelated co-tenants, and passes exactly
+;; because their :SUB values are pairwise distinct (%CHECK-BYTE-SUB-
+;; VARIANTS! guarantees this at DEFINSTRUCTION time). SCLD registering with
+;; no error at all, above, already exercises this; nothing further to add.
+
+(fiveam:test hole-selected-sub-opcode-encode-emits-opcode-sub-operand
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xC0))
+         (reg (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ind (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal (list #xC0 0 #x05) (encode-instruction reg '(5))))
+    (fiveam:is (equal (list #xC0 1 #x05) (encode-instruction ind '(5))))))
+
+(fiveam:test hole-selected-sub-opcode-assembler-picks-matching-sibling
+  ;; The regression %CHOICES-ELIGIBLE-P (assembler.lisp) exists to prevent:
+  ;; both siblings share one mode and one INSTRUCTION-DESCRIPTOR-SIZE, so
+  ;; without it declaration order alone would win regardless of which
+  ;; alternative the operand's own syntax actually matched.
+  (fiveam:is (equalp #(#xC0 0 5) (assembly-cells (assemble "scld 5" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xC0 1 5) (assembly-cells (assemble "scld [5]" :machine 'instr-test-machine)))))
+
+(fiveam:test hole-selected-sub-opcode-decode-reports-matched-choices
+  ;; #126: DECODE-INSTRUCTION-AT's fourth CHOICES value is no longer
+  ;; unconditionally NIL on a byte-encoded machine -- it carries the matched
+  ;; descriptor's own SUB-CHOICES.
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (vector #xC0 0 5)) 0 'instr-test-machine)
+    (fiveam:is (string= "SCLD" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(5) values))
+    (fiveam:is (= 3 size))
+    (fiveam:is (eq 'oo-instr-reg (%matched-choice-name choices 0))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (vector #xC0 1 5)) 0 'instr-test-machine)
+    (declare (ignore descriptor values size))
+    (fiveam:is (eq 'oo-instr-ind (%matched-choice-name choices 0)))))
+
+(fiveam:test hole-selected-sub-opcode-choice-case-dispatches-on-byte-machine
+  ;; The first time CHOICE-CASE is reachable at all on a cell-encoded
+  ;; machine (#73/#122) -- before #126, EXECUTE-INSTRUCTION's CHOICES was
+  ;; always NIL there, so every clause fell through to NO-MATCHING-CHOICE.
+  (let* ((m (make-machine 'instr-test-machine))
+         (descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xC0))
+         (reg (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ind (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (setf (mref m 'ram 5) 77)
+    (execute-instruction reg m '(5) (instruction-descriptor-sub-choices reg))
+    (fiveam:is (= 5 (sref m 'a)))
+    (execute-instruction ind m '(5) (instruction-descriptor-sub-choices ind))
+    (fiveam:is (= 77 (sref m 'a)))))
+
+(fiveam:test hole-selected-sub-opcode-round-trip-disassembles-matched-alternative
+  (let ((assembly (assemble "scld 5" :machine 'instr-test-machine)))
+    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+      (fiveam:is (string= "scld $5" (disassembly-line-text (first lines))))))
+  (let ((assembly (assemble "scld [5]" :machine 'instr-test-machine)))
+    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+      (fiveam:is (string= "scld [$5]" (disassembly-line-text (first lines)))))))
+
+;; More than one operand hole carrying a sub selector -- the sub-opcode cell
+;; is singular, so two holes each wanting to pick it has no coherent meaning.
+(fiveam:test hole-selected-sub-opcode-two-holes-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad1
+             (modes oo-instr-two)
+             (encoding (opcode #xC1)
+                       (operand dst :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 1)))
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 1))))
+             (semantics nil)))))
+
+;; A sub selector on a hole that isn't a ONE-OF at all has nothing to select
+;; between.
+(fiveam:test hole-selected-sub-opcode-non-one-of-hole-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad2
+             (modes immediate)
+             (encoding (opcode #xC2)
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))))
+             (semantics nil)))))
+
+;; An unclaimed alternative -- unlike #118's word-machine mixed-field rule,
+;; there is no value-selected fallback for it to resolve into here.
+(fiveam:test hole-selected-sub-opcode-unclaimed-alternative-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad3
+             (modes sc-instr-one)
+             (encoding (opcode #xC3)
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))))
+             (semantics nil)))))
+
+;; Two alternatives claiming the same sub value can never be told apart.
+(fiveam:test hole-selected-sub-opcode-duplicate-sub-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad4
+             (modes sc-instr-one)
+             (encoding (opcode #xC4)
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 0))))
+             (semantics nil)))))
+
+;; An explicit (opcode n :sub s) and a hole-selected selector would both be
+;; writing the same cell.
+(fiveam:test hole-selected-sub-opcode-conflicts-with-explicit-sub-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad5
+             (modes sc-instr-one)
+             (encoding (opcode #xC5 :sub 9)
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 1))))
+             (semantics nil)))))
+
+;; A sub value that doesn't fit the machine's code cell width.
+(fiveam:test hole-selected-sub-opcode-too-wide-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine scbad6
+             (modes sc-instr-one)
+             (encoding (opcode #xC6)
+                       (operand src :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 256))))
+             (semantics nil)))))
+
+;; A hole-selected sub-opcode selector is a byte-machine-only mechanism, same
+;; as #125's plain :SUB -- on WORD-TEST-MACHINE, the byte-style
+;; (operand NAME :width n (variant ...)) spec doesn't even parse as a
+;; word-encoded (operand NAME :field f ...) subclause.
+(fiveam:test hole-selected-sub-opcode-on-word-machine-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine scwordbad
+             (modes wc-two)
+             (encoding (opcode 20)
+                       (operand v :width 1
+                         (variant (choice wc-reg) (sub 0))
+                         (variant (choice wc-ind) (sub 1))))
+             (semantics (set! a v))))))
+
+;; A sub-selected mode coexisting on one mnemonic with a genuinely different
+;; mode whose own syntax happens to overlap one of the sub-selected hole's
+;; alternatives (both a bare EXPR) -- %CHOICES-ELIGIBLE-P (assembler.lisp)
+;; must filter out only the sub-selected mode's own ineligible sibling
+;; (OO-INSTR-IND, whose selector doesn't match), leaving the ordinary
+;; declaration-order/width tiebreak (%MAYBE-WARN-AMBIGUOUS-MODE) to run
+;; exactly as it would with no sub selector involved at all.
+(definstruction instr-test-machine scld2
+  (modes
+    (sc-instr-one (opcode #xCA)
+      (operand src :width 1
+        (variant (choice oo-instr-reg) (sub 0))
+        (variant (choice oo-instr-ind) (sub 1)))
+      (semantics (choice-case src
+                   (oo-instr-reg (set! a src))
+                   (oo-instr-ind (set! a (mref machine 'ram src))))))
+    (absolute (opcode #xCB)
+      (semantics (set! a (mref machine 'ram operand))))))
+
+(fiveam:test hole-selected-sub-opcode-coexists-with-unrelated-tied-mode
+  ;; "[5]" only matches SC-INSTR-ONE's OO-INSTR-IND alternative -- ABSOLUTE's
+  ;; bare-EXPR syntax doesn't match "[...]" at all, so there is exactly one
+  ;; candidate and no ambiguity.
+  (fiveam:is (equalp #(#xCA 1 5) (assembly-cells (assemble "scld2 [5]" :machine 'instr-test-machine))))
+  ;; "5" matches both SC-INSTR-ONE's OO-INSTR-REG alternative (size 3: opcode
+  ;; + sub + 1-cell operand) and ABSOLUTE's own bare-EXPR pattern (size 3:
+  ;; opcode + ABSOLUTE's 2-cell default width, from INSTR-TEST-MACHINE's
+  ;; 16-bit-addressed RAM) -- a genuine tie between two *different* modes,
+  ;; resolved the ordinary way (declaration order: SC-INSTR-ONE first), with
+  ;; an AMBIGUOUS-MODE warning exactly as it would without any sub selector
+  ;; in the mix.
+  (fiveam:signals ambiguous-mode
+    (assemble "scld2 5" :machine 'instr-test-machine))
+  (handler-bind ((ambiguous-mode #'muffle-warning))
+    (fiveam:is (equalp #(#xCA 0 5) (assembly-cells (assemble "scld2 5" :machine 'instr-test-machine))))))

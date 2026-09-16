@@ -178,8 +178,69 @@ end, including a second mnemonic sharing an opcode the same way; this is the
 byte-machine counterpart of `examples/sharedopcode.lisp`'s word-machine
 story.
 
-`:sub` is selected per `(modes ...)` clause, not per operand hole — there is
-no byte-machine analogue of `(choice mode)` (below) yet.
+`:sub` above is selected per `(modes ...)` clause, not per operand hole — for
+that, see hole-selected sub-opcodes next.
+
+### `(variant (choice m) (sub s))` — hole-selected sub-opcode
+
+The byte-machine analogue of `(choice mode)` (below): rather than fixing
+`:sub` once for a whole mode, an `(operand ...)` subclause whose hole came
+from a `(one-of ...)` pattern element ([Addressing modes, "Per-operand
+modes"](modes.md#per-operand-modes)) can pick the sub-opcode cell's value by
+*which alternative the operand's own syntax actually matched*:
+
+```lisp
+(defmode sc-direct expr)
+(defmode sc-indirect "[" expr "]")
+(defmode sc-any (one-of sc-direct sc-indirect))
+
+(definstruction sixtyfoo lda
+  (modes sc-any)
+  (encoding (opcode #x10)
+            (operand src :width 1
+              (variant (choice sc-direct) (sub 0))
+              (variant (choice sc-indirect) (sub 1))))
+  (semantics (choice-case src
+               (sc-direct (set! a src))
+               (sc-indirect (set! a (mref machine 'ram src))))))
+```
+
+`lda 5` encodes `#x10 00 05`; `lda [5]` encodes `#x10 01 05` — one mnemonic,
+one mode, one opcode, told apart purely by which `one-of` alternative the
+operand matched, rather than needing a separate `(modes ...)` clause per
+form the way a plain `(opcode n :sub s)` would. `definstruction` registers
+one `instruction-descriptor` per claimed alternative (two here), each with
+its own `sub-opcode` and a hole-aligned `sub-choices` record naming that
+alternative — the same mechanism that lets several descriptors share one
+byte-machine opcode above, but chosen per operand hole instead of per whole
+mode. See [`examples/subchoice.lisp`](../examples/subchoice.lisp) for this
+run end to end, including `choice-case` dispatch and disassembly.
+
+Rules, all checked at `definstruction` time:
+
+- The carrying hole must be a `(one-of ...)` hole; a selector on a plain
+  `expr` hole has nothing to select between.
+- **Every** alternative of the carrying hole must be claimed by exactly one
+  `(variant (choice m) (sub s))` — unlike a word-encoded field's mixed
+  `choice`/value-selected variants (below), there is no value-selected
+  fallback for an unclaimed alternative to resolve into, so partial coverage
+  is a permanent error here, not a gap.
+- At most one operand hole per mode may carry these selectors — the
+  sub-opcode cell is singular, so two holes each wanting to pick it has no
+  coherent meaning without a cartesian product of explicit values, which is
+  not supported (see the tracker for this follow-up).
+- `s` must be pairwise distinct across the carrying hole's alternatives and
+  fit the machine's code cell width, same requirement as a plain `:sub`.
+- An explicit `(opcode n :sub s)` and a hole-selected selector may not both
+  be given on one mode — both would be writing the same cell.
+
+Once assembled, decode (`decode-instruction-at`) reads the sub-opcode cell
+back and reports the matched descriptor's `sub-choices` as its own `choices`
+return value — the same hole-aligned record a word-encoded machine's
+`(choice mode)` field already produces. This is what makes `choice-case`
+(below) and the disassembler's rendering of the matched alternative both
+reachable on a byte-encoded machine for the first time, not only a
+word-encoded one.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
@@ -355,6 +416,16 @@ descriptor with a `:sub`-less one at the same opcode is still an error
 (`opcode-conflict`'s `:sub-opcode-required` reason) — decode couldn't tell
 whether the cell after the opcode is a sub-opcode or the first operand —
 and so is reusing the same `:sub` value twice (`:duplicate-sub-opcode`).
+
+A hole-selected sub-opcode (above) reaches the same registration check from
+a single `definstruction` form rather than two: one `(operand ...)`
+subclause claiming a `one-of` hole's alternatives expands into one
+descriptor per alternative, all sharing one mnemonic, mode, and opcode.
+Registration's pairwise check runs on these exactly as it would on unrelated
+co-tenants, and passes because their `:sub` values are pairwise distinct by
+construction (`definstruction` itself enforces this before registration ever
+sees them) — so a hole-selected sub-opcode's own descriptors never trip
+`:duplicate-sub-opcode` or `:sub-opcode-required` in ordinary use.
 
 ```lisp
 (defmode a-reg expr)
@@ -574,9 +645,10 @@ which alternative was actually matched, `a-lit` included: `choice-case`
 [Semantics vocabulary](semantics.md#choice-case--dispatching-on-a-matched-addressing-mode-alternative))
 dispatches on it directly, so `[reg]` really means "dereference" while a
 bare `reg` means "use the value directly" (see [Semantics vocabulary,
-"`choice-case`"](semantics.md#choice-case) for the full picture, including
-what happens on a cell-encoded machine, which has no matched alternative to
-read back):
+"`choice-case`"](semantics.md#choice-case) for the full picture, including a
+cell-encoded machine's own hole-selected sub-opcode form above — `choice-case`
+reads back a real matched alternative there too, not only on a word-encoded
+machine):
 
 ```lisp
 (semantics

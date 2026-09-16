@@ -176,23 +176,31 @@ contributes, not just once for the element as a whole; a nested `one-of`
 match's own choice. On a word-encoded machine (see
 [Instructions](instructions.md#choice-selected-word-fields)), a `(choice
 mode)` variant selector reads this value to pick a field's own code, or an
-unconditional extra word, by which alternative a hole actually matched —
-byte-encoded machines have no such consumer, so `choices` there remains
-purely informational.
+unconditional extra word, by which alternative a hole actually matched; on a
+byte-encoded machine, a `(variant (choice m) (sub s))` selector (see
+[Instructions, "hole-selected
+sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+reads it the same way to pick the sub-opcode cell's own value. A hole with
+neither kind of selector leaves `choices` purely informational.
 
 ### What `one-of` does and does not do
 
 Declaring a `one-of` only changes which *syntax* an operand hole accepts —
 it says nothing, by itself, about the value each alternative parses to. On a
 **byte-encoded** machine (a plain `(operand :mode)`/`(operand :width n)`
-encoding), this is still the whole story: `a-ind` above (`"[" expr "]"`)
-parses to the same plain integer `a-reg` (`expr`) would, and every
-alternative's value encodes into the same field the same way, regardless of
-which one matched (see
+encoding) with no sub-opcode selector on that hole, this is still the whole
+story: `a-ind` above (`"[" expr "]"`) parses to the same plain integer
+`a-reg` (`expr`) would, and every alternative's value encodes into the same
+field the same way, regardless of which one matched (see
 [`examples/orthogonal.lisp`](../examples/orthogonal.lisp) for this made
 explicit — three syntactically distinct operands assembling to identical
-bytes, and staying that way, since there is no word-encoded field for a
-`(choice mode)` selector to apply to).
+bytes, and staying that way, since there is no field, sub-opcode or
+otherwise, for anything to apply to). A hole-selected `(variant (choice m)
+(sub s))` (see [Instructions, "hole-selected
+sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+is the byte-machine exception: it lets the matched alternative steer the
+sub-opcode cell the same way a word-encoded field's `(choice mode)`,
+described next, steers a bit field.
 
 On a **word-encoded** machine (`(instruction-word ...)`, see
 [Instructions](instructions.md#word-encoded-instructions-20-m4)), a `(choice
@@ -208,20 +216,23 @@ dispatches on which alternative a hole actually matched, so `[reg]` really
 dereferences while a bare `reg` reads the value directly, on a word-encoded
 machine — every sibling descriptor a `one-of`'s alternatives expand into
 still shares one `semantics` body, but that body can now tell them apart at
-runtime instead of treating every alternative identically. On a
-byte-encoded machine there is no encoded discriminator for `choice-case` to
-read at all (see below) — it signals there unless given an `otherwise`
-clause. Letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
+runtime instead of treating every alternative identically. A byte-encoded
+machine's hole-selected sub-opcode (above) gives `choice-case` the same
+thing to read back, the first time that is reachable there at all; a hole
+with neither a `(choice mode)` word field nor a hole-selected sub-opcode has
+no encoded discriminator, so `choice-case` signals there unless given an
+`otherwise` clause. Letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
 `[register]` vs. `[register + offset]`) actually mean different things
 still needs symbolic register names (see the tracker) so the assembler can
 tell a register apart from an arbitrary expression inside the brackets.
 
 Disassembly mirrors this split: a byte-encoded machine's decoded word
-carries no record of which alternative was assembled, so it always renders
-a `one-of`'s first alternative; a word-encoded machine's `(choice mode)`
-field carries that record forward from decode, so the disassembler renders
-the alternative that was actually written — see
-[Disassembler](disassembler.md).
+renders a `one-of`'s first alternative unless its descriptor declares a
+hole-selected sub-opcode, in which case the sub-opcode cell carries that
+record forward from decode, same as a word-encoded machine's `(choice mode)`
+field — either way, the disassembler renders the alternative that was
+actually written when a record exists, and only falls back to the first
+alternative when it doesn't — see [Disassembler](disassembler.md).
 
 ### Per-hole `:strict`
 
