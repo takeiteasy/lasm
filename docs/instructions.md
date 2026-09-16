@@ -290,28 +290,83 @@ wherever it is:
 ```
 
 Each `(variant (choice m1 m2 ...) (sub s))` names one alternative per
-participating `one-of` hole, in hole order — **every** `one-of` hole of the
-mode participates; there is no way to name only a subset (see the tracker
-for that follow-up). `mov 20, 5` encodes `#x10 00 14 05`; `mov [20], [5]`
-encodes `#x10 03 14 05` — one mnemonic, one mode, one opcode, told apart by
-which combination of the two holes' alternatives matched. `definstruction`
-registers one `instruction-descriptor` per claimed combination (four here),
-each with its own `sub-opcode` and a `sub-choices` record populated at every
-participating hole. See
+participating `one-of` hole, in hole order — with no other subclause,
+**every** `one-of` hole of the mode participates. `mov 20, 5` encodes `#x10
+00 14 05`; `mov [20], [5]` encodes `#x10 03 14 05` — one mnemonic, one mode,
+one opcode, told apart by which combination of the two holes' alternatives
+matched. `definstruction` registers one `instruction-descriptor` per claimed
+combination (four here), each with its own `sub-opcode` and a `sub-choices`
+record populated at every participating hole. See
 [`examples/subtable.lisp`](../examples/subtable.lisp) for this run end to
 end.
+
+#### `(holes ...)` — subsetting the table
+
+A mode with more `one-of` holes than the table needs to discriminate — an
+unrelated extra `one-of` hole whose own alternatives already agree with
+each other — can name just the holes this table covers with a leading
+`(holes h1 h2 ...)` form, by 0-based pattern-order index (#131):
+
+```lisp
+(defmode oo-a expr)
+(defmode oo-b "[" expr "]")
+(defmode nw-a expr)
+(defmode nw-b "[" expr "]")
+(defmode three-holes (one-of oo-a oo-b) "," (one-of nw-a nw-b) "," (one-of oo-a oo-b))
+
+(definstruction sixtyfoo foo
+  (modes three-holes)
+  (encoding (opcode #x20)
+            (operand h0 :width 1) (operand h1 :width 1) (operand h2 :width 1)
+            (sub-opcode
+              (holes 0 2)
+              (variant (choice oo-a oo-a) (sub 0))
+              (variant (choice oo-a oo-b) (sub 1))
+              (variant (choice oo-b oo-a) (sub 2))
+              (variant (choice oo-b oo-b) (sub 3))))
+  (semantics ...))
+```
+
+Hole 1 (`NW-A`/`NW-B`, syntactically distinct but otherwise identical —
+neither declares `:signed`, `:width`, nor `:relative`) is left uncovered —
+the table names only holes 0 and 2, so `(choice ...)` above has arity 2,
+not 3. An uncovered `one-of` hole gets no decode-time record at all,
+exactly as if `(sub-opcode ...)` had never been given for it — its own
+alternatives must therefore already agree on `:signed`/`:width`/`:relative`
+(`%check-byte-one-of-signed`/`-width`/`-relative`, instruction.lisp, still
+enforce this — naming a genuinely disagreeing hole in `(holes ...)` is how
+to cover it instead), or carry their own selector some other way. Omitting
+`(holes ...)` entirely keeps today's original meaning — every `one-of` hole
+participates. With no decode-time record, disassembly renders an uncovered
+hole's first alternative unconditionally (`NW-A`'s plain syntax here, never
+`NW-B`'s brackets) regardless of which one was actually written — the same
+fallback rule [Modes, "What `one-of` does and does not
+do"](modes.md#what-one-of-does-and-does-not-do) describes for any hole with
+no discriminator at all.
+
+`(holes ...)`'s own indices are sorted into ascending pattern order
+internally regardless of how they are written — `(holes 2 0)` means exactly
+the same as `(holes 0 2)` — and every `(choice m1 m2 ...)` stays positional
+in that same pattern order, never in `(holes ...)`'s own writing order. See
+[`examples/subtable.lisp`](../examples/subtable.lisp) for a subsetted table
+run end to end.
 
 Rules, all checked at `definstruction` time — the multi-hole generalization
 of the single-hole selector's own rules above:
 
 - The mode must have at least one `one-of` hole; a table on a mode with none
   has nothing to select between.
-- Every `(choice ...)`'s arity must match the number of participating holes,
-  and each name must belong to its own hole's alternatives.
-- **Every combination of the cross product must be claimed exactly once** —
-  neither missing nor duplicated; there is no value-selected fallback for an
-  unclaimed combination to resolve into, the same permanent-error rule the
-  single-hole selector holds every alternative to.
+- A `(holes ...)` form, if given, must name at least one hole, no hole more
+  than once, and only in-range indices whose hole is itself a `one-of` —
+  naming a plain `expr` hole has nothing to select between either.
+- Every `(choice ...)`'s arity must match the number of *participating*
+  holes (every `one-of` hole, or `(holes ...)`'s own narrower subset), and
+  each name must belong to its own hole's alternatives.
+- **Every combination of the participating holes' cross product must be
+  claimed exactly once** — neither missing nor duplicated; there is no
+  value-selected fallback for an unclaimed combination to resolve into, the
+  same permanent-error rule the single-hole selector holds every alternative
+  to.
 - The cross product's size must fit the machine's code cell width, and `s`
   must be pairwise distinct and fit it too.
 - A `(sub-opcode ...)` table and a per-hole `(variant (choice m) (sub s))`
@@ -322,7 +377,7 @@ Decode, `operand-signedness`, and `operand-widths` (below) all work exactly
 as the single-hole case describes, just across every hole the table names
 rather than one — any number of `one-of` holes may now disagree on
 `:signed` or `:width` at once, as long as each is one of the table's
-participating holes.
+participating holes (its full hole set, or `(holes ...)`'s own subset).
 
 ### `operand-signedness`
 

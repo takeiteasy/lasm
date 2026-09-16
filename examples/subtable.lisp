@@ -21,6 +21,12 @@
 ;;;; discriminated purely by which combination of alternatives the two
 ;;;; operands' own syntax matched.
 ;;;;
+;;;; Also demonstrates (holes ...) (#131): a leading form inside
+;;;; (sub-opcode ...) naming, by pattern-order index, only the ONE-OF holes
+;;;; a table actually needs to discriminate -- an unrelated extra ONE-OF
+;;;; hole whose own alternatives already agree needn't be enumerated into
+;;;; the table's cross product at all.
+;;;;
 ;;;; Run with:  sbcl --script examples/subtable.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -243,5 +249,55 @@ each independently, via CHOICES naming both holes' own matched alternative:~%")
     (assert (string= "brw &$5,$7" (disassembly-line-text (first lines)))))
   (format t "~%TGT's own offset resolves to TARGET's address; N's own value is untouched ~
 by that adjustment.~%"))
+
+;; #131: (holes ...) subsetting a multi-hole (sub-opcode ...) table -- a
+;; mode with an extra ONE-OF hole whose own alternatives already agree
+;; needn't have that hole enumerated into the table's cross product at all.
+;; SEL3's middle hole (SS-MID1/SS-MID2) is left uncovered by (holes 0 2);
+;; only holes 0 and 2 (SS-A1/SS-A2, SS-C1/SS-C2) discriminate the
+;; sub-opcode -- a 2x2 cross product instead of the 2x2x2 a table naming
+;; every hole would need.
+(defmode ss-a1 expr)
+(defmode ss-a2 "[" expr "]")
+(defmode ss-mid1 expr)
+(defmode ss-mid2 "[" expr "]")
+(defmode ss-c1 expr)
+(defmode ss-c2 "[" expr "]")
+(defmode ss-three (one-of ss-a1 ss-a2) "," (one-of ss-mid1 ss-mid2) "," (one-of ss-c1 ss-c2))
+
+(definstruction subtablefoo sel3
+  (modes ss-three)
+  (encoding (opcode #x40)
+            (operand h0 :width 1)
+            (operand h1 :width 1)
+            (operand h2 :width 1)
+            (sub-opcode
+              (holes 0 2)
+              (variant (choice ss-a1 ss-c1) (sub 0))
+              (variant (choice ss-a1 ss-c2) (sub 1))
+              (variant (choice ss-a2 ss-c1) (sub 2))
+              (variant (choice ss-a2 ss-c2) (sub 3))))
+  (semantics (set! a h1)))
+
+(format t "~%SEL3's (holes 0 2) covers only holes 0 and 2 -- its middle hole ~
+(SS-MID1/SS-MID2) needs no selector at all, since its own alternatives already agree:~%")
+(let ((aa (assembly-cells (assemble "sel3 20, 99, 5" :machine 'subtablefoo)))
+      (ic (assembly-cells (assemble "sel3 [20], 99, 5" :machine 'subtablefoo))))
+  (format t "  sel3 20, 99, 5      -> ~{~2,'0X~^ ~}~%" (coerce aa 'list))
+  (format t "  sel3 [20], 99, 5    -> ~{~2,'0X~^ ~}~%" (coerce ic 'list))
+  (assert (equalp #(#x40 #x00 #x14 #x63 #x05) aa))
+  (assert (equalp #(#x40 #x02 #x14 #x63 #x05) ic))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader ic) 0 'subtablefoo)
+    (assert (string= "SEL3" (instruction-descriptor-name descriptor)))
+    (assert (equal (list 20 99 5) values))
+    (assert (= 5 size))
+    (assert (eq 'ss-a2 (%matched-choice-name choices 0)))
+    ;; The uncovered hole's own CHOICES entry stays NIL, exactly as if
+    ;; (sub-opcode ...) had never been given for it at all.
+    (assert (null (%matched-choice-name choices 1)))
+    (assert (eq 'ss-c1 (%matched-choice-name choices 2))))
+  (format t "~%Hole 1 carries no decode-time record -- (holes 0 2) named only holes 0 and 2, ~
+so the sub-opcode table's cross product, and every CHOICES record it produces, cover just those two.~%"))
 
 (format t "~%All assertions passed.~%")

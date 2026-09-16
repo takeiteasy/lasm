@@ -665,15 +665,73 @@ order."
                names tail))
       (values names (second (first tail))))))
 
+(defun %parse-byte-sub-table-holes-clause (variant-forms hole-alternatives-list machine name)
+  "VARIANT-FORMS is the full body of a (sub-opcode ...) subclause (#128),
+optionally led by one (holes h1 h2 ...) form naming, by 0-based
+pattern-order index (the same indexing HOLE-ALTERNATIVES-LIST -- mode.lisp's
+%MODE-HOLE-ALTERNATIVES -- is aligned against), which of the mode's ONE-OF
+holes this table covers (#131). Returns (VALUES hole-indices
+remaining-variant-forms): with a leading (holes ...) form, HOLE-INDICES is
+its own names sorted into ascending pattern order regardless of how (holes
+...) listed them -- so a variant's (choice m1 m2 ...) stays positional in
+pattern order unambiguously either way, not in (holes ...)'s own writing
+order -- and REMAINING-VARIANT-FORMS has that leading form stripped off;
+with no (holes ...) form, HOLE-INDICES is every ONE-OF hole of the mode (in
+pattern order, today's original meaning) and REMAINING-VARIANT-FORMS is
+VARIANT-FORMS unchanged.
+
+Signals a DEFINSTRUCTION-time error, naming MACHINE/NAME, for a (holes ...)
+form that: names no hole at all; repeats an index; names an index out of
+range for HOLE-ALTERNATIVES-LIST; or names an index whose hole is not
+governed by any ONE-OF -- a sub-opcode table, full or subset, only chooses
+between ONE-OF alternatives. A ONE-OF hole left unnamed by (holes ...) is
+simply not covered by this table -- it gets no sub-opcode-selector record of
+its own (%CHECK-BYTE-ONE-OF-SIGNED/-WIDTH/-RELATIVE, below, still require
+such a hole's alternatives to agree with each other, exactly as an
+ungoverned or fully-uncovered ONE-OF hole always has)."
+  (if (and variant-forms (consp (first variant-forms)) (eq (first (first variant-forms)) 'holes))
+      (let ((indices (rest (first variant-forms))))
+        (unless indices
+          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes) names no hole -- give at ~
+least one hole index, or omit (holes ...) entirely to cover every ONE-OF hole" machine name))
+        (let ((dup (loop for (i . later) on indices when (member i later) return i)))
+          (when dup
+            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D more than once"
+                   machine name dup)))
+        (dolist (i indices)
+          (unless (and (integerp i) (<= 0 i) (< i (length hole-alternatives-list)))
+            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, not a valid ~
+hole index for this mode (0-~D)" machine name i (1- (length hole-alternatives-list))))
+          (unless (nth i hole-alternatives-list)
+            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D, which is ~
+not a ONE-OF pattern element -- a sub-opcode table only chooses between ONE-OF alternatives"
+                   machine name i)))
+        (values (sort (copy-list indices) #'<) (rest variant-forms)))
+      (values (loop for alts in hole-alternatives-list
+                    for i from 0
+                    when alts collect i)
+              variant-forms)))
+
 (defun %check-byte-sub-table! (variant-forms hole-alternatives-list machine name)
-  "Validate VARIANT-FORMS -- the (variant (choice m1 m2 ...) (sub s)) forms
-declared by a (sub-opcode ...) subclause (#128) -- against
-HOLE-ALTERNATIVES-LIST, the whole mode's own hole-aligned alternatives
-(mode.lisp's %MODE-HOLE-ALTERNATIVES, NIL at a plain EXPR hole). Every
-ONE-OF hole of the mode participates, in hole order -- there is no way to
-name only a subset (see the tracker for that follow-up); this is the
-multi-hole generalization of %CHECK-BYTE-SUB-VARIANTS!'s one-hole selector,
-which stays the sugar for the single-hole case.
+  "Validate VARIANT-FORMS -- an optional leading (holes ...) form (#131)
+followed by the (variant (choice m1 m2 ...) (sub s)) forms -- declared by a
+(sub-opcode ...) subclause (#128) -- against HOLE-ALTERNATIVES-LIST, the
+whole mode's own hole-aligned alternatives (mode.lisp's
+%MODE-HOLE-ALTERNATIVES, NIL at a plain EXPR hole). With no (holes ...)
+form, every ONE-OF hole of the mode participates, in hole order -- this is
+the multi-hole generalization of %CHECK-BYTE-SUB-VARIANTS!'s one-hole
+selector, which stays the sugar for the single-hole case. With one, only
+its named holes -- %PARSE-BYTE-SUB-TABLE-HOLES-CLAUSE, above -- do; a
+ONE-OF hole left out is simply not covered by this table, as if #128 had
+never given it a decode-time record at all. (Note: a single multi-hole
+ONE-OF pattern element -- one whose alternatives themselves each span more
+than one hole -- repeats its own alt-names list once per hole it
+contributes, mode.lisp's %PATTERN-HOLE-ALTERNATIVES; HOLE-INDICES then
+treats each of those holes as an independently participating hole here, so
+the cross product is squared with combinations that can never actually
+arise from one shared alternative match. (holes ...) can work around this
+by naming only one such hole, but doesn't fix it -- that's #120's
+territory, not this one's.)
 
 Signals a DEFINSTRUCTION-time error, naming MACHINE/NAME, if: the mode has
 no ONE-OF hole at all; some variant's (choice ...) arity doesn't match the
@@ -687,11 +745,11 @@ for an unclaimed combination to resolve into, so partial coverage is a
 permanent error here too.
 
 On success, returns (VALUES hole-indices pairs): HOLE-INDICES the
-participating holes in pattern order, PAIRS the ((name-list . sub) ...)
-entries in VARIANT-FORMS' own declaration order."
-  (let ((hole-indices (loop for alts in hole-alternatives-list
-                             for i from 0
-                             when alts collect i)))
+participating holes in pattern order (every ONE-OF hole, or (holes ...)'s
+own subset), PAIRS the ((name-list . sub) ...) entries in VARIANT-FORMS'
+own declaration order."
+  (multiple-value-bind (hole-indices variant-forms)
+      (%parse-byte-sub-table-holes-clause variant-forms hole-alternatives-list machine name)
     (unless hole-indices
       (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but this mode has no ONE-OF ~
 operand hole -- a sub-opcode table only chooses between ONE-OF alternatives" machine name))
@@ -816,7 +874,7 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
               (t nil))
             mode-specified)))
 
-(defun %check-relative-mode-holes (mode machine name)
+(defun %check-mode-hole-attributes (mode machine name)
   ;; A whole-mode RELATIVE mode (mode.lisp, MODE-DESCRIPTOR-RELATIVEP) marks
   ;; its *entire* pattern's operand as a single PC-relative offset -- there
   ;; is no ONE-OF here naming which hole that is, so MODE's own :RELATIVE
@@ -852,6 +910,25 @@ one hole is itself a ONE-OF -- a whole-mode :RELATIVE has no coherent ~
 meaning there, since which alternative matched would silently override it; ~
 give the ONE-OF's own alternative :RELATIVE T instead (per-hole :RELATIVE, ~
 #130)"
+           machine name (mode-descriptor-name mode)))
+  ;; #132: the same hazard, one hole earlier in the pipeline, for a plain
+  ;; whole-mode :SIGNED T (not :RELATIVE, which -- being itself (OR RELATIVE
+  ;; SIGNED) -- is already caught by the clause above; the NOT RELATIVEP
+  ;; guard here keeps that case reported under its own clearer message
+  ;; rather than this one). %BYTE-OPERAND-SIGNEDNESS resolves a ONE-OF
+  ;; hole's signedness from its own matched alternative first, never falling
+  ;; back to MODE's own SIGNEDP -- so a mode declared (one-of a b) :signed t
+  ;; would have that :SIGNED T silently dropped whenever A and B happen to
+  ;; agree with each other (the only case with no selector to catch the
+  ;; disagreement and error some other way). Rejected here rather than left
+  ;; to silently encode as unsigned.
+  (when (and (mode-descriptor-signedp mode)
+             (not (mode-descriptor-relativep mode))
+             (some #'identity (%mode-hole-alternatives mode)))
+    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :SIGNED, but its ~
+one hole is itself a ONE-OF -- a whole-mode :SIGNED has no coherent meaning ~
+there, since which alternative matched would silently override it; give the ~
+ONE-OF's own alternative :SIGNED T instead (per-hole :SIGNED, #124/#127)"
            machine name (mode-descriptor-name mode))))
 
 ;; The semantics body has no WITH-MACHINE form of its own to name its machine
@@ -2078,7 +2155,7 @@ its absolute-mode sibling."
            ;; specific to CYCLES; #92 tracks rejecting unknown subclauses
            ;; here instead.
            (cycles-subclause (find 'cycles body :key #'first)))
-      (%check-relative-mode-holes mode machine name)
+      (%check-mode-hole-attributes mode machine name)
       (%check-word-relative mode machine name machine)
       (unless opcode-subclause
         (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
@@ -2337,7 +2414,7 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                 (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
                                                     (rest encoding-clause)))
                 (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first)))
-           (%check-relative-mode-holes mode machine name)
+           (%check-mode-hole-attributes mode machine name)
            (%check-word-relative mode machine name machine)
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"

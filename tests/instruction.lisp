@@ -408,6 +408,25 @@
              (encoding (opcode #xFE) (operand :width 1))
              (semantics nil)))))
 
+;; #132: the same hazard as above, one hole earlier in the pipeline, for a
+;; plain whole-mode :SIGNED T (not :RELATIVE). %BYTE-OPERAND-SIGNEDNESS
+;; resolves a ONE-OF hole's signedness from its own matched alternative
+;; first, never falling back to MODE's own SIGNEDP -- so a mode's own
+;; :SIGNED T would be silently dropped in favor of whichever alternative
+;; matched (agreeing or not) rather than erroring where the contradiction is
+;; written. %CHECK-MODE-HOLE-ATTRIBUTES now rejects this outright.
+(defmode signed-one-of-hole-test-a expr)
+(defmode signed-one-of-hole-test-b "[" expr "]")
+(defmode signed-one-of-hole-test-mode
+    (one-of signed-one-of-hole-test-a signed-one-of-hole-test-b) :signed t)
+
+(fiveam:test signed-mode-whose-single-hole-is-a-one-of-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine bogus
+             (modes signed-one-of-hole-test-mode)
+             (encoding (opcode #xFD) (operand :width 1))
+             (semantics nil)))))
+
 (fiveam:test unknown-clause-head-signals-error
   (fiveam:signals error
     (eval '(definstruction instr-test-machine bogus
@@ -693,6 +712,24 @@
                          #'string< :key #'symbol-name)))
     (fiveam:is (= 2 (length variants)))
     (fiveam:is (equal '(wc-ind wc-reg) choices))))
+
+;; #132: the byte-machine hazard above has a word-machine equivalent --
+;; %WORD-FIELD-CHOICE-FORM stamps a CHOICE-selected variant's SIGNEDP from
+;; the alternative it names, never from MODE's own SIGNEDP -- so a
+;; whole-mode :SIGNED T mode whose single hole is a ONE-OF is rejected here
+;; too, by the same %CHECK-MODE-HOLE-ATTRIBUTES call every DEFINSTRUCTION
+;; path makes before branching on encoding scheme.
+(defmode wc-signed-one-of-hole-test-mode (one-of wc-reg wc-ind) :signed t)
+
+(fiveam:test word-signed-mode-whose-single-hole-is-a-one-of-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes wc-signed-one-of-hole-test-mode)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7))
+                         (variant (choice wc-ind) inline :range (8 15))))
+             (semantics nil)))))
 
 (fiveam:test choice-inline-without-range-signals-error
   (fiveam:signals error
@@ -2263,6 +2300,74 @@ reld #*" :machine 'instr-test-machine)
                (rw-narrow-abs (set! a val))
                (rw-wide-rel (set! pc (+ pc val))))))
 
+;; #133: :SIGNED and :RELATIVE disagreeing INDEPENDENTLY at the same hole --
+;; not two different holes (BRW above), and not two holes both narrowing to
+;; the same MODE-DESCRIPTOR-SIGNEDP the way :WIDTH's own disagreement can
+;; (#130's own closing comment left this unverified). RS-SIGNED-ABS is a
+;; plain signed, non-relative immediate; RS-REL is a PC-relative offset --
+;; MODE-DESCRIPTOR-SIGNEDP is (OR RELATIVE SIGNED), so both alternatives
+;; report SIGNEDP = T (agreeing, invisible to %ONE-OF-SIGNED-DISAGREEMENT),
+;; while only RELATIVEP genuinely differs (caught by
+;; %ONE-OF-RELATIVE-DISAGREEMENT testing RELATIVEP directly, per its own
+;; docstring). One sub-opcode selector satisfies both.
+(defmode rs-signed-abs "#" expr :width 1 :signed t)
+(defmode rs-rel "&" expr :width 1 :relative t)
+(defmode rs-one (one-of rs-signed-abs rs-rel))
+
+(definstruction instr-test-machine rsig
+  (modes rs-one)
+  (encoding (opcode #x0F)
+            (operand val :mode
+              (variant (choice rs-signed-abs) (sub 0))
+              (variant (choice rs-rel) (sub 1))))
+  (semantics (choice-case val
+               (rs-signed-abs (set! a val))
+               (rs-rel (set! pc (+ pc val))))))
+
+(fiveam:test one-of-signed-and-relative-disagreeing-at-the-same-hole-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x0F))
+         (signed (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (relative (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    ;; Both siblings agree on OPERAND-SIGNEDNESS (T) -- the shared MODE-
+    ;; DESCRIPTOR-SIGNEDP consequence of RELATIVE implying SIGNED -- but only
+    ;; RELATIVE-HOLE-INDEX tells them apart.
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness signed)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index signed)))
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness relative)))
+    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index relative)))))
+
+(fiveam:test one-of-signed-and-relative-round-trips-the-plain-signed-alternative
+  ;; The offset arithmetic actually differs, not just the descriptor slots:
+  ;; a plain signed immediate encodes/decodes its literal value untouched.
+  (let ((cells (assembly-cells (assemble "rsig #-5" :machine 'instr-test-machine))))
+    (fiveam:is (equalp #(#x0F 0 #xFB) cells))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "RSIG" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(-5) values))
+      (fiveam:is (eq 'rs-signed-abs (%matched-choice-name choices 0))))))
+
+(fiveam:test one-of-signed-and-relative-round-trips-the-relative-alternative
+  ;; The relative alternative instead goes through %RELATIVE-OFFSET's
+  ;; PC-relative arithmetic: RSIG is 3 bytes (opcode, sub, 1-cell val), NOP
+  ;; is 1, so TARGET at address 4 is offset 4 - 3 = 1 from RSIG's own next
+  ;; instruction.
+  (let* ((source "rsig &target
+nop
+target: nop")
+         (assembly (assemble source :machine 'instr-test-machine))
+         (cells (assembly-cells assembly)))
+    (fiveam:is (equalp #(#x0F 1 1 #xEA #xEA) cells))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "RSIG" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(1) values))
+      (fiveam:is (eq 'rs-rel (%matched-choice-name choices 0))))
+    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+      (fiveam:is (string= "rsig &$4" (disassembly-line-text (first lines)))))))
+
 (fiveam:test one-of-relative-and-width-disagreeing-at-the-same-hole-is-legal
   (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x6A))
          (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
@@ -2296,6 +2401,95 @@ reld #*" :machine 'instr-test-machine)
     (fiveam:is (equal '(-4) values))
     (fiveam:is (= 4 size))
     (fiveam:is (eq 'rw-wide-rel (%matched-choice-name choices 0)))))
+
+;; #133's own closing paragraph: a hole with all THREE of :SIGNED, :WIDTH,
+;; and :RELATIVE disagreeing at once, worth checking together with #131 --
+;; RW-ONE's own two alternatives above (RW-NARROW-ABS/RW-WIDE-REL) already
+;; are this case, not just the :WIDTH/:RELATIVE pair its own comment names:
+;; MODE-DESCRIPTOR-SIGNEDP is (OR RELATIVE SIGNED), so RW-WIDE-REL's
+;; :RELATIVE T makes it SIGNEDP T too, disagreeing with RW-NARROW-ABS's
+;; plain NIL -- the third attribute was disagreeing all along. One shared
+;; sub-opcode selector composes it with no new machinery.
+(fiveam:test one-of-signed-width-and-relative-disagreeing-at-the-same-hole-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x6A))
+         (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-operand-signedness narrow)))
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness wide)))))
+
+;; The same three-way disagreement, but at one hole of a genuine multi-hole
+;; (sub-opcode ...) table (#131) rather than the single-hole selector sugar
+;; above -- TW-A1/TW-A2 disagree on all three attributes at hole 0; hole 1
+;; (TW-MID1/TW-MID2) is a second ONE-OF hole whose own alternatives agree on
+;; everything, so (holes 0) leaves it uncovered, exactly the #131 shape.
+(defmode tw-a1 expr :width 1)
+(defmode tw-a2 "&" expr :width 2 :relative t)
+(defmode tw-mid1 expr)
+(defmode tw-mid2 "[" expr "]")
+(defmode tw-two (one-of tw-a1 tw-a2) "," (one-of tw-mid1 tw-mid2))
+
+(definstruction instr-test-machine trisig
+  (modes tw-two)
+  (encoding (opcode #x01)
+            (operand val :mode)
+            (operand mid :width 1)
+            (sub-opcode
+              (holes 0)
+              (variant (choice tw-a1) (sub 0))
+              (variant (choice tw-a2) (sub 1))))
+  (semantics (choice-case val
+               (tw-a1 (set! a val))
+               (tw-a2 (set! pc (+ pc val))))))
+
+(fiveam:test one-of-three-way-disagreement-inside-a-sub-opcode-table-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x01))
+         (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(1 1) (instruction-descriptor-operand-widths narrow)))
+    (fiveam:is (equal '(nil nil) (instruction-descriptor-operand-signedness narrow)))
+    (fiveam:is (null (instruction-descriptor-relative-hole-index narrow)))
+    (fiveam:is (equal '(2 1) (instruction-descriptor-operand-widths wide)))
+    (fiveam:is (equal '(t nil) (instruction-descriptor-operand-signedness wide)))
+    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index wide)))))
+
+(fiveam:test one-of-three-way-disagreement-round-trips-the-narrow-alternative
+  (let ((cells (assembly-cells (assemble "trisig 5, 7" :machine 'instr-test-machine))))
+    (fiveam:is (equalp #(#x01 0 5 7) cells))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "TRISIG" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(5 7) values))
+      (fiveam:is (eq 'tw-a1 (%matched-choice-name choices 0)))
+      ;; Hole 1 is uncovered by (holes 0) -- no CHOICES record, exactly the
+      ;; #131 subsetting shape composed with #133's three-way disagreement.
+      (fiveam:is (null (%matched-choice-name choices 1))))))
+
+(fiveam:test one-of-three-way-disagreement-round-trips-the-wide-relative-alternative
+  (let* ((source "trisig &target, [7]
+nop
+target: nop")
+         (assembly (assemble source :machine 'instr-test-machine))
+         (cells (assembly-cells assembly)))
+    ;; TRISIG is 5 bytes here (opcode, sub, 2-cell val, 1-cell mid); TARGET
+    ;; sits after it and one NOP, at address 6 -- offset from TRISIG's own
+    ;; next-instruction address (5) is 6 - 5 = 1.
+    (fiveam:is (equalp #(#x01 1 1 0 7 #xEA #xEA) cells))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "TRISIG" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(1 7) values))
+      (fiveam:is (eq 'tw-a2 (%matched-choice-name choices 0)))
+      (fiveam:is (null (%matched-choice-name choices 1))))
+    ;; Hole 1's own CHOICES entry is NIL (uncovered by (holes 0)), so
+    ;; disassembly falls back to its first alternative's plain syntax
+    ;; (TW-MID1, no brackets) regardless of which one was actually written
+    ;; -- both encode the identical value, exactly [Modes, "What one-of
+    ;; does and does not do"] describes for a hole with no decode-time
+    ;; record.
+    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+      (fiveam:is (string= "trisig &$6,$7" (disassembly-line-text (first lines)))))))
 
 ;;; Multi-hole sub-opcode selection, a (sub-opcode ...) table (#128, the
 ;;; follow-up #126 filed for itself) -- several ONE-OF holes jointly
@@ -2643,4 +2837,202 @@ reld #*" :machine 'instr-test-machine)
                        (operand src :width 1)
                        (sub-opcode
                          (variant (choice absolute) (sub 0))))
+             (semantics nil)))))
+
+;;; (holes ...) subsetting (#131): a table may cover fewer than every ONE-OF
+;;; hole of the mode, naming the ones it covers by 0-based pattern-order
+;;; index. HOLES-THREE has three ONE-OF holes; the tables below cover only
+;;; holes 0 and 2, leaving hole 1 uncovered -- its own alternatives (B1/B2)
+;;; agree on :SIGNED/:WIDTH/:RELATIVE (neither declares any of them), so no
+;;; selector is required for it, exactly as an ungoverned or fully-uncovered
+;;; ONE-OF hole always needed none before #128 existed at all.
+(defmode holes-a1 expr)
+(defmode holes-a2 "[" expr "]")
+(defmode holes-b1 expr)
+(defmode holes-b2 "[" expr "]")
+(defmode holes-c1 expr)
+(defmode holes-c2 "[" expr "]")
+(defmode holes-three
+    (one-of holes-a1 holes-a2) "," (one-of holes-b1 holes-b2) "," (one-of holes-c1 holes-c2))
+
+(definstruction instr-test-machine holtab
+  (modes holes-three)
+  (encoding (opcode #xE8)
+            (operand h0 :width 1)
+            (operand h1 :width 1)
+            (operand h2 :width 1)
+            (sub-opcode
+              (holes 0 2)
+              (variant (choice holes-a1 holes-c1) (sub 0))
+              (variant (choice holes-a1 holes-c2) (sub 1))
+              (variant (choice holes-a2 holes-c1) (sub 2))
+              (variant (choice holes-a2 holes-c2) (sub 3))))
+  (semantics
+    (choice-case h0
+      (holes-a1 (set! a h0))
+      (holes-a2 (set! a (mref machine 'ram h0))))))
+
+(fiveam:test sub-opcode-table-holes-clause-subsets-participating-holes
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xE8))
+         (d0 (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (d1 (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (d2 (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (d3 (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (= 4 (length descs)))
+    ;; Hole 1 (the uncovered one) is NIL in every sibling's SUB-CHOICES --
+    ;; only holes 0 and 2, the ones (holes 0 2) actually named, are populated.
+    (fiveam:is (equal '(holes-a1 nil holes-c1) (instruction-descriptor-sub-choices d0)))
+    (fiveam:is (equal '(holes-a1 nil holes-c2) (instruction-descriptor-sub-choices d1)))
+    (fiveam:is (equal '(holes-a2 nil holes-c1) (instruction-descriptor-sub-choices d2)))
+    (fiveam:is (equal '(holes-a2 nil holes-c2) (instruction-descriptor-sub-choices d3)))))
+
+(fiveam:test sub-opcode-table-holes-clause-round-trips-through-assembler-and-decoder
+  (fiveam:is (equalp #(#xE8 2 5 20 7)
+                      (assembly-cells (assemble "holtab [5], 20, 7" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (vector #xE8 2 5 20 7)) 0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "HOLTAB" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(5 20 7) values))
+    (fiveam:is (eq 'holes-a2 (%matched-choice-name choices 0)))
+    (fiveam:is (null (%matched-choice-name choices 1)))
+    (fiveam:is (eq 'holes-c1 (%matched-choice-name choices 2))))
+  (let ((lines (disassemble-assembly (assemble "holtab [5], 20, 7" :machine 'instr-test-machine)
+                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "holtab [$5],$14,$7" (disassembly-line-text (first lines))))))
+
+;; A CHOICE-CASE naming the uncovered hole's own alternatives still parses
+;; (HOLE-ALTERNATIVES is non-NIL there -- it IS a ONE-OF hole, just not one
+;; this table covers): %CHECK-CHOICE-CASE-KEYS! only checks ONE-OF
+;; membership, not selector coverage. At runtime SUB-CHOICES' entry for that
+;; hole is always NIL, so every clause falls through to OTHERWISE or
+;; NO-MATCHING-CHOICE -- the same pre-#126 behavior any ONE-OF hole with no
+;; selector at all has always had (see HOLE-SELECTED-SUB-OPCODE-CHOICE-CASE-
+;; DISPATCHES-ON-BYTE-MACHINE's own comment above).
+(definstruction instr-test-machine holtabcc
+  (modes holes-three)
+  (encoding (opcode #xE9)
+            (operand h0 :width 1)
+            (operand h1 :width 1)
+            (operand h2 :width 1)
+            (sub-opcode
+              (holes 0 2)
+              (variant (choice holes-a1 holes-c1) (sub 0))
+              (variant (choice holes-a1 holes-c2) (sub 1))
+              (variant (choice holes-a2 holes-c1) (sub 2))
+              (variant (choice holes-a2 holes-c2) (sub 3))))
+  (semantics
+    (choice-case h1
+      (holes-b1 (set! a 1))
+      (holes-b2 (set! a 2)))))
+
+(fiveam:test sub-opcode-table-holes-clause-choice-case-on-uncovered-hole-never-matches
+  (let* ((m (make-machine 'instr-test-machine))
+         (descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xE9))
+         (d0 (find 0 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:signals no-matching-choice
+      (execute-instruction d0 m '(5 20 7) (instruction-descriptor-sub-choices d0)))))
+
+;; Out-of-order (holes 2 0): still names the same set {0, 2} -- HOLE-INDICES
+;; is always sorted into ascending pattern order internally, so (choice ...)
+;; stays positional in pattern order (hole 0's alternative first, hole 2's
+;; second) regardless of how (holes ...) itself was written. A buggy
+;; unsorted scatter would misassign which choice belongs to which hole here,
+;; which -- since HOLES-A1/A2 and HOLES-C1/C2 are disjoint mode-name sets --
+;; would surface as a DEFINSTRUCTION-time "not one of this hole's ONE-OF
+;; alternatives" error, not a silent mis-decode; this instruction being
+;; accepted at all, with a correct round trip, is the assertion.
+(definstruction instr-test-machine holtabrev
+  (modes holes-three)
+  (encoding (opcode #xF2)
+            (operand h0 :width 1)
+            (operand h1 :width 1)
+            (operand h2 :width 1)
+            (sub-opcode
+              (holes 2 0)
+              (variant (choice holes-a1 holes-c1) (sub 0))
+              (variant (choice holes-a1 holes-c2) (sub 1))
+              (variant (choice holes-a2 holes-c1) (sub 2))
+              (variant (choice holes-a2 holes-c2) (sub 3))))
+  (semantics nil))
+
+(fiveam:test sub-opcode-table-holes-clause-out-of-order-is-still-positional
+  (fiveam:is (equalp #(#xF2 2 5 20 7)
+                      (assembly-cells (assemble "holtabrev [5], 20, 7" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (vector #xF2 2 5 20 7)) 0 'instr-test-machine)
+    (declare (ignore size))
+    (fiveam:is (string= "HOLTABREV" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(5 20 7) values))
+    (fiveam:is (eq 'holes-a2 (%matched-choice-name choices 0)))
+    (fiveam:is (eq 'holes-c1 (%matched-choice-name choices 2)))))
+
+;; (holes) with no indices at all names nothing to cover.
+(fiveam:test sub-opcode-table-holes-clause-empty-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine holtabbad1
+             (modes holes-three)
+             (encoding (opcode #xEB)
+                       (operand :width 1) (operand :width 1) (operand :width 1)
+                       (sub-opcode
+                         (holes)
+                         (variant (choice holes-a1 holes-c1) (sub 0))
+                         (variant (choice holes-a2 holes-c2) (sub 1))))
+             (semantics nil)))))
+
+;; A duplicate hole index in (holes ...).
+(fiveam:test sub-opcode-table-holes-clause-duplicate-index-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine holtabbad2
+             (modes holes-three)
+             (encoding (opcode #xEC)
+                       (operand :width 1) (operand :width 1) (operand :width 1)
+                       (sub-opcode
+                         (holes 0 0)
+                         (variant (choice holes-a1) (sub 0))
+                         (variant (choice holes-a2) (sub 1))))
+             (semantics nil)))))
+
+;; A hole index out of range for this mode's own hole count.
+(fiveam:test sub-opcode-table-holes-clause-out-of-range-index-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine holtabbad3
+             (modes holes-three)
+             (encoding (opcode #xED)
+                       (operand :width 1) (operand :width 1) (operand :width 1)
+                       (sub-opcode
+                         (holes 0 5)
+                         (variant (choice holes-a1 holes-c1) (sub 0))
+                         (variant (choice holes-a2 holes-c2) (sub 1))))
+             (semantics nil)))))
+
+;; A hole index naming a plain EXPR hole (not a ONE-OF) has nothing for the
+;; table to select between at that hole.
+(defmode holes-mixed expr "," (one-of holes-a1 holes-a2))
+
+(fiveam:test sub-opcode-table-holes-clause-non-one-of-index-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine holtabbad4
+             (modes holes-mixed)
+             (encoding (opcode #xEE)
+                       (operand :width 1) (operand :width 1)
+                       (sub-opcode
+                         (holes 0)
+                         (variant (choice holes-a1) (sub 0))
+                         (variant (choice holes-a2) (sub 1))))
+             (semantics nil)))))
+
+;; Arity must match the NARROWED (holes ...) hole count, not the mode's full
+;; ONE-OF hole count -- a 3-name (choice ...) against a 2-hole (holes 0 2)
+;; subset is a mismatch.
+(fiveam:test sub-opcode-table-holes-clause-wrong-arity-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine holtabbad5
+             (modes holes-three)
+             (encoding (opcode #xEF)
+                       (operand :width 1) (operand :width 1) (operand :width 1)
+                       (sub-opcode
+                         (holes 0 2)
+                         (variant (choice holes-a1 holes-b1 holes-c1) (sub 0))
+                         (variant (choice holes-a2 holes-b2 holes-c2) (sub 1))))
              (semantics nil)))))

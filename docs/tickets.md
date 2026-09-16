@@ -22,10 +22,8 @@ graph TD
     T120["#120 Varying hole counts\nacross ONE-OF alternatives"]
     T119["#119 Zero-hole addressing modes"]
     T85["#85 Forced-variant syntax for\nword machines' inline-vs-extra-word choice"]
-    T131["#131 Subsetting a multi-hole\nsub-opcode table\n(follow-up from #128)"]
 
     T120 -.may subsume/depend on.-> T119
-    T131 -.relates to.-> T120
 
     style T85 fill:#ffd
 ```
@@ -38,15 +36,18 @@ alongside #126), #124/#127 (per-hole `:signed` on `one-of` alternatives,
 both encoding schemes), #128 (multi-hole sub-opcode selection, lifting
 #126's one-carrying-hole cap via an explicit `(sub-opcode ...)` combination
 table, and #124's matching cap on disagreeing-signedness holes alongside
-it), #129 (per-hole `:width` on byte-encoded machines), and #130 (per-hole
-`:relative`, the last of #124's four split-off attributes) have all landed.
-#129's own gate — `%layout`'s monotone-widening FLOOR fixpoint tolerating a
-per-hole operand size — turned out narrower than its original phrasing
-suggested: a sub-opcode-selected sibling is chosen by *syntax* alone
-(`%choices-eligible-p`, before any value ever folds), and syntax is
-pass-invariant, so the chosen sibling's size is already constant on the
-first relaxation pass, with nothing for the FLOOR fixpoint to widen — see
-[Assembler, "Choosing a mode"](assembler.md#choosing-a-mode). This does
+it), #129 (per-hole `:width` on byte-encoded machines), #130 (per-hole
+`:relative`, the last of #124's four split-off attributes), #131
+(subsetting a multi-hole sub-opcode table), #132 (a whole-mode `:signed t`
+mode whose single hole is a `one-of` silently dropping that `:signed t`),
+and #133 (the `:signed`/`:relative`-at-one-hole composition #130 left
+unverified) have all landed. #129's own gate — `%layout`'s monotone-widening
+FLOOR fixpoint tolerating a per-hole operand size — turned out narrower than
+its original phrasing suggested: a sub-opcode-selected sibling is chosen by
+*syntax* alone (`%choices-eligible-p`, before any value ever folds), and
+syntax is pass-invariant, so the chosen sibling's size is already constant
+on the first relaxation pass, with nothing for the FLOOR fixpoint to widen —
+see [Assembler, "Choosing a mode"](assembler.md#choosing-a-mode). This does
 *not* carry over to #120 below, whose own problem (alternatives of one
 `one-of` binding a *different number* of holes) is structural, not a sizing
 question the eligibility argument resolves. #130's own gate — needing
@@ -60,19 +61,27 @@ hole 0), so every consumer — the assembler's fit filter/`%encode`, the
 strict-range check, and the disassembler's rendering (the one surface
 #124/#127/#129 never touched, since all three were pure encode/decode-value
 changes) — reads one uniform record instead of branching on
-`mode-descriptor-relativep` separately. Left open, tracked as a follow-up:
-whether a hole that is simultaneously the relative one and has
-`:signed`/`:width`-disagreeing siblings composes cleanly when all three
-share one sub-opcode selector — #130's own implementation covers what
-composes naturally, not every combination. `:suffix` folds into #85 rather
-than getting its own ticket. #131 (subsetting a multi-hole sub-opcode
-table, filed as a follow-up while implementing #128: today every `one-of`
-hole of a mode must participate in a `(sub-opcode ...)` table, with no way
-to have only some of them discriminate) is worth reading together with
-#120, which touches the same `one-of` hole-identity assumptions — and,
-since #129 landed, #131 also means a mode with an unrelated extra `one-of`
-hole must enumerate the full cross product just to give one hole its own
-per-hole `:width` (or, since #130, `:relative`).
+`mode-descriptor-relativep` separately. `:suffix` folds into #85 rather than
+getting its own ticket. #131 added an optional leading `(holes h1 h2 ...)`
+form inside `(sub-opcode ...)`, naming by 0-based pattern-order index which
+of the mode's `one-of` holes a table covers — an uncovered `one-of` hole
+gets no decode-time record, same as before #128 existed, so its own
+alternatives must already agree; the indices are sorted into ascending
+pattern order internally regardless of how they're written, so `(choice
+...)` inside the table stays positional in pattern order rather than
+`(holes ...)`'s own writing order. It remains worth reading together with
+#120, which touches the same `one-of` hole-identity assumptions, but is no
+longer itself blocking anything. #132 folded its check into the same
+`%check-mode-hole-attributes` function (renamed from
+`%check-relative-mode-holes`) #130 added for the equivalent `:relative`
+hazard, rather than a new sibling function, so the two can never be
+sequenced wrong at either call site. #133 confirmed `:signed` and
+`:relative` disagreeing independently at one shared-selector hole composes
+cleanly (verified by encode/decode round trip, not just slot values), and
+that the further three-way `:signed`/`:width`/`:relative` disagreement at
+one hole also composes cleanly with no new machinery, closing the
+"composes for free" question #130's own closing comment and #131's ticket
+both left open.
 
 Other open M4 tickets and what they follow up on (no blocking dependency
 between them or on the chain above):

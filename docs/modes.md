@@ -292,7 +292,9 @@ The discriminator is scheme-specific:
   — the same mechanism `choice-case` and the disassembler already use to
   recover which alternative was written. A table lets any number of a
   mode's holes have disagreeing-signedness alternatives at once, as long as
-  each is one of the table's own participating holes.
+  each is one of the table's own participating holes — its full `one-of`
+  hole set, or a narrower `(holes ...)` subset (see [Instructions,
+  "`(holes ...)`"](instructions.md#holes--subsetting-the-table)).
 - On a **word-encoded** machine, every field variant at that hole must be
   `(choice m)`-selected (see [Instructions, "CHOICE-selected word
   fields"](instructions.md#choice-selected-word-fields)) — a plain
@@ -314,6 +316,13 @@ reinterpretations, decided purely by which alternative was written (see
 [`examples/subchoice.lisp`](../examples/subchoice.lisp) for this run end to
 end, and [`examples/anima16.lisp`](../examples/anima16.lisp) for the
 word-encoded equivalent).
+
+A mode's *own* `:signed t` combined with a `one-of` as its single hole is
+rejected outright, for the same reason `:relative` is below: which
+alternative matched would silently override the mode's own declaration
+whenever the alternatives happen to agree with each other, rather than the
+two ever combining coherently — write `:signed t` on the `one-of`
+alternative that needs it instead.
 
 ### Per-hole `:width`
 
@@ -339,7 +348,8 @@ sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
 and ["multi-hole sub-opcode
 selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection)).
 A table lets any number of a mode's holes have disagreeing-width
-alternatives at once, exactly as it does for `:signed`.
+alternatives at once, exactly as it does for `:signed` — full hole set or
+`(holes ...)` subset alike.
 
 An explicit `(operand :width n)` on the hole's own `(operand ...)`
 subclause always wins over a matched alternative's own `:width` — the
