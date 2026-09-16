@@ -202,7 +202,11 @@ otherwise, for anything to apply to). A hole-selected `(variant (choice m)
 sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
 is the byte-machine exception: it lets the matched alternative steer the
 sub-opcode cell the same way a word-encoded field's `(choice mode)`,
-described next, steers a bit field.
+described next, steers a bit field. A mode with more than one `one-of` hole
+wanting a say in the cell uses a `(sub-opcode ...)` table instead (see
+[Instructions, "multi-hole sub-opcode
+selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection)) —
+the same mechanism, generalized from one carrying hole to several.
 
 On a **word-encoded** machine (`(instruction-word ...)`, see
 [Instructions](instructions.md#word-encoded-instructions-20-m4)), a `(choice
@@ -275,13 +279,17 @@ which one matched, and no discriminator is required at all.
 
 The discriminator is scheme-specific:
 
-- On a **byte-encoded** machine, the hole must carry a hole-selected
-  `(variant (choice m) (sub s))` selector (see [Instructions, "hole-selected
-  sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+- On a **byte-encoded** machine, the hole must carry a sub-opcode selector
+  — either its own hole-selected `(variant (choice m) (sub s))`, or
+  membership in a `(sub-opcode ...)` table's participating holes (see
+  [Instructions, "hole-selected
+  sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
+  and ["multi-hole sub-opcode
+  selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection))
   — the same mechanism `choice-case` and the disassembler already use to
-  recover which alternative was written. Since a byte-encoded mode may carry
-  at most one sub-selected hole, at most one hole per mode can have
-  disagreeing-signedness alternatives.
+  recover which alternative was written. A table lets any number of a
+  mode's holes have disagreeing-signedness alternatives at once, as long as
+  each is one of the table's own participating holes.
 - On a **word-encoded** machine, every field variant at that hole must be
   `(choice m)`-selected (see [Instructions, "CHOICE-selected word
   fields"](instructions.md#choice-selected-word-fields)) — a plain

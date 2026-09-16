@@ -152,9 +152,11 @@ analogue of the whole-mode `:signed` reinterpretation above.
 `decode-instruction-at` returns a fourth value on both paths: `choices`, the
 `one-of` alternative each operand hole actually matched (a word-encoded
 field's own `word-field-choice`, or, on a cell-encoded machine, the matched
-descriptor's own `sub-choices` when it declares a hole-selected sub-opcode
-(see [Instructions, "hole-selected
-sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+descriptor's own `sub-choices` when it declares a sub-opcode selector at one
+or more holes (see [Instructions, "hole-selected
+sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
+and ["multi-hole sub-opcode
+selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection))
 — `nil` throughout when there is no such record). `step-machine` forwards
 it straight through to `execute-instruction`, so a `(semantics ...)` body's
 `choice-case` (see [Semantics vocabulary,

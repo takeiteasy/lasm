@@ -111,12 +111,17 @@ end: the three forms of `ld` now produce three genuinely different results
 for the same written value, not just three different encodings.
 
 A **cell-encoded** machine's decoded instruction carries a record of which
-`one-of` alternative was assembled only for a hole with its own
-hole-selected sub-opcode selector (see [Instructions, "`(variant (choice m)
-(sub s))`"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)
-and [Addressing modes, "What `one-of` does and does not
-do"](modes.md#what-one-of-does-and-does-not-do)) — `choice-case` dispatches
-on it exactly as it does on a word-encoded machine's `(choice mode)` field.
+`one-of` alternative was assembled only for a hole governed by a sub-opcode
+selector — its own hole-selected `(variant (choice m) (sub s))` (see
+[Instructions, "`(variant (choice m)
+(sub s))`"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)),
+or membership in a `(sub-opcode ...)` table's participating holes (see
+["multi-hole sub-opcode
+selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection))
+— and [Addressing modes, "What `one-of` does and does not
+do"](modes.md#what-one-of-does-and-does-not-do) — `choice-case` dispatches
+on it exactly as it does on a word-encoded machine's `(choice mode)` field,
+independently at each hole a table governs.
 A hole with no such selector still carries no record at all, so `choice-case`
 there always sees it as unmatched, signalling `no-matching-choice` unless
 given an `otherwise` clause.

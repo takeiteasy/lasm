@@ -225,10 +225,9 @@ Rules, all checked at `definstruction` time:
   `choice`/value-selected variants (below), there is no value-selected
   fallback for an unclaimed alternative to resolve into, so partial coverage
   is a permanent error here, not a gap.
-- At most one operand hole per mode may carry these selectors — the
-  sub-opcode cell is singular, so two holes each wanting to pick it has no
-  coherent meaning without a cartesian product of explicit values, which is
-  not supported (see the tracker for this follow-up).
+- Only one operand hole per mode may carry its own selector this way — two
+  holes each wanting to pick the (singular) sub-opcode cell need a
+  `(sub-opcode ...)` table instead (below).
 - `s` must be pairwise distinct across the carrying hole's alternatives and
   fit the machine's code cell width, same requirement as a plain `:sub`.
 - An explicit `(opcode n :sub s)` and a hole-selected selector may not both
@@ -249,6 +248,65 @@ disagree on `:signed` (see [Addressing modes, "Per-hole
 `definstruction` time from which alternative it was claimed for) tells
 `decode-instruction-at` which holes to sign-extend, per descriptor rather
 than per whole mode.
+
+### `(sub-opcode ...)` — multi-hole sub-opcode selection
+
+The above selects the sub-opcode cell by *one* hole's matched alternative. A
+mode with two or more `one-of` holes that each want a say in the cell needs a
+`(sub-opcode ...)` subclause instead — sibling to `(operand ...)`, valid
+wherever it is:
+
+```lisp
+(defmode sc-direct expr)
+(defmode sc-indirect "[" expr "]")
+(defmode sc-two (one-of sc-direct sc-indirect) "," (one-of sc-direct sc-indirect))
+
+(definstruction sixtyfoo mov
+  (modes sc-two)
+  (encoding (opcode #x10)
+            (operand dst :width 1)
+            (operand src :width 1)
+            (sub-opcode
+              (variant (choice sc-direct sc-direct)     (sub 0))
+              (variant (choice sc-direct sc-indirect)   (sub 1))
+              (variant (choice sc-indirect sc-direct)   (sub 2))
+              (variant (choice sc-indirect sc-indirect) (sub 3))))
+  (semantics ...))
+```
+
+Each `(variant (choice m1 m2 ...) (sub s))` names one alternative per
+participating `one-of` hole, in hole order — **every** `one-of` hole of the
+mode participates; there is no way to name only a subset (see the tracker
+for that follow-up). `mov 20, 5` encodes `#x10 00 14 05`; `mov [20], [5]`
+encodes `#x10 03 14 05` — one mnemonic, one mode, one opcode, told apart by
+which combination of the two holes' alternatives matched. `definstruction`
+registers one `instruction-descriptor` per claimed combination (four here),
+each with its own `sub-opcode` and a `sub-choices` record populated at every
+participating hole. See
+[`examples/subtable.lisp`](../examples/subtable.lisp) for this run end to
+end.
+
+Rules, all checked at `definstruction` time — the multi-hole generalization
+of the single-hole selector's own rules above:
+
+- The mode must have at least one `one-of` hole; a table on a mode with none
+  has nothing to select between.
+- Every `(choice ...)`'s arity must match the number of participating holes,
+  and each name must belong to its own hole's alternatives.
+- **Every combination of the cross product must be claimed exactly once** —
+  neither missing nor duplicated; there is no value-selected fallback for an
+  unclaimed combination to resolve into, the same permanent-error rule the
+  single-hole selector holds every alternative to.
+- The cross product's size must fit the machine's code cell width, and `s`
+  must be pairwise distinct and fit it too.
+- A `(sub-opcode ...)` table and a per-hole `(variant (choice m) (sub s))`
+  selector on another hole may not both be given, nor may a table and an
+  explicit `(opcode n :sub s)` — all would be writing the same cell.
+
+Decode and `operand-signedness` (below) work exactly as the single-hole case
+describes, just across every hole the table names rather than one — any
+number of `one-of` holes may now disagree on `:signed`, as long as each is
+one of the table's participating holes.
 
 ### `operand-signedness`
 

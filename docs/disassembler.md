@@ -140,13 +140,16 @@ carries its matched alternative forward from `decode-instruction-at`, the
 same way a word-encoded machine's own `word-alternatives`-based decode
 already tells an inline value from an escaped extra-word marker apart, and
 the disassembler renders that alternative's own syntax instead of always the
-first. A byte-encoded machine's hole-selected sub-opcode ([Instructions,
-"hole-selected
-sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
+first. A byte-encoded machine's sub-opcode selector — a hole-selected
+`(variant (choice m) (sub s))` ([Instructions, "hole-selected
+sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode)),
+or a `(sub-opcode ...)` table naming several holes at once (["multi-hole
+sub-opcode
+selection"](instructions.md#sub-opcode--multi-hole-sub-opcode-selection)) —
 carries the same kind of record: `decode-instruction-at` reads the matched
-descriptor's own alternative back off the sub-opcode cell, so a hole with
-one of these selectors renders its real syntax there too, not only on a
-word-encoded machine. A hole with *neither* kind of selector still carries
+descriptor's own alternative back off the sub-opcode cell, at every hole the
+selector governs, so each such hole renders its real syntax there too, not
+only on a word-encoded machine. A hole with *neither* kind of selector still carries
 no record at all (that only ever existed at assembly time, as
 `try-match-operand-mode`'s `choices` return value), so it falls back to
 rendering a `one-of`'s first alternative, a known, documented limitation

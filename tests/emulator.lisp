@@ -57,6 +57,32 @@
     (immediate (opcode #xB0 :sub 0) (operand :mode) (semantics (set! x operand)))
     (absolute (opcode #xB0 :sub 1) (operand :mode) (semantics (set! x (mref machine 'ram operand))))))
 
+;; Multi-hole sub-opcode table (#128): two ONE-OF holes jointly select the
+;; sub-opcode cell -- proves STEP-MACHINE runs the right combination's own
+;; semantics, not just that decode picks the right descriptor (SUBOP above
+;; already covers the single-hole/whole-mode case).
+(defmode emu-oo-reg expr)
+(defmode emu-oo-ind "[" expr "]")
+(defmode emu-oo-two (one-of emu-oo-reg emu-oo-ind) "," (one-of emu-oo-reg emu-oo-ind))
+
+(definstruction emu-test-machine subtab
+  (modes emu-oo-two)
+  (encoding (opcode #xB1)
+            (operand dst :width 1)
+            (operand src :width 1)
+            (sub-opcode
+              (variant (choice emu-oo-reg emu-oo-reg) (sub 0))
+              (variant (choice emu-oo-reg emu-oo-ind) (sub 1))
+              (variant (choice emu-oo-ind emu-oo-reg) (sub 2))
+              (variant (choice emu-oo-ind emu-oo-ind) (sub 3))))
+  (semantics
+    (let ((s (choice-case src
+               (emu-oo-reg src)
+               (emu-oo-ind (mref machine 'ram src)))))
+      (choice-case dst
+        (emu-oo-reg (setf (mref machine 'ram dst) s))
+        (emu-oo-ind (setf (mref machine 'ram (mref machine 'ram dst)) s))))))
+
 ;; Multi-mode (mode.lisp, #18): LDA's IMMEDIATE and ZERO-PAGE variants share
 ;; one mnemonic but distinct opcodes/semantics -- proves opcode decode
 ;; (FIND-INSTRUCTION-BY-OPCODE) stays 1:1 per variant once a mnemonic
@@ -184,6 +210,20 @@ subop $2000" :machine 'emu-test-machine)))
     (let ((descriptor (step-machine m)))                       ; subop $2000 -- ABSOLUTE
       (fiveam:is (eq (find-instruction 'emu-test-machine 'subop :mode 'absolute) descriptor))
       (fiveam:is (= 99 (sref m 'x))))))
+
+(fiveam:test step-machine-sub-opcode-table-runs-each-combination-own-semantics
+  ;; Target addresses (100/110/120) are chosen well clear of the program
+  ;; itself, which occupies low addresses in this von Neumann RAM -- SUBOP
+  ;; above avoids the same trap by using a far ABSOLUTE address ($2000).
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "subtab 100, 10
+subtab 110, [120]" :machine 'emu-test-machine)))
+    (load-program m a)
+    (setf (mref m 'ram 120) 42)
+    (step-machine m)                                           ; subtab 100, 10 -- reg,reg
+    (fiveam:is (= 10 (mref m 'ram 100)))
+    (step-machine m)                                           ; subtab 110, [120] -- reg,ind
+    (fiveam:is (= 42 (mref m 'ram 110)))))
 
 (fiveam:test step-machine-branch-not-taken-falls-through
   (let ((m (make-machine 'emu-test-machine))

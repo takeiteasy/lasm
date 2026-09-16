@@ -1983,3 +1983,306 @@ signd #-100" :machine 'instr-test-machine)
 ;; ELEMENTS! already rejects this at DEFMODE time (tests/mode.lisp), so it
 ;; never reaches DEFINSTRUCTION at all; nothing further to test here beyond
 ;; confirming SI-INSTR-ONE itself (a plain, non-nested ONE-OF) works, above.
+
+;;; Multi-hole sub-opcode selection, a (sub-opcode ...) table (#128, the
+;;; follow-up #126 filed for itself) -- several ONE-OF holes jointly
+;;; selecting the sub-opcode cell, rather than #126's single carrying hole.
+;;; Reuses OO-INSTR-TWO (defined above, #18/#104-shaped: two ONE-OF holes,
+;;; each (one-of oo-instr-reg oo-instr-ind)) so the table has a genuine 2x2
+;;; cross product to cover.
+
+(definstruction instr-test-machine sctab
+  (modes oo-instr-two)
+  (encoding (opcode #xD3)
+            (operand dst :width 1)
+            (operand src :width 1)
+            (sub-opcode
+              (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+              (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+              (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+              (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+  (semantics
+    (let ((s (choice-case src
+               (oo-instr-reg src)
+               (oo-instr-ind (mref machine 'ram src)))))
+      (choice-case dst
+        (oo-instr-reg (setf (mref machine 'ram dst) s))
+        (oo-instr-ind (setf (mref machine 'ram (mref machine 'ram dst)) s))))))
+
+(fiveam:test sub-opcode-table-expands-one-descriptor-per-combination
+  (let ((variants (find-instruction-variants 'instr-test-machine 'sctab)))
+    (fiveam:is (= 4 (length variants))))
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xD3))
+         (rr (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ri (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (ir (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (ii (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (= 4 (length descs)))
+    (fiveam:is (equal '(oo-instr-reg oo-instr-reg) (instruction-descriptor-sub-choices rr)))
+    (fiveam:is (equal '(oo-instr-reg oo-instr-ind) (instruction-descriptor-sub-choices ri)))
+    (fiveam:is (equal '(oo-instr-ind oo-instr-reg) (instruction-descriptor-sub-choices ir)))
+    (fiveam:is (equal '(oo-instr-ind oo-instr-ind) (instruction-descriptor-sub-choices ii)))))
+
+(fiveam:test sub-opcode-table-encode-emits-each-combinations-own-sub
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xD3))
+         (rr (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ri (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (ir (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (ii (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal (list #xD3 0 5 10) (encode-instruction rr '(5 10))))
+    (fiveam:is (equal (list #xD3 1 5 10) (encode-instruction ri '(5 10))))
+    (fiveam:is (equal (list #xD3 2 5 10) (encode-instruction ir '(5 10))))
+    (fiveam:is (equal (list #xD3 3 5 10) (encode-instruction ii '(5 10))))))
+
+(fiveam:test sub-opcode-table-assembler-picks-matching-combination
+  (fiveam:is (equalp #(#xD3 0 5 10) (assembly-cells (assemble "sctab 5, 10" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 1 5 10) (assembly-cells (assemble "sctab 5, [10]" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 2 5 10) (assembly-cells (assemble "sctab [5], 10" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 3 5 10) (assembly-cells (assemble "sctab [5], [10]" :machine 'instr-test-machine)))))
+
+(fiveam:test sub-opcode-table-decode-reports-both-holes-choices
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (vector #xD3 1 5 10)) 0 'instr-test-machine)
+    (declare (ignore values size))
+    (fiveam:is (string= "SCTAB" (instruction-descriptor-name descriptor)))
+    (fiveam:is (eq 'oo-instr-reg (%matched-choice-name choices 0)))
+    (fiveam:is (eq 'oo-instr-ind (%matched-choice-name choices 1)))))
+
+(fiveam:test sub-opcode-table-choice-case-dispatches-on-both-holes
+  (let* ((m (make-machine 'instr-test-machine))
+         (descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xD3))
+         (ri (find 1 descs :key #'instruction-descriptor-sub-opcode)))
+    (setf (mref m 'ram 10) 77)
+    (execute-instruction ri m '(5 10) (instruction-descriptor-sub-choices ri))
+    (fiveam:is (= 77 (mref m 'ram 5)))))
+
+(fiveam:test sub-opcode-table-round-trip-disassembles-matched-alternative-at-both-holes
+  (let ((lines (disassemble-assembly (assemble "sctab 5, [10]" :machine 'instr-test-machine)
+                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "sctab $5,[$A]" (disassembly-line-text (first lines))))))
+
+;; Mixed plain/ONE-OF holes: arity is the mode's ONE-OF hole count, not its
+;; total hole count, and HOLE-INDICES must map back to the right positions --
+;; the middle and last holes here, skipping the first (plain EXPR) one.
+(defmode oo-instr-mixed-three expr "," (one-of oo-instr-reg oo-instr-ind) "," (one-of oo-instr-reg oo-instr-ind))
+
+(definstruction instr-test-machine scmix
+  (modes oo-instr-mixed-three)
+  (encoding (opcode #xD4)
+            (operand :width 1)
+            (operand :width 1)
+            (operand :width 1)
+            (sub-opcode
+              (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+              (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+              (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+              (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+  (semantics nil))
+
+(fiveam:test sub-opcode-table-mixed-plain-and-one-of-holes-populates-right-indices
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xD4))
+         (rr (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (ri (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (ir (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (ii (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (= 4 (length descs)))
+    (fiveam:is (equal '(nil oo-instr-reg oo-instr-reg) (instruction-descriptor-sub-choices rr)))
+    (fiveam:is (equal '(nil oo-instr-reg oo-instr-ind) (instruction-descriptor-sub-choices ri)))
+    (fiveam:is (equal '(nil oo-instr-ind oo-instr-reg) (instruction-descriptor-sub-choices ir)))
+    (fiveam:is (equal '(nil oo-instr-ind oo-instr-ind) (instruction-descriptor-sub-choices ii)))))
+
+;; Per-hole :SIGNED (#124/#127's byte half) on TWO holes at once -- #128
+;; lifts %CHECK-BYTE-ONE-OF-SIGNED's one-hole cap alongside the sub-opcode
+;; one, since per-hole :SIGNED uses the same selector as its own decode-time
+;; discriminator.
+(defmode sit-pos-a expr)
+(defmode sit-neg-a "#" expr :signed t)
+(defmode sit-pos-b expr)
+(defmode sit-neg-b "[" expr "]" :signed t)
+(defmode sit-two (one-of sit-pos-a sit-neg-a) "," (one-of sit-pos-b sit-neg-b))
+
+(definstruction instr-test-machine sigtab
+  (modes sit-two)
+  (encoding (opcode #xD5)
+            (operand v1 :width 1)
+            (operand v2 :width 1)
+            (sub-opcode
+              (variant (choice sit-pos-a sit-pos-b) (sub 0))
+              (variant (choice sit-pos-a sit-neg-b) (sub 1))
+              (variant (choice sit-neg-a sit-pos-b) (sub 2))
+              (variant (choice sit-neg-a sit-neg-b) (sub 3))))
+  (semantics (set! a v1) (set! x v2)))
+
+(fiveam:test sub-opcode-table-signed-disagreement-on-two-holes-is-legal
+  (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #xD5))
+         (pp (find 0 descs :key #'instruction-descriptor-sub-opcode))
+         (pn (find 1 descs :key #'instruction-descriptor-sub-opcode))
+         (np (find 2 descs :key #'instruction-descriptor-sub-opcode))
+         (nn (find 3 descs :key #'instruction-descriptor-sub-opcode)))
+    (fiveam:is (equal '(nil nil) (instruction-descriptor-operand-signedness pp)))
+    (fiveam:is (equal '(nil t) (instruction-descriptor-operand-signedness pn)))
+    (fiveam:is (equal '(t nil) (instruction-descriptor-operand-signedness np)))
+    (fiveam:is (equal '(t t) (instruction-descriptor-operand-signedness nn)))))
+
+(fiveam:test sub-opcode-table-signed-round-trips-negative-values-at-both-holes
+  (fiveam:is (equalp #(#xD5 3 156 200) (assembly-cells (assemble "sigtab #-100, [-56]" :machine 'instr-test-machine))))
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "sigtab #-100, [-56]" :machine 'instr-test-machine)))
+                              0 'instr-test-machine)
+    (declare (ignore size choices))
+    (fiveam:is (string= "SIGTAB" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(-100 -56) values))))
+
+;; Missing combination -- the table's own generalization of #126's "every
+;; alternative claimed" rule to "every combination claimed".
+(fiveam:test sub-opcode-table-missing-combination-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad1
+             (modes oo-instr-two)
+             (encoding (opcode #xE0)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 2))))
+             (semantics nil)))))
+
+;; Duplicated combination -- two entries claiming the same (choice ...) can
+;; never be told apart either.
+(fiveam:test sub-opcode-table-duplicated-combination-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad2
+             (modes oo-instr-two)
+             (encoding (opcode #xE1)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 1))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 2))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 3))
+                         (variant (choice oo-instr-ind oo-instr-ind) (sub 4))))
+             (semantics nil)))))
+
+;; (choice ...) arity must equal the mode's participating ONE-OF hole count.
+(fiveam:test sub-opcode-table-wrong-arity-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad3
+             (modes oo-instr-two)
+             (encoding (opcode #xE2)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg) (sub 0))))
+             (semantics nil)))))
+
+;; A (choice ...) name that isn't one of its own hole's ONE-OF alternatives.
+(fiveam:test sub-opcode-table-unknown-alternative-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad4
+             (modes oo-instr-two)
+             (encoding (opcode #xE3)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice immediate oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+                         (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+             (semantics nil)))))
+
+;; Two combinations claiming the same sub value.
+(fiveam:test sub-opcode-table-duplicate-sub-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad5
+             (modes oo-instr-two)
+             (encoding (opcode #xE4)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 0))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+                         (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+             (semantics nil)))))
+
+;; The cross product itself is too large for the machine's code cell width
+;; to distinguish, regardless of how many entries the table actually lists.
+(defmachine subtab-narrow-machine
+  (register a :width 8)
+  (memory ram :width 2 :addr-width 8))
+
+(defmode nw-a1 expr)
+(defmode nw-a2 "[" expr "]")
+(defmode nw-a3 "(" expr ")")
+(defmode nw-two (one-of nw-a1 nw-a2 nw-a3) "," (one-of nw-a1 nw-a2 nw-a3))
+
+(fiveam:test sub-opcode-table-product-too-wide-signals-error
+  (fiveam:signals error
+    (eval '(definstruction subtab-narrow-machine sctbad6
+             (modes nw-two)
+             (encoding (opcode 0)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice nw-a1 nw-a1) (sub 0))))
+             (semantics nil)))))
+
+;; A (sub-opcode ...) table and a per-hole (variant (choice m) (sub s))
+;; selector on another hole would both be writing the same cell.
+(fiveam:test sub-opcode-table-conflicts-with-per-hole-selector-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad7
+             (modes oo-instr-two)
+             (encoding (opcode #xE5)
+                       (operand dst :width 1
+                         (variant (choice oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-ind) (sub 1)))
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+                         (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+             (semantics nil)))))
+
+;; A (sub-opcode ...) table and an explicit (opcode n :sub s) would also both
+;; be writing the same cell.
+(fiveam:test sub-opcode-table-conflicts-with-explicit-sub-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad8
+             (modes oo-instr-two)
+             (encoding (opcode #xE6 :sub 9)
+                       (operand dst :width 1)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice oo-instr-reg oo-instr-reg) (sub 0))
+                         (variant (choice oo-instr-reg oo-instr-ind) (sub 1))
+                         (variant (choice oo-instr-ind oo-instr-reg) (sub 2))
+                         (variant (choice oo-instr-ind oo-instr-ind) (sub 3))))
+             (semantics nil)))))
+
+;; (sub-opcode ...) is a byte-machine-only mechanism, same as a hole-selected
+;; single-hole selector.
+(fiveam:test sub-opcode-table-on-word-machine-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine sctwordbad
+             (modes wc-two)
+             (encoding (opcode 20)
+                       (operand v)
+                       (sub-opcode
+                         (variant (choice wc-reg wc-reg) (sub 0))))
+             (semantics (set! a v))))))
+
+;; A mode with no ONE-OF hole at all has nothing for a table to select
+;; between.
+(fiveam:test sub-opcode-table-no-one-of-hole-signals-error
+  (fiveam:signals error
+    (eval '(definstruction instr-test-machine sctbad9
+             (modes absolute)
+             (encoding (opcode #xE7)
+                       (operand src :width 1)
+                       (sub-opcode
+                         (variant (choice absolute) (sub 0))))
+             (semantics nil)))))
