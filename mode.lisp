@@ -39,8 +39,8 @@
                ; Implies SIGNEDP (below); a RELATIVE mode is always signed,
                ; since a branch offset can go either direction.
     signedp    ; T if this mode's operand is a signed quantity (#30, split off
-               ; RELATIVE): the emulator sign-extends the fetched operand
-               ; (emulator.lisp) before handing it to semantics, and the
+               ; RELATIVE): the decoder sign-extends the fetched operand
+               ; (decoder.lisp) before handing it to semantics, and the
                ; assembler's mode selector range-checks candidate values
                ; against the signed range rather than the unsigned one
                ; (assembler.lisp's %CHOOSE-VARIANT).

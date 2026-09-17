@@ -152,31 +152,51 @@ pass :MEMORY explicitly" (machine-descriptor-name descriptor)
                   (mapcar #'storage-element-name mem-elements)))
           (t (storage-element-name (first mem-elements)))))))
 
+(defun %compute-descriptor-cell-width (descriptor)
+  "DESCRIPTOR's code cell width in bits (#53) when no MEMORY-NAME disambiguates
+-- the sole memory element's, or, when DESCRIPTOR declares several, their
+shared width if every one agrees. The uncached body %DESCRIPTOR-CELL-WIDTH
+memoizes below."
+  (let ((mem-elements (%descriptor-memory-elements descriptor)))
+    (cond
+      ((null mem-elements)
+       (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+      ((null (rest mem-elements))
+       (storage-element-cell-width (first mem-elements)))
+      (t (let ((widths (remove-duplicates (mapcar #'storage-element-cell-width mem-elements))))
+           (if (null (rest widths))
+               (first widths)
+               (error "Machine ~S: more than one memory element declared with ~
+different cell widths (~{~S~^, ~}) -- pass :MEMORY explicitly"
+                      (machine-descriptor-name descriptor)
+                      (mapcar (lambda (e) (list (storage-element-name e)
+                                                 (storage-element-cell-width e)))
+                              mem-elements))))))))
+
 (defun %descriptor-cell-width (descriptor &optional memory-name)
   "DESCRIPTOR's code cell width in bits (#53): MEMORY-NAME's own CELL-WIDTH
-when given, else the sole memory element's. When DESCRIPTOR declares more
-than one memory element and MEMORY-NAME isn't given, this only succeeds if
-every element's cell width agrees -- otherwise the caller must specify which
-memory element it means, same as %DESCRIPTOR-RESOLVE-MEMORY's own ambiguity
-error. See %DESCRIPTOR-RESOLVE-MEMORY for why this takes a descriptor object
-rather than a machine name."
+when given, else the sole memory element's (or their shared width, when
+DESCRIPTOR declares several that agree) -- otherwise the caller must specify
+which memory element it means, same as %DESCRIPTOR-RESOLVE-MEMORY's own
+ambiguity error. See %DESCRIPTOR-RESOLVE-MEMORY for why this takes a
+descriptor object rather than a machine name.
+
+#63: the no-MEMORY-NAME case is memoized on DESCRIPTOR's own
+CELL-WIDTH-CACHE slot (storage.lisp) -- %COMPUTE-DESCRIPTOR-CELL-WIDTH
+otherwise reconses ELEMENTS' memory sublist and calls REMOVE-DUPLICATES on
+every call, and this is read once per ENCODE-INSTRUCTION plus several times
+per assembler relaxation pass. Lazy, not computed at BUILD-MACHINE-
+DESCRIPTOR time, so a machine with genuinely ambiguous cell widths still
+signals its error at first use rather than at DEFMACHINE time. The
+explicit-MEMORY-NAME path is a single DESCRIPTOR-ELEMENT hash lookup
+already and stays uncached."
   (if memory-name
       (storage-element-cell-width (descriptor-element descriptor memory-name))
-      (let ((mem-elements (%descriptor-memory-elements descriptor)))
-        (cond
-          ((null mem-elements)
-           (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
-          ((null (rest mem-elements))
-           (storage-element-cell-width (first mem-elements)))
-          (t (let ((widths (remove-duplicates (mapcar #'storage-element-cell-width mem-elements))))
-               (if (null (rest widths))
-                   (first widths)
-                   (error "Machine ~S: more than one memory element declared with ~
-different cell widths (~{~S~^, ~}) -- pass :MEMORY explicitly"
-                          (machine-descriptor-name descriptor)
-                          (mapcar (lambda (e) (list (storage-element-name e)
-                                                     (storage-element-cell-width e)))
-                                  mem-elements)))))))))
+      (let ((cached (machine-descriptor-cell-width-cache descriptor)))
+        (if (eq cached :unset)
+            (setf (machine-descriptor-cell-width-cache descriptor)
+                  (%compute-descriptor-cell-width descriptor))
+            cached))))
 
 (defun %resolve-memory (machine-name memory)
   "MEMORY if given, else the sole :MEMORY element declared on MACHINE-NAME.

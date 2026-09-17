@@ -699,7 +699,10 @@ reads differently:
 `NAME` binds as before; `FIELD-NAME` names one of the machine's declared
 `instruction-word` fields instead of giving a byte width. With no
 `(variant ...)` forms at all, the field just holds the value directly
-(biased by 0) over its own full unsigned range — the word-encoded
+(biased by 0) over its own full range — unsigned, `[0, 2^width-1]`, unless
+the mode itself declares `:signed t` (see ["Signed word
+fields"](#signed-word-fields-63) below), in which case it's the field's
+signed bound instead, `[-2^(width-1), 2^(width-1)-1]` — the word-encoded
 equivalent of `(operand :mode)`'s implicit default. With one or more:
 
 - `(variant (range LO HI) inline [:bias N])` — a value in `LO..HI` (before
@@ -746,9 +749,46 @@ Both a variant's biased inline range and any `:else` escape value must fit
 `FIELD-NAME`'s declared bit width, and an escape value may never fall inside
 an inline variant's biased range — that ambiguity would leave a decoder
 unable to tell a genuine inline value from the escape marker apart reading
-the same raw bits. Both are checked at `definstruction`'s macroexpansion
-time, not left as an encode- or decode-time surprise. The `opcode` value
-itself is checked the same way, against the `opcode` field's own width.
+the same raw bits. Two inline variants at one field (reachable via `(choice
+mode)`, below, or #63's plain value-selected signed case) may not overlap
+either, in the same raw-bit-pattern sense. All three are checked at
+`definstruction`'s macroexpansion time, not left as an encode- or decode-time
+surprise. The `opcode` value itself is checked the same way, against the
+`opcode` field's own width.
+
+### Signed word fields (#63)
+
+A word-encoded hole's signedness comes from its mode, exactly the way its
+PC-relativeness already does (`:relative` implies `:signed`, [Addressing
+modes](modes.md#signed-operands)) — `wsimm` below is `wimm` with `:signed t`
+added, nothing else:
+
+```lisp
+(defmode wsimm "#" expr :signed t)
+
+(definstruction wordfoo setc
+  (modes wsimm)
+  (encoding
+    (opcode 5)
+    (operand value :field src
+      (variant (range -16 15) inline)
+      (variant :else (extra-word :escape #x200))))
+  (semantics (set! a (wrap-value value 16))))
+```
+
+A `:signed t` hole's plain value-selected variant (no `(choice m)` of its
+own) packs its declared range two's-complement instead of unsigned, and
+decode sign-extends the raw bits back — both the inline path and, when a
+value escapes, the fetched extra word too. Before this, a word-encoded
+field's signedness came only from a `(choice m)`-selected variant's own mode
+(see ["CHOICE-selected word
+fields"](#choice-selected-word-fields-104) below) or from `:relative`; a
+plain `:signed t` mode had no effect on a value-selected field at all, and
+its negative range was rejected outright as failing the field's *unsigned*
+bound — the only way to encode a negative word-field value was `:bias`
+(above), which cannot represent one exceeding its inline range at all. See
+[`examples/word.lisp`](../examples/word.lisp)'s `setc` for this run end to
+end, both inline and escaped.
 
 ### PC-relative operands (#62)
 

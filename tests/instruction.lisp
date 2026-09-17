@@ -680,6 +680,154 @@
                          (variant :else (extra-word :escape 30))))
              (semantics nil)))))
 
+;; #63: the value-selected counterpart of CHOICE-OVERLAPPING-INLINE-RANGES-
+;; SIGNAL-ERROR below -- two ordinary (RANGE lo hi) variants (no (CHOICE m)
+;; selector at all) whose raw footprints overlap purely through their own
+;; :BIAS, unreachable before #104 gave a field room for more than one
+;; value-selected :INLINE variant. The check itself (%CHECK-WORD-VARIANTS'
+;; pairwise raw-chunk overlap loop) already covers this -- it does not
+;; distinguish CHOICE-selected from value-selected variants -- this test
+;; only closes the ticket-#63 gap of having no coverage for this exact shape.
+(fiveam:test word-variant-value-selected-overlapping-inline-ranges-signal-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 3)
+                       (operand value :field src
+                         (variant (range 0 7) inline :bias 0)
+                         (variant (range 0 7) inline :bias 4)))
+             (semantics nil)))))
+
+;;; :SIGNED on a value-selected word field (#63) -- before this, a
+;;; word-encoded hole's signedness came only from a (CHOICE m) variant's own
+;;; mode (#127) or from a :RELATIVE hole (#62); a plain :SIGNED T mode had no
+;;; effect on a value-selected variant at all, and its declared negative
+;;; range was rejected outright as failing the field's unsigned bound.
+;;; SIGNED-WORD-TEST-MACHINE's SRC field is 5 bits (0..31 unsigned,
+;;; -16..15 signed) -- wide enough to leave room, inside the same field,
+;;; for both an inline range narrower than the full signed span and an
+;;; escape marker distinct from it.
+
+(defmachine signed-word-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 11)
+    (field src 5)))
+
+(defmode word-signed-imm "#" expr :signed t)
+
+(definstruction signed-word-test-machine signset
+  (modes word-signed-imm)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (range -8 7) inline)
+      (variant :else (extra-word :escape 16))))
+  (semantics (set! a operand)))
+
+(fiveam:test signed-word-field-value-selected-inline-range-accepted
+  ;; Before #63 this DEFINSTRUCTION itself would have signalled an error --
+  ;; a negative-LO range validated against the field's *unsigned* bound.
+  (let ((variants (find-instruction-variants 'signed-word-test-machine "SIGNSET")))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (every (lambda (d) (word-field-choice-signedp (first (instruction-descriptor-word-fields d))))
+                       variants))))
+
+(fiveam:test signed-word-field-value-selected-implicit-default-uses-signed-bound
+  ;; No (variant ...) forms at all on a :SIGNED T hole -- the implicit
+  ;; default range must be the field's *signed* bound (-16..15), mirroring
+  ;; the existing :RELATIVE behavior (#62), not [0, 31].
+  (eval '(definstruction signed-word-test-machine signset2
+           (modes word-signed-imm)
+           (encoding (opcode 2) (operand value :field src))
+           (semantics (set! a value))))
+  (let ((d (find-instruction 'signed-word-test-machine 'signset2)))
+    (fiveam:is (word-field-choice-signedp (first (instruction-descriptor-word-fields d))))
+    (fiveam:is (equal '(-16 . 15) (word-field-choice-range (first (instruction-descriptor-word-fields d)))))))
+
+(fiveam:test signed-word-field-inline-encode-decode-round-trips-a-negative-value
+  (let* ((cells (assembly-cells (assemble "signset #-5" :machine 'signed-word-test-machine))))
+    (fiveam:is (= 2 (length cells))) ; fits inline, no extra word
+    (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'signed-word-test-machine)
+      (fiveam:is (string= "SIGNSET" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(-5) values)))))
+
+(fiveam:test signed-word-field-escapes-to-extra-word-and-decodes-signed
+  ;; The other half of ticket #63's item 2: a signed value whose magnitude
+  ;; exceeds the inline range's bias must still be representable, via the
+  ;; existing :ELSE escape -- and the escaped extra word itself must decode
+  ;; back signed (decoder.lisp's %TRY-DECODE-WORD-CANDIDATE), not just the
+  ;; inline path.
+  (let* ((cells (assembly-cells (assemble "signset #-5000" :machine 'signed-word-test-machine))))
+    (fiveam:is (= 4 (length cells))) ; instruction word + one extra word
+    (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'signed-word-test-machine)
+      (fiveam:is (string= "SIGNSET" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(-5000) values)))))
+
+(fiveam:test signed-word-field-executes-negative-inline-and-escaped-values
+  (dolist (case '(("signset #-5" . -5) ("signset #-5000" . -5000)))
+    (destructuring-bind (source . expected) case
+      (let ((m (make-machine 'signed-word-test-machine)))
+        (load-program m (assemble source :machine 'signed-word-test-machine))
+        (multiple-value-bind (reason steps) (run m :max-steps 1)
+          (declare (ignore steps))
+          (fiveam:is (eq :max-steps reason))
+          (fiveam:is (= (wrap-value expected 16) (sref m 'a))))))))
+
+;; #63: disjointness between two co-tenant descriptors' value-selected
+;; fields must be checked in raw (two's-complement-wrapped) bit-pattern
+;; space, chunk-against-chunk, not naively over declared value-space ranges
+;; -- exactly %CHECK-WORD-VARIANTS' own overlap check already does for two
+;; variants of *one* field (#127), now exercised across two *different*
+;; mnemonics' fields sharing one opcode (%CHECK-OPCODE-DECODABLE!'s
+;; %HOLE-DISJOINT-P/%WORD-FIELD-CHOICE-VALUES). SD-NEG's signed range
+;; -5..5 splits into raw chunks (0..5) and (27..31) in a 5-bit field; SD-POS's
+;; unsigned 6..26 sits entirely in the gap between them.
+
+(defmachine signed-disjoint-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 11)
+    (field src 5)))
+
+(defmode sd-imm "#" expr)
+(defmode sd-signed-imm "#" expr :signed t)
+
+(definstruction signed-disjoint-test-machine sdpos
+  (modes sd-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range 6 26) inline)))
+  (semantics (set! a v)))
+
+(definstruction signed-disjoint-test-machine sdneg
+  (modes sd-signed-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range -5 5) inline)))
+  (semantics (set! b v)))
+
+(fiveam:test signed-word-field-two-chunk-raw-footprint-disjoint-from-sibling-mnemonic
+  (fiveam:is (= 2 (length (find-instruction-descriptors-by-opcode 'signed-disjoint-test-machine 1))))
+  (let ((pos (assembly-cells (assemble "sdpos #20" :machine 'signed-disjoint-test-machine)))
+        (neg (assembly-cells (assemble "sdneg #-3" :machine 'signed-disjoint-test-machine))))
+    (fiveam:is (string= "SDPOS" (instruction-descriptor-name
+                                  (decode-instruction-at (vector-cell-reader pos) 0 'signed-disjoint-test-machine))))
+    (fiveam:is (string= "SDNEG" (instruction-descriptor-name
+                                  (decode-instruction-at (vector-cell-reader neg) 0 'signed-disjoint-test-machine))))))
+
+(fiveam:test signed-word-field-two-chunk-raw-footprint-collision-signals-error
+  ;; SDBAD's 20..31 range overlaps SDNEG's high (negative-wrapped) chunk
+  ;; 27..31 -- only detectable if the two-chunk split is honored rather than
+  ;; SDNEG's declared value-space range (-5..5) being compared directly
+  ;; against SDBAD's (20..31), which never numerically overlap.
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction signed-disjoint-test-machine sdbad
+             (modes sd-imm)
+             (encoding (opcode 1) (operand v :field src (variant (range 20 31) inline)))
+             (semantics (set! a v))))))
+
 ;;; CHOICE-selected word fields (#104) -- syntax-, not value-, selected
 ;;; encoding and unconditional extra words, keyed by which ONE-OF
 ;;; alternative an operand hole actually matched (mode.lisp, #103's CHOICES,

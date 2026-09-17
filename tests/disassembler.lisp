@@ -278,12 +278,28 @@ hlt" :machine 'disasm-word-machine)))
 (fiveam:test decode-word-machine-never-sign-extends
   ;; Field A's high bit is set by an inline value near its top (30, biased to
   ;; 63) -- if this were wrongly sign-extended it would decode negative.
+  ;; DISASM-RR (the mode SET declares) has no :SIGNED of its own, so this
+  ;; stays true after #63 exactly as before it -- #63 only makes a
+  ;; *:SIGNED T* hole's value-selected field sign-extend, never an
+  ;; ungoverned one.
   (let ((a (assemble "set 0,30" :machine 'disasm-word-machine)))
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'disasm-word-machine)
       (declare (ignore size))
       (fiveam:is (string= "SET" (instruction-descriptor-name descriptor)))
       (fiveam:is (equal (list 0 30) values)))))
+
+;; #63: a :SIGNED T word-encoded hole's value-selected field, by contrast,
+;; must decode sign-extended -- SIGNSET (tests/instruction.lisp,
+;; SIGNED-WORD-TEST-MACHINE) is the positive case DECODE-WORD-MACHINE-NEVER-
+;; SIGN-EXTENDS above is deliberately not.
+(fiveam:test decode-signed-word-field-sign-extends
+  (let ((a (assemble "signset #-5" :machine 'signed-word-test-machine)))
+    (multiple-value-bind (descriptor values size)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'signed-word-test-machine)
+      (declare (ignore size))
+      (fiveam:is (string= "SIGNSET" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal (list -5) values)))))
 
 ;;; Rendering
 

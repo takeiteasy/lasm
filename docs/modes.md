@@ -299,7 +299,11 @@ The discriminator is scheme-specific:
   `(choice m)`-selected (see [Instructions, "CHOICE-selected word
   fields"](instructions.md#choice-selected-word-fields)) — a plain
   value-selected fallback variant (no `(choice ...)` of its own) has no
-  alternative of its own to read `:signed` off.
+  alternative of its own to read `:signed` off. This restriction is only
+  about a *disagreeing* `one-of` hole: a word-encoded hole with no `one-of`
+  at all, or whose alternatives *agree* on `:signed`, needs no discriminator
+  — see [Instructions, "Signed word
+  fields"](instructions.md#signed-word-fields-63) for that plain case.
 
 ```lisp
 (defmode oo-uval expr)
@@ -471,6 +475,13 @@ unsigned one. This affects two things:
   signed byte and the selector moves on to a wider candidate instead of
   wrapping it (see [Assembler, "Choosing a
   mode"](assembler.md#choosing-a-mode)).
+
+On a **word-encoded** machine (#63), a plain value-selected field (no
+`(choice m)` of its own — see [Per-hole `:signed`](#per-hole-signed) above
+for the `one-of` case) packs and decodes the same way: two's-complement
+instead of unsigned, sign-extended back on decode, both for a value that
+packs inline and one that escapes to its own extra word — see [Instructions,
+"Signed word fields"](instructions.md#signed-word-fields-63).
 
 `:relative` (below) **implies** `:signed` — a branch offset can go either
 direction — but the two attributes are otherwise independent: a signed,

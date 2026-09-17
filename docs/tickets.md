@@ -88,8 +88,8 @@ between them or on the chain above):
 
 | Ticket | Follows up on |
 |---|---|
-| #63 word-encoding polish (extra-word width, signed gap, memoization, overlap check) | #20 |
 | #64 non-uniform instruction-word layouts | #20, concrete case from #54 |
+| #135 per-field extra-word width on a word-encoded machine | #20, split off #63 |
 | #65 `.cell`/`.dat` directive | #53 |
 | #66 `:endian` option | #53 |
 | #67 `lo`/`hi` operators vs. cell width | #53 |
@@ -100,6 +100,13 @@ between them or on the chain above):
 | #114 architecture → CPU family → CPU model tiering | independent (mirrors old rpg/ANIMA-16 tiering) |
 | #134 `:strict` has no effect on a word-encoded machine's non-relative holes | #20, noted while implementing #62 |
 | #116 per-hole ambiguity warning for ONE-OF | #74, #103; neighbors #115/#123/#124 but not blocked by them |
+
+#63 (word-encoding polish: extra-word width, signed gap, memoization,
+overlap check) is now closed -- its signed gap, memoization, and overlap
+check landed together (the overlap check turned out already covered by
+#104/#127, only lacking a regression test); its extra-word-width item split
+off to #135 above, being by far the largest of the four and needing its own
+syntax design.
 
 ## Adding to this page
 

@@ -829,12 +829,14 @@ hlt" :machine 'word-test-machine)))
     (fiveam:is (= 4 (sref m 'pc)))))    ; instruction word + one extra word
 
 (fiveam:test step-machine-word-encoded-negative-inline-round-trip
-  ;; Exercises the :BIAS mechanism's actual reason for existing: -1 packs
-  ;; into an unsigned field via bias +1, decoded back to -1, not treated as
-  ;; a sign-extended two's-complement quantity the way a byte-encoded SIGNED
-  ;; mode would (#20 restriction -- word-encoded fields have no SIGNED
-  ;; sign-extension of their own; a negative inline value's sign is carried
-  ;; entirely by its variant's bias).
+  ;; Exercises the :BIAS mechanism's actual reason for existing: WORD-IMM
+  ;; (tests/instruction.lisp) declares no :SIGNED of its own, so -1 packs
+  ;; into an unsigned field via bias +1, decoded back to -1 by subtracting
+  ;; the same bias, not by two's-complement sign extension -- see
+  ;; SIGNED-WORD-FIELD-INLINE-ENCODE-DECODE-ROUND-TRIPS-A-NEGATIVE-VALUE
+  ;; (tests/instruction.lisp) for the :SIGNED T counterpart (#63), where a
+  ;; negative inline value's sign *is* carried by two's-complement
+  ;; sign-extension on decode instead.
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "set #-1
 hlt" :machine 'word-test-machine)))

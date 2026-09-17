@@ -138,7 +138,18 @@
   ;; RUN-FOR-DURATION requires this to be set (it has no other way to convert
   ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
   ;; MACHINE-CYCLES below need no clock speed at all.
-  (clock-speed nil :type (or null (integer 1))))
+  (clock-speed nil :type (or null (integer 1)))
+  ;; #63: lazy memo for %DESCRIPTOR-CELL-WIDTH's no-MEMORY-NAME case
+  ;; (machine.lisp) -- that path rebuilds ELEMENTS' memory sublist and calls
+  ;; REMOVE-DUPLICATES on every call otherwise, and it's read once per
+  ;; ENCODE-INSTRUCTION and several times per assembler relaxation pass. Two
+  ;; states live here: :UNSET (never computed) and any other value (the
+  ;; resolved width, cached). Safe to cache on this struct, unlike
+  ;; INSTRUCTION-DESCRIPTOR-WORD-LAYOUT's deliberate non-caching
+  ;; (instruction.lisp) -- DEFMACHINE rebuilds this whole struct from scratch
+  ;; on redefinition (%BUILD-MACHINE-DESCRIPTOR), so there is no stale
+  ;; instance for this slot to drift against.
+  (cell-width-cache :unset))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))
