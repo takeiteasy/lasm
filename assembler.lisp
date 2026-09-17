@@ -1281,7 +1281,7 @@ contiguous instruction stream could."
     (adjust-array cells n :fill-pointer n :initial-element 0))
   cells)
 
-(defun %encode (sized-entries symbols origin final-address cell-width)
+(defun %encode (sized-entries symbols origin final-address cell-width endian)
   "Evaluate SIZED-ENTRIES (%LAYOUT's tagged output) against the completed
 symbol table SYMBOLS and write each entry's cells at its own address (minus
 ORIGIN) into a cell vector, CELL-WIDTH bits per element (#53), sized to
@@ -1293,7 +1293,11 @@ an operand resolves against the address of the entry it's *in* -- for
 %RELATIVE-OFFSET for a RELATIVE mode, same as gas's \"bne *\" branching to
 itself); for :EMIT (e.g. \".byte 1, *, 3\") each value gets *its own*
 element address, not the directive statement's address, so \".word *, *\"
-emits two different words."
+emits two different words. ENDIAN (#66) governs :EMIT's own
+%ENCODE-VALUE-CELLS call directly -- :INSTRUCTION instead calls
+ENCODE-INSTRUCTION, which resolves the machine's endian itself, so
+.BYTE/.WORD and code always lay cells down the same way without this
+function needing to pass ENDIAN twice."
   (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
     (dolist (entry sized-entries)
       (ecase (first entry)
@@ -1327,7 +1331,7 @@ emits two different words."
            (loop with i = (- address origin)
                  for ast in asts
                  do (dolist (cell (%encode-value-cells
-                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width))
+                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width endian))
                       (setf (aref cells i) cell) (incf i)))))
         (:reserve
          ;; Zero-filled -- %MAKE-GROWABLE-CELLS/%ENSURE-CELLS-LENGTH already
@@ -1392,7 +1396,9 @@ per %MACHINE-CELL-WIDTH (MACHINE's sole memory element, or its shared
 cell-width across several), same rule as LOAD-PROGRAM's own :MEMORY. A
 machine with no memory element at all cannot be assembled -- its code cell
 width is undefined -- and signals the same error %MACHINE-CELL-WIDTH gives
-any other caller in that position. SOURCE (#25), when given, is the
+any other caller in that position. MEMORY's declared :ENDIAN (#66) governs
+.BYTE/.WORD data the same way it governs instruction operands -- resolved
+via %MACHINE-ENDIAN, same rule. SOURCE (#25), when given, is the
 original source text this STATEMENTS list came from -- ASSEMBLE passes its
 own SOURCE argument through automatically; a caller building STATEMENTS by
 hand (e.g. from PARSE directly, or synthesizing them) may pass it too, or
@@ -1408,10 +1414,11 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
     ;; (operand/`.equ` folding, below) and %BIND-SYMBOL!'s alias-collision
     ;; check, for the whole of this assembly.
     (let* ((cell-width (%machine-cell-width machine memory))
+           (endian (%machine-endian machine memory))
            (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine))))
       (multiple-value-bind (symbols sized final-address asm-origin info)
           (%layout (expand-macros statements) machine origin cell-width)
-        (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)
+        (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
                        :cell-width cell-width
                        :origin asm-origin :symbols symbols :symbol-info info
                        :listing (%build-listing sized) :source source)))))

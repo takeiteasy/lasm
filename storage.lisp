@@ -90,7 +90,8 @@
   (names nil :type list)
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
-  (cell-width nil :type (or null (integer 1)))) ; memory, defaults to width
+  (cell-width nil :type (or null (integer 1)))  ; memory, defaults to width
+  (endian nil :type (or null keyword)))         ; memory, :little or :big, #66
 
 ;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
 ;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
@@ -100,9 +101,10 @@
 ;; significant-first) order -- SHIFT is each field's bit offset from the
 ;; word's LSB, derived once here so encode/decode never recompute it.
 ;; WIDTH-CELLS is WIDTH/CELL-WIDTH, checked to be a whole number at parse
-;; time (machine.lisp) since the word is emitted as CELL-WIDTH-wide,
-;; little-endian cells (#53 -- the assembler pipeline is typed to the
-;; target machine's own memory cell width, not fixed at 8 bits).
+;; time (machine.lisp) since the word is emitted as CELL-WIDTH-wide cells
+;; (#53 -- the assembler pipeline is typed to the target machine's own
+;; memory cell width, not fixed at 8 bits), in the machine's own ENDIAN
+;; order (#66).
 ;; #64: NAME is NIL on the default (machine-wide) layout, and a symbol on an
 ;; alternate declared by a (layout NAME (field ...)...) form. ALTERNATES holds
 ;; the machine's other layouts (each its own INSTRUCTION-WORD-LAYOUT, NAME
@@ -117,6 +119,7 @@
   (width nil :type (integer 1))
   (width-cells nil :type (integer 1))
   (cell-width nil :type (integer 1))
+  (endian nil :type (or null keyword)) ; :little or :big, #66
   (fields nil :type list)           ; (name width shift), MSB-first as declared
   (alternates nil :type list))      ; list of INSTRUCTION-WORD-LAYOUT, default only
 
@@ -185,7 +188,10 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; (instruction.lisp) -- DEFMACHINE rebuilds this whole struct from scratch
   ;; on redefinition (%BUILD-MACHINE-DESCRIPTOR), so there is no stale
   ;; instance for this slot to drift against.
-  (cell-width-cache :unset))
+  (cell-width-cache :unset)
+  ;; #66: same memoization rationale as CELL-WIDTH-CACHE above, for
+  ;; %DESCRIPTOR-ENDIAN's no-MEMORY-NAME case.
+  (endian-cache :unset))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))

@@ -283,6 +283,15 @@ descriptor, so it can't drift from the machine descriptor it names."
 rationale as INSTRUCTION-DESCRIPTOR-WORD-LAYOUT."
   (%machine-cell-width (instruction-descriptor-machine descriptor)))
 
+(defun instruction-descriptor-endian (descriptor)
+  "DESCRIPTOR's machine's cell endianness (#66) -- looked up via
+%MACHINE-ENDIAN (machine.lisp), same rationale as
+INSTRUCTION-DESCRIPTOR-CELL-WIDTH. Only used on DESCRIPTOR's cell-encoded
+path (ENCODE-INSTRUCTION below); a word-encoded descriptor's own
+INSTRUCTION-WORD-LAYOUT already carries its own ENDIAN, set once at
+DEFMACHINE time (%FINISH-INSTRUCTION-WORD-LAYOUT, machine.lisp)."
+  (%machine-endian (instruction-descriptor-machine descriptor)))
+
 (defun instruction-descriptor-size (descriptor)
   "Total encoded cells for one use of DESCRIPTOR -- 1 (opcode cell), plus 1
 more for a sub-opcode cell when SUB-OPCODE is non-NIL (#125), plus operand
@@ -520,7 +529,8 @@ sub-opcode-cell, #125) behavior when distinct co-tenants share an opcode."
 ;; A mode's default operand width, when neither the mode itself nor the
 ;; instruction gives one explicitly: the machine's sole memory element's
 ;; address width, rounded up to whole cells of that same element's own
-;; CELL-WIDTH (#53), little-endian on encode. When a machine declares more
+;; CELL-WIDTH (#53), in that element's own endian order on encode (#66).
+;; When a machine declares more
 ;; than one memory element, this is ambiguous and DEFINSTRUCTION requires
 ;; (operand :width n) explicitly instead of guessing which memory element an
 ;; address-shaped operand addresses. Named for what it does now that
@@ -3003,25 +3013,35 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 
 ;;; Encoding / execution
 
-(defun %encode-value-cells (value width cell-width)
-  "Split (already-evaluated integer) VALUE into WIDTH little-endian
-(unsigned-byte CELL-WIDTH) cells, wrapping each with WRAP-VALUE
-(storage.lisp) like every other encoded quantity in this codebase. Shared by
-ENCODE-INSTRUCTION below and the assembler's .BYTE/.WORD directive encoding
-(assembler.lisp, #14), so instruction operands and directive data can't
-drift apart in how they lay cells down."
-  (loop for i below width collect (wrap-value (ash value (* (- cell-width) i)) cell-width)))
+(defun %encode-value-cells (value width cell-width &optional (endian :little))
+  "Split (already-evaluated integer) VALUE into WIDTH (unsigned-byte
+CELL-WIDTH) cells in ENDIAN order (#66: :LITTLE, the default, or :BIG),
+wrapping each with WRAP-VALUE (storage.lisp) like every other encoded
+quantity in this codebase. Shared by ENCODE-INSTRUCTION below and the
+assembler's .BYTE/.WORD directive encoding (assembler.lisp, #14), so
+instruction operands and directive data can't drift apart in how they lay
+cells down. The returned list is always in ascending address order --
+ENDIAN only chooses which cell is the low-order one, never reorders which
+cell goes at which address."
+  (loop for i below width
+        for shift = (if (eq endian :big) (- width 1 i) i)
+        collect (wrap-value (ash value (* (- cell-width) shift)) cell-width)))
 
 (defun %encode-word-instruction (descriptor layout values)
   "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode,
 each of its (field-value ...) WORD-CONSTANTS (#136), and each operand's
 chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES) into one
-LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
-(%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH) followed by each
-:EXTRA-WORD operand's own value, also little-endian, in operand declaration
-order, each at its own WORD-FIELD-CHOICE-EXTRA-CELLS width (#135; formerly
-always LAYOUT's own WIDTH-CELLS)."
-  (let ((word 0) extra-word-values (cell-width (instruction-word-layout-cell-width layout)))
+LAYOUT-WIDTH-bit word by shift, then emit that word in LAYOUT's own ENDIAN
+order (%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH, #66) followed by
+each :EXTRA-WORD operand's own value, also in LAYOUT's endian order, in
+operand declaration order, each at its own WORD-FIELD-CHOICE-EXTRA-CELLS
+width (#135; formerly always LAYOUT's own WIDTH-CELLS). The instruction word
+always precedes its extra words regardless of ENDIAN -- endianness only
+governs cell order *within* one multi-cell value, never field or word
+order."
+  (let ((word 0) extra-word-values
+        (cell-width (instruction-word-layout-cell-width layout))
+        (endian (instruction-word-layout-endian layout)))
     (destructuring-bind (opcode-width opcode-shift)
         (rest (instruction-word-field layout 'opcode))
       (setf word (ash (wrap-value (instruction-descriptor-opcode descriptor) opcode-width) opcode-shift)))
@@ -3039,9 +3059,9 @@ always LAYOUT's own WIDTH-CELLS)."
                 (setf word (logior word (ash (word-field-choice-escape choice)
                                               (word-field-choice-shift choice))))
                 (cl:push (cons value (word-field-choice-extra-cells choice)) extra-word-values))))
-    (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width)
+    (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width endian)
             (loop for (value . extra-cells) in (nreverse extra-word-values)
-                  append (%encode-value-cells value extra-cells cell-width)))))
+                  append (%encode-value-cells value extra-cells cell-width endian)))))
 
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
@@ -3050,27 +3070,30 @@ order -- NIL for a no-operand instruction) into a list of
 (unsigned-byte cell-width) cells, CELL-WIDTH being DESCRIPTOR's machine's own
 code cell width (#53, INSTRUCTION-DESCRIPTOR-CELL-WIDTH). On an ordinary
 cell-encoded machine: the opcode, then, when DESCRIPTOR declares a SUB-OPCODE
-(#125), that sub-opcode as its own cell, then each value's cells little-endian
-in turn, per DESCRIPTOR's OPERAND-WIDTHS. On a word-encoded machine (#20,
+(#125), that sub-opcode as its own cell, then each value's cells in the
+machine's own endian order (#66, INSTRUCTION-DESCRIPTOR-ENDIAN) in turn, per
+DESCRIPTOR's OPERAND-WIDTHS. On a word-encoded machine (#20,
 INSTRUCTION-DESCRIPTOR-WORD-LAYOUT non-NIL): one instruction word packing the
 opcode and every inline operand's biased value or extra-word escape by bit
-field, little-endian, followed by each extra-word operand's own value, also
-little-endian, in declaration order (%ENCODE-WORD-INSTRUCTION; SUB-OPCODE is
-always NIL here -- #125's sub-opcode cell is byte-machine-only). VALUES
-shorter than DESCRIPTOR declares silently encodes fewer fields, rather than
-erroring -- every caller in this codebase (%ENCODE, assembler.lisp) always
-supplies exactly one value per field, so this is unreachable internally, but
-a caller of this exported function on its own should supply the same."
+field, in the layout's own endian order, followed by each extra-word
+operand's own value, also in that order, in declaration order
+(%ENCODE-WORD-INSTRUCTION; SUB-OPCODE is always NIL here -- #125's sub-opcode
+cell is byte-machine-only). VALUES shorter than DESCRIPTOR declares silently
+encodes fewer fields, rather than erroring -- every caller in this codebase
+(%ENCODE, assembler.lisp) always supplies exactly one value per field, so
+this is unreachable internally, but a caller of this exported function on
+its own should supply the same."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
         (%encode-word-instruction descriptor layout values)
         (let ((cell-width (instruction-descriptor-cell-width descriptor))
+              (endian (instruction-descriptor-endian descriptor))
               (sub (instruction-descriptor-sub-opcode descriptor)))
           (cons (wrap-value (instruction-descriptor-opcode descriptor) cell-width)
                 (append (when sub (list (wrap-value sub cell-width)))
                         (loop for value in values
                               for width in (instruction-descriptor-operand-widths descriptor)
-                              append (%encode-value-cells value width cell-width))))))))
+                              append (%encode-value-cells value width cell-width endian))))))))
 
 (defun execute-instruction (descriptor machine values &optional choices)
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing

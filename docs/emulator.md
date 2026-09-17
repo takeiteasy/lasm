@@ -70,8 +70,9 @@ same function, so encoded cells decode identically whether they're about to
 be executed or merely read back as text.
 
 Fetches the opcode cell at `pc`, decodes it (`find-instruction-by-opcode`),
-reads its declared `operand-widths` fields little-endian **one after
-another**, each cell masked at the machine's own `:cell-width` (#53 — 8 bits
+reads its declared `operand-widths` fields in the machine's own endian
+order (`:little` by default, #66) **one after another**, each cell masked
+at the machine's own `:cell-width` (#53 — 8 bits
 on every byte-addressed machine) rather than a fixed 8 (each field's own
 width, in the order `definstruction` wired them up — see [Instructions,
 "Repeated `(operand ...)` subclauses"](instructions.md)),
@@ -117,8 +118,9 @@ clock speed" below.
 
 On a machine declaring an `instruction-word` clause ([Machine
 model](machine-model.md)), `step-machine` instead fetches one whole
-instruction word (little-endian, `instruction-word-layout-width-cells`
-cells at the machine's own `:cell-width`, #53), extracts its `opcode` field,
+instruction word (in the layout's own endian order, #66,
+`instruction-word-layout-width-cells` cells at the machine's own
+`:cell-width`, #53), extracts its `opcode` field,
 and tries every `instruction-descriptor` registered under that opcode in
 turn (see [Instructions, "Opcode to descriptor
 decode"](instructions.md#opcode-to-descriptor-decode)) — one candidate on a

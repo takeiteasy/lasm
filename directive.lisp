@@ -136,11 +136,12 @@ referencing PARAMS' own parameter name(s), in order:
                               (#53 -- a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
                               also fold label-free.
-  (emit width values)      -- lay down (length VALUES) little-endian
-                              WIDTH-cell fields, one per value in VALUES;
-                              layout size is WIDTH * (length VALUES); each
-                              value may reference a label (resolved in
-                              pass 2, like an ordinary instruction operand).
+  (emit width values)      -- lay down (length VALUES) WIDTH-cell fields,
+                              one per value in VALUES, in the machine's own
+                              endian order (#66); layout size is WIDTH *
+                              (length VALUES); each value may reference a
+                              label (resolved in pass 2, like an ordinary
+                              instruction operand).
   (assign name value)      -- bind NAME (an identifier operand, not an
                               expression) to VALUE in the symbol table,
                               without occupying any address -- #35's .EQU.

@@ -332,6 +332,14 @@ target: nop" :machine 'instr-test-machine)))
   (let ((a (assemble ".word $1234" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x34 #x12) (assembly-cells a)))))
 
+(fiveam:test word-directive-emits-big-endian-words-on-a-big-endian-machine
+  ;; #66: BIGENDIAN-TEST-MACHINE (tests/instruction.lisp) declares
+  ;; :ENDIAN :BIG -- .WORD's data must lay cells down the same way
+  ;; instruction operands do (%ENCODE-VALUE-CELLS, shared by both), the
+  ;; mirror image of WORD-DIRECTIVE-EMITS-LITTLE-ENDIAN-WORDS above.
+  (let ((a (assemble ".word $1234" :machine 'bigendian-test-machine)))
+    (fiveam:is (equalp #(#x12 #x34) (assembly-cells a)))))
+
 (fiveam:test byte-directive-with-label-argument-resolves-in-pass-2
   ;; nop (1 byte, address 0), target: nop (address 1) -- .byte target should
   ;; fold to 1 once pass 2 has the symbol table, even though pass 1 (where

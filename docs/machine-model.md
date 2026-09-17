@@ -68,11 +68,13 @@ widths against a machine defined earlier in the same file.
   validation case, a stack shared between ordinary data and an implicit
   call stack (`jsr`/`rts` pushing/popping `pc`), reaching an argument
   underneath its own return address via `stack-ref`.
-- `(memory NAME :width n :addr-width n [:cell-width n])` — addressable
-  storage. `:addr-width` is the number of address bits (so the element has
-  `2^addr-width` cells); `:cell-width` is the bit width of each cell and
-  defaults to `:width` (byte-addressed). Set `:cell-width` different from 8
-  for word-addressed memory (DCPU-16-style). Out-of-range addresses signal
+- `(memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])` —
+  addressable storage. `:addr-width` is the number of address bits (so the
+  element has `2^addr-width` cells); `:cell-width` is the bit width of each
+  cell and defaults to `:width` (byte-addressed). Set `:cell-width` different
+  from 8 for word-addressed memory (DCPU-16-style). `:endian` (default
+  `:little`) is which cell of a multi-cell value is the low-order one — see
+  "Cell width and the assembler" below. Out-of-range addresses signal
   `address-out-of-range`.
   Memory is currently allocated eagerly as one array of `2^addr-width`
   cells. This is deliberately kept behind the constructor in `storage.lisp`
@@ -122,9 +124,10 @@ unknown clause heads are compile-time errors. `instruction-word`'s field
 widths must sum exactly to its own `:width`, which must itself be a whole
 number of the machine's own memory cells (#53 — see "Cell width and the
 assembler" below; a whole number of 8-bit bytes on every byte-addressed
-machine, the only kind before this) — the word is still emitted as
-little-endian cells of that width, see "Cell- vs. word-encoded
-instructions" below. Every `(layout NAME ...)` alternate (#64) is held to
+machine, the only kind before this) — the word is still emitted as cells of
+that width in the machine's own endian order (#66), see "Cell- vs.
+word-encoded instructions" below. Every `(layout NAME ...)` alternate (#64)
+is held to
 the same field-width-sums-to-`:width` rule independently, plus the
 cross-layout checks above: layout names unique, and an `opcode` field
 identical in width and shift to the default's. Those two checks are what let
@@ -204,10 +207,11 @@ the *value* being encoded, not just its addressing-mode syntax.
 `instruction-descriptor-size` is the one accessor that covers both schemes —
 the total encoded cell count for one use of an instruction, cell-encoded or
 word-encoded alike. The instruction word itself (and any extra word an
-escaped operand needs) is emitted as little-endian cells at the target
-machine's own cell width, so `assembly-cells` is `(vector (unsigned-byte 8))`
-on every byte-addressed machine and `(vector (unsigned-byte n))` on one
-declaring `:cell-width n` (#53) — see "Cell width and the assembler" below.
+escaped operand needs) is emitted as cells at the target machine's own cell
+width, in the machine's own endian order (#66), so `assembly-cells` is
+`(vector (unsigned-byte 8))` on every byte-addressed machine and
+`(vector (unsigned-byte n))` on one declaring `:cell-width n` (#53) — see
+"Cell width and the assembler" below.
 
 ## Cell width and the assembler
 
@@ -224,6 +228,18 @@ this ambiguous, and each of those entry points takes an explicit `:memory`
 argument for exactly that case — the same shape as `%default-address-width`
 (instruction.lisp) already uses to pick a sole memory element's address
 width when an addressing mode doesn't declare one.
+
+`:endian` (#66) resolves the same way, alongside `:cell-width` — a memory
+element's declared `:little` (the default) or `:big`, or the machine's
+shared endianness across several elements that agree, ambiguous the same
+way and resolved by the same explicit `:memory` argument. It governs cell
+order within one multi-cell value — an instruction operand, an
+`instruction-word`'s own encoded word and any extra word following it, and
+a `.byte`/`.word` directive's data — never which cell a *field* occupies or
+which order fields or words themselves fall in. Every encoded quantity in
+the codebase ultimately goes through `%encode-value-cells`
+(instruction.lisp) and its inverse `%fetch-cells` (decoder.lisp), so
+instructions and data always agree on endianness for a given machine.
 
 Word-addressed memory and bitfield/variant instruction-word encoding (see
 ["Word-encoded instructions"](instructions.md#word-encoded-instructions-20))

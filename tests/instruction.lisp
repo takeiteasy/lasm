@@ -651,6 +651,59 @@
     (fiveam:is (equal '(dst 2 10) (instruction-word-field layout 'dst)))
     (fiveam:is (equal '(src 10 0) (instruction-word-field layout 'src)))))
 
+;;; #66: :ENDIAN on a word-encoded machine -- BIGENDIAN-WORD-TEST-MACHINE is
+;;; WORD-TEST-MACHINE's exact shape, its sole memory element :ENDIAN :BIG
+;;; instead of the implicit :LITTLE default.
+
+(defmachine bigendian-word-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16 :endian :big)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(definstruction bigendian-word-test-machine set
+  (modes word-imm)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff))))
+  (semantics (set! a operand)))
+
+(definstruction bigendian-word-test-machine hlt
+  (encoding (opcode 2))
+  (semantics (trap :halt)))
+
+(fiveam:test word-encoded-instruction-word-big-endian-round-trip
+  ;; SET #5 packs inline (bias 1 -> field value 6) -- opcode 1, dst 0, src 6
+  ;; is word #x1006, whose two cells swap order under :BIG relative to
+  ;; STEP-MACHINE-WORD-ENCODED-INLINE-ROUND-TRIP's little-endian equivalent
+  ;; (tests/emulator.lisp). ASSEMBLE (not a direct FIND-INSTRUCTION +
+  ;; ENCODE-INSTRUCTION call), since %CHOOSE-VARIANT is what picks the
+  ;; inline sibling descriptor over the extra-word one for this value.
+  (let ((a (assemble "set #5" :machine 'bigendian-word-test-machine)))
+    (fiveam:is (equalp #(#x10 #x06) (assembly-cells a)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'bigendian-word-test-machine :memory 'ram)
+      (fiveam:is (string= "SET" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(5) values)))))
+
+(fiveam:test word-encoded-extra-word-big-endian-round-trip
+  ;; SET #1000 escapes SRC (#x3FF) and carries 1000 (#x03E8) in its own
+  ;; extra word -- proves %ENCODE-WORD-INSTRUCTION's second
+  ;; %ENCODE-VALUE-CELLS call (the extra word) and %TRY-DECODE-WORD-
+  ;; CANDIDATE's %FETCH-CELLS call both honour LAYOUT's own ENDIAN, not
+  ;; just the instruction word's own first %ENCODE-VALUE-CELLS call.
+  (let ((a (assemble "set #1000" :machine 'bigendian-word-test-machine)))
+    (fiveam:is (equalp #(#x13 #xFF #x03 #xE8) (assembly-cells a)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'bigendian-word-test-machine :memory 'ram)
+      (fiveam:is (string= "SET" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(1000) values)))))
+
 ;;; #64: per-instruction, non-uniform instruction-word layouts. WORD-LAYOUTS-
 ;;; TEST-MACHINE's field X is deliberately *not* nested across its three
 ;;; layouts -- width 4/shift 8 in the default, width 12/shift 0 in WIDE,
@@ -4109,3 +4162,80 @@ target: nop")
                          (variant (choice holes-a1 holes-b1 holes-c1) (sub 0))
                          (variant (choice holes-a2 holes-b2 holes-c2) (sub 1))))
              (semantics nil)))))
+
+;;; :ENDIAN (#66)
+
+(fiveam:test encode-value-cells-big-endian-reverses-cell-order
+  ;; The exact mirror of ENCODE-VALUE-CELLS-SPLITS-INTO-16-BIT-CELLS above,
+  ;; :BIG instead of the default :LITTLE -- the high cell comes first.
+  (fiveam:is (equal (list #x0001 #x1234) (%encode-value-cells #x00011234 2 16 :big))))
+
+(defmachine bigendian-test-machine
+  (register a :width 8)
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16 :endian :big))
+
+(definstruction bigendian-test-machine adc
+  (modes absolute)
+  (encoding (opcode #x6D) (operand :mode))
+  (semantics (set! a (wrap-value (+ a (mref machine 'ram operand)) 8))))
+
+;; A :SIGNED absolute-shaped mode -- BIGENDIAN-TEST-MACHINE has no built-in
+;; signed multi-cell mode, so this pins that ENCODE-INSTRUCTION's endian
+;; ordering and SIGNED-VALUE's own reinterpretation compose independently
+;; (SIGNED-VALUE runs on the reassembled integer, after cell order is
+;; already resolved) -- same rationale as instr-test-machine's SBC-style
+;; signed modes elsewhere in this file.
+(defmode big-simm expr :signed t)
+
+(definstruction bigendian-test-machine sbc
+  (modes big-simm)
+  (encoding (opcode #x6E) (operand :mode))
+  (semantics (set! a (wrap-value (+ a operand) 8))))
+
+(fiveam:test encode-absolute-instruction-big-endian
+  ;; #x1234's two cells swap order relative to ENCODE-ABSOLUTE-INSTRUCTION-
+  ;; LITTLE-ENDIAN's little-endian (#6D #x00 #x10) result on the same value.
+  (let ((adc (find-instruction 'bigendian-test-machine 'adc)))
+    (fiveam:is (equal (list #x6D #x12 #x34) (encode-instruction adc (list #x1234))))))
+
+(fiveam:test encode-decode-round-trip-big-endian-multi-cell-operand
+  ;; ENCODE-INSTRUCTION then DECODE-INSTRUCTION-AT over a bare cell vector
+  ;; (VECTOR-CELL-READER) must recover the same operand value -- proves
+  ;; %DECODE-CELL-INSTRUCTION's %FETCH-CELLS-based reassembly (post-#66
+  ;; dedup) agrees with the encoder on a big-endian machine.
+  (let* ((adc (find-instruction 'bigendian-test-machine 'adc))
+         (cells (coerce (encode-instruction adc (list #xBEEF)) 'vector)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader cells) 0 'bigendian-test-machine :memory 'ram)
+      (fiveam:is (eq adc descriptor))
+      (fiveam:is (equal (list #xBEEF) values)))))
+
+(fiveam:test encode-decode-round-trip-big-endian-signed-multi-cell-operand
+  ;; Same round trip, a negative two-cell operand -- pins SIGNED-VALUE as
+  ;; endian-invariant: it reinterprets the already-reassembled integer, so
+  ;; a big-endian machine sign-extends identically to a little-endian one.
+  (let* ((sbc (find-instruction 'bigendian-test-machine 'sbc))
+         (cells (coerce (encode-instruction sbc (list -100)) 'vector)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader cells) 0 'bigendian-test-machine :memory 'ram)
+      (fiveam:is (eq sbc descriptor))
+      (fiveam:is (equal (list -100) values)))))
+
+(fiveam:test defmachine-rejects-invalid-endian
+  (fiveam:signals error
+    (eval '(defmachine endian-bad-machine
+             (memory ram :width 8 :addr-width 8 :endian :middle)))))
+
+(fiveam:test defmachine-endian-defaults-to-little
+  ;; INSTR-TEST-MACHINE (top of this file) declares no :ENDIAN at all --
+  ;; must default to :LITTLE.
+  (fiveam:is (eq :little (%machine-endian 'instr-test-machine))))
+
+(fiveam:test defmachine-disagreeing-memory-endian-requires-explicit-memory
+  (eval '(defmachine endian-ambiguous-machine
+           (memory rom :width 8 :addr-width 8 :endian :big)
+           (memory ram :width 8 :addr-width 8 :endian :little)))
+  (fiveam:signals error (%machine-endian 'endian-ambiguous-machine))
+  (fiveam:is (eq :big (%machine-endian 'endian-ambiguous-machine 'rom)))
+  (fiveam:is (eq :little (%machine-endian 'endian-ambiguous-machine 'ram))))

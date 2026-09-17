@@ -36,9 +36,10 @@ including zero. `action-form` must be exactly one of:
 - `(reserve value-name)` — advance the address counter by `value-name`
   cells (the machine's own addressable unit, #53 — bytes on every
   byte-addressed machine, the only kind before this), zero-filled.
-- `(emit width values-name)` — lay down `(length values-name)` little-endian
-  `width`-cell fields, one per value. Layout size is `width * (length
-  values-name)`.
+- `(emit width values-name)` — lay down `(length values-name)` `width`-cell
+  fields, one per value, in the machine's own endian order (#66 — the same
+  `%encode-value-cells` an instruction operand uses, so code and data can't
+  disagree). Layout size is `width * (length values-name)`.
 - `(assign name-name value-name)` — bind `name-name` (an identifier operand,
   not an expression) to `value-name` in the symbol table, without occupying
   any address (`.equ` below).
@@ -101,7 +102,7 @@ here: .org $8000   ; here == $8000, not the address before the move
 
 ```lisp
 .byte 1, 2, 3        ; three one-cell fields: 01 02 03
-.word $1234          ; one two-cell field, little-endian: 34 12
+.word $1234          ; one two-cell field -- little-endian by default: 34 12
 .byte target         ; a label operand -- resolved at encode time, like an
 target: nop          ; ordinary instruction operand
 ```
@@ -109,11 +110,12 @@ target: nop          ; ordinary instruction operand
 Variadic; zero or more comma-separated operands (`statement-operands`, see
 [Statement grammar & expression parser](parser.md) — each one a bare
 expression, not an addressing-mode pattern). `.byte` lays down one cell per
-value, `.word` one little-endian two-cell field per value — both via
-`%encode-value-cells`, the same little-endian cell-splitting
-`encode-instruction` uses for an ordinary operand ([Instructions,
-"Encoding"](instructions.md)), so directive data and instruction operands
-can't drift apart in how they lay cells down. A value out of its field's
+value, `.word` one two-cell field per value, in the machine's own endian
+order (`:endian`, #66, [Machine model](machine-model.md#defmachine)) — both
+via `%encode-value-cells`, the same cell-splitting `encode-instruction` uses
+for an ordinary operand ([Instructions, "Encoding"](instructions.md)), so
+directive data and instruction operands can't drift apart in how they lay
+cells down. A value out of its field's
 range wraps via the existing `wrap-value`, exactly like an instruction
 operand (diagnosing that instead of wrapping is a separate, existing
 follow-up ticket, not specific to directives).

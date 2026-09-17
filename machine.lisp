@@ -8,6 +8,14 @@
     (error "~A for ~S must be a positive integer, got ~S" what name value))
   value)
 
+(defun %check-endian (value name)
+  "#66: VALUE must be :LITTLE or :BIG -- the only two cell orderings
+%ENCODE-VALUE-CELLS/%FETCH-CELLS (instruction.lisp/decoder.lisp) know how to
+lay a multi-cell value down in."
+  (unless (member value '(:little :big))
+    (error "memory ~S :endian must be :LITTLE or :BIG, got ~S" name value))
+  value)
+
 (defun parse-register-clause (name-form)
   ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
   ;; an optional list of alias symbols, one per bank cell in index order
@@ -45,14 +53,17 @@
                            :depth (%check-positive depth ":depth" name))))
 
 (defun parse-memory-clause (form)
-  ;; (memory NAME :width n :addr-width n [:cell-width n])
-  (destructuring-bind (name &key width addr-width cell-width) form
+  ;; (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])
+  ;; #66: ENDIAN defaults to :LITTLE, matching every machine before this
+  ;; ticket -- see %ENCODE-VALUE-CELLS/%FETCH-CELLS for what it governs.
+  (destructuring-bind (name &key width addr-width cell-width (endian :little)) form
     (unless width (error "memory ~S requires :width" name))
     (unless addr-width (error "memory ~S requires :addr-width" name))
     (make-storage-element :name name :kind :memory
                            :width (%check-positive width ":width" name)
                            :addr-width (%check-positive addr-width ":addr-width" name)
-                           :cell-width (%check-positive (or cell-width width) ":cell-width" name))))
+                           :cell-width (%check-positive (or cell-width width) ":cell-width" name)
+                           :endian (%check-endian endian name))))
 
 (defun parse-flags-clause (form)
   ;; (flags A B C ...) -- expands to one storage-element per flag, width 1
@@ -197,21 +208,23 @@ default layout's OPCODE field ~S -- every layout must place OPCODE identically"
        :fields fields
        :alternates alternates))))
 
-(defun %finish-instruction-word-layout (layout cell-width)
-  "Fill in LAYOUT's WIDTH-CELLS and CELL-WIDTH, and recurse into its
-ALTERNATES (#64), once the machine's own memory cell width is known
-(BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has been parsed) -- see
-PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this can't happen at
+(defun %finish-instruction-word-layout (layout cell-width endian)
+  "Fill in LAYOUT's WIDTH-CELLS, CELL-WIDTH and ENDIAN (#66), and recurse into
+its ALTERNATES (#64), once the machine's own memory cell width/endianness is
+known (BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has been parsed)
+-- see PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this can't happen at
 clause-parse time. Signals if the instruction word's bit width isn't a whole
-number of cells."
+number of cells. Setting ENDIAN here (rather than resolving it per-decode)
+means %DECODE-WORD-INSTRUCTION (decoder.lisp) needs no extra lookup."
   (let ((width (instruction-word-layout-width layout)))
     (unless (zerop (mod width cell-width))
       (error "instruction-word :width ~D must be a whole number of ~D-bit cells"
              width cell-width))
     (setf (instruction-word-layout-width-cells layout) (/ width cell-width)
-          (instruction-word-layout-cell-width layout) cell-width))
+          (instruction-word-layout-cell-width layout) cell-width
+          (instruction-word-layout-endian layout) endian))
   (dolist (alt (instruction-word-layout-alternates layout))
-    (%finish-instruction-word-layout alt cell-width))
+    (%finish-instruction-word-layout alt cell-width endian))
   layout)
 
 ;;; Memory / cell-width resolution
@@ -303,6 +316,53 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
 %DESCRIPTOR-CELL-WIDTH for every caller outside DEFMACHINE's own expansion."
   (%descriptor-cell-width (find-machine-descriptor machine-name) memory-name))
 
+;;; Memory / endian resolution (#66) -- exact twin of the cell-width trio
+;;; above, same rationale: one place decides a machine's cell ordering so
+;;; the encoder (instruction.lisp), decoder (decoder.lisp) and assembler
+;;; (assembler.lisp) can't drift apart on a machine with more than one
+;;; memory element.
+
+(defun %compute-descriptor-endian (descriptor)
+  "DESCRIPTOR's cell endianness (#66) when no MEMORY-NAME disambiguates --
+the sole memory element's, or, when DESCRIPTOR declares several, their
+shared endianness if every one agrees. The uncached body %DESCRIPTOR-ENDIAN
+memoizes below."
+  (let ((mem-elements (%descriptor-memory-elements descriptor)))
+    (cond
+      ((null mem-elements)
+       (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+      ((null (rest mem-elements))
+       (storage-element-endian (first mem-elements)))
+      (t (let ((endians (remove-duplicates (mapcar #'storage-element-endian mem-elements))))
+           (if (null (rest endians))
+               (first endians)
+               (error "Machine ~S: more than one memory element declared with ~
+different endianness (~{~S~^, ~}) -- pass :MEMORY explicitly"
+                      (machine-descriptor-name descriptor)
+                      (mapcar (lambda (e) (list (storage-element-name e)
+                                                 (storage-element-endian e)))
+                              mem-elements))))))))
+
+(defun %descriptor-endian (descriptor &optional memory-name)
+  "DESCRIPTOR's cell endianness (#66): MEMORY-NAME's own ENDIAN when given,
+else the sole memory element's (or their shared endianness, when DESCRIPTOR
+declares several that agree) -- otherwise the caller must specify which
+memory element it means, same as %DESCRIPTOR-CELL-WIDTH's own ambiguity
+error. Memoized on DESCRIPTOR's own ENDIAN-CACHE slot (storage.lisp), same
+rationale as CELL-WIDTH-CACHE (#63)."
+  (if memory-name
+      (storage-element-endian (descriptor-element descriptor memory-name))
+      (let ((cached (machine-descriptor-endian-cache descriptor)))
+        (if (eq cached :unset)
+            (setf (machine-descriptor-endian-cache descriptor)
+                  (%compute-descriptor-endian descriptor))
+            cached))))
+
+(defun %machine-endian (machine-name &optional memory-name)
+  "MACHINE-NAME's cell endianness (#66). Name-based wrapper around
+%DESCRIPTOR-ENDIAN for every caller outside DEFMACHINE's own expansion."
+  (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
+
 (defun parse-machine-clauses (clauses)
   (let (elements instruction-word clock-speed)
     (dolist (clause clauses)
@@ -346,22 +406,24 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
                  (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
                        index)))
       (setf (machine-descriptor-elements descriptor) elements)
-      ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH can only be finished now
-      ;; that every MEMORY element is known (#53) -- see
+      ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
+      ;; now that every MEMORY element is known (#53, #66) -- see
       ;; PARSE-INSTRUCTION-WORD-CLAUSE and %FINISH-INSTRUCTION-WORD-LAYOUT.
       ;; A machine with no memory element at all (e.g. SIXTYFOO's
       ;; instruction-less ancestor) or more than one with disagreeing cell
-      ;; widths only matters once an instruction-word clause is actually
-      ;; declared, so %MACHINE-CELL-WIDTH's error is deferred to here.
+      ;; widths/endianness only matters once an instruction-word clause is
+      ;; actually declared, so %MACHINE-CELL-WIDTH/%MACHINE-ENDIAN's errors
+      ;; are deferred to here.
       (when instruction-word
-        (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)))
+        (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)
+                                          (%descriptor-endian descriptor)))
       descriptor)))
 
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:
      (register NAME :width n [:count n] [:names (A B C ...)])
      (stack NAME :width n :depth n)
-     (memory NAME :width n :addr-width n [:cell-width n])
+     (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
@@ -389,6 +451,16 @@ one it encodes against via a (layout NAME) encoding subclause. Lets one
 machine express per-instruction non-uniform word layouts, e.g. a CHIP8-shaped
 16-bit word whose opcode nibble alone decides whether the rest splits 4/12,
 4/4/8, or 4/4/4/4.
+
+A memory element's :ENDIAN (#66) declares which end of a multi-cell value
+its low-order cell occupies -- :LITTLE (the default) or :BIG. Governs
+%ENCODE-VALUE-CELLS/%FETCH-CELLS (instruction.lisp/decoder.lisp), so an
+instruction operand, an INSTRUCTION-WORD's own encoded word, and a
+.BYTE/.WORD directive's data all lay their cells down the same way. Several
+memory elements may declare different endianness, same as :CELL-WIDTH; an
+operation ambiguous about which one it means (no explicit :MEMORY, and the
+elements disagree) signals the same way %MACHINE-CELL-WIDTH's own ambiguity
+does.
 
 CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
 RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to

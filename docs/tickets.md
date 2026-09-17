@@ -89,11 +89,10 @@ between them or on the chain above):
 | Ticket | Follows up on |
 |---|---|
 | #65 `.cell`/`.dat` directive | #53 |
-| #66 `:endian` option | #53 |
 | #67 `lo`/`hi` operators vs. cell width | #53 |
 | #68 `mref` read-path masking | #53 |
 | #69 dead cell-width fallback in `storage.lisp` | #53 |
-| #70 step loop re-resolves cell-width every step | #53 (same shape as #39) |
+| #70 step loop re-resolves cell-width (and now endian, #66) every step | #53 (same shape as #39) |
 | #72 symbolic names for banked register elements | #13, #54, #55 |
 | #114 architecture → CPU family → CPU model tiering | independent (mirrors old rpg/ANIMA-16 tiering) |
 | #134 `:strict` has no effect on a word-encoded machine's non-relative holes | #20, noted while implementing #62 |

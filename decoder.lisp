@@ -45,22 +45,31 @@ can use one HANDLER-CASE for both cell sources."
 
 ;;; Decode
 
-(defun %fetch-cells (read-cell address width-cells cell-width)
+(defun %fetch-cells (read-cell address width-cells cell-width &optional (endian :little))
   "Read WIDTH-CELLS cells starting at ADDRESS through READ-CELL as one
-little-endian unsigned integer, each cell CELL-WIDTH bits wide -- shared by
-an instruction word itself and every extra word following it. Formerly
-%FETCH-WORD (emulator.lisp), generalized to read through any READ-CELL
-closure rather than always MREF."
+unsigned integer, each cell CELL-WIDTH bits wide, in ENDIAN order (#66:
+:LITTLE, the default, or :BIG) -- the exact inverse of %ENCODE-VALUE-CELLS
+(instruction.lisp). Shared by an instruction word itself, every extra word
+following it, and %DECODE-CELL-INSTRUCTION's ordinary operand fetch.
+Formerly %FETCH-WORD (emulator.lisp), generalized to read through any
+READ-CELL closure rather than always MREF.
+
+Always walks ADDRESS ascending, regardless of ENDIAN -- only the shift each
+cell contributes flips, never the order cells are read in. This matters:
+VECTOR-CELL-READER's range check and %TRY-DECODE-WORD-CANDIDATE's
+check-constants-before-fetching-an-extra-word ordering both assume reads
+never run backward or past a rejected candidate's own bounds."
   (loop with v = 0
         for i below width-cells
-        do (setf v (logior v (ash (funcall read-cell (+ address i)) (* cell-width i))))
+        for shift = (if (eq endian :big) (- width-cells 1 i) i)
+        do (setf v (logior v (ash (funcall read-cell (+ address i)) (* cell-width shift))))
         finally (return v)))
 
 ;; %WORD-CHOICE-MATCHES-P now lives in instruction.lisp (#105) -- registration
 ;; (REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE!) needs it too,
 ;; and decoder.lisp loads after instruction.lisp in the :SERIAL T system.
 
-(defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word)
+(defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word endian)
   "Try decoding WORD (already fetched at ADDRESS) against one candidate
 DESCRIPTOR sharing this opcode (#105) -- decode each operand field against
 DESCRIPTOR's WORD-ALTERNATIVES: a fetched raw field value matching some
@@ -125,7 +134,7 @@ rejected before any extra word is ever fetched."
                               (word-field-choice-bias match)))
                   (:extra-word
                    (let ((extra-cells (word-field-choice-extra-cells match)))
-                     (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width)))
+                     (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
                               (if (word-field-choice-signedp match)
                                   (signed-value v (* extra-cells cell-width))
                                   v))
@@ -190,7 +199,8 @@ on both encodings: %OPERAND-RENDER-VALUES (disassembler.lisp) for display,
 and a branch's own (set! pc (+ pc operand)) semantics at run time."
   (let* ((width-cells (instruction-word-layout-width-cells layout))
          (cell-width (instruction-word-layout-cell-width layout))
-         (word (%fetch-cells read-cell address width-cells cell-width))
+         (endian (instruction-word-layout-endian layout))
+         (word (%fetch-cells read-cell address width-cells cell-width endian))
          (opcode-field (instruction-word-field layout 'opcode)))
     (destructuring-bind (opcode-width opcode-shift) (rest opcode-field)
       (let ((opcode (ldb (byte opcode-width opcode-shift) word)))
@@ -198,15 +208,19 @@ and a branch's own (set! pc (+ pc operand)) semantics at run time."
             (let ((candidates (find-instruction-descriptors-by-opcode machine-name opcode)))
               (dolist (descriptor candidates (values :decode-failure nil nil))
                 (multiple-value-bind (values offset matches okp)
-                    (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word)
+                    (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
                   (when okp
                     (return-from %decode-word-instruction (values descriptor values offset matches))))))
           (unknown-instruction () (values :decode-failure nil nil)))))))
 
-(defun %decode-cell-instruction (read-cell address machine-name cell-width)
+(defun %decode-cell-instruction (read-cell address machine-name cell-width endian)
   "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- unchanged in shape
 from before #20/#21, only reading through READ-CELL rather than always MREF,
-plus #125's sub-opcode cell and #126's hole-selected CHOICES below.
+plus #125's sub-opcode cell and #126's hole-selected CHOICES below. Each
+operand's cells are reassembled via %FETCH-CELLS (the same routine the
+word-encoded path below uses), which is what makes ENDIAN (#66) apply here
+too -- previously a second, hand-rolled little-endian-only copy of that
+loop lived here.
 
 A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies SIGNEDP) was
 assembled as a signed quantity (a RELATIVE operand specifically as an
@@ -258,11 +272,7 @@ unconditionally before #126."
                                       (make-list (length widths))))
                      (values (loop with offset = (+ 1 sub-offset)
                                    for width in widths
-                                   collect (loop with v = 0
-                                                 for i below width
-                                                 do (setf v (logior v (ash (funcall read-cell (+ address offset i))
-                                                                            (* cell-width i))))
-                                                 finally (return v))
+                                   collect (%fetch-cells read-cell (+ address offset) width cell-width endian)
                                    do (incf offset width))))
                 (setf values (mapcar (lambda (v w signedp) (if signedp (signed-value v (* cell-width w)) v))
                                       values widths signedness))
@@ -309,11 +319,15 @@ truncated trailing instruction is a stop condition or a decodable-as-data
 byte is the caller's policy, not this function's.
 
 MEMORY, when given, is only used to resolve MACHINE-NAME's INSTRUCTION-WORD
-layout and cell width when the machine declares more than one memory
-element (see %RESOLVE-MEMORY, machine.lisp); READ-CELL itself already knows
-which memory it reads."
+layout, cell width and endianness (#66) when the machine declares more than
+one memory element (see %RESOLVE-MEMORY, machine.lisp); READ-CELL itself
+already knows which memory it reads. A word-encoded machine instead reads
+ENDIAN off LAYOUT's own slot, set once at DEFMACHINE time -- see
+%DECODE-WORD-INSTRUCTION."
   (let* ((memory (%resolve-memory machine-name memory))
          (layout (machine-descriptor-instruction-word (find-machine-descriptor machine-name))))
     (if layout
         (%decode-word-instruction read-cell address machine-name layout)
-        (%decode-cell-instruction read-cell address machine-name (%machine-cell-width machine-name memory)))))
+        (%decode-cell-instruction read-cell address machine-name
+                                   (%machine-cell-width machine-name memory)
+                                   (%machine-endian machine-name memory)))))

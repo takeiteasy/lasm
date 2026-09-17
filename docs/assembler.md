@@ -84,6 +84,15 @@ requires `:memory` explicitly. `load-program` checks an `assembly`'s
 disagree, rather than silently misplacing every cell (see
 [Emulator](emulator.md#load-program)).
 
+`assemble`/`assemble-statements` resolve the target memory element's
+`:endian` (#66) the same way, alongside `cell-width` — there is no separate
+`endian` slot on `assembly` itself, since decode always resolves endianness
+from the machine descriptor at read time and an assembly is always produced
+against one; see [Machine model, "Cell width and the
+assembler"](machine-model.md#cell-width-and-the-assembler) for the shared
+resolution rule and [Directives, `.byte`/`.word`](directives.md) for how it
+governs directive data.
+
 ## Macro expansion
 
 `assemble-statements` runs `expand-macros` ([Macros](macros.md)) before
@@ -345,7 +354,8 @@ a later hole, not just the first — and hands the whole list of values to
 
 ```lisp
 mov $20, target   ; DST ($20) and SRC (target's resolved address) both
-target: nop       ; encode, little-endian, one after the other
+target: nop       ; encode, in the machine's own endian order (#66), one
+                  ; after the other
 ```
 
 ## Word-encoded instructions (#20)
@@ -386,8 +396,8 @@ the same `%choose-variant` pipeline described above, generalized via
 
 `encode-instruction` packs the opcode and every inline field's (biased)
 value into one instruction word by bit shift, then appends each
-`extra-word` field's own value as a separate little-endian word, at that
-field's own declared cell width (#135) — see
+`extra-word` field's own value as a separate word in the layout's own
+endian order (#66), at that field's own declared cell width (#135) — see
 [Instructions](instructions.md#operand-pipeline). See
 [`examples/word.lisp`](../examples/word.lisp) for a complete program
 assembled and run end to end.

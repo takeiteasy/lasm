@@ -139,9 +139,11 @@ A single-hole mode needs exactly one `(operand ...)` subclause here; a mode
 with more holes (see "Repeated `(operand ...)` subclauses" below) needs one
 per hole, in hole order.
 
-Encoded cells are little-endian and each field's cells are masked with the
-existing `wrap-value` (see [Machine model](machine-model.md)) at the
-machine's own cell width, so an over-wide value wraps rather than erroring.
+Encoded cells follow the machine's own `:endian` order (`:little` by
+default, #66 — see [Machine model, `defmachine`](machine-model.md#defmachine))
+and each field's cells are masked with the existing `wrap-value` (see
+[Machine model](machine-model.md)) at the machine's own cell width, so an
+over-wide value wraps rather than erroring.
 
 ### `(opcode n :sub s)` — sub-opcode cell
 
@@ -459,8 +461,9 @@ hole, in the same order the holes appear in the pattern, each independently
 ```
 
 Assembling `mov 2, 3` matches `reg-reg`'s two holes against `2` and `3`,
-encodes as `#x40 #x02 #x03` (each field little-endian at its own width, in
-hole order), and `(semantics ...)` sees `dst` bound to `2` and `src` to `3`.
+encodes as `#x40 #x02 #x03` (each field in the machine's own endian order at
+its own width, in hole order), and `(semantics ...)` sees `dst` bound to `2`
+and `src` to `3`.
 A multi-mode variant (the `(modes (MODE ...) ...)` form) works the same
 way, with one exception: a **single**-hole mode there may still omit
 `(operand ...)` entirely and take its default width, exactly as before —
@@ -672,10 +675,11 @@ and turning it into bytes or an executed effect:
   for one use of instruction `descriptor` with operand field values `values`
   (a list, one per operand encoding field, or `nil` for a no-operand
   instruction): on an ordinary cell-encoded machine, the opcode followed by
-  each field's cells little-endian in turn; on a word-encoded one (#20), the
-  instruction word (opcode and every field packed in by bit shift) followed
-  by each `:extra-word` field's own value, also little-endian, each at its
-  own declared cell width (`:cells`, below).
+  each field's cells in the machine's own endian order (#66) in turn; on a
+  word-encoded one (#20), the instruction word (opcode and every field
+  packed in by bit shift) followed by each `:extra-word` field's own value,
+  in that same endian order, each at its own declared cell width (`:cells`,
+  below).
 - `(instruction-descriptor-size descriptor)` — total encoded cells for one
   use of `descriptor`, covering both encoding schemes: `1 +` operand cell
   widths on a cell-encoded machine, or the instruction-word's own cell
