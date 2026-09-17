@@ -85,7 +85,24 @@ already-biased quantity). SIGNEDP is only ever T on a CHOICE-selected MATCH
 (instruction.lisp's %WORD-FIELD-CHOICE-FORM), so an ungoverned or
 value-selected field is unaffected -- unlike the byte path
 (%DECODE-CELL-INSTRUCTION below), word decode was previously never signed at
-all; this is the first case where it is."
+all; this is the first case where it is.
+
+#136: every one of DESCRIPTOR's own WORD-CONSTANTS (a (field-value ...)
+pin) must match WORD's already-fetched bits exactly, checked *before* the
+operand-hole loop below and before OFFSET is ever advanced past the
+instruction word itself. This ordering is load-bearing, not cosmetic:
+DECODE-INSTRUCTION-AT documents that a condition READ-CELL signals (e.g.
+ADDRESS-OUT-OF-RANGE past the end of a buffer) propagates rather than being
+caught here, so a rejected candidate that also has an :EXTRA-WORD operand
+hole could otherwise call %FETCH-CELLS past a buffer's end while still
+failing to match its own constants -- killing the disassembler on a
+would-be :DECODE-FAILURE instead of quietly trying the next candidate at
+this opcode. Checking constants first means a mismatched candidate is
+rejected before any extra word is ever fetched."
+  (dolist (constant (instruction-descriptor-word-constants descriptor))
+    (unless (= (ldb (byte (word-constant-width constant) (word-constant-shift constant)) word)
+               (word-constant-value constant))
+      (return-from %try-decode-word-candidate (values nil nil nil nil))))
   (loop with offset = width-cells
         for alternatives in (instruction-descriptor-word-alternatives descriptor)
         for choice0 = (first alternatives)

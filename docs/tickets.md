@@ -89,7 +89,6 @@ between them or on the chain above):
 | Ticket | Follows up on |
 |---|---|
 | #135 per-field extra-word width on a word-encoded machine | #20, split off #63 |
-| #136 word-encoded constant discriminator fields | #64, gates a nibble-faithful CHIP8 |
 | #137 `%hole-disjoint-p` compares holes positionally | #105, exposed by #64 |
 | #138 `(operand ... :field opcode)` is not rejected | #20, found while implementing #64 |
 | #65 `.cell`/`.dat` directive | #53 |
@@ -114,10 +113,20 @@ syntax design.
 named `(layout NAME ...)` alternates share the machine's `:width` and
 `opcode` field, and a `definstruction` selects one via a `(layout NAME)`
 encoding subclause. Scoped to layout *selection*; a nibble-faithful CHIP8
-also needs constant discriminator fields (no operand hole, a field pinned to
-a literal), split off to #136. #137 and #138 are two further gaps the
+also needed constant discriminator fields (no operand hole, a field pinned
+to a literal), split off to #136. #137 and #138 are two further gaps the
 implementation surfaced (one pre-existing, one this ticket's own
 same-layout-per-opcode workaround) rather than fixed in place.
+
+#136 (word-encoded constant discriminator fields) is now closed --
+`(field-value FIELD-NAME n)` pins an instruction-word field to a literal
+with no operand hole, participating in `%check-opcode-decodable!`'s
+co-tenancy check the same way a hole's raw bits already do.
+`examples/chip8word.lisp` is nibble-faithful for every CHIP8 opcode family
+this needed (`8XY_`, `5XY0`/`9XY0`, `EX9E`/`EXA1`, `FX__`, `00E0`/`00EE`)
+except `0NNN`, which cannot coexist with `00E0`/`00EE` under disjointness
+alone -- filed as #139, needing priority/ordering semantics between
+co-tenants instead.
 
 ## Adding to this page
 

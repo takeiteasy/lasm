@@ -93,9 +93,12 @@ widths against a machine defined earlier in the same file.
   the default's; only the fields below `opcode` vary per layout. A
   `definstruction` names which layout it encodes against with its own
   `(layout NAME)` encoding subclause (default when omitted) — see
-  [Instructions, "Per-instruction layouts"](instructions.md#per-instruction-layouts-64),
+  [Instructions, "Per-instruction layouts"](instructions.md#per-instruction-layouts-64).
+  A field can also be pinned to a constant with no operand hole at all via
+  `(field-value FIELD-NAME n)` — see [Instructions, "Constant discriminator
+  fields"](instructions.md#field-value-field-name-n--constant-discriminator-fields-136),
   and [`examples/chip8word.lisp`](../examples/chip8word.lisp) for a complete
-  machine.
+  machine using both.
 - `(clock-speed n)` — the machine's nominal rate in Hz (#75). Optional; a
   machine with no such clause can still accumulate `machine-cycles` and use
   `run-for-cycles`, just not `run-for-duration` or `machine-elapsed-seconds`

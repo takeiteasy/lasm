@@ -592,6 +592,24 @@ hlt" :machine 'word-layouts-test-machine))
          (a2 (assemble text :machine 'word-layouts-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
+;;; #136: three co-tenants at one opcode (FIELD-VALUE-TEST-MACHINE,
+;;; tests/instruction.lisp) told apart purely by their own pinned
+;;; (field-value ...) -- INCN/DECN each carry an operand hole, ZEROALL
+;;; carries none at all -- the check that DECODE-INSTRUCTION-AT's own
+;;; constant pre-pass (%TRY-DECODE-WORD-CANDIDATE, decoder.lisp) picks the
+;;; right one of the three, not just the first registered.
+(fiveam:test round-trip-field-value-co-tenants
+  (let* ((a (assemble "incn 0
+decn 0
+zeroall
+hlt" :machine 'field-value-test-machine))
+         (lines (disassemble-assembly a :machine 'field-value-test-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'field-value-test-machine)))
+    (fiveam:is (equal '("INCN" "DECN" "ZEROALL" "HLT")
+                       (mapcar (lambda (l) (instruction-descriptor-name (disassembly-line-descriptor l))) lines)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
 ;;; #62 (M4): a word-encoded RELATIVE hole renders as its absolute target on
 ;;; disassembly, exactly like the byte path's DISASSEMBLE-RELATIVE-RENDERS-
 ;;; ABSOLUTE-TARGET, and round-trips through re-assembly in both its inline

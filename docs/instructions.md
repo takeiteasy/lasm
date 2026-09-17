@@ -798,8 +798,9 @@ layout only — `nnn` above exists only in `NNN`, not in `XNN` or the default,
 and naming it from an instruction selecting a different layout is a
 macroexpansion-time error. Omitting `(layout ...)` selects the machine's
 default layout, exactly as before this feature existed; a no-operand
-instruction (no fields to resolve) may not name a layout at all, since every
-layout shares one `opcode` field regardless.
+instruction with nothing to pin may not name a layout at all, since every
+layout shares one `opcode` field regardless — see `field-value` below for
+the one case where a no-operand instruction *does* need to name one.
 
 Two co-tenant descriptors sharing one opcode (multiple modes of one
 mnemonic, or distinct mnemonics — see ["Opcode to descriptor
@@ -808,6 +809,59 @@ layout — decode has no way to tell which layout's fields to read until it
 already knows which descriptor matched, so mixing layouts at one opcode is
 rejected outright (`opcode-conflict`, reason `:different-word-layout`)
 rather than risked.
+
+### `(field-value FIELD-NAME n)` — constant discriminator fields (#136)
+
+Per-instruction layouts (above) let two instructions split a word's bits
+differently; they don't give either one a way to *pin* a field to a literal
+with no operand hole at all. Real CHIP8 needs exactly that: `8XY0`–`8XYE`
+share opcode `8`, told apart only by their low nibble; `00E0`/`00EE` pin
+every field below `opcode` to a fixed value with no operand whatsoever.
+`field-value` is a repeatable encoding subclause, valid anywhere `(operand
+...)` is, that writes a constant into a named field and requires an exact
+match there at decode time:
+
+```lisp
+(definstruction chip8wordfoo cls
+  (encoding (opcode 0) (layout nnn) (field-value nnn #xe0))
+  (semantics nil))
+
+(definstruction chip8wordfoo xor
+  (modes wxy)
+  (encoding (opcode 8) (field-value n 3)
+    (operand x :field x) (operand y :field y))
+  (semantics (set! (v x) (logxor (v x) (v y)))))
+```
+
+`FIELD-NAME` resolves within the instruction's own selected layout, exactly
+as an `(operand ... :field F)` hole does — an unknown name, or `opcode`
+itself (already owned by `(opcode n)`), is a macroexpansion-time error, as is
+a value that doesn't fit the field's width, the same field pinned twice, or
+a field both pinned and given an `(operand ...)` hole in the same
+instruction. A no-operand instruction (no `(modes ...)` clause at all) *may*
+name a non-default layout when it also pins one or more of that layout's
+fields — `cls` above needs `NNN`'s own `nnn` field to pin, which the
+machine's default layout doesn't have.
+
+Co-tenancy at one opcode treats a pinned field exactly like an ordinary
+hole's raw bits: two co-tenants are decodable once *some* field disagrees,
+whether that disagreement comes from an operand hole, a `field-value` pin
+against another pin, or a pin against a hole whose own range never covers
+the pinned value. A `field-value` neither side's other candidate mentions at
+all doesn't count as disagreement — those bits are simply not looked at
+when deciding whether that candidate matches, so a pin only distinguishes
+descriptors that actually address the same field. This is the word-encoded
+counterpart of `(opcode n :sub s)` (above) — `field-value` is rejected
+outright on a byte-encoded machine, and `(opcode n :sub s)` is rejected on a
+word-encoded one, for the same reason: each scheme already has its own way
+to discriminate co-tenants.
+
+See [`examples/chip8word.lisp`](../examples/chip8word.lisp) for this run end
+to end across CHIP8's `8XY_` ALU family, `5XY0`/`9XY0`, `EX9E`/`EXA1`, `FX__`,
+and `00E0`/`00EE` — nibble-faithful except `0NNN`, which cannot coexist with
+`00E0`/`00EE` under this mechanism alone (a catch-all address hole at opcode
+`0` would overlap both pinned values; telling them apart needs priority
+ordering between co-tenants, not disjointness — tracked separately, #139).
 
 ### Signed word fields (#63)
 

@@ -907,6 +907,27 @@ hlt" :machine 'word-layouts-test-machine)))
       (fiveam:is (= 3 (sref m 'a)))
       (fiveam:is (= 102 (sref m 'b))))))
 
+;;; Word-encoded constant discriminator fields (#136) -- reuses
+;;; FIELD-VALUE-TEST-MACHINE (tests/instruction.lisp): STEP-MACHINE must
+;;; pick the one co-tenant at opcode 1 whose own (field-value ...) matches
+;;; the fetched word, including ZEROALL, which carries no operand hole at
+;;; all -- the no-operand-descriptor edge %CHECK-OPCODE-DECODABLE!'s own
+;;; docstring calls out.
+
+(fiveam:test step-machine-field-value-picks-the-matching-co-tenant
+  (let ((m (make-machine 'field-value-test-machine))
+        (a (assemble "incn 0
+decn 0
+zeroall
+hlt" :machine 'field-value-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "INCN" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 1 (regref m 'a 0)))
+    (fiveam:is (string= "DECN" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 0 (regref m 'a 0)))
+    (fiveam:is (string= "ZEROALL" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (every #'zerop (loop for k below 4 collect (regref m 'a k))))))
+
 ;;; #62 (M4): PC-relative branching on a word-encoded machine -- WBRA
 ;;; (tests/instruction.lisp, WORD-RELATIVE-TEST-MACHINE) folds its 10-bit
 ;;; SRC field back to a signed offset from the *next* instruction's address

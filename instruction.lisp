@@ -259,7 +259,16 @@ until it already knows which descriptor matched"
   ;; NAME, not the INSTRUCTION-WORD-LAYOUT struct itself, so it can't drift
   ;; from the machine descriptor it names -- see
   ;; INSTRUCTION-DESCRIPTOR-WORD-LAYOUT, the sole place it's resolved.
-  (word-layout-name nil :type symbol))
+  (word-layout-name nil :type symbol)
+  ;; #136 (M4): non-NIL only on a word-encoded machine, and only when one or
+  ;; more (field-value FIELD-NAME n) subclauses pinned a field to a literal.
+  ;; A list of WORD-CONSTANT, declaration order -- ENCODE-INSTRUCTION ORs
+  ;; each straight into the instruction word, and %TRY-DECODE-WORD-CANDIDATE
+  ;; (decoder.lisp) rejects the candidate outright unless every one of them
+  ;; matches the fetched word's own bits. %CHECK-OPCODE-DECODABLE! treats a
+  ;; pinned field exactly like a hole's raw bits for co-tenancy purposes --
+  ;; see %CONSTANTS-DISJOINT-P below.
+  (word-constants nil :type list))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -1082,7 +1091,14 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
                           &optional hole-alternatives-list sub-opcode sub-choices operand-signedness
-                            relative-hole-index)
+                            relative-hole-index word-layout-name word-constants-form)
+  "WORD-LAYOUT-NAME/WORD-CONSTANTS-FORM (#136) are only ever non-NIL from the
+no-mode (encoding ...) DEFINSTRUCTION path -- a no-operand, word-encoded
+instruction (CLS/RET-shaped) that pins one or more fields via
+(field-value ...); every other caller of this function is byte-encoded and
+leaves both at their NIL default. WORD-CONSTANTS-FORM is an already-quoted
+%WORD-CONSTANTS-FORM builder form, not a bare list, mirroring how
+%WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted."
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -1094,6 +1110,8 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
     :operand-names ',operand-names
     :operand-signedness ',operand-signedness
     :relative-hole-index ',relative-hole-index
+    :word-layout-name ',word-layout-name
+    :word-constants ,word-constants-form
     :cycles ,cycles
     :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
 
@@ -1305,6 +1323,22 @@ alternatives don't override it. MODE-SPECIFIED (#129,
   (shift nil :type (integer 0))
   (variants nil :type list))  ; list of WORD-VARIANT, declaration order
 
+;; #136 (M4): a (field-value FIELD-NAME n) encoding subclause -- a field
+;; pinned to a literal value with no operand hole at all, discriminating
+;; opcode families that share their opcode field (CHIP8's 8XY0-8XYE,
+;; 5XY0/9XY0, EX9E/EXA1, FX__, 00E0/00EE). WIDTH/SHIFT locate its bits the
+;; same as a WORD-OPERAND-SPEC's; VALUE is the raw (unsigned, already
+;; range-checked against WIDTH) bit pattern ENCODE-INSTRUCTION ORs in and
+;; DECODE-INSTRUCTION-AT requires an exact match on. Kept as its own list on
+;; INSTRUCTION-DESCRIPTOR rather than folded into WORD-ALTERNATIVES/
+;; WORD-FIELDS -- those are hole-aligned with OPERAND-NAMES and the decoded
+;; VALUES list, and a constant consumes no operand value at all.
+(defstruct word-constant
+  (name nil :type symbol)     ; instruction-word field name
+  (width nil :type (integer 1))
+  (shift nil :type (integer 0))
+  (value nil :type (integer 0)))
+
 ;; One operand's *chosen* (or, in an INSTRUCTION-DESCRIPTOR's WORD-ALTERNATIVES,
 ;; one *candidate*) field encoding -- WIDTH/SHIFT locate its bits in the
 ;; instruction word; KIND says whether VALUE packs in biased by BIAS or is
@@ -1445,6 +1479,45 @@ hole where two co-tenant candidates can never both match a fetched word."
   (let ((values-a (mapcan #'%word-field-choice-values alternatives-a)))
     (notany (lambda (c) (some (lambda (v) (%word-choice-matches-p v c)) values-a)) alternatives-b)))
 
+(defun %word-field-choices-at (alternatives width shift)
+  "The one hole's WORD-FIELD-CHOICE list within ALTERNATIVES (a descriptor's
+WORD-ALTERNATIVES) cut from the field at WIDTH/SHIFT, or NIL if no hole of
+this descriptor occupies those bits -- every variant of one hole shares its
+spec's own WIDTH/SHIFT, so the first entry alone tells the hole apart.
+Used by %CONSTANT-DISTINGUISHES-P (#136) to find whether a (field-value ...)
+constant on one co-tenant lands on an ordinary operand hole on the other."
+  (find-if (lambda (choices) (and choices
+                                   (= (word-field-choice-width (first choices)) width)
+                                   (= (word-field-choice-shift (first choices)) shift)))
+            alternatives))
+
+(defun %constant-distinguishes-p (constant other)
+  "T if CONSTANT (one of A's WORD-CONSTANTS, #136) tells A apart from OTHER --
+either OTHER pins the same (WIDTH . SHIFT) field to a different literal
+value, or OTHER has an ordinary operand hole there whose alternatives never
+match CONSTANT's own value (%WORD-CHOICE-MATCHES-P). NIL -- not
+distinguishing -- when OTHER mentions that field neither as a constant nor
+as a hole: it ignores those bits entirely at decode and would match
+CONSTANT's value vacuously, the same non-distinguishing case
+%HOLE-DISJOINT-P's caller already treats a missing shared hole as (see
+%CHECK-OPCODE-DECODABLE!'s MIN over WORD-ALTERNATIVES lengths)."
+  (let ((other-constant (find-if (lambda (c) (and (= (word-constant-width c) (word-constant-width constant))
+                                                    (= (word-constant-shift c) (word-constant-shift constant))))
+                                  (instruction-descriptor-word-constants other))))
+    (if other-constant
+        (/= (word-constant-value other-constant) (word-constant-value constant))
+        (let ((choices (%word-field-choices-at (instruction-descriptor-word-alternatives other)
+                                                (word-constant-width constant) (word-constant-shift constant))))
+          (and choices (notany (lambda (c) (%word-choice-matches-p (word-constant-value constant) c)) choices))))))
+
+(defun %constants-disjoint-p (a b)
+  "T if some (field-value ...) constant A or B declares (#136) can never
+match the other's own encoding of that same field -- see
+%CONSTANT-DISTINGUISHES-P. Checked from both A's and B's constants, since
+only one side might pin the field at all."
+  (or (some (lambda (c) (%constant-distinguishes-p c b)) (instruction-descriptor-word-constants a))
+      (some (lambda (c) (%constant-distinguishes-p c a)) (instruction-descriptor-word-constants b))))
+
 (defun %check-opcode-decodable! (machine-name name a b)
   "Signal OPCODE-CONFLICT unless A and B -- two INSTRUCTION-DESCRIPTORs about
 to share one opcode on word-encoded MACHINE-NAME (#105), neither a sibling
@@ -1460,17 +1533,19 @@ tracks making %HOLE-DISJOINT-P itself layout-aware, which would let this
 requirement relax.
 
 Given a shared layout, :REASON :INDISTINGUISHABLE unless the two disagree at
-some shared hole: a hole index, within (MIN (length A's WORD-ALTERNATIVES)
+some shared hole -- a hole index, within (MIN (length A's WORD-ALTERNATIVES)
 (length B's)), where %HOLE-DISJOINT-P finds no raw fetched value that would
-match both. Requires *at least one* such hole, not that every hole
-disagrees -- decode only needs one field to tell the two apart. A no-operand
-descriptor's WORD-ALTERNATIVES is NIL, so MIN is 0 and the loop below finds
-no hole to check at all -- %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) matches
-a no-operand descriptor vacuously, so it would collide with *any* co-tenant,
-and this correctly falls through to the error rather than reporting a false
-pass; likewise for two co-tenant no-operand descriptors, which are truly
-indistinguishable unless they are siblings (caught by %SIBLING-COMBOS-P
-above)."
+match both -- or at some field either pins with (field-value ...) (#136,
+%CONSTANTS-DISJOINT-P). Requires *at least one* such disagreement, not that
+every hole/field disagrees -- decode only needs one field to tell the two
+apart. A no-operand descriptor's WORD-ALTERNATIVES is NIL, so MIN is 0 and
+the hole loop below finds nothing to check on its own -- %TRY-DECODE-WORD-
+CANDIDATE (decoder.lisp) matches a no-operand descriptor vacuously, so it
+would collide with *any* co-tenant unless its own WORD-CONSTANTS (#136, a
+CLS/RET-shaped no-operand instruction pinning every field) supply the
+disagreement instead; two co-tenant no-operand descriptors with no
+constants are truly indistinguishable unless they are siblings (caught by
+%SIBLING-COMBOS-P above)."
   (unless (%sibling-combos-p a b)
     (unless (eq (instruction-descriptor-word-layout-name a) (instruction-descriptor-word-layout-name b))
       (error 'opcode-conflict :machine machine-name
@@ -1480,9 +1555,10 @@ above)."
                                :reason :different-word-layout))
     (let ((n (min (length (instruction-descriptor-word-alternatives a))
                    (length (instruction-descriptor-word-alternatives b)))))
-      (unless (loop for i below n
-                    thereis (%hole-disjoint-p (nth i (instruction-descriptor-word-alternatives a))
-                                               (nth i (instruction-descriptor-word-alternatives b))))
+      (unless (or (loop for i below n
+                         thereis (%hole-disjoint-p (nth i (instruction-descriptor-word-alternatives a))
+                                                    (nth i (instruction-descriptor-word-alternatives b))))
+                  (%constants-disjoint-p a b))
         (error 'opcode-conflict :machine machine-name
                                  :opcode (instruction-descriptor-opcode a)
                                  :mnemonic name
@@ -1964,8 +2040,22 @@ value that decode then reads back unsigned."
                                        (word-operand-spec-variants spec))))
                     specs hole-signedp-list)))
 
+(defun %word-constants-form (constants)
+  "One (quoted) form building CONSTANTS (a list of WORD-CONSTANT, #136) --
+shared by every sibling combo of one word-encoded DEFINSTRUCTION variant,
+same as %WORD-ALTERNATIVES-FORM shares its own menu across siblings: a
+(field-value ...) pin doesn't vary by which value-range combo a mnemonic's
+operand happened to expand into, so there is exactly one CONSTANTS list per
+variant, not one per combo."
+  `(list ,@(mapcar (lambda (c) `(make-word-constant :name ',(word-constant-name c)
+                                                      :width ,(word-constant-width c)
+                                                      :shift ,(word-constant-shift c)
+                                                      :value ,(word-constant-value c)))
+                    constants)))
+
 (defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms
-                               hole-alternatives-list hole-signedp-list hole-relativep-list layout-name)
+                               hole-alternatives-list hole-signedp-list hole-relativep-list layout-name
+                               constants-form)
   "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
 . VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order). RELATIVE-HOLE-
 INDEX (#62) is COMBO's own %WORD-RELATIVE-HOLE-INDEX -- computed per combo,
@@ -1976,7 +2066,9 @@ shared. HOLE-SIGNEDP-LIST and HOLE-RELATIVEP-LIST (#63) are kept separate --
 signedness is an independent per-hole boolean any number of holes may set,
 while RELATIVE-HOLE-INDEX is positional, at most one hole ever. LAYOUT-NAME
 (#64) is this mode's own selected instruction-word layout name, stamped
-straight onto every combo -- see INSTRUCTION-DESCRIPTOR-WORD-LAYOUT-NAME."
+straight onto every combo -- see INSTRUCTION-DESCRIPTOR-WORD-LAYOUT-NAME.
+CONSTANTS-FORM (#136) is this variant's %WORD-CONSTANTS-FORM, shared across
+every combo the same way ALTERNATIVES-FORM already is."
   (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
          (word-fields-form `(list ,@(mapcar (lambda (p hole-signedp)
                                                (%word-field-choice-form (car p) (cdr p) hole-signedp))
@@ -1995,11 +2087,12 @@ straight onto every combo -- see INSTRUCTION-DESCRIPTOR-WORD-LAYOUT-NAME."
       :extra-words ,extra-words
       :relative-hole-index ',relative-index
       :word-layout-name ',layout-name
+      :word-constants ,constants-form
       :cycles ,cycles
       :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list))))
 
 (defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
-                                     cycles semantics-forms &optional layout-name)
+                                     cycles semantics-forms &optional layout-name field-value-subclauses)
   "Every INSTRUCTION-DESCRIPTOR form for one word-encoded addressing-mode
 use -- one per %EXPAND-WORD-COMBOS combo, or a single no-operand descriptor
 if OPERAND-SUBCLAUSES is empty and MODE has no holes. Unlike the byte-encoded
@@ -2010,43 +2103,54 @@ byte-encoded one falls back to %MODE-OPERAND-WIDTH, so silently accepting
 zero subclauses against a mode with holes would drop that hole's value on
 the floor instead of encoding it anywhere. LAYOUT-NAME (#64) is this
 instruction's own selected instruction-word layout (NIL for the machine's
-default) -- resolved by the caller's (layout NAME) subclause parsing."
+default) -- resolved by the caller's (layout NAME) subclause parsing.
+FIELD-VALUE-SUBCLAUSES (#136) is every (field-value FIELD-NAME n) subclause
+given alongside OPERAND-SUBCLAUSES -- resolved into WORD-CONSTANTs and
+stamped onto every combo the same CONSTANTS-FORM, since a pinned field
+doesn't vary by which value-range combo the mode's own operand expanded
+into."
   (when (and (null operand-subclauses) (plusp (%mode-hole-count mode)))
     (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
 (operand ...) subclause was given -- a word-encoded operand has no default ~
 field to fall back to" machine name mode-name (%mode-hole-count mode)))
-  (if (null operand-subclauses)
-      (list `(make-instruction-descriptor
-              :name ,(string-upcase (symbol-name name))
-              :machine ',machine
-              :mode ,mode-form
-              :opcode ,opcode
-              :operand-widths nil
-              :operand-names nil
-              :word-fields nil
-              :word-alternatives nil
-              :extra-words 0
-              :word-layout-name ',layout-name
-              :cycles ,cycles
-              :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
-      (let* ((layout (instruction-word-layout-named
-                       (machine-descriptor-instruction-word (find-machine-descriptor machine-name))
-                       layout-name))
-             (specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name
-                                                     layout layout-name))
-             (hole-alternatives-list (%mode-hole-alternatives mode))
-             (hole-signedp-list (%word-hole-signedp-list mode hole-alternatives-list (%mode-hole-count mode)))
-             (hole-relativep-list (%word-hole-relativep-list mode hole-alternatives-list (%mode-hole-count mode))))
-        (%check-word-one-of-signed specs hole-alternatives-list machine name)
-        (%check-word-one-of-width hole-alternatives-list machine name)
-        (let ((alternatives-form (%word-alternatives-form specs hole-signedp-list))
-              (combos (%expand-word-combos specs)))
-          (%check-word-one-of-relative specs combos hole-alternatives-list hole-relativep-list machine name)
-          (mapcar (lambda (combo)
-                    (%word-descriptor-form machine name mode-form opcode alternatives-form combo
-                                            cycles semantics-forms hole-alternatives-list
-                                            hole-signedp-list hole-relativep-list layout-name))
-                  combos)))))
+  (let* ((layout (instruction-word-layout-named
+                   (machine-descriptor-instruction-word (find-machine-descriptor machine-name))
+                   layout-name))
+         (operand-field-names (%operand-subclause-field-names operand-subclauses))
+         (constants (%parse-field-value-subclauses machine name mode-name layout layout-name
+                                                     field-value-subclauses operand-field-names))
+         (constants-form (%word-constants-form constants)))
+    (if (null operand-subclauses)
+        (list `(make-instruction-descriptor
+                :name ,(string-upcase (symbol-name name))
+                :machine ',machine
+                :mode ,mode-form
+                :opcode ,opcode
+                :operand-widths nil
+                :operand-names nil
+                :word-fields nil
+                :word-alternatives nil
+                :extra-words 0
+                :word-layout-name ',layout-name
+                :word-constants ,constants-form
+                :cycles ,cycles
+                :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
+        (let* ((specs (%parse-word-operand-subclauses mode operand-subclauses machine name mode-name machine-name
+                                                       layout layout-name))
+               (hole-alternatives-list (%mode-hole-alternatives mode))
+               (hole-signedp-list (%word-hole-signedp-list mode hole-alternatives-list (%mode-hole-count mode)))
+               (hole-relativep-list (%word-hole-relativep-list mode hole-alternatives-list (%mode-hole-count mode))))
+          (%check-word-one-of-signed specs hole-alternatives-list machine name)
+          (%check-word-one-of-width hole-alternatives-list machine name)
+          (let ((alternatives-form (%word-alternatives-form specs hole-signedp-list))
+                (combos (%expand-word-combos specs)))
+            (%check-word-one-of-relative specs combos hole-alternatives-list hole-relativep-list machine name)
+            (mapcar (lambda (combo)
+                      (%word-descriptor-form machine name mode-form opcode alternatives-form combo
+                                              cycles semantics-forms hole-alternatives-list
+                                              hole-signedp-list hole-relativep-list layout-name
+                                              constants-form))
+                    combos))))))
 
 (defun %check-word-opcode (machine name opcode)
   "Signal an error if OPCODE doesn't fit MACHINE's instruction-word OPCODE
@@ -2331,6 +2435,86 @@ word-encoded machine (#64) -- ~S declares no instruction-word clause"
                machine name context layout-name machine))
       layout-name)))
 
+(defun %operand-subclause-field-names (operand-subclauses)
+  "The instruction-word field name each of OPERAND-SUBCLAUSES' (operand
+[name] :field F ...) forms targets, in declaration order -- used only so
+%PARSE-FIELD-VALUE-SUBCLAUSES (#136) can reject a (field-value ...) that
+collides with a field an ordinary operand hole here already claims. NIL
+entries (a subclause not shaped like a word operand at all) are dropped
+rather than erroring here -- %PARSE-WORD-OPERAND-SUBCLAUSE is the actual
+validator for OPERAND-SUBCLAUSES' own shape."
+  (remove nil (mapcar (lambda (s) (multiple-value-bind (op-name spec) (%parse-operand-subclause s)
+                                     (declare (ignore op-name))
+                                     (and (eq (first spec) :field) (second spec))))
+                       operand-subclauses)))
+
+(defun %parse-field-value-subclause (machine name context layout layout-name subclause)
+  "Parse one (field-value FIELD-NAME n) encoding subclause (#136) -- a field
+pinned to a literal with no operand hole at all, discriminating opcode
+families that share their OPCODE field (CHIP8's 8XY0-8XYE, 5XY0/9XY0,
+EX9E/EXA1, FX__, 00E0/00EE). FIELD-NAME resolves within LAYOUT -- the
+instruction's own selected instruction-word layout (the machine's default,
+or a (layout NAME) alternate) -- exactly as an (operand ... :field F) hole
+resolves it (%PARSE-WORD-OPERAND-SUBCLAUSE), so an unknown field name is
+reported identically either way.
+
+Rejects OPCODE as the target field outright: (opcode n) already owns it, and
+letting (field-value ...) also write it would silently corrupt the
+already-placed opcode -- the same hazard #138 tracks for a stray
+(operand ... :field opcode). Rejects a literal outside FIELD-NAME's own
+[0, 2^width-1] range: registration and %CHECK-OPCODE-DECODABLE! both key off
+this declared VALUE while %ENCODE-WORD-INSTRUCTION writes it through
+WRAP-VALUE, so an over-wide constant would register under one value and
+encode a different, silently wrapped one -- the same rationale as
+%CHECK-WORD-OPCODE for the OPCODE field itself."
+  (destructuring-bind (field-value-kw field-name value) subclause
+    (declare (ignore field-value-kw))
+    (when (eq field-name 'opcode)
+      (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value opcode ...) is not allowed -- the ~
+opcode field is already given by this instruction's own (opcode n)" machine name context))
+    (let ((field (instruction-word-field layout field-name)))
+      (unless field
+        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no field named ~S in ~:[the default instruction-word ~
+layout~;instruction-word layout ~:*~S~] on machine ~S"
+               machine name context field-name layout-name machine))
+      (destructuring-bind (fname fwidth fshift) field
+        (declare (ignore fname))
+        (when (or (minusp value) (> value (1- (ash 1 fwidth))))
+          (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ~D) does not fit its ~D-bit field"
+                 machine name context field-name value fwidth))
+        (make-word-constant :name field-name :width fwidth :shift fshift :value value)))))
+
+(defun %parse-field-value-subclauses (machine name context layout layout-name field-value-subclauses
+                                       operand-field-names)
+  "Parse every (field-value ...) subclause (#136) on one word-encoded
+instruction variant into a list of WORD-CONSTANT. Signals an error when
+FIELD-VALUE-SUBCLAUSES is non-empty on a byte-encoded machine -- #136's
+constant-discriminator field is a word-machine-only mechanism, with
+(opcode n :sub s) (#125) as its byte-machine analogue -- before touching
+LAYOUT at all, which is meaningless there. Also signals an error for two
+field-value subclauses naming the same field, or a field-value naming a
+field OPERAND-FIELD-NAMES says an (operand ... :field F) hole here already
+claims -- both would OR two different values into the same bits, silently
+corrupting whichever one loses."
+  (when (and field-value-subclauses (not (%word-machine-p machine)))
+    (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ...) is a word-encoded-machine-only ~
+mechanism (#136) -- ~S declares no instruction-word clause; a byte-encoded machine's analogue ~
+is (opcode n :sub s) (#125)" machine name context machine))
+  (let ((constants (mapcar (lambda (s) (%parse-field-value-subclause machine name context layout layout-name s))
+                            field-value-subclauses)))
+    (let ((dup (loop for (c . later) on constants
+                      when (find (word-constant-name c) later :key #'word-constant-name)
+                        return (word-constant-name c))))
+      (when dup
+        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) is given more than once"
+               machine name context dup)))
+    (dolist (c constants)
+      (when (member (word-constant-name c) operand-field-names)
+        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) names the same field an ~
+(operand ... :field ~S) subclause already uses -- a field may be pinned to a constant or ~
+carry an operand, not both" machine name context (word-constant-name c) (word-constant-name c))))
+    constants))
+
 (defun %parse-opcode-subclause (machine name opcode-subclause)
   "Parse one (opcode n [:sub s]) subclause -- the same shape at all three
 DEFINSTRUCTION sites that accept one (the multi-mode (modes ...) form, the
@@ -2386,6 +2570,9 @@ its absolute-mode sibling."
     (let* ((mode (find-mode-descriptor mode-sym))
            (opcode-subclause (find 'opcode body :key #'first))
            (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand)) body))
+           ;; #136: repeatable, like OPERAND-SUBCLAUSES above -- REMOVE-IF-NOT,
+           ;; not FIND, or every field-value but the first would silently vanish.
+           (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value)) body))
            (sub-opcode-subclause (find 'sub-opcode body :key #'first))
            (layout-subclause (find 'layout body :key #'first))
            (semantics-subclause (find 'semantics body :key #'first))
@@ -2403,6 +2590,10 @@ its absolute-mode sibling."
       (when (and sub-opcode-subclause (%word-machine-p machine))
         (error "DEFINSTRUCTION ~S ~S: mode ~S: (sub-opcode ...) is a byte-machine-only ~
 mechanism (#128), not supported on word-encoded machine ~S" machine name mode-sym machine))
+      (when (and field-value-subclauses (not (%word-machine-p machine)))
+        (error "DEFINSTRUCTION ~S ~S: mode ~S: (field-value ...) is a word-encoded-machine-only ~
+mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub s) (#125)"
+               machine name mode-sym machine))
       (let ((layout-name (%parse-layout-subclause machine name mode-sym layout-subclause)))
         (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
         (let ((cycles-form (if cycles-subclause (second cycles-subclause) cycles-form))
@@ -2416,7 +2607,8 @@ mechanism (#128), not supported on word-encoded machine ~S" machine name mode-sy
           (if (%word-machine-p machine)
               (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                             opcode operand-subclauses mode mode-sym machine
-                                            cycles-form semantics-forms layout-name)
+                                            cycles-form semantics-forms layout-name
+                                            field-value-subclauses)
               ;; #124/#127: the word path's own gate runs inside
               ;; %WORD-MODE-DESCRIPTOR-FORMS itself (unlike the byte path's,
               ;; called here) -- it needs SPECS, which only that function
@@ -2606,28 +2798,46 @@ NO-MATCHING-CHOICE rather than silently falling through."
            (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
          (let* ((opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
                 (operand-subclause (find 'operand (rest encoding-clause) :key #'first))
-                (layout-subclause (find 'layout (rest encoding-clause) :key #'first)))
+                (layout-subclause (find 'layout (rest encoding-clause) :key #'first))
+                ;; #136: repeatable, like OPERAND-SUBCLAUSES elsewhere --
+                ;; REMOVE-IF-NOT, not FIND.
+                (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
+                                                        (rest encoding-clause))))
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                     machine name))
            (when operand-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
 but no (modes ...) clause declares an addressing mode" machine name))
-           ;; #64: a no-operand instruction has no field to resolve, and
-           ;; every layout shares one OPCODE field, so naming one here says
-           ;; nothing -- reject outright rather than silently ignoring it.
-           (when layout-subclause
+           ;; #64/#136: a no-operand instruction has no field an ordinary
+           ;; operand hole could resolve, and every layout shares one OPCODE
+           ;; field, so naming a non-default layout here says nothing *unless*
+           ;; a (field-value ...) also pins one of that layout's other
+           ;; fields -- reject only the bare case, since the other genuinely
+           ;; needs the layout to know which fields exist to pin (CLS/RET-
+           ;; shaped CHIP8 opcodes, e.g. 00E0/00EE, need exactly this).
+           (when (and layout-subclause (null field-value-subclauses))
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) has a (layout ...) subclause ~
-but no (modes ...) clause declares an addressing mode -- a no-operand instruction ~
-has no field to resolve, so naming a layout has no effect" machine name))
-           (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
-             (%check-word-opcode machine name opcode)
-             `(eval-when (:compile-toplevel :load-toplevel :execute)
-                (register-instruction-variants!
-                 ',machine
-                 (list ,(%descriptor-form machine name nil opcode nil nil
-                                           cycles-form (rest semantics-clause) nil sub)))
-                ',name))))
+but no (modes ...) clause declares an addressing mode and no (field-value ...) pins a field ~
+in it -- a no-operand instruction with nothing to pin has no field to resolve, so naming a ~
+layout has no effect" machine name))
+           (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
+             (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+               (%check-word-opcode machine name opcode)
+               (let* ((layout (and (%word-machine-p machine)
+                                    (instruction-word-layout-named
+                                     (machine-descriptor-instruction-word (find-machine-descriptor machine))
+                                     layout-name)))
+                      (constants (%parse-field-value-subclauses machine name nil layout layout-name
+                                                                  field-value-subclauses nil))
+                      (constants-form (%word-constants-form constants)))
+                 `(eval-when (:compile-toplevel :load-toplevel :execute)
+                    (register-instruction-variants!
+                     ',machine
+                     (list ,(%descriptor-form machine name nil opcode nil nil
+                                               cycles-form (rest semantics-clause) nil sub
+                                               nil nil nil layout-name constants-form)))
+                    ',name))))))
         ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
         ((consp (first mode-forms))
          (when encoding-clause
@@ -2662,6 +2872,10 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                 (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
                 (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
                                                     (rest encoding-clause)))
+                ;; #136: repeatable, like OPERAND-SUBCLAUSES above --
+                ;; REMOVE-IF-NOT, not FIND.
+                (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
+                                                        (rest encoding-clause)))
                 (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first))
                 (layout-subclause (find 'layout (rest encoding-clause) :key #'first)))
            (%check-mode-hole-attributes mode machine name)
@@ -2674,6 +2888,10 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
            (when (and sub-opcode-subclause (%word-machine-p machine))
              (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) is a byte-machine-only mechanism ~
 (#128), not supported on word-encoded machine ~S" machine name machine))
+           (when (and field-value-subclauses (not (%word-machine-p machine)))
+             (error "DEFINSTRUCTION ~S ~S: (field-value ...) is a word-encoded-machine-only ~
+mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub s) (#125)"
+                    machine name machine))
            (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
            (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
              (%check-word-opcode machine name opcode)
@@ -2684,7 +2902,8 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                      (list ,@(%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                                            opcode operand-subclauses
                                                            mode mode-sym machine
-                                                           cycles-form (rest semantics-clause) layout-name)))
+                                                           cycles-form (rest semantics-clause) layout-name
+                                                           field-value-subclauses)))
                     ',name)
                  (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
                      (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine
@@ -2714,9 +2933,10 @@ drift apart in how they lay cells down."
   (loop for i below width collect (wrap-value (ash value (* (- cell-width) i)) cell-width)))
 
 (defun %encode-word-instruction (descriptor layout values)
-  "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode and
-each operand's chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES)
-into one LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
+  "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode,
+each of its (field-value ...) WORD-CONSTANTS (#136), and each operand's
+chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES) into one
+LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
 (%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH) followed by each
 :EXTRA-WORD operand's own value, also little-endian, in operand declaration
 order."
@@ -2724,6 +2944,9 @@ order."
     (destructuring-bind (opcode-width opcode-shift)
         (rest (instruction-word-field layout 'opcode))
       (setf word (ash (wrap-value (instruction-descriptor-opcode descriptor) opcode-width) opcode-shift)))
+    (dolist (constant (instruction-descriptor-word-constants descriptor))
+      (setf word (logior word (ash (wrap-value (word-constant-value constant) (word-constant-width constant))
+                                    (word-constant-shift constant)))))
     (loop for choice in (instruction-descriptor-word-fields descriptor)
           for value in values
           do (ecase (word-field-choice-kind choice)

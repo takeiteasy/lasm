@@ -801,6 +801,147 @@
     ;; SETNARROW 3, 2, 100 -> opcode 3 << 12 | 3 << 10 | 2 << 8 | 100 = #x3E64
     (fiveam:is (equalp #(#x64 #x3e) (coerce (encode-instruction setnarrow '(3 2 100)) 'vector)))))
 
+;;; Word-encoded constant discriminator fields (#136) -- (field-value FIELD-
+;;; NAME n) pins a field to a literal with no operand hole at all, letting
+;;; several descriptors share one opcode when nothing else tells them apart.
+;;; FIELD-VALUE-TEST-MACHINE mirrors chip8word.lisp's own opcode-8 ALU shape:
+;;; one 4/4/4/4 default layout, X an ordinary hole, N pinned per mnemonic --
+;;; INCN/DECN both carry an X hole and differ only by their own pinned N;
+;;; ZEROALL, at the same opcode, carries no operand at all and is
+;;; discriminated purely by its own pinned N, mirroring CLS/RET/HLT's own
+;;; opcode-0 shape in the extended example.
+
+(defmachine field-value-test-machine
+  (register pc :width 16)
+  (register a :width 8 :count 4)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4) (field x 4) (field y 4) (field n 4)))
+
+(defmode field-value-x expr)
+
+(definstruction field-value-test-machine incn
+  (modes field-value-x)
+  (encoding (opcode 1) (field-value n 1)
+    (operand x :field x))
+  (semantics (set! (a x) (wrap-value (1+ (a x)) 8))))
+
+(definstruction field-value-test-machine decn
+  (modes field-value-x)
+  (encoding (opcode 1) (field-value n 2)
+    (operand x :field x))
+  (semantics (set! (a x) (wrap-value (1- (a x)) 8))))
+
+(definstruction field-value-test-machine zeroall
+  (encoding (opcode 1) (field-value n 0))
+  (semantics (set! (a 0) 0) (set! (a 1) 0) (set! (a 2) 0) (set! (a 3) 0)))
+
+(definstruction field-value-test-machine hlt
+  (encoding (opcode 2))
+  (semantics (trap :halt)))
+
+(fiveam:test field-value-constant-recorded-on-the-descriptor
+  (let ((incn (first (find-instruction-variants 'field-value-test-machine "incn")))
+        (zeroall (first (find-instruction-variants 'field-value-test-machine "zeroall"))))
+    (fiveam:is (equalp (list (make-word-constant :name 'n :width 4 :shift 0 :value 1))
+                        (instruction-descriptor-word-constants incn)))
+    (fiveam:is (equalp (list (make-word-constant :name 'n :width 4 :shift 0 :value 0))
+                        (instruction-descriptor-word-constants zeroall)))
+    (fiveam:is (null (instruction-descriptor-word-fields zeroall)))))
+
+(fiveam:test field-value-constant-packs-into-declared-bits
+  ;; INCN A2 -> opcode 1 << 12 | x=2 << 8 | y=0 << 4 | n=1 = #x1201
+  (let ((incn (first (find-instruction-variants 'field-value-test-machine "incn"))))
+    (fiveam:is (equalp #(#x01 #x12) (coerce (encode-instruction incn '(2)) 'vector)))))
+
+(fiveam:test field-value-co-tenants-decode-and-execute-distinctly
+  ;; INCN/DECN (each carrying an X hole) and ZEROALL (no operand at all)
+  ;; all share opcode 1, told apart purely by their own pinned N (#136) --
+  ;; no hole disagreement is needed or present between INCN and ZEROALL.
+  (let ((a (assemble "  incn 0
+  incn 0
+  decn 0
+  zeroall
+  incn 1
+  hlt" :machine 'field-value-test-machine)))
+    (let ((m (make-machine 'field-value-test-machine)))
+      (load-program m a)
+      (multiple-value-bind (reason steps) (run m)
+        (fiveam:is (eq :trap reason))
+        (fiveam:is (= 6 steps))
+        ;; A0: +1 +1 -1 then ZEROALL clears it back to 0; A1: ZEROALL clears
+        ;; it, then +1 -> 1.
+        (fiveam:is (= 0 (regref m 'a 0)))
+        (fiveam:is (= 1 (regref m 'a 1)))))))
+
+(fiveam:test field-value-disassembles-each-co-tenant-back-to-its-own-mnemonic
+  (let ((a (assemble "  incn 0
+  decn 0
+  zeroall
+  hlt" :machine 'field-value-test-machine)))
+    (let ((lines (disassemble-cells (assembly-cells a) :machine 'field-value-test-machine)))
+      (fiveam:is (equal '("INCN" "DECN" "ZEROALL" "HLT")
+                         (mapcar (lambda (l) (instruction-descriptor-name (disassembly-line-descriptor l)))
+                                 lines))))))
+
+(fiveam:test field-value-rejected-on-byte-machine
+  (fiveam:signals error
+    (eval '(definstruction test-machine bogus
+             (modes immediate)
+             (encoding (opcode 201) (field-value n 1) (operand :mode))
+             (semantics)))))
+
+(fiveam:test field-value-rejects-unknown-field
+  (fiveam:signals error
+    (eval '(definstruction field-value-test-machine bogus
+             (modes field-value-x)
+             (encoding (opcode 3) (field-value zzz 1)
+               (operand x :field x))
+             (semantics (set! (a x) 0))))))
+
+(fiveam:test field-value-rejects-opcode-as-target-field
+  (fiveam:signals error
+    (eval '(definstruction field-value-test-machine bogus
+             (modes field-value-x)
+             (encoding (opcode 3) (field-value opcode 1)
+               (operand x :field x))
+             (semantics (set! (a x) 0))))))
+
+(fiveam:test field-value-rejects-out-of-range-value
+  (fiveam:signals error
+    (eval '(definstruction field-value-test-machine bogus
+             (modes field-value-x)
+             (encoding (opcode 3) (field-value n 16)
+               (operand x :field x))
+             (semantics (set! (a x) 0))))))
+
+(fiveam:test field-value-rejects-duplicate-pin
+  (fiveam:signals error
+    (eval '(definstruction field-value-test-machine bogus
+             (modes field-value-x)
+             (encoding (opcode 3) (field-value n 1) (field-value n 2)
+               (operand x :field x))
+             (semantics (set! (a x) 0))))))
+
+(fiveam:test field-value-rejects-collision-with-operand-field
+  (fiveam:signals error
+    (eval '(definstruction field-value-test-machine bogus
+             (modes field-value-x)
+             (encoding (opcode 3) (field-value x 1)
+               (operand x :field x))
+             (semantics (set! (a x) 0))))))
+
+(fiveam:test field-value-indistinguishable-co-tenants-signal-error
+  ;; A second descriptor at opcode 1 pinning N to a value ZEROALL/INCN/DECN
+  ;; already claim -- no field tells them apart at decode time.
+  (handler-case
+      (eval '(definstruction field-value-test-machine bogus
+               (encoding (opcode 1) (field-value n 0))
+               (semantics nil)))
+    (opcode-conflict (c)
+      (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
 ;;; Variant expansion / registration
 
 (fiveam:test word-instruction-expands-into-one-descriptor-per-variant
