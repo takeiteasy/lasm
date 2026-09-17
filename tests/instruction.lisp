@@ -1746,6 +1746,22 @@
                (for-choice vh-idx (operand off :trailing-word)))
              (semantics nil)))))
 
+(fiveam:test for-choice-base-alternative-unclaimed-by-any-choice-variant-signals-error
+  ;; The base tuple's own alternative (VH-REG, contributing no extra holes)
+  ;; is just as much an unclaimed-alternative case as the over-count one
+  ;; above -- SRC only claims VH-IDX, so the base tuple's own filtered menu
+  ;; comes up empty too.
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 5)
+               (operand dst :field dst)
+               (operand src :field src
+                 (variant (choice vh-idx) inline :range (0 7) :bias #x10))
+               (for-choice vh-idx (operand off :trailing-word)))
+             (semantics nil)))))
+
 ;; Byte-encoded machines are out of #120's initial slice -- a varying ONE-OF
 ;; is rejected outright, not silently truncated to its base hole count.
 (defmachine varying-hole-byte-test-machine
