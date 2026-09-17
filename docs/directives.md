@@ -1,19 +1,21 @@
 # Directives
 
 `defdirective` declares an assembler directive: a named-parameter list plus
-exactly one action form from a small fixed vocabulary. LASM ships five
-built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.res`,
-`.equ`. The assembler (see [Assembler](assembler.md)) dispatches a statement
-to a directive by mnemonic, the same way it dispatches to an instruction's
-addressing-mode variants — a directive statement is otherwise an ordinary
-`statement` (see [Statement grammar & expression parser](parser.md)), just
-one whose mnemonic happens to start with `.` under the default lexer's
-`ident-chars`.
+exactly one action form from a small fixed vocabulary. LASM ships seven
+built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.cell`,
+`.dat`, `.res`, `.equ`. The assembler (see [Assembler](assembler.md))
+dispatches a statement to a directive by mnemonic, the same way it dispatches
+to an instruction's addressing-mode variants — a directive statement is
+otherwise an ordinary `statement` (see [Statement grammar & expression
+parser](parser.md)), just one whose mnemonic happens to start with `.` under
+the default lexer's `ident-chars`.
 
 ```lisp
 (defdirective ".org"  (address)      (set-origin! address))
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
+(defdirective ".cell" (&rest values) (emit 1 values))
+(defdirective ".dat"  (&rest values) (emit 1 values))
 (defdirective ".res"  (count)        (reserve count))
 (defdirective ".equ"  (name value)   (assign name value))
 ```
@@ -124,13 +126,39 @@ follow-up ticket, not specific to directives).
 and `.word` still mean *one* and *two of the machine's own cells* — the
 names are inherited from every byte-addressed example so far and are a
 misnomer there (`.byte 1, 2` on a 16-bit-cell machine lays down two 16-bit
-cells, not two 8-bit bytes; DCPU-16 assemblers call the equivalent `dat`). A
-dedicated `.cell`/`.dat` alias is a follow-up ticket, kept separate so this
-change doesn't touch any existing byte-addressed machine's source.
+cells, not two 8-bit bytes). `.cell`/`.dat` (#65, below) are the
+cell-sized spellings meant for this case.
 
 Because layout size here is just argument *count*, `.byte`/`.word` values
 are evaluated against the completed symbol table at encode time — a label
 operand works with no special handling.
+
+## `.cell` / `.dat`
+
+```lisp
+.cell 1, 2, 3        ; three one-cell fields, same as .byte
+.dat  $1234           ; one one-cell field, DCPU-16 spelling
+```
+
+Plain aliases for `.byte` — identical `:emit` action and width-1 descriptor,
+so they run through the exact same encode path (`%encode-value-cells`) and
+share every rule above, including how a value out of range wraps and how a
+label operand resolves at encode time. They exist so a word-addressed
+machine's source can write "one of this machine's own cells" without
+reaching for the byte-addressed-flavored `.byte` — `.dat` matches the
+spelling DCPU-16 assemblers use for the same thing; `.cell` is the
+machine-agnostic name. Both are registered globally, so they are visible (as
+plain `.byte` synonyms) on byte-addressed machines too, and — like every
+other directive — occupy the mnemonic namespace, so no machine may define an
+instruction named `.cell` or `.dat`.
+
+```lisp
+(defmachine wordfoo
+  (register pc :width 16)
+  (memory ram :width 16 :addr-width 12 :cell-width 16))
+
+result: .dat 0   ; one 16-bit cell, not two 8-bit bytes
+```
 
 ## `.res`
 
@@ -238,9 +266,9 @@ restricted vocabulary actually requires.
   count, an `.equ`'s first operand not a bare identifier, an `.equ` value
   referencing a symbol not yet bound (forward reference), or a duplicate
   symbol (a label or `.equ` name bound twice, in any combination).
-- `unresolved-label` — a `.byte`/`.word` operand referencing a label never
-  bound anywhere in the program (from `eval-expr` at encode time, same as an
-  instruction operand).
+- `unresolved-label` — a `.byte`/`.word`/`.cell`/`.dat` operand referencing a
+  label never bound anywhere in the program (from `eval-expr` at encode time,
+  same as an instruction operand).
 
 ## Follow-ups
 
@@ -250,5 +278,10 @@ restricted vocabulary actually requires.
 - `.set` / redefinable assignment — a rebinding counterpart to `.equ`, which
   signals `assembly-error` on any rebind (see "`.equ`" above).
 - Lifting `.org`/`.res`'s pure-`.equ`-only restriction (#41).
+- The disassembler's undecodable-data lines always render as `.byte $XX`
+  (`%data-line-text`, `disassembler.lisp`), even on a word-addressed machine
+  — rendering `.cell`/`.dat` there needs the machine's cell width threaded
+  through disassembly, which none of `disassemble-cells`/`-assembly`/`-memory`
+  currently plumb in.
 
 See the tracker for these.

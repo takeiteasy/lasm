@@ -175,9 +175,7 @@ anything -- see this file's header comment."
 ;; respectively, same as they always meant 1 and 2 8-bit bytes on every
 ;; byte-addressed machine so far. On a word-addressed machine (:CELL-WIDTH
 ;; 16), ".byte 1, 2" lays down two 16-bit cells, not two 8-bit bytes -- the
-;; name is a misnomer there (DCPU-16 assemblers call the equivalent "dat");
-;; a dedicated .CELL/.DAT alias is a follow-up ticket rather than a rename
-;; here, to keep every byte-addressed machine's existing source unchanged.
+;; name is a misnomer there (DCPU-16 assemblers call the equivalent "dat").
 (defdirective ".org"  (address)      (set-origin! address))
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
@@ -187,3 +185,13 @@ anything -- see this file's header comment."
 ;; change at all.
 (defdirective ".res"  (count)        (reserve count))
 (defdirective ".equ"  (name value)   (assign name value))
+;; .CELL/.DAT (#65): plain aliases for .BYTE -- same width-1 :EMIT action, so
+;; a word-addressed machine's source can name "one of the machine's own
+;; cells" without reading the byte-addressed-flavored ".byte". Both spellings
+;; are offered since DCPU-16 assemblers call this "dat" while other
+;; word-addressed machines may prefer the more generic "cell". The registry
+;; is global, so both are also visible (as .BYTE synonyms) on byte-addressed
+;; machines, and -- like every other directive -- take the mnemonic
+;; namespace, so no machine may define an instruction named .CELL or .DAT.
+(defdirective ".cell" (&rest values) (emit 1 values))
+(defdirective ".dat"  (&rest values) (emit 1 values))

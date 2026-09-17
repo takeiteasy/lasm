@@ -328,6 +328,26 @@ target: nop" :machine 'instr-test-machine)))
   (let ((a (assemble ".byte 1, 2, 3" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
+;; #65 -- .CELL/.DAT are plain .BYTE aliases: same cells out, on both a
+;; byte-addressed machine and a word-addressed one (WORDADDR-TEST-MACHINE,
+;; below, mirrors BYTE-DIRECTIVE-LAYS-ONE-CELL-PER-VALUE-ON-WORD-ADDRESSED-
+;; MACHINE).
+(fiveam:test cell-directive-is-an-alias-for-byte
+  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :machine 'instr-test-machine))
+                      (assembly-cells (assemble ".cell 1, 2, 3" :machine 'instr-test-machine)))))
+
+(fiveam:test dat-directive-is-an-alias-for-byte
+  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :machine 'instr-test-machine))
+                      (assembly-cells (assemble ".dat 1, 2, 3" :machine 'instr-test-machine)))))
+
+(fiveam:test cell-directive-with-label-argument-resolves-in-pass-2
+  ;; Mirrors BYTE-DIRECTIVE-WITH-LABEL-ARGUMENT-RESOLVES-IN-PASS-2 below --
+  ;; .CELL's values fold at encode time exactly like .BYTE's.
+  (let ((a (assemble "nop
+target: nop
+.cell target" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA #xEA 1) (assembly-cells a)))))
+
 (fiveam:test word-directive-emits-little-endian-words
   (let ((a (assemble ".word $1234" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x34 #x12) (assembly-cells a)))))
@@ -1046,6 +1066,17 @@ second: nop" :machine 'wordaddr-test-machine)))
 
 (fiveam:test byte-directive-lays-one-cell-per-value-on-word-addressed-machine
   (let ((a (assemble ".byte 1, 2, 3" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
+
+;; #65 -- .CELL/.DAT lay down the same one-cell-per-value data as .BYTE on a
+;; word-addressed machine -- the case the alias exists for, since ".byte" is
+;; a misnomer once a cell is wider than 8 bits.
+(fiveam:test cell-directive-lays-one-cell-per-value-on-word-addressed-machine
+  (let ((a (assemble ".cell 1, 2, 3" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
+
+(fiveam:test dat-directive-lays-one-cell-per-value-on-word-addressed-machine
+  (let ((a (assemble ".dat 1, 2, 3" :machine 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
 (fiveam:test word-directive-lays-two-cells-per-value-on-word-addressed-machine

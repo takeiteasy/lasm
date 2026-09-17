@@ -63,7 +63,8 @@ ldb #20
 add          ; A = A + B = 30
 sta result
 hlt
-result: .word 0")
+result: .word 0
+marker: .dat $BEEF")
 
 (format t "~&Source:~%~A~2%" *source*)
 
@@ -72,11 +73,14 @@ result: .word 0")
   (format t "  cells:      ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  cell-width: ~D bits~%" (assembly-cell-width assembly))
   (format t "  length:     ~D cells (2 each for LDA/LDB/STA, 1 each for ADD/HLT, ~
-2 for RESULT's .word -- .WORD always means 2 of this machine's own cells, #53)~%"
+2 for RESULT's .word -- .WORD always means 2 of this machine's own cells, #53 -- ~
+1 for MARKER's .dat, #65's cell-sized alias to .byte, spelled the DCPU-16 way)~%"
           (length (assembly-cells assembly)))
   (assert (= 16 (assembly-cell-width assembly)))
-  (assert (= 10 (length (assembly-cells assembly))))
+  (assert (= 11 (length (assembly-cells assembly))))
   (assert (equal '(unsigned-byte 16) (array-element-type (assembly-cells assembly))))
+  (assert (= 10 (gethash "marker" (assembly-symbols assembly))))
+  (assert (= #xBEEF (aref (assembly-cells assembly) 10)))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'wordaddrfoo)))

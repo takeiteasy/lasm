@@ -14,6 +14,8 @@
   (fiveam:is (eq :set-origin (directive-descriptor-action (find-directive-descriptor ".org"))))
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".byte"))))
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".word"))))
+  (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".cell"))))
+  (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".dat"))))
   (fiveam:is (eq :reserve (directive-descriptor-action (find-directive-descriptor ".res"))))
   (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".equ")))))
 
@@ -35,6 +37,17 @@
 
 (fiveam:test word-directive-width-is-two
   (fiveam:is (= 2 (directive-descriptor-width (find-directive-descriptor ".word")))))
+
+;; #65 -- .CELL/.DAT are plain .BYTE aliases: same :EMIT action, :VARIADIC
+;; arity, width 1. Equivalence of emitted cells is exercised against
+;; INSTR-TEST-MACHINE/WORDADDR-TEST-MACHINE in tests/assembler.lisp.
+(fiveam:test cell-directive-is-variadic-with-width-one
+  (fiveam:is (eq :variadic (directive-descriptor-arity (find-directive-descriptor ".cell"))))
+  (fiveam:is (= 1 (directive-descriptor-width (find-directive-descriptor ".cell")))))
+
+(fiveam:test dat-directive-is-variadic-with-width-one
+  (fiveam:is (eq :variadic (directive-descriptor-arity (find-directive-descriptor ".dat"))))
+  (fiveam:is (= 1 (directive-descriptor-width (find-directive-descriptor ".dat")))))
 
 (fiveam:test res-directive-has-fixed-arity-one
   (fiveam:is (equal '(:fixed 1) (directive-descriptor-arity (find-directive-descriptor ".res")))))
