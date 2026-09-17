@@ -697,7 +697,10 @@ reads differently:
 ```
 
 `NAME` binds as before; `FIELD-NAME` names one of the machine's declared
-`instruction-word` fields instead of giving a byte width. With no
+`instruction-word` fields instead of giving a byte width — naming `opcode`
+(already given by the instruction's own `(opcode n)`), or naming a field a
+sibling `(operand ...)` subclause here already claims, is a
+macroexpansion-time error. With no
 `(variant ...)` forms at all, the field just holds the value directly
 (biased by 0) over its own full range — unsigned, `[0, 2^width-1]`, unless
 the mode itself declares `:signed t` (see ["Signed word
@@ -808,7 +811,12 @@ decode"](#opcode-to-descriptor-decode) below, #105) must name the *same*
 layout — decode has no way to tell which layout's fields to read until it
 already knows which descriptor matched, so mixing layouts at one opcode is
 rejected outright (`opcode-conflict`, reason `:different-word-layout`)
-rather than risked.
+rather than risked. Within a shared layout, decodability itself is checked
+bit-by-bit: two candidates are told apart the moment some field they both
+occupy — matched by the bits it actually sits at, not by declaration order —
+accepts disjoint raw values, or some `field-value` pin (below) disagrees. A
+field only one candidate mentions never counts as disagreement, since it
+ignores those bits entirely at decode and would match vacuously.
 
 ### `(field-value FIELD-NAME n)` — constant discriminator fields (#136)
 

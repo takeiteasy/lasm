@@ -687,6 +687,43 @@
   (encoding (opcode 4))
   (semantics (trap :halt)))
 
+;; #137 fixtures: DISJX alone at opcode 10 (a conflicting DISJY is added only
+;; via EVAL, by the test that expects it to be rejected). DISJY1/DISJY2 share
+;; opcode 11, both on field Y with disjoint ranges -- genuinely
+;; distinguishable. ORDERAB/ORDERBA share opcode 12 and both use fields X and
+;; Y, but declare their (operand ...) subclauses in opposite order -- only
+;; field Y's ranges (0..2 vs. 3..255) actually disagree; field X's ranges
+;; fully overlap (0..15 both sides).
+
+(definstruction word-layouts-test-machine disjx
+  (modes word-layouts-x)
+  (encoding (opcode 10) (operand v :field x (variant (range 0 3) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine disjy1
+  (modes word-layouts-x)
+  (encoding (opcode 11) (operand v :field y (variant (range 0 100) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine disjy2
+  (modes word-layouts-x)
+  (encoding (opcode 11) (operand v :field y (variant (range 200 255) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine orderab
+  (modes word-layouts-xy)
+  (encoding (opcode 12)
+    (operand x :field x)
+    (operand y :field y (variant (range 0 2) inline)))
+  (semantics (set! a x) (set! b y)))
+
+(definstruction word-layouts-test-machine orderba
+  (modes word-layouts-xy)
+  (encoding (opcode 12)
+    (operand y :field y (variant (range 3 255) inline))
+    (operand x :field x))
+  (semantics (set! a x) (set! b y)))
+
 (fiveam:test instruction-word-layout-alternates-share-width-and-opcode-field
   (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor 'word-layouts-test-machine))))
     (fiveam:is (null (instruction-word-layout-name layout)))
@@ -941,6 +978,75 @@
     (opcode-conflict (c)
       (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
     (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+;;; #137: %HOLE-DISJOINT-P must pair two co-tenants' holes by the bits they
+;;; occupy, not by index -- reusing WORD-LAYOUTS-TEST-MACHINE (default layout
+;;; opcode 4/x 4 shift 8/y 8 shift 0) since its two non-opcode fields differ
+;;; in both width and shift, the exact shape the positional comparison got
+;;; wrong.
+
+(fiveam:test definstruction-co-tenants-disjoint-in-different-fields-are-rejected
+  ;; DISJX's only hole is field X (raw 0-3); a second descriptor at the same
+  ;; opcode whose only hole is field Y (raw 4-255) -- comparing those two raw
+  ;; value sets positionally looks disjoint, but the sets were never
+  ;; comparable: X and Y occupy different bits, so a fetched word with X=0
+  ;; and Y=4 matches both. No field ties them apart, so this must be
+  ;; rejected as :INDISTINGUISHABLE.
+  (handler-case
+      (eval '(definstruction word-layouts-test-machine disjy
+              (modes word-layouts-x)
+              (encoding (opcode 10) (operand v :field y (variant (range 4 255) inline)))
+              (semantics (set! a v))))
+    (opcode-conflict (c)
+      (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+(fiveam:test definstruction-co-tenants-disjoint-in-the-same-field-are-accepted
+  ;; DISJY1 and DISJY2 are genuinely distinguishable (field Y, disjoint
+  ;; ranges) -- each must round-trip to its own mnemonic at decode time, not
+  ;; merely have registered without error.
+  (let ((v1 (assembly-cells (assemble "disjy1 50" :machine 'word-layouts-test-machine)))
+        (v2 (assembly-cells (assemble "disjy2 210" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "DISJY1" (instruction-descriptor-name
+                                   (decode-instruction-at (vector-cell-reader v1) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "DISJY2" (instruction-descriptor-name
+                                   (decode-instruction-at (vector-cell-reader v2) 0 'word-layouts-test-machine))))))
+
+(fiveam:test definstruction-co-tenants-with-holes-in-different-order-pair-by-bits
+  ;; ORDERAB declares its X hole before its Y hole; ORDERBA declares them the
+  ;; other way round. Positionally, hole 0 of each (X's full 0-15 range vs.
+  ;; Y's 3-255) and hole 1 of each (Y's 0-2 vs. X's full 0-15) both overlap,
+  ;; so the old index-paired comparison would find no disjoint hole and
+  ;; falsely reject an actually-distinguishable pair (field Y: {0,1,2} vs.
+  ;; {3..255}, genuinely disjoint). Pairing by bits must still find it, and
+  ;; each must round-trip to its own mnemonic.
+  (let ((ab (assembly-cells (assemble "orderab 9, 1" :machine 'word-layouts-test-machine)))
+        (ba (assembly-cells (assemble "orderba 200, 9" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "ORDERAB" (instruction-descriptor-name
+                                    (decode-instruction-at (vector-cell-reader ab) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "ORDERBA" (instruction-descriptor-name
+                                    (decode-instruction-at (vector-cell-reader ba) 0 'word-layouts-test-machine))))))
+
+;;; #138: an (operand ... :field opcode) hole would OR its own bits into the
+;;; already-placed opcode field at encode time (%ENCODE-WORD-INSTRUCTION) --
+;;; rejected the same way (field-value opcode ...) already is (#136, above).
+;;; Two operand subclauses naming the same field carry the identical hazard.
+
+(fiveam:test word-operand-rejects-opcode-as-target-field
+  (fiveam:signals error
+    (eval '(definstruction word-layouts-test-machine bogus
+             (modes word-layouts-x)
+             (encoding (opcode 13) (operand v :field opcode))
+             (semantics (set! a v))))))
+
+(fiveam:test word-operand-rejects-duplicate-target-field
+  (fiveam:signals error
+    (eval '(definstruction word-layouts-test-machine bogus
+             (modes word-layouts-xy)
+             (encoding (opcode 13)
+               (operand x :field x)
+               (operand y :field x))
+             (semantics (set! a x) (set! b y))))))
 
 ;;; Variant expansion / registration
 

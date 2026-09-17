@@ -89,8 +89,7 @@ between them or on the chain above):
 | Ticket | Follows up on |
 |---|---|
 | #135 per-field extra-word width on a word-encoded machine | #20, split off #63 |
-| #137 `%hole-disjoint-p` compares holes positionally | #105, exposed by #64 |
-| #138 `(operand ... :field opcode)` is not rejected | #20, found while implementing #64 |
+| #140 relax #64's same-layout-per-opcode restriction | #105, #64, unblocked by #137 |
 | #65 `.cell`/`.dat` directive | #53 |
 | #66 `:endian` option | #53 |
 | #67 `lo`/`hi` operators vs. cell width | #53 |
@@ -114,9 +113,13 @@ named `(layout NAME ...)` alternates share the machine's `:width` and
 `opcode` field, and a `definstruction` selects one via a `(layout NAME)`
 encoding subclause. Scoped to layout *selection*; a nibble-faithful CHIP8
 also needed constant discriminator fields (no operand hole, a field pinned
-to a literal), split off to #136. #137 and #138 are two further gaps the
-implementation surfaced (one pre-existing, one this ticket's own
-same-layout-per-opcode workaround) rather than fixed in place.
+to a literal), split off to #136. It also surfaced two further gaps, both
+since closed: #137 (`%hole-disjoint-p`'s caller compared co-tenant holes
+positionally instead of by the bits they occupy -- pre-existing, exposed
+by this ticket's own co-tenancy check) and #138 (`(operand ... :field
+opcode)` silently corrupted the opcode field at encode time -- pre-existing
+on every word-encoded machine). #137's fix leaves the same-layout-per-opcode
+restriction itself no longer load-bearing; relaxing it is #140.
 
 #136 (word-encoded constant discriminator fields) is now closed --
 `(field-value FIELD-NAME n)` pins an instruction-word field to a literal
