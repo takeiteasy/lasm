@@ -1609,6 +1609,160 @@
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil)))))
 
+;;; Varying hole counts across ONE-OF alternatives (#120) -- a ONE-OF hole
+;;; whose alternatives disagree on hole count, on a word-encoded machine,
+;;; gated on the governing field being wholly CHOICE-selected (or #118-mixed
+;;; with the unclaimed alternative sharing the base hole count). Expands one
+;;; fixed-arity INSTRUCTION-DESCRIPTOR per alternative-tuple
+;;; (mode.lisp's %MODE-HOLE-TUPLES) rather than one shared shape.
+
+(defmachine varying-hole-test-machine
+  (register pc :width 16)
+  (register a :width 16 :count 8)
+  (memory ram :width 16 :addr-width 16)
+  (instruction-word :width 16
+    (field src 6)
+    (field dst 5)
+    (field opcode 5)))
+
+(defmode vh-reg expr)
+(defmode vh-idx "[" expr "," expr "]")
+(defmode vh-mode expr "," (one-of vh-reg vh-idx))
+
+(definstruction varying-hole-test-machine ldv
+  (modes vh-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :field dst)
+    (operand src :field src
+      (variant (choice vh-reg) inline :range (0 7) :bias #x00)
+      (variant (choice vh-idx) inline :range (0 7) :bias #x10))
+    (for-choice vh-idx (operand off :trailing-word)))
+  (semantics
+    (choice-case src
+      (vh-reg (set! (a dst) (a src)))
+      (vh-idx (set! (a dst) (mref machine 'ram (+ (a src) off)))))))
+
+(fiveam:test varying-hole-counts-expand-one-descriptor-per-tuple
+  (let ((variants (find-instruction-variants 'varying-hole-test-machine 'ldv)))
+    (fiveam:is (= 2 (length variants)))
+    (let ((one-hole (find 2 variants :key (lambda (d) (length (instruction-descriptor-operand-names d)))))
+          (two-hole (find 3 variants :key (lambda (d) (length (instruction-descriptor-operand-names d))))))
+      (fiveam:is (equal '(dst src) (instruction-descriptor-operand-names one-hole)))
+      (fiveam:is (equal '(dst src off) (instruction-descriptor-operand-names two-hole)))
+      (fiveam:is (= 1 (instruction-descriptor-size one-hole)))
+      (fiveam:is (= 2 (instruction-descriptor-size two-hole)))
+      (fiveam:is (= 0 (instruction-descriptor-extra-cells one-hole)))
+      (fiveam:is (= 1 (instruction-descriptor-extra-cells two-hole))))))
+
+(fiveam:test varying-hole-counts-governing-field-filtered-per-tuple
+  ;; The one-hole tuple's own field-SRC menu must NOT include the two-hole
+  ;; alternative's variant -- otherwise a value in VH-IDX's own 0x10-0x17
+  ;; range would be judged decodable by the one-hole descriptor too (this is
+  ;; the load-bearing per-tuple filtering fix, not merely a shape check).
+  (let* ((variants (find-instruction-variants 'varying-hole-test-machine 'ldv))
+         (one-hole (find 2 variants :key (lambda (d) (length (instruction-descriptor-operand-names d)))))
+         ;; hole order is (dst src), so the SRC field's own variant menu is
+         ;; the second entry.
+         (src-alternatives (second (instruction-descriptor-word-alternatives one-hole))))
+    (fiveam:is (= 1 (length src-alternatives)))
+    (fiveam:is (equal '(vh-reg) (mapcar #'word-field-choice-choice src-alternatives)))))
+
+(fiveam:test varying-hole-counts-assemble-and-decode-round-trip
+  (let ((one (assembly-cells (assemble "ldv 1, 5" :machine 'varying-hole-test-machine)))
+        (two (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine))))
+    (fiveam:is (= 1 (length one)))
+    (fiveam:is (= 2 (length two)))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (lambda (addr) (aref two addr)) 0 'varying-hole-test-machine)
+      (declare (ignore choices))
+      (fiveam:is (= 2 size))
+      (fiveam:is (equal '(2 3 100) values))
+      (fiveam:is (= 3 (length (instruction-descriptor-operand-names descriptor)))))))
+
+(fiveam:test varying-hole-counts-semantics-dispatch-reads-extra-hole
+  (let ((m (make-machine 'varying-hole-test-machine)))
+    (setf (regref m 'a 3) 3)
+    (setf (mref m 'ram 103) 999)
+    (load-program m (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine)))
+    (step-machine m)
+    (fiveam:is (= 999 (regref m 'a 2)))))
+
+(fiveam:test varying-hole-counts-disassemble-renders-matched-alternative
+  (let* ((cells (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine)))
+         (lines (disassemble-cells cells :machine 'varying-hole-test-machine)))
+    (fiveam:is (search "[$3,$64]" (disassembly-line-text (first lines))))))
+
+(fiveam:test for-choice-missing-signals-error
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 5)
+               (operand dst :field dst)
+               (operand src :field src
+                 (variant (choice vh-reg) inline :range (0 7) :bias #x00)
+                 (variant (choice vh-idx) inline :range (0 7) :bias #x10)))
+             (semantics nil)))))
+
+(fiveam:test for-choice-wrong-arity-signals-error
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 5)
+               (operand dst :field dst)
+               (operand src :field src
+                 (variant (choice vh-reg) inline :range (0 7) :bias #x00)
+                 (variant (choice vh-idx) inline :range (0 7) :bias #x10))
+               (for-choice vh-idx (operand off :trailing-word) (operand off2 :trailing-word)))
+             (semantics nil)))))
+
+(fiveam:test for-choice-unknown-alternative-signals-error
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 5)
+               (operand dst :field dst)
+               (operand src :field src
+                 (variant (choice vh-reg) inline :range (0 7) :bias #x00)
+                 (variant (choice vh-idx) inline :range (0 7) :bias #x10))
+               (for-choice vh-reg (operand off :trailing-word)))
+             (semantics nil)))))
+
+(fiveam:test for-choice-alternative-unclaimed-by-any-choice-variant-signals-error
+  ;; VH-IDX contributes a FOR-CHOICE group but no (CHOICE VH-IDX) variant
+  ;; claims it on SRC -- %FILTER-TUPLE-GOVERNING-SPECS' own tuple then has
+  ;; nothing left in its filtered menu.
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 5)
+               (operand dst :field dst)
+               (operand src :field src
+                 (variant (choice vh-reg) inline :range (0 7) :bias #x00))
+               (for-choice vh-idx (operand off :trailing-word)))
+             (semantics nil)))))
+
+;; Byte-encoded machines are out of #120's initial slice -- a varying ONE-OF
+;; is rejected outright, not silently truncated to its base hole count.
+(defmachine varying-hole-byte-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(fiveam:test varying-hole-counts-rejected-on-byte-machine
+  (fiveam:signals error
+    (eval '(definstruction varying-hole-byte-test-machine bogus
+             (modes vh-mode)
+             (encoding
+               (opcode 1)
+               (operand :width 1)
+               (operand :width 1))
+             (semantics nil)))))
+
 ;;; Per-field extra-word width (#135) -- an (extra-word ...) variant's own
 ;;; :CELLS, defaulting to the layout's WIDTH-CELLS (2, for this 16-bit word
 ;;; / 8-bit cell machine) when omitted. SETN's fallback is narrower than

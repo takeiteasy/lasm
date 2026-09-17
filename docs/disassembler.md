@@ -161,7 +161,14 @@ to the one `one-of` alternative no `choice`-selected variant there claims,
 so a hole on a mixed field still carries a real record either way, and
 renders its own actually-matched syntax same as a `choice`-selected one.
 Only a hole with no selector of any kind still has no record to fall back
-from. See [`examples/anima16.lisp`](../examples/anima16.lisp) and
+from. When the matched alternative has more holes than its `one-of`
+element's other alternatives ([Addressing modes, "Varying hole counts
+across alternatives"](modes.md#varying-hole-counts-across-alternatives)),
+the render walk consumes exactly that many values and record entries for
+it, popped in lockstep off the same decoded `values`/`choices` lists every
+other hole draws from — a longer alternative simply renders more of its own
+pattern, with no special case needed here. See
+[`examples/anima16.lisp`](../examples/anima16.lisp) and
 [`examples/subchoice.lisp`](../examples/subchoice.lisp) for the round-trips
 where a real record exists — the mixed-field and byte-machine cases
 respectively — and [`examples/orthogonal.lisp`](../examples/orthogonal.lisp)

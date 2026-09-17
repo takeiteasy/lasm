@@ -130,18 +130,19 @@ Each `one-of` alternative names an already-registered mode (a plain symbol,
 resolved the same way `definstruction`'s `(modes ...)` resolves a mode
 name). At `defmode` time, every alternative:
 
-- must have the exact same hole count as every other alternative in the same
-  `one-of` — the positional hole ↔ operand-encoding-field parallel the rest
-  of the pipeline depends on (see [Instructions](instructions.md)) has no
-  room for a `one-of` that yields a different field count depending on which
-  alternative matched;
+- may have a *different* hole count than its siblings — see [Varying hole
+  counts across alternatives](#varying-hole-counts-across-alternatives)
+  below for what that needs at `definstruction` time; at most one `one-of`
+  element per pattern may vary, and none of its alternatives may itself be a
+  varying mode (a varying `one-of` nested inside another isn't supported
+  yet — #152);
 - may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below),
   `:signed` (see [Per-hole `:signed`](#per-hole-signed) below), `:width`
   (see [Per-hole `:width`](#per-hole-width) below), or `:relative` (see
   [Per-hole `:relative`](#per-hole-relative) below) — but not `:suffix`
   itself: honoring a per-hole `:suffix` needs some way to recover, at decode
   time, which alternative a hole actually matched, which doesn't yet have a
-  design;
+  design (#153);
 - must not share identical syntax with another alternative in the same
   `one-of` (checked case-insensitively, since a `:literal` element already
   matches that way) — nothing could ever choose between two alternatives
@@ -230,10 +231,15 @@ machine's hole-selected sub-opcode (above) gives `choice-case` the same
 thing to read back, the first time that is reachable there at all; a hole
 with neither a `(choice mode)` word field nor a hole-selected sub-opcode has
 no encoded discriminator, so `choice-case` signals there unless given an
-`otherwise` clause. Letting `"[" expr "]"` and `"[" expr "+" expr "]"` (i.e.
-`[register]` vs. `[register + offset]`) actually mean different things
-still needs symbolic register names (see the tracker) so the assembler can
-tell a register apart from an arbitrary expression inside the brackets.
+`otherwise` clause. `[register]` and `[register, offset]` can already mean
+different things — [Varying hole counts across
+alternatives](#varying-hole-counts-across-alternatives) above is exactly
+this shape, one alternative's own extra hole holding the offset. Spelling
+that second hole `"+"`-separated rather than comma-separated, so it reads as
+`[register + offset]`, needs a parser change of its own (the expression
+grammar folds `reg + offset` into one expression before a mode's second hole
+ever gets a turn) — a separate, smaller gap than the hole-count one #120
+closed.
 
 Disassembly mirrors this split: a byte-encoded machine's decoded word
 renders a `one-of`'s first alternative unless its descriptor declares a
@@ -242,6 +248,34 @@ record forward from decode, same as a word-encoded machine's `(choice mode)`
 field — either way, the disassembler renders the alternative that was
 actually written when a record exists, and only falls back to the first
 alternative when it doesn't — see [Disassembler](disassembler.md).
+
+### Varying hole counts across alternatives
+
+A `one-of`'s alternatives may declare *different* hole counts — `reg`
+(one hole) and `[reg,off]` (two holes) can sit in the same `one-of` — on a
+**word-encoded** machine, when the governing hole is `(choice mode)`-selected
+on every alternative (or #118-mixed, with the one unclaimed alternative
+sharing the other alternatives' hole count). `definstruction` expands one
+fixed-arity `instruction-descriptor` per alternative-tuple rather than
+assuming every alternative shares one shape, so nothing downstream of
+`definstruction` — the decoder, the disassembler, `%choose-variant` — ever
+sees a variable-arity descriptor.
+
+An alternative with more holes than its siblings names its own extra
+operand subclauses with a `(for-choice alt (operand ...)...)` subclause,
+alongside the mode's ordinary `(operand ...)` subclauses — see
+[Instructions, "`for-choice` — extra holes for a varying
+alternative"](instructions.md#for-choice--extra-holes-for-a-varying-alternative)
+for the encoding-side mechanics and `(operand name :trailing-word)`, the
+fieldless hole shape an extra operand typically takes. A shared
+`(semantics ...)` body may read an extra hole's name directly, or through
+`choice-case`; see [Semantics vocabulary,
+"`choice-case`"](semantics.md#choice-case) for what a sibling descriptor
+that lacks that hole sees instead.
+
+Byte-encoded machines (#151) and a varying `one-of` nested inside another
+alternative (#152) are both rejected outright at `definstruction` time —
+neither is supported yet.
 
 ### Per-hole `:strict`
 

@@ -298,9 +298,14 @@ used by %CHOOSE-VARIANT's value filter to pick the narrowest (fewest extra
 cells) combo a value actually fits."
   (every (lambda (value choice)
            (ecase (word-field-choice-kind choice)
-             (:extra-word (if (word-field-choice-signedp choice)
-                               (%fits-signed-width-p value (word-field-choice-extra-cells choice) cell-width)
-                               (%fits-width-p value (word-field-choice-extra-cells choice) cell-width)))
+             ;; #120: a :TRAILING-WORD hole fits exactly like :EXTRA-WORD --
+             ;; the value must fit its own trailing cells, signed per the hole
+             ;; -- it just has no field bits, and so no ESCAPE marker, of its
+             ;; own to spend instead.
+             ((:extra-word :trailing-word)
+              (if (word-field-choice-signedp choice)
+                  (%fits-signed-width-p value (word-field-choice-extra-cells choice) cell-width)
+                  (%fits-width-p value (word-field-choice-extra-cells choice) cell-width)))
              (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
                         (<= lo value hi)))))
          values (instruction-descriptor-word-fields descriptor)))
@@ -333,7 +338,19 @@ A byte-encoded DESCRIPTOR with no SUB-CHOICES entry anywhere, and a
 word-encoded one with no CHOICE-selected field anywhere, are both vacuously
 eligible for any CHOICES, including the all-NIL CHOICES of a program using no
 ONE-OF at all -- neither #104 nor #126 changes selection for a DEFINSTRUCTION
-that doesn't use them."
+that doesn't use them.
+
+#120: a word-encoded mode whose ONE-OF alternatives disagree on hole count
+now registers sibling descriptors of *different* WORD-FIELDS lengths at one
+opcode -- SELECTORS and CHOICES can then legitimately differ in length, and
+the LOOP below pairs them positionally only as far as the shorter one, which
+would silently judge a shorter descriptor eligible for a longer match (its
+own selector list is a prefix of the longer CHOICES) rather than rejecting
+it outright. Guarded first: a word-encoded DESCRIPTOR is eligible only when
+its own hole count actually matches CHOICES' length."
+  (when (and (instruction-descriptor-word-layout descriptor)
+             (/= (length (instruction-descriptor-word-fields descriptor)) (length choices)))
+    (return-from %choices-eligible-p nil))
   ;; WORD-FIELDS and SUB-CHOICES are mutually exclusive by construction (a
   ;; descriptor is word-encoded or byte-encoded, never both), so this OR
   ;; picks whichever one DESCRIPTOR actually has -- an empty/NIL WORD-FIELDS

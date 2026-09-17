@@ -53,7 +53,7 @@
                ; that share operand syntax with another mode (so relaxation
                ; has an actual choice to override) benefit from a suffix;
                ; LASM's built-ins give one only to ZERO-PAGE/ABSOLUTE.
-    strictp)   ; T if an operand encoded through this mode that doesn't fit
+    strictp    ; T if an operand encoded through this mode that doesn't fit
                ; its own width is an ASSEMBLY-ERROR rather than silently
                ; wrapping (#74, absorbing #28/#43) -- checked at encode time
                ; by %ENCODE's :INSTRUCTION branch (assembler.lisp), alongside
@@ -61,6 +61,12 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL preserves #28/#43's
                ; original wrap-on-overflow behavior.
+    varyingp)  ; T if this mode's own pattern has a :ONE-OF element whose
+               ; alternatives disagree on hole count (#120) -- %MODE-HOLE-
+               ; TUPLES (below) then returns more than one tuple for it.
+               ; %CHECK-ONE-OF-ELEMENTS! rejects any mode declaring VARYINGP
+               ; T as another mode's own :ONE-OF alternative -- a varying
+               ; :ONE-OF nested inside another is not yet supported.
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -159,24 +165,34 @@ options start at the first keyword symbol; everything before it is pattern."
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
 
+  (defun %pattern-one-of-min-hole-count (alt-names &optional seen)
+    "The minimum MODE-HOLE-COUNT across ALT-NAMES (a :ONE-OF element's own
+alternative mode-name symbols) -- since #120, an alternative may contribute
+more holes than its siblings, so a :ONE-OF element's own contribution to a
+hole count is its *shortest* alternative, not (as before #120) simply its
+first one; %CHECK-ONE-OF-ELEMENTS! no longer requires every alternative to
+agree."
+    (reduce #'min (mapcar (lambda (n) (%mode-hole-count (find-mode-descriptor n) seen)) alt-names)))
+
   (defun %pattern-hole-count (pattern &optional seen)
     "Total :EXPR holes in PATTERN (a MODE-DESCRIPTOR's own pattern list, or a
-DEFMODE-in-progress's), recursing into any :ONE-OF element via its first
-alternative -- %CHECK-ONE-OF-ELEMENTS! (below) validates every alternative of
-one :ONE-OF shares the same hole count, so any one of them stands for the
-element as a whole. SEEN is the list of mode names already on this recursion
-path -- signals an error rather than recursing forever if a :ONE-OF element
-names a mode already being walked (a hand-written DEFMODE cycle: redefining
-a mode some :ONE-OF already references so the reference loops back to it).
-A plain file reload can't create a cycle (it replays the same patterns in
-the same order), so this only ever fires on a genuinely circular
-redefinition, caught here at DEFMODE time rather than as an unbounded
-recursion at some later, unrelated call."
+DEFMODE-in-progress's) at its *minimum* shape -- a :ONE-OF element
+contributes its shortest alternative's own hole count (#120,
+%PATTERN-ONE-OF-MIN-HOLE-COUNT); MODE-HOLE-TUPLES (below) is what a caller
+wanting every alternative shape, not just the minimum, should use instead.
+SEEN is the list of mode names already on this recursion path -- signals an
+error rather than recursing forever if a :ONE-OF element names a mode
+already being walked (a hand-written DEFMODE cycle: redefining a mode some
+:ONE-OF already references so the reference loops back to it). A plain file
+reload can't create a cycle (it replays the same patterns in the same
+order), so this only ever fires on a genuinely circular redefinition,
+caught here at DEFMODE time rather than as an unbounded recursion at some
+later, unrelated call."
     (loop for element in pattern
           sum (ecase (first element)
                 (:literal 0)
                 (:expr 1)
-                (:one-of (%mode-hole-count (find-mode-descriptor (second element)) seen)))))
+                (:one-of (%pattern-one-of-min-hole-count (rest element) seen)))))
 
   (defun %mode-hole-count (mode &optional seen)
     (let ((name (mode-descriptor-name mode)))
@@ -203,7 +219,7 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
                    (:literal nil)
                    (:expr (list nil))
                    (:one-of (let* ((alt-names (rest element))
-                                    (holes (%mode-hole-count (find-mode-descriptor (first alt-names)) seen)))
+                                    (holes (%pattern-one-of-min-hole-count alt-names seen)))
                               (make-list holes :initial-element alt-names))))))
 
   (defun %mode-hole-alternatives (mode &optional seen)
@@ -283,49 +299,162 @@ DEFINSTRUCTION time (%CHECK-WORD-ONE-OF-RELATIVE) -- and, beyond the
 selector requirement it shares with :SIGNED/:WIDTH, carries its own
 positional rule (at most one hole per expanded descriptor may resolve
 relative), also checked at DEFINSTRUCTION time since it spans more than one
-hole. Every alternative must have the same hole count as every other, since
-the positional hole <-> operand-field parallel the rest of the pipeline
-depends on (instruction.lisp, decoder.lisp, disassembler.lisp) has no room
-for a :ONE-OF that yields a different field count depending which
-alternative matched; and no two alternatives may share identical (EQUALP,
-since a :LITERAL matches case-insensitively) syntax, since nothing could
-ever disambiguate between them."
-    (dolist (element pattern)
-      (when (eq (first element) :one-of)
-        (let* ((alt-names (rest element))
-               (alts (mapcar #'find-mode-descriptor alt-names)))
-          (when (< (length alts) 2)
-            (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
-                   name alt-names))
-          (dolist (alt alts)
-            (when (mode-descriptor-suffix alt)
-              (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
+hole. Alternatives may disagree on hole count (#120) -- DEFINSTRUCTION's
+word-encoded path (instruction.lisp's %WORD-MODE-DESCRIPTOR-FORMS) expands
+one fixed-arity INSTRUCTION-DESCRIPTOR per alternative-tuple
+(mode.lisp's %MODE-HOLE-TUPLES) rather than assuming one shared shape, so
+every stage downstream of DEFINSTRUCTION still sees only fixed-arity
+descriptors; a byte-encoded machine has no such expansion yet and rejects a
+varying mode outright at DEFINSTRUCTION time (#151). At most one
+:ONE-OF element per pattern may vary, and none of its alternatives may
+itself be a varying mode (VARYINGP) -- nesting a varying :ONE-OF inside
+another is not yet supported (#152). No two alternatives may share identical
+(EQUALP, since a :LITERAL matches case-insensitively) syntax, since nothing
+could ever disambiguate between them."
+    (let (varying-element)
+      (dolist (element pattern)
+        (when (eq (first element) :one-of)
+          (let* ((alt-names (rest element))
+                 (alts (mapcar #'find-mode-descriptor alt-names)))
+            (when (< (length alts) 2)
+              (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
+                     name alt-names))
+            (dolist (alt alts)
+              (when (mode-descriptor-suffix alt)
+                (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
 (:SUFFIX) -- not yet supported per-hole inside ONE-OF"
-                     name (mode-descriptor-name alt)))
-            (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
-              (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+                       name (mode-descriptor-name alt)))
+              (when (mode-descriptor-varyingp alt)
+                (error "DEFMODE ~S: ONE-OF alternative ~S itself has a ONE-OF whose own ~
+alternatives disagree on hole count -- nesting a varying ONE-OF inside another is not yet ~
+supported (#120)"
+                       name (mode-descriptor-name alt)))
+              (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
+                (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
 alternative declares :SIGNED T or :RELATIVE T -- only the outermost ONE-OF a hole belongs ~
 to keeps its CHOICES entry, so a nested :SIGNED/:RELATIVE can never be recovered at decode ~
 time; give ~S itself :SIGNED T or :RELATIVE T instead, or move the alternative up to this ~
 ONE-OF directly"
-                     name (mode-descriptor-name alt) (mode-descriptor-name alt)))
-            (when (%pattern-nested-one-of-width-p (mode-descriptor-pattern alt))
-              (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+                       name (mode-descriptor-name alt) (mode-descriptor-name alt)))
+              (when (%pattern-nested-one-of-width-p (mode-descriptor-pattern alt))
+                (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
 alternative declares :WIDTH -- only the outermost ONE-OF a hole belongs to keeps its ~
 CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S itself ~
 :WIDTH instead, or move the :WIDTH alternative up to this ONE-OF directly"
-                     name (mode-descriptor-name alt) (mode-descriptor-name alt))))
-          (let ((counts (remove-duplicates (mapcar #'%mode-hole-count alts))))
-            (when (> (length counts) 1)
-              (error "DEFMODE ~S: ONE-OF alternatives ~S have differing hole counts ~S -- ~
-every alternative must bind the same number of operand fields"
-                     name alt-names counts)))
-          (loop for (alt . later) on alts
-                do (dolist (other later)
-                     (when (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
-                       (error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
+                       name (mode-descriptor-name alt) (mode-descriptor-name alt))))
+            (let ((counts (remove-duplicates (mapcar #'%mode-hole-count alts))))
+              (when (> (length counts) 1)
+                (if varying-element
+                    (error "DEFMODE ~S: more than one ONE-OF element has alternatives of ~
+varying hole count -- only one varying ONE-OF per mode is supported (#120)"
+                           name)
+                    (setf varying-element element))))
+            (loop for (alt . later) on alts
+                  do (dolist (other later)
+                       (when (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
+                         (error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
 -- nothing could ever choose between them"
-                              name (mode-descriptor-name alt) (mode-descriptor-name other)))))))))
+                                name (mode-descriptor-name alt) (mode-descriptor-name other))))))))))
+
+  (defun %pattern-varying-one-of-element (pattern &optional seen)
+    "The one :ONE-OF element of PATTERN whose alternatives disagree on hole
+count (#120), or NIL if every element's alternatives agree. Valid to call
+once %CHECK-ONE-OF-ELEMENTS! has confirmed at most one such element exists."
+    (dolist (element pattern)
+      (when (eq (first element) :one-of)
+        (let ((counts (remove-duplicates
+                       (mapcar (lambda (n) (%mode-hole-count (find-mode-descriptor n) seen))
+                               (rest element)))))
+          (when (> (length counts) 1)
+            (return element))))))
+
+  (defun %varying-element-hole-range (mode &optional seen)
+    "For MODE's one varying :ONE-OF pattern element (#120), the (VALUES START
+BASE-COUNT) hole-index range its own base (minimum) holes occupy in MODE's
+minimum-shape hole ordering (%MODE-HOLE-ALTERNATIVES) -- the position a
+longer alternative's extra (operand ...) subclauses, given via a
+(for-choice ...) group (instruction.lisp), splice in after. NIL if MODE has
+no varying element."
+    (let* ((pattern (mode-descriptor-pattern mode))
+           (varying-element (%pattern-varying-one-of-element pattern seen)))
+      (when varying-element
+        (let ((start 0))
+          (dolist (element pattern)
+            (when (eq element varying-element)
+              (return-from %varying-element-hole-range
+                (values start (%pattern-one-of-min-hole-count (rest element) seen))))
+            (incf start (ecase (first element)
+                          (:literal 0)
+                          (:expr 1)
+                          (:one-of (%pattern-one-of-min-hole-count (rest element) seen)))))))))
+
+  (defstruct mode-hole-tuple
+    ;; NIL for the base tuple (every alternative at MODE's varying element, if
+    ;; it has one, that shares the element's minimum hole count); otherwise the
+    ;; one over-count alternative's own mode-name symbol this tuple was
+    ;; expanded for (#120).
+    alt-name
+    ;; Hole-aligned list of :ONE-OF alternative-name lists, this tuple's own
+    ;; shape -- %MODE-HOLE-ALTERNATIVES' shape, generalized to one entry per
+    ;; alternative-tuple rather than assuming every :ONE-OF element's
+    ;; alternatives share one shape.
+    hole-alternatives)
+
+  (defun %pattern-hole-alternatives-for-tuple (pattern varying-element tuple-alt-name &optional seen)
+    "Like %PATTERN-HOLE-ALTERNATIVES, but VARYING-ELEMENT (EQ to one of
+PATTERN's own :ONE-OF elements) contributes TUPLE-ALT-NAME's own hole count
+-- rather than the element's minimum -- when TUPLE-ALT-NAME is non-NIL.
+Used by %MODE-HOLE-TUPLES to build one alternative-tuple's own hole-aligned
+alternatives list; every other :ONE-OF element (and VARYING-ELEMENT itself
+when TUPLE-ALT-NAME is NIL, the base tuple) behaves exactly as
+%PATTERN-HOLE-ALTERNATIVES."
+    (loop for element in pattern
+          append (ecase (first element)
+                   (:literal nil)
+                   (:expr (list nil))
+                   (:one-of
+                    (let* ((alt-names (rest element))
+                           (holes (if (and tuple-alt-name (eq element varying-element))
+                                      (%mode-hole-count (find-mode-descriptor tuple-alt-name) seen)
+                                      (%pattern-one-of-min-hole-count alt-names seen))))
+                      (make-list holes :initial-element alt-names))))))
+
+  (defun %mode-hole-tuples (mode &optional seen)
+    "One MODE-HOLE-TUPLE per alternative-tuple MODE's pattern expands into
+(#120): a single tuple, identical to today's %MODE-HOLE-ALTERNATIVES, for a
+mode with no varying :ONE-OF element (the overwhelmingly common case,
+including every mode this ticket doesn't touch); otherwise one base tuple
+(ALT-NAME NIL, every alternative sharing the element's minimum hole count)
+plus one further tuple per alternative whose own hole count exceeds that
+minimum. Consumed by instruction.lisp's %WORD-MODE-DESCRIPTOR-FORMS, which
+expands one fixed-arity INSTRUCTION-DESCRIPTOR per tuple."
+    (let ((pattern (mode-descriptor-pattern mode)))
+      (let ((varying-element (%pattern-varying-one-of-element pattern seen)))
+        (if (null varying-element)
+            (list (make-mode-hole-tuple
+                   :alt-name nil
+                   :hole-alternatives (%pattern-hole-alternatives pattern seen)))
+            (let* ((alt-names (rest varying-element))
+                   (base-count (%pattern-one-of-min-hole-count alt-names seen))
+                   (over-alts (remove-if (lambda (n) (= (%mode-hole-count (find-mode-descriptor n) seen) base-count))
+                                          alt-names)))
+              (cons (make-mode-hole-tuple
+                     :alt-name nil
+                     :hole-alternatives (%pattern-hole-alternatives-for-tuple pattern varying-element nil seen))
+                    (mapcar (lambda (alt-name)
+                              (make-mode-hole-tuple
+                               :alt-name alt-name
+                               :hole-alternatives (%pattern-hole-alternatives-for-tuple
+                                                    pattern varying-element alt-name seen)))
+                            over-alts)))))))
+
+  (defun %mode-hole-count-range (mode &optional seen)
+    "(VALUES MIN MAX) hole count across every one of MODE's alternative-tuples
+(#120, %MODE-HOLE-TUPLES) -- MIN equals %MODE-HOLE-COUNT; both equal it for
+a mode with no varying :ONE-OF element."
+    (let ((counts (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple)))
+                           (%mode-hole-tuples mode seen))))
+      (values (reduce #'min counts) (reduce #'max counts))))
 
   (defun build-mode-descriptor (name body)
     (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
@@ -344,7 +473,8 @@ every alternative must bind the same number of operand fields"
                                  :relativep relative
                                  :signedp (or relative signed)
                                  :suffix suffix
-                                 :strictp strict))))))
+                                 :strictp strict
+                                 :varyingp (and (%pattern-varying-one-of-element pattern) t)))))))
 
 (defmacro defmode (name &body pattern)
   "Define an addressing mode named NAME matching PATTERN, a sequence of
@@ -353,9 +483,12 @@ string literals, the symbol EXPR (one per operand hole), and/or
 see \"Per-operand modes\" in docs/modes.md) -- each hole an addressing mode
 declares may independently pick its own syntax from a set of other modes,
 e.g. a bare register or \"[\" expr \"]\" indirection at the same operand
-position. Every ONE-OF alternative must have the same hole count as every
-other and may declare neither :SUFFIX itself (a follow-up extends per-hole
-attributes further) nor -- on a word-encoded machine -- :RELATIVE, which
+position. ONE-OF alternatives may disagree on hole count (#120, see
+docs/modes.md's \"Varying hole counts across alternatives\") -- at most one
+ONE-OF element per pattern may vary, and none of its alternatives may
+itself be a varying mode. Every alternative may declare neither :SUFFIX
+itself (#153 extends per-hole attributes further) nor -- on a
+word-encoded machine -- :RELATIVE, which
 stays byte-machine-only; :STRICT, :SIGNED, :WIDTH, and :RELATIVE (on a
 byte-encoded machine) are the exceptions -- an alternative may declare any
 of the four on its own, honored per hole rather than per statement (see

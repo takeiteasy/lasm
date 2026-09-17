@@ -124,15 +124,27 @@ rejected before any extra word is ever fetched."
   (loop with offset = width-cells
         for alternatives in (instruction-descriptor-word-alternatives descriptor)
         for choice0 = (first alternatives)
-        for raw = (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word)
-        for match = (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives)
+        ;; #120: a :TRAILING-WORD hole has no field bits of its own --
+        ;; ALTERNATIVES is always its own single, unconditionally-matching
+        ;; entry, so RAW stays NIL (WORD-FIELD-CHOICE-WIDTH/-SHIFT are both
+        ;; NIL there, nothing to LDB) and MATCH is CHOICE0 directly, with no
+        ;; %WORD-CHOICE-MATCHES-P call at all. RAW is only ever read below
+        ;; from the :INLINE collect clause, unreachable for a :TRAILING-WORD
+        ;; MATCH (its own KIND is always :TRAILING-WORD, never :INLINE).
+        for trailingp = (eq (word-field-choice-kind choice0) :trailing-word)
+        for raw = (unless trailingp
+                    (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word))
+        for match = (if trailingp choice0 (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives))
         do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
         collect (ecase (word-field-choice-kind match)
                   (:inline (- (if (word-field-choice-signedp match)
                                    (signed-value raw (word-field-choice-width match))
                                    raw)
                               (word-field-choice-bias match)))
-                  (:extra-word
+                  ;; #120: :TRAILING-WORD fetches exactly like :EXTRA-WORD -- an
+                  ;; unconditional trailing value at OFFSET, of its own EXTRA-CELLS
+                  ;; width -- it just never had field bits to escape-match first.
+                  ((:extra-word :trailing-word)
                    (let ((extra-cells (word-field-choice-extra-cells match)))
                      (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
                               (if (word-field-choice-signedp match)

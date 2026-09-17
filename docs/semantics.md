@@ -84,6 +84,17 @@ matching none of the given keys — including one with no recorded
 alternative at all — signals `no-matching-choice` instead of silently
 falling through.
 
+`name` may also be an extra operand a *sibling* alternative's own hole count
+contributes but this one's own mode use doesn't (see [Addressing modes,
+"Varying hole counts across
+alternatives"](modes.md#varying-hole-counts-across-alternatives),
+[Instructions, "`for-choice`"](instructions.md#for-choice--extra-holes-for-a-varying-alternative))
+— reading it outside a `choice-case` body works too, bound to `nil` (rather
+than left unbound) in a descriptor that has no such hole of its own; a
+`choice-case` clause reading it is reachable only from the sibling
+descriptor that actually has it, since that is the only descriptor whose
+own governing hole ever matches that clause's key.
+
 This is the piece a word-encoded field's `(choice mode)` variant selector
 (see [Instructions, "CHOICE-selected word
 fields"](instructions.md#choice-selected-word-fields-104)) leaves open on

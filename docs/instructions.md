@@ -482,10 +482,13 @@ this follow-up).
 
 A `(one-of mode...)` pattern element ([Addressing modes, "Per-operand
 modes"](modes.md#per-operand-modes)) counts as one hole, the same as a plain
-`expr` — every alternative it names is validated at `defmode` time to have
-the same hole count as every other, so `(operand ...)` subclause counting
-here doesn't need to know or care whether a given hole came from a bare
-`expr` or a `one-of`.
+`expr`, as long as every alternative it names shares the same hole count --
+the ordinary case, and the only one a byte-encoded machine accepts (see
+["Varying hole counts across
+alternatives"](modes.md#varying-hole-counts-across-alternatives) for the
+word-encoded exception) -- so `(operand ...)` subclause counting here
+doesn't need to know or care whether a given hole came from a bare `expr`
+or an equal-count `one-of`.
 
 ### `(semantics form...)`
 
@@ -1080,6 +1083,62 @@ end, including the decode/disassemble round-trip — the matched
 alternative's own syntax renders back for every one of the five forms,
 `choice`-selected or resolved value-selected alike, not always the
 `one-of`'s first alternative (see [Disassembler](disassembler.md)).
+
+#### `for-choice` — extra holes for a varying alternative
+
+A `one-of` alternative may contribute more holes than its siblings (see
+[Addressing modes, "Varying hole counts across
+alternatives"](modes.md#varying-hole-counts-across-alternatives)) — `reg`
+(one hole) and `[reg,off]` (two holes) sharing one `one-of`, say. Its own
+extra holes, beyond the element's base (minimum) count, get their own
+`(operand ...)` subclauses via a `(for-choice alt (operand ...)...)`
+subclause alongside the mode's ordinary ones:
+
+```lisp
+(definstruction anima16foo ld
+  (modes ld-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :field b)
+    (operand src :field a
+      (variant (choice a-reg) inline :range (0 7) :bias #x00)
+      (variant (choice a-idx) inline :range (0 7) :bias #x10))
+    (for-choice a-idx (operand off :trailing-word)))
+  (semantics
+    (choice-case src
+      (a-reg (reg src))
+      (a-idx (mref machine 'ram (+ (reg src) off))))))
+```
+
+`alt` must be one of the governing `one-of` element's own alternatives whose
+hole count exceeds the element's base count, and its own subclauses must
+supply exactly that many extra holes, in pattern order — a missing
+`for-choice`, one naming an alternative that doesn't need it, or one with
+the wrong number of subclauses is a `definstruction`-time error.
+
+`(operand name :trailing-word [:cells k])` is the shape an extra hole
+typically takes: a fieldless hole with no bits of its own in the instruction
+word, packing an unconditional trailing word of its own — `:cells` defaults
+to the layout's own width, same as an ordinary `(extra-word ...)`
+variant's. Nothing stops an extra hole from naming a `:field` instead, if
+the alternative genuinely has a second field's worth of bits to pack, but
+`:trailing-word` is the common case, since the whole reason a hole is
+"extra" is usually that it has nowhere else to go.
+
+`definstruction` expands one `instruction-descriptor` per alternative-tuple
+— one shape for every alternative sharing the base hole count, one more per
+over-count alternative — each with its own fixed operand count, its own
+`instruction-descriptor-size`, and its own filtered menu of the governing
+field's variants (so a shorter sibling's field code is never mistaken for a
+longer one's, or vice versa, at either assemble or decode time). A shared
+`(semantics ...)` body may read an extra hole's name directly — bound to
+`nil` in a sibling descriptor that lacks it, read only inside the matching
+`choice-case` branch, which that sibling's own descriptor can never reach —
+see [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case).
+
+Word-encoded machines only, and at most one varying `one-of` element per
+pattern, with none of its alternatives themselves varying — a byte-encoded
+machine, or a nested varying `one-of`, is rejected outright.
 
 #### `CHOICE`-selected fields and `:SIGNED`
 

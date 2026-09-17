@@ -257,9 +257,50 @@ looks like."
 
 (defmode oo-two-hole expr "," expr)
 
-(fiveam:test one-of-mismatched-hole-counts-signals-error
+;; #120: alternatives of differing hole count are now accepted -- the old
+;; equal-hole-count restriction is relaxed for exactly one varying ONE-OF
+;; element per mode (%MODE-HOLE-TUPLES, below, expands one tuple per
+;; over-count alternative).
+(fiveam:test one-of-varying-hole-counts-is-accepted
+  (fiveam:finishes (eval '(defmode oo-varying-holes (one-of oo-reg oo-two-hole)))))
+
+(fiveam:test one-of-varying-marks-mode-descriptor-varyingp
+  (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'oo-varying-holes)))
+  (fiveam:is-false (mode-descriptor-varyingp (find-mode-descriptor 'oo-two))))
+
+(fiveam:test mode-hole-tuples-single-for-non-varying-mode
+  (fiveam:is (= 1 (length (%mode-hole-tuples (find-mode-descriptor 'oo-two)))))
+  (fiveam:is (null (mode-hole-tuple-alt-name (first (%mode-hole-tuples (find-mode-descriptor 'oo-two))))))
+  (fiveam:is (equal (%mode-hole-alternatives (find-mode-descriptor 'oo-two))
+                     (mode-hole-tuple-hole-alternatives (first (%mode-hole-tuples (find-mode-descriptor 'oo-two)))))))
+
+(fiveam:test mode-hole-tuples-varying-mode-shape
+  (let ((tuples (%mode-hole-tuples (find-mode-descriptor 'oo-varying-holes))))
+    (fiveam:is (= 2 (length tuples)))
+    (let ((base (find nil tuples :key #'mode-hole-tuple-alt-name))
+          (extra (find 'oo-two-hole tuples :key #'mode-hole-tuple-alt-name)))
+      (fiveam:is (= 1 (length (mode-hole-tuple-hole-alternatives base))))
+      (fiveam:is (= 2 (length (mode-hole-tuple-hole-alternatives extra))))
+      (fiveam:is (equal '(oo-reg oo-two-hole) (first (mode-hole-tuple-hole-alternatives base))))
+      (fiveam:is (equal '(oo-reg oo-two-hole) (first (mode-hole-tuple-hole-alternatives extra))))
+      (fiveam:is (equal '(oo-reg oo-two-hole) (second (mode-hole-tuple-hole-alternatives extra)))))))
+
+(fiveam:test mode-hole-count-and-range-for-varying-mode
+  (let ((mode (find-mode-descriptor 'oo-varying-holes)))
+    (fiveam:is (= 1 (%mode-hole-count mode)))
+    (multiple-value-bind (lo hi) (%mode-hole-count-range mode)
+      (fiveam:is (= 1 lo))
+      (fiveam:is (= 2 hi)))))
+
+(defmode oo-three-hole expr "," expr "," expr)
+
+(fiveam:test one-of-more-than-one-varying-element-signals-error
   (fiveam:signals error
-    (eval '(defmode oo-bad-holes (one-of oo-reg oo-two-hole)))))
+    (eval '(defmode oo-two-varying (one-of oo-reg oo-two-hole) "|" (one-of oo-reg oo-three-hole)))))
+
+(fiveam:test one-of-nested-varying-alternative-signals-error
+  (fiveam:signals error
+    (eval '(defmode oo-nest-varying (one-of oo-reg oo-varying-holes)))))
 
 (defmode oo-signed "@" expr :signed t)
 (defmode oo-relative expr :relative t)
