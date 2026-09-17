@@ -860,6 +860,53 @@ hlt" :machine 'word-test-machine)))
       (fiveam:is (= 3 steps))
       (fiveam:is (= 1000 (sref m 'a))))))
 
+;;; Per-instruction word layouts (#64) -- reuses WORD-LAYOUTS-TEST-MACHINE
+;;; (tests/instruction.lisp): STEP-MACHINE must decode each instruction
+;;; through *its own* layout, not the machine's default, and PC must still
+;;; advance by one word regardless of which layout was used to fill it.
+
+(fiveam:test step-machine-word-layout-default-round-trip
+  (let ((m (make-machine 'word-layouts-test-machine))
+        (a (assemble "setx 5, 200
+hlt" :machine 'word-layouts-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SETX" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 200 (sref m 'b)))
+    (fiveam:is (= 2 (sref m 'pc)))))
+
+(fiveam:test step-machine-word-layout-alternate-wide-round-trip
+  (let ((m (make-machine 'word-layouts-test-machine))
+        (a (assemble "setwide 4000
+hlt" :machine 'word-layouts-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SETWIDE" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 4000 (sref m 'a)))
+    (fiveam:is (= 2 (sref m 'pc)))))
+
+(fiveam:test step-machine-word-layout-alternate-narrow-round-trip
+  (let ((m (make-machine 'word-layouts-test-machine))
+        (a (assemble "setnarrow 3, 2, 100
+hlt" :machine 'word-layouts-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SETNARROW" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 3 (sref m 'a)))
+    (fiveam:is (= 102 (sref m 'b)))
+    (fiveam:is (= 2 (sref m 'pc)))))
+
+(fiveam:test run-word-layouts-machine-round-trip-end-to-end
+  (let ((m (make-machine 'word-layouts-test-machine))
+        (a (assemble "setx 5, 200
+setwide 4000
+setnarrow 3, 2, 100
+hlt" :machine 'word-layouts-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 4 steps))
+      (fiveam:is (= 3 (sref m 'a)))
+      (fiveam:is (= 102 (sref m 'b))))))
+
 ;;; #62 (M4): PC-relative branching on a word-encoded machine -- WBRA
 ;;; (tests/instruction.lisp, WORD-RELATIVE-TEST-MACHINE) folds its 10-bit
 ;;; SRC field back to a signed offset from the *next* instruction's address

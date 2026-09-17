@@ -578,6 +578,20 @@ hlt" :machine 'disasm-word-machine))
          (a2 (assemble text :machine 'disasm-word-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
+;;; #64: a program mixing all three of WORD-LAYOUTS-TEST-MACHINE's layouts
+;;; (tests/instruction.lisp) -- the check that DECODE-INSTRUCTION-AT picks
+;;; the right field split per opcode, not just the machine's default one.
+
+(fiveam:test round-trip-word-layouts-machine
+  (let* ((a (assemble "setx 5, 200
+setwide 4000
+setnarrow 3, 2, 100
+hlt" :machine 'word-layouts-test-machine))
+         (lines (disassemble-assembly a :machine 'word-layouts-test-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'word-layouts-test-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
 ;;; #62 (M4): a word-encoded RELATIVE hole renders as its absolute target on
 ;;; disassembly, exactly like the byte path's DISASSEMBLE-RELATIVE-RENDERS-
 ;;; ABSOLUTE-TARGET, and round-trips through re-assembly in both its inline

@@ -852,6 +852,33 @@ target: hlt" :machine 'word-test-machine)))
   (let ((a (assemble "hlt" :machine 'word-test-machine)))
     (fiveam:is (equalp #(#x00 #x20) (assembly-cells a)))))
 
+;;; Per-instruction word layouts (#64) -- reuses WORD-LAYOUTS-TEST-MACHINE
+;;; and its SETX/SETWIDE/SETNARROW instructions from tests/instruction.lisp.
+;;; Each instruction names a different (layout ...) sharing one 16-bit word
+;;; and OPCODE field, with field X deliberately at a different width/shift
+;;; in each -- an exact-cell assertion per layout is the one place a wrong
+;;; shift in an alternate layout would show up as a wrong byte rather than
+;;; merely an unrelated round-trip mismatch.
+
+(fiveam:test word-layout-default-encodes-at-its-own-shifts
+  ;; SETX 5, 200 (default 4/4/8) -> opcode 1 << 12 | 5 << 8 | 200 = #x15C8
+  (let ((a (assemble "setx 5, 200" :machine 'word-layouts-test-machine)))
+    (fiveam:is (equalp #(#xc8 #x15) (assembly-cells a)))))
+
+(fiveam:test word-layout-alternate-wide-encodes-at-its-own-shifts
+  ;; SETWIDE 4000 (WIDE, 4/12) -> opcode 2 << 12 | 4000 = #x2FA0
+  (let ((a (assemble "setwide 4000" :machine 'word-layouts-test-machine)))
+    (fiveam:is (equalp #(#xa0 #x2f) (assembly-cells a)))))
+
+(fiveam:test word-layout-alternate-narrow-encodes-at-its-own-shifts
+  ;; SETNARROW 3, 2, 100 (NARROW, 4/2/2/8) -> opcode 3 << 12 | 3 << 10 | 2 << 8 | 100 = #x3E64
+  (let ((a (assemble "setnarrow 3, 2, 100" :machine 'word-layouts-test-machine)))
+    (fiveam:is (equalp #(#x64 #x3e) (assembly-cells a)))))
+
+(fiveam:test word-layout-hlt-no-operand-unaffected-by-alternates
+  (let ((a (assemble "hlt" :machine 'word-layouts-test-machine)))
+    (fiveam:is (equalp #(#x00 #x40) (assembly-cells a)))))
+
 ;;; CHOICE-selected word fields (#104) -- the payoff: WCX's operand encodes
 ;;; differently depending on which ONE-OF alternative (WC-REG bare, WC-IND
 ;;; "[" expr "]") the hole actually matched, unlike a plain value-selected

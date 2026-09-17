@@ -88,8 +88,10 @@ between them or on the chain above):
 
 | Ticket | Follows up on |
 |---|---|
-| #64 non-uniform instruction-word layouts | #20, concrete case from #54 |
 | #135 per-field extra-word width on a word-encoded machine | #20, split off #63 |
+| #136 word-encoded constant discriminator fields | #64, gates a nibble-faithful CHIP8 |
+| #137 `%hole-disjoint-p` compares holes positionally | #105, exposed by #64 |
+| #138 `(operand ... :field opcode)` is not rejected | #20, found while implementing #64 |
 | #65 `.cell`/`.dat` directive | #53 |
 | #66 `:endian` option | #53 |
 | #67 `lo`/`hi` operators vs. cell width | #53 |
@@ -107,6 +109,15 @@ check landed together (the overlap check turned out already covered by
 #104/#127, only lacking a regression test); its extra-word-width item split
 off to #135 above, being by far the largest of the four and needing its own
 syntax design.
+
+#64 (per-instruction, non-uniform instruction-word layouts) is now closed --
+named `(layout NAME ...)` alternates share the machine's `:width` and
+`opcode` field, and a `definstruction` selects one via a `(layout NAME)`
+encoding subclause. Scoped to layout *selection*; a nibble-faithful CHIP8
+also needs constant discriminator fields (no operand hole, a field pinned to
+a literal), split off to #136. #137 and #138 are two further gaps the
+implementation surfaced (one pre-existing, one this ticket's own
+same-layout-per-opcode workaround) rather than fixed in place.
 
 ## Adding to this page
 

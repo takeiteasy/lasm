@@ -62,63 +62,129 @@
 ;; INSTRUCTION-WORD in source order, and DEFMACHINE parses clauses one at a
 ;; time. BUILD-MACHINE-DESCRIPTOR finishes the layout (WIDTH-CELLS,
 ;; CELL-WIDTH) once every element is known.
+;;
+;; #64: an optional (layout NAME (field name width)...) form declares an
+;; alternate bit-field split sharing this clause's own :WIDTH and OPCODE
+;; field -- a per-instruction DEFINSTRUCTION names which layout it encodes
+;; against (its (layout NAME) encoding subclause), so a machine can express
+;; e.g. CHIP8's 1NNN (4/12) alongside 6XNN (4/4/8) in one 16-bit word. See
+;; PARSE-INSTRUCTION-WORD-CLAUSE for the cross-layout checks.
+;; #64: FIELD-FORMS is one layout's (field name width) forms -- the default
+;; layout's own, or one (layout NAME ...) alternate's. Shared by both so the
+;; per-layout rules (at least one field, FIELD head, no duplicate names
+;; *within* this layout, positive widths, exactly one OPCODE field, widths
+;; summing to WIDTH) can't drift between the two call sites. CONTEXT names the
+;; layout in error messages -- "instruction-word" for the default, or
+;; "instruction-word layout NAME" for an alternate.
+(defun %parse-instruction-word-fields (field-forms width context)
+  (unless field-forms
+    (error "~A requires at least one (field name width) clause" context))
+  (let ((seen (make-hash-table :test 'eq))
+        (opcode-seen nil)
+        (total 0)
+        fields)
+    (dolist (field-form field-forms)
+      (destructuring-bind (head name field-width) field-form
+        (unless (eq head 'field)
+          (error "~A: expected (field name width), got ~S" context field-form))
+        (when (gethash name seen)
+          (error "~A: duplicate field name ~S" context name))
+        (setf (gethash name seen) t)
+        (%check-positive field-width ":width" name)
+        (when (eq name 'opcode) (setf opcode-seen t))
+        (cl:push (list name field-width) fields)
+        (incf total field-width)))
+    (unless opcode-seen
+      (error "~A requires exactly one field named OPCODE" context))
+    (unless (= total width)
+      (error "~A: field widths sum to ~D, but :width is ~D" context total width))
+    ;; FIELDS was accumulated MSB-first-declared but CL:PUSH-reversed, so
+    ;; NREVERSE restores declaration order before computing each field's
+    ;; shift from the LSB -- the last-declared field sits at shift 0.
+    (setf fields (nreverse fields))
+    (let ((shift width))
+      (mapcar (lambda (f)
+                (destructuring-bind (name field-width) f
+                  (decf shift field-width)
+                  (list name field-width shift)))
+              fields))))
+
+;; #64: (layout NAME (field name width)...) -- one alternate bit-field split
+;; for a subset of a word-encoded machine's opcodes, e.g. CHIP8's 1NNN
+;; (4/12) vs. 6XNN (4/4/8) sharing one 16-bit word. Parsed here into a bare
+;; INSTRUCTION-WORD-LAYOUT (ALTERNATES always NIL -- only the default layout
+;; nests alternates); PARSE-INSTRUCTION-WORD-CLAUSE cross-checks it against
+;; the default (shared :WIDTH, identical OPCODE field) once every layout is
+;; known.
+(defun %parse-instruction-word-layout-form (form width)
+  (destructuring-bind (head name &rest field-forms) form
+    (unless (eq head 'layout)
+      (error "instruction-word: expected (layout name (field ...)...), got ~S" form))
+    (unless (symbolp name)
+      (error "instruction-word: layout name must be a symbol, got ~S" name))
+    (make-instruction-word-layout
+     :name name
+     :width width
+     :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
+     :cell-width 1  ; placeholder
+     :fields (%parse-instruction-word-fields
+              field-forms width (format nil "instruction-word layout ~S" name)))))
+
 (defun parse-instruction-word-clause (form)
   (let* ((body (rest form))
          (width-pos (position :width body))
          (width (and width-pos (nth (1+ width-pos) body)))
-         (field-forms (if width-pos
-                           (append (subseq body 0 width-pos) (subseq body (+ width-pos 2)))
-                           body)))
+         (rest-forms (if width-pos
+                         (append (subseq body 0 width-pos) (subseq body (+ width-pos 2)))
+                         body))
+         ;; #64: (layout ...) forms are the machine's alternates; everything
+         ;; else is the default layout's own (field ...) forms.
+         (layout-forms (remove-if-not (lambda (f) (eq (first f) 'layout)) rest-forms))
+         (field-forms (remove-if (lambda (f) (eq (first f) 'layout)) rest-forms)))
     (unless width (error "instruction-word requires :width"))
     (%check-positive width ":width" 'instruction-word)
-    (unless field-forms
-      (error "instruction-word requires at least one (field name width) clause"))
-    (let ((seen (make-hash-table :test 'eq))
-          (opcode-seen nil)
-          (total 0)
-          fields)
-      (dolist (field-form field-forms)
-        (destructuring-bind (head name field-width) field-form
-          (unless (eq head 'field)
-            (error "instruction-word: expected (field name width), got ~S" field-form))
-          (when (gethash name seen)
-            (error "instruction-word: duplicate field name ~S" name))
-          (setf (gethash name seen) t)
-          (%check-positive field-width ":width" name)
-          (when (eq name 'opcode) (setf opcode-seen t))
-          (cl:push (list name field-width) fields)
-          (incf total field-width)))
-      (unless opcode-seen
-        (error "instruction-word requires exactly one field named OPCODE"))
-      (unless (= total width)
-        (error "instruction-word: field widths sum to ~D, but :width is ~D" total width))
-      ;; FIELDS was accumulated MSB-first-declared but CL:PUSH-reversed, so
-      ;; NREVERSE restores declaration order before computing each field's
-      ;; shift from the LSB -- the last-declared field sits at shift 0.
-      (setf fields (nreverse fields))
-      (let ((shift width))
-        (make-instruction-word-layout
-         :width width
-         :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
-         :cell-width 1  ; placeholder
-         :fields (mapcar (lambda (f)
-                            (destructuring-bind (name field-width) f
-                              (decf shift field-width)
-                              (list name field-width shift)))
-                          fields))))))
+    (let* ((fields (%parse-instruction-word-fields field-forms width "instruction-word"))
+           (opcode-field (find 'opcode fields :key #'first))
+           (alternates (mapcar (lambda (f) (%parse-instruction-word-layout-form f width)) layout-forms)))
+      ;; Cross-layout checks (#64): alternate names unique and non-NIL
+      ;; (NIL always names the default), and each alternate's OPCODE field
+      ;; identical in width and shift to the default's -- decode reads the
+      ;; OPCODE field off the machine's *default* layout alone
+      ;; (%DECODE-WORD-INSTRUCTION), so every candidate must agree on where
+      ;; it lives regardless of which layout actually encoded it.
+      (let ((names (mapcar #'instruction-word-layout-name alternates)))
+        (loop for tail on names
+              when (member (first tail) (rest tail))
+                do (error "instruction-word: duplicate layout name ~S" (first tail))))
+      (dolist (alt alternates)
+        (let ((alt-opcode (instruction-word-field alt 'opcode)))
+          (unless (equal (rest alt-opcode) (rest opcode-field))
+            (error "instruction-word layout ~S: OPCODE field ~S disagrees with the ~
+default layout's OPCODE field ~S -- every layout must place OPCODE identically"
+                   (instruction-word-layout-name alt) alt-opcode opcode-field))))
+      (make-instruction-word-layout
+       :name nil
+       :width width
+       :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
+       :cell-width 1  ; placeholder
+       :fields fields
+       :alternates alternates))))
 
 (defun %finish-instruction-word-layout (layout cell-width)
-  "Fill in LAYOUT's WIDTH-CELLS and CELL-WIDTH once the machine's own memory
-cell width is known (BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has
-been parsed) -- see PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this
-can't happen at clause-parse time. Signals if the instruction word's bit
-width isn't a whole number of cells."
+  "Fill in LAYOUT's WIDTH-CELLS and CELL-WIDTH, and recurse into its
+ALTERNATES (#64), once the machine's own memory cell width is known
+(BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has been parsed) -- see
+PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this can't happen at
+clause-parse time. Signals if the instruction word's bit width isn't a whole
+number of cells."
   (let ((width (instruction-word-layout-width layout)))
     (unless (zerop (mod width cell-width))
       (error "instruction-word :width ~D must be a whole number of ~D-bit cells"
              width cell-width))
     (setf (instruction-word-layout-width-cells layout) (/ width cell-width)
           (instruction-word-layout-cell-width layout) cell-width))
+  (dolist (alt (instruction-word-layout-alternates layout))
+    (%finish-instruction-word-layout alt cell-width))
   layout)
 
 ;;; Memory / cell-width resolution
@@ -268,6 +334,14 @@ default opcode-byte-plus-operand-bytes encoding -- see DEFINSTRUCTION's
 (operand NAME :field F (variant ...)) clause for how an instruction fills
 those fields. Optional; a machine with no such clause keeps the default
 byte encoding.
+
+An optional (layout NAME (field name width)...) form (#64) declares an
+alternate field split for a subset of the machine's opcodes -- every layout
+shares :WIDTH and an identical OPCODE field, and a DEFINSTRUCTION names which
+one it encodes against via a (layout NAME) encoding subclause. Lets one
+machine express per-instruction non-uniform word layouts, e.g. a CHIP8-shaped
+16-bit word whose opcode nibble alone decides whether the rest splits 4/12,
+4/4/8, or 4/4/4/4.
 
 CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
 RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to

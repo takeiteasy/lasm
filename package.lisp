@@ -65,7 +65,10 @@
    #:instruction-word-layout-width
    #:instruction-word-layout-width-cells
    #:instruction-word-layout-fields
+   #:instruction-word-layout-name
+   #:instruction-word-layout-alternates
    #:instruction-word-field
+   #:instruction-word-layout-named
    #:machine-descriptor-clock-speed
    #:machine-cycles
 

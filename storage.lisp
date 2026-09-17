@@ -95,15 +95,34 @@
 ;; time (machine.lisp) since the word is emitted as CELL-WIDTH-wide,
 ;; little-endian cells (#53 -- the assembler pipeline is typed to the
 ;; target machine's own memory cell width, not fixed at 8 bits).
+;; #64: NAME is NIL on the default (machine-wide) layout, and a symbol on an
+;; alternate declared by a (layout NAME (field ...)...) form. ALTERNATES holds
+;; the machine's other layouts (each its own INSTRUCTION-WORD-LAYOUT, NAME
+;; non-NIL) and is non-NIL only on the default -- an alternate's own
+;; ALTERNATES is always NIL, so there is exactly one place to look up a
+;; sibling from either side. Every alternate shares WIDTH/WIDTH-CELLS/
+;; CELL-WIDTH and an OPCODE field identical in width and shift to the
+;; default's (machine.lisp validates this at DEFMACHINE time) -- only the
+;; fields below OPCODE vary per layout.
 (defstruct instruction-word-layout
+  (name nil :type symbol)
   (width nil :type (integer 1))
   (width-cells nil :type (integer 1))
   (cell-width nil :type (integer 1))
-  (fields nil :type list))          ; (name width shift), MSB-first as declared
+  (fields nil :type list)           ; (name width shift), MSB-first as declared
+  (alternates nil :type list))      ; list of INSTRUCTION-WORD-LAYOUT, default only
 
 (defun instruction-word-field (layout name)
   "The (name width shift) entry in LAYOUT's FIELDS named NAME, or NIL."
   (find name (instruction-word-layout-fields layout) :key #'first))
+
+(defun instruction-word-layout-named (layout name)
+  "LAYOUT itself when NAME is NIL, else the alternate in LAYOUT's ALTERNATES
+named NAME, or NIL if no such alternate exists. LAYOUT is always the
+machine's default layout -- callers hold no other kind (#64)."
+  (if (null name)
+      layout
+      (find name (instruction-word-layout-alternates layout) :key #'instruction-word-layout-name)))
 
 (defstruct machine-descriptor
   (name nil :type symbol)

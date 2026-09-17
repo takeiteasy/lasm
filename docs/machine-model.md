@@ -75,6 +75,27 @@ widths against a machine defined earlier in the same file.
   uses. See [Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
   for how `definstruction` fills a field, and
   [`examples/word.lisp`](../examples/word.lisp) for a complete machine.
+
+  One or more `(layout NAME (field NAME width)...)` forms nested inside the
+  same clause (#64) declare *alternate* field splits for a subset of the
+  machine's opcodes — e.g. a CHIP8-shaped machine whose opcode nibble alone
+  decides whether the rest of the word splits 4/12, 4/4/8, or 4/4/4/4:
+
+  ```lisp
+  (instruction-word :width 16
+    (field opcode 4) (field x 4) (field y 4) (field n 4)   ; default: 4/4/4/4
+    (layout xnn (field opcode 4) (field x 4) (field nn 8)) ; 4/4/8
+    (layout nnn (field opcode 4) (field nnn 12)))          ; 4/12
+  ```
+
+  Every layout — the default and each alternate — shares the clause's own
+  `:width` and declares an `opcode` field identical in width and shift to
+  the default's; only the fields below `opcode` vary per layout. A
+  `definstruction` names which layout it encodes against with its own
+  `(layout NAME)` encoding subclause (default when omitted) — see
+  [Instructions, "Per-instruction layouts"](instructions.md#per-instruction-layouts-64),
+  and [`examples/chip8word.lisp`](../examples/chip8word.lisp) for a complete
+  machine.
 - `(clock-speed n)` — the machine's nominal rate in Hz (#75). Optional; a
   machine with no such clause can still accumulate `machine-cycles` and use
   `run-for-cycles`, just not `run-for-duration` or `machine-elapsed-seconds`
@@ -89,7 +110,10 @@ number of the machine's own memory cells (#53 — see "Cell width and the
 assembler" below; a whole number of 8-bit bytes on every byte-addressed
 machine, the only kind before this) — the word is still emitted as
 little-endian cells of that width, see "Cell- vs. word-encoded
-instructions" below.
+instructions" below. Every `(layout NAME ...)` alternate (#64) is held to
+the same field-width-sums-to-`:width` rule independently, plus the
+cross-layout checks above: layout names unique, and an `opcode` field
+identical in width and shift to the default's.
 
 ### Note on naming
 

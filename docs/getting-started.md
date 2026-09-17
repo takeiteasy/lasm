@@ -185,6 +185,20 @@ instructions"](instructions.md#word-encoded-instructions-20) and [Machine
 model, "Cell width and the assembler"](machine-model.md#cell-width-and-the-assembler).
 
 ```sh
+sbcl --script examples/chip8word.lisp
+```
+
+M4's per-instruction layout case (#64): a CHIP8-shaped machine
+(`chip8wordfoo`) whose `instruction-word` clause declares two named
+alternates alongside its default — `1NNN`/`2NNN`/`ANNN` split 4/12, `3XNN`/
+`6XNN`/`7XNN` split 4/4/8, `DXYN` stays on the default 4/4/4/4 — all sharing
+one 16-bit word and `opcode` field. Unlike `examples/chip8.lisp` above (which
+proves non-uniform *register* widths on the ordinary cell-encoded path),
+this one proves non-uniform *instruction-word* layouts on the same machine —
+see [Instructions, "Per-instruction
+layouts"](instructions.md#per-instruction-layouts-64).
+
+```sh
 sbcl --script examples/cycles.lisp
 ```
 

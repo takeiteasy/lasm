@@ -756,6 +756,59 @@ either, in the same raw-bit-pattern sense. All three are checked at
 surprise. The `opcode` value itself is checked the same way, against the
 `opcode` field's own width.
 
+### Per-instruction layouts (#64)
+
+A machine whose `instruction-word` clause declares one or more `(layout NAME
+...)` alternates (see [Machine model](machine-model.md#defmachine)) can give
+different instructions a different bit-field split of the same word — real
+CHIP8 opcodes need this: `1NNN` is 4/12, `6XNN` is 4/4/8, `DXYN` is 4/4/4/4,
+and no single machine-wide layout can express all three. A `definstruction`
+names which layout it encodes against with a `(layout NAME)` encoding
+subclause, alongside `(opcode n)`:
+
+```lisp
+(defmachine chip8wordfoo
+  (register pc :width 16) (register i :width 16)
+  (register v :width 8 :count 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4) (field x 4) (field y 4) (field n 4)   ; default: 4/4/4/4
+    (layout xnn (field opcode 4) (field x 4) (field nn 8)) ; 4/4/8
+    (layout nnn (field opcode 4) (field nnn 12))))         ; 4/12
+
+(defmode wnnn expr)
+(defmode wximm "V" expr "," "#" expr)
+
+(definstruction chip8wordfoo jp
+  (modes wnnn)
+  (encoding (opcode 1) (layout nnn)
+    (operand addr :field nnn))
+  (semantics (set! pc addr)))
+
+(definstruction chip8wordfoo ld
+  (modes wximm)
+  (encoding (opcode 6) (layout xnn)
+    (operand x :field x)
+    (operand nn :field nn))
+  (semantics (set! (v x) nn)))
+```
+
+`(operand ... :field FIELD-NAME)` resolves `FIELD-NAME` *within* the named
+layout only — `nnn` above exists only in `NNN`, not in `XNN` or the default,
+and naming it from an instruction selecting a different layout is a
+macroexpansion-time error. Omitting `(layout ...)` selects the machine's
+default layout, exactly as before this feature existed; a no-operand
+instruction (no fields to resolve) may not name a layout at all, since every
+layout shares one `opcode` field regardless.
+
+Two co-tenant descriptors sharing one opcode (multiple modes of one
+mnemonic, or distinct mnemonics — see ["Opcode to descriptor
+decode"](#opcode-to-descriptor-decode) below, #105) must name the *same*
+layout — decode has no way to tell which layout's fields to read until it
+already knows which descriptor matched, so mixing layouts at one opcode is
+rejected outright (`opcode-conflict`, reason `:different-word-layout`)
+rather than risked.
+
 ### Signed word fields (#63)
 
 A word-encoded hole's signedness comes from its mode, exactly the way its

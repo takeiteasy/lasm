@@ -635,6 +635,172 @@
     (fiveam:is (equal '(dst 2 10) (instruction-word-field layout 'dst)))
     (fiveam:is (equal '(src 10 0) (instruction-word-field layout 'src)))))
 
+;;; #64: per-instruction, non-uniform instruction-word layouts. WORD-LAYOUTS-
+;;; TEST-MACHINE's field X is deliberately *not* nested across its three
+;;; layouts -- width 4/shift 8 in the default, width 12/shift 0 in WIDE,
+;;; width 2/shift 10 in NARROW -- so a bug that resolved :FIELD against the
+;;; wrong layout would encode wrong bits, not merely fail to find a field or
+;;; reproduce the default's own bits by coincidence.
+;;;
+;;;   default (4/4/8):  (field opcode 4) (field x 4) (field y 8)
+;;;   wide    (4/12):   (field opcode 4) (field x 12)
+;;;   narrow  (4/2/2/8): (field opcode 4) (field x 2) (field y 2) (field z 8)
+;;;
+;;; Every layout shares the OPCODE field (width 4, shift 12).
+
+(defmachine word-layouts-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4) (field x 4) (field y 8)
+    (layout wide (field opcode 4) (field x 12))
+    (layout narrow (field opcode 4) (field x 2) (field y 2) (field z 8))))
+
+(defmode word-layouts-xy expr "," expr)
+(defmode word-layouts-x expr)
+(defmode word-layouts-xyz expr "," expr "," expr)
+
+(definstruction word-layouts-test-machine setx
+  (modes word-layouts-xy)
+  (encoding (opcode 1)
+    (operand x :field x)
+    (operand y :field y))
+  (semantics (set! a x) (set! b y)))
+
+(definstruction word-layouts-test-machine setwide
+  (modes word-layouts-x)
+  (encoding (opcode 2) (layout wide)
+    (operand x :field x))
+  (semantics (set! a x)))
+
+(definstruction word-layouts-test-machine setnarrow
+  (modes word-layouts-xyz)
+  (encoding (opcode 3) (layout narrow)
+    (operand x :field x)
+    (operand y :field y)
+    (operand z :field z))
+  (semantics (set! a x) (set! b (+ y z))))
+
+(definstruction word-layouts-test-machine hlt
+  (encoding (opcode 4))
+  (semantics (trap :halt)))
+
+(fiveam:test instruction-word-layout-alternates-share-width-and-opcode-field
+  (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor 'word-layouts-test-machine))))
+    (fiveam:is (null (instruction-word-layout-name layout)))
+    (fiveam:is (equal '(opcode 4 12) (instruction-word-field layout 'opcode)))
+    (fiveam:is (equal '(x 4 8) (instruction-word-field layout 'x)))
+    (fiveam:is (equal '(y 8 0) (instruction-word-field layout 'y)))
+    (let ((wide (instruction-word-layout-named layout 'wide)))
+      (fiveam:is (eq 'wide (instruction-word-layout-name wide)))
+      (fiveam:is (= 2 (instruction-word-layout-width-cells wide)))
+      (fiveam:is (equal '(opcode 4 12) (instruction-word-field wide 'opcode)))
+      (fiveam:is (equal '(x 12 0) (instruction-word-field wide 'x))))
+    (let ((narrow (instruction-word-layout-named layout 'narrow)))
+      (fiveam:is (equal '(opcode 4 12) (instruction-word-field narrow 'opcode)))
+      (fiveam:is (equal '(x 2 10) (instruction-word-field narrow 'x)))
+      (fiveam:is (equal '(y 2 8) (instruction-word-field narrow 'y)))
+      (fiveam:is (equal '(z 8 0) (instruction-word-field narrow 'z))))
+    (fiveam:is (null (instruction-word-layout-named layout 'no-such-layout)))))
+
+(fiveam:test instruction-word-layout-rejects-duplicate-layout-name
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-layouts-machine
+             (memory ram :width 8 :addr-width 8)
+             (instruction-word :width 16
+               (field opcode 4) (field x 12)
+               (layout dup (field opcode 4) (field x 12))
+               (layout dup (field opcode 4) (field x 12)))))))
+
+(fiveam:test instruction-word-layout-widths-must-match-default
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-layouts-machine
+             (memory ram :width 8 :addr-width 8)
+             (instruction-word :width 16
+               (field opcode 4) (field x 12)
+               (layout narrower (field opcode 4) (field x 4)))))))
+
+(fiveam:test instruction-word-layout-opcode-field-width-must-match-default
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-layouts-machine
+             (memory ram :width 8 :addr-width 8)
+             (instruction-word :width 16
+               (field opcode 4) (field x 12)
+               (layout wide-opcode (field opcode 8) (field x 8)))))))
+
+(fiveam:test instruction-word-layout-opcode-field-shift-must-match-default
+  (fiveam:signals error
+    (eval '(defmachine bogus-word-layouts-machine
+             (memory ram :width 8 :addr-width 8)
+             (instruction-word :width 16
+               (field opcode 4) (field x 12)
+               (layout shifted-opcode (field x 12) (field opcode 4)))))))
+
+(fiveam:test definstruction-layout-subclause-rejects-unknown-layout-name
+  (fiveam:signals error
+    (eval '(definstruction word-layouts-test-machine bogus
+             (modes word-layouts-x)
+             (encoding (opcode 5) (layout no-such-layout)
+               (operand x :field x))
+             (semantics (set! a x))))))
+
+(fiveam:test definstruction-layout-subclause-rejects-field-not-in-selected-layout
+  (fiveam:signals error
+    (eval '(definstruction word-layouts-test-machine bogus
+             (modes word-layouts-x)
+             (encoding (opcode 5) (layout wide)
+               (operand z :field z)) ; Z only exists in NARROW, not WIDE
+             (semantics (set! a z))))))
+
+(fiveam:test definstruction-layout-subclause-rejected-on-byte-machine
+  (fiveam:signals error
+    (eval '(definstruction test-machine bogus
+             (modes immediate)
+             (encoding (opcode 200) (layout anything) (operand :mode))
+             (semantics)))))
+
+(fiveam:test definstruction-layout-subclause-rejected-on-no-operand-instruction
+  (fiveam:signals error
+    (eval '(definstruction word-layouts-test-machine bogus
+             (modes)
+             (encoding (opcode 6) (layout wide))
+             (semantics)))))
+
+(fiveam:test definstruction-co-tenants-at-one-opcode-must-share-a-layout
+  ;; SETX (opcode 1, default layout) and a bogus second descriptor at the
+  ;; same opcode naming WIDE instead -- %HOLE-DISJOINT-P compares holes
+  ;; purely positionally, so mixing layouts at one opcode must be rejected
+  ;; outright (#64) rather than silently trusted.
+  (handler-case
+      (eval '(definstruction word-layouts-test-machine bogus
+               (modes word-layouts-x)
+               (encoding (opcode 1) (layout wide)
+                 (operand x :field x))
+               (semantics (set! a x))))
+    (opcode-conflict (c)
+      (fiveam:is (eq :different-word-layout (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+(fiveam:test encode-instruction-selects-fields-from-the-named-layout
+  ;; SETX (default 4/4/8), SETWIDE (WIDE, 4/12), SETNARROW (NARROW, 4/2/2/8)
+  ;; each pack their operands into a *different* bit position for the same
+  ;; field name X -- the one test that actually pins layout-aware field
+  ;; resolution, per the non-nested WORD-LAYOUTS-TEST-MACHINE fixture above.
+  (let ((setx (first (find-instruction-variants 'word-layouts-test-machine "setx")))
+        (setwide (first (find-instruction-variants 'word-layouts-test-machine "setwide")))
+        (setnarrow (first (find-instruction-variants 'word-layouts-test-machine "setnarrow"))))
+    (fiveam:is (null (instruction-descriptor-word-layout-name setx)))
+    (fiveam:is (eq 'wide (instruction-descriptor-word-layout-name setwide)))
+    (fiveam:is (eq 'narrow (instruction-descriptor-word-layout-name setnarrow)))
+    ;; SETX 5, 200 -> opcode 1 << 12 | 5 << 8 | 200 = #x15C8
+    (fiveam:is (equalp #(#xc8 #x15) (coerce (encode-instruction setx '(5 200)) 'vector)))
+    ;; SETWIDE 4000 -> opcode 2 << 12 | 4000 = #x2FA0
+    (fiveam:is (equalp #(#xa0 #x2f) (coerce (encode-instruction setwide '(4000)) 'vector)))
+    ;; SETNARROW 3, 2, 100 -> opcode 3 << 12 | 3 << 10 | 2 << 8 | 100 = #x3E64
+    (fiveam:is (equalp #(#x64 #x3e) (coerce (encode-instruction setnarrow '(3 2 100)) 'vector)))))
+
 ;;; Variant expansion / registration
 
 (fiveam:test word-instruction-expands-into-one-descriptor-per-variant
@@ -1645,6 +1811,119 @@ skip: hlt" :machine 'chip8-test-machine)))
         (fiveam:is (= 5 (regref m 'v 1)))
         (fiveam:is (= 0 (regref m 'v 2)))
         (fiveam:is (= 3 (sref m 'i)))))))
+
+;;; Per-instruction, non-uniform instruction-word layouts (#64) --
+;;; CHIP8WORDFOO mirrors examples/chip8word.lisp: CHIP8's own layout-only
+;;; opcode families -- JP/CALL/LD-I on a 4/12 NNN layout, LD/ADD/SE Vx,byte
+;;; on a 4/4/8 XNN layout, DRW on the default 4/4/4/4 -- sharing one 16-bit
+;;; instruction word and OPCODE field.
+
+(defmachine chip8wordfoo-test-machine
+  (register pc :width 16)
+  (register v :width 8 :count 16)
+  (register i :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (stack cs :width 16 :depth 16)
+  (instruction-word :width 16
+    (field opcode 4) (field x 4) (field y 4) (field n 4)
+    (layout xnn (field opcode 4) (field x 4) (field nn 8))
+    (layout nnn (field opcode 4) (field nnn 12))))
+
+(defmode chip8word-nnn expr)
+(defmode chip8word-ximm "V" expr "," "#" expr)
+(defmode chip8word-xyn "V" expr "," "V" expr "," expr)
+
+(definstruction chip8wordfoo-test-machine hlt
+  (encoding (opcode 0))
+  (semantics (trap :halt)))
+
+(definstruction chip8wordfoo-test-machine jp
+  (modes chip8word-nnn)
+  (encoding (opcode 1) (layout nnn)
+    (operand addr :field nnn))
+  (semantics (set! pc addr)))
+
+(definstruction chip8wordfoo-test-machine call
+  (modes chip8word-nnn)
+  (encoding (opcode 2) (layout nnn)
+    (operand addr :field nnn))
+  (semantics (push pc cs) (set! pc addr)))
+
+(definstruction chip8wordfoo-test-machine se
+  (modes chip8word-ximm)
+  (encoding (opcode 3) (layout xnn)
+    (operand x :field x)
+    (operand nn :field nn))
+  (semantics (when (= (v x) nn) (set! pc (+ pc 2)))))
+
+(definstruction chip8wordfoo-test-machine ret
+  (encoding (opcode 9))
+  (semantics (set! pc (pop cs))))
+
+(definstruction chip8wordfoo-test-machine ld
+  (modes chip8word-ximm)
+  (encoding (opcode 6) (layout xnn)
+    (operand x :field x)
+    (operand nn :field nn))
+  (semantics (set! (v x) nn)))
+
+(definstruction chip8wordfoo-test-machine add
+  (modes chip8word-ximm)
+  (encoding (opcode 7) (layout xnn)
+    (operand x :field x)
+    (operand nn :field nn))
+  (semantics (set! (v x) (wrap-value (+ (v x) nn) 8))))
+
+(definstruction chip8wordfoo-test-machine ldi
+  (modes chip8word-nnn)
+  (encoding (opcode 10) (layout nnn)
+    (operand addr :field nnn))
+  (semantics (set! i addr)))
+
+(definstruction chip8wordfoo-test-machine drw
+  (modes chip8word-xyn)
+  (encoding (opcode #xd)
+    (operand x :field x)
+    (operand y :field y)
+    (operand n :field n))
+  (semantics (declare (ignore y n)) (setf (mref machine 'ram i) (v x))))
+
+(fiveam:test chip8word-encode-instruction-per-layout
+  (let ((ld (first (find-instruction-variants 'chip8wordfoo-test-machine "ld")))
+        (jp (first (find-instruction-variants 'chip8wordfoo-test-machine "jp")))
+        (drw (first (find-instruction-variants 'chip8wordfoo-test-machine "drw"))))
+    (fiveam:is (eq 'xnn (instruction-descriptor-word-layout-name ld)))
+    (fiveam:is (eq 'nnn (instruction-descriptor-word-layout-name jp)))
+    (fiveam:is (null (instruction-descriptor-word-layout-name drw)))
+    ;; LD V0, #21 -> opcode 6 << 12 | 0 << 8 | 21 = #x6015
+    (fiveam:is (equalp #(#x15 #x60) (coerce (encode-instruction ld '(0 21)) 'vector)))
+    ;; JP 256 -> opcode 1 << 12 | 256 = #x1100
+    (fiveam:is (equalp #(#x00 #x11) (coerce (encode-instruction jp '(256)) 'vector)))))
+
+(fiveam:test chip8word-machine-end-to-end
+  ;; Mirrors examples/chip8word.lisp's *SOURCE* verbatim.
+  (let ((a (assemble "  ld    V 0, #21
+  ldi   $100
+  call  double
+  drw   V 0, V 1, 3
+  se    V 0, #42
+  ld    V 0, #99
+  jp    done
+double:
+  add   V 0, #21
+  ret
+done:
+  hlt" :machine 'chip8wordfoo-test-machine)))
+    (fiveam:is (= 20 (length (assembly-cells a))))
+    (let ((m (make-machine 'chip8wordfoo-test-machine)))
+      (load-program m a)
+      (multiple-value-bind (reason steps) (run m)
+        (fiveam:is (eq :trap reason))
+        (fiveam:is (= 9 steps))
+        (fiveam:is (= 42 (regref m 'v 0)))
+        (fiveam:is (= 256 (sref m 'i)))
+        (fiveam:is (= 42 (mref m 'ram 256)))
+        (fiveam:is (zerop (stack-depth m 'cs)))))))
 
 ;;; Word-addressed memory + bitfield/variant encoding combined (#55, M4) --
 ;;; DCPU16FOO mirrors examples/dcpu16.lisp: DCPU-16's real instruction-word
