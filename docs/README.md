@@ -15,8 +15,7 @@
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
 - [Debugger](debugger.md) — breakpoints, step/continue, register/memory inspection, a reference REPL
-- [Tickets](tickets.md) — open backlog, grouped by milestone, with dependency graphs
 
-This directory covers what exists today. Planned work and its milestone
-grouping live in the tracker (see [Tickets](tickets.md)); this directory
-stays limited to reference documentation for what's implemented.
+This directory covers what exists today. Planned work lives in the
+[issue tracker](https://todo.sr.ht/~takeiteasy/lasm); this directory stays
+limited to reference documentation for what's implemented.
