@@ -104,10 +104,11 @@ doesn't recognize as an operator).
 | 7 | prefix `-` `+` `~` `<` `>` |
 | 8 | primary: number, label, `*` (location counter), `( expr )` |
 
-Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators. **Known
-future collision:** if a later milestone adds comparison operators, `<`/`>`
-will need disambiguating from this prefix use — not a concern for M1, which
-has no comparisons.
+Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
+the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
+regardless of the target machine's `:cell-width` — they're a byte-packing
+convenience, not an encoding-width-relative operator. On a wide-cell
+machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`.
 
 A bare `*` in primary position is the location-counter symbol (`expr-location`
 below, #15) rather than multiplication: `%parse-primary` only reaches that

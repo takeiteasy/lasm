@@ -1097,6 +1097,27 @@ jmp *" :machine 'wordaddr-test-machine)))
 nop" :machine 'wordaddr-test-machine)))
     (fiveam:is (equalp #(0 0 0 0 0 0) (assembly-cells a)))))
 
+;; #67: `<`/`>` stay a fixed 8-bit low/high-byte split regardless of the
+;; target machine's :CELL-WIDTH -- a byte-packing convenience, not a
+;; cell-width-relative operator. Confirmed end-to-end on WORDADDR-TEST-
+;; MACHINE (:CELL-WIDTH 16), not just through EVAL-EXPR-CONSTANT's no-machine
+;; path (see EVAL-EXPR-CONSTANT-LO-HI, tests/instruction.lisp), so a machine
+;; in scope can't change the split.
+(fiveam:test lo-hi-operators-stay-8-bit-on-word-addressed-machine
+  (let ((a (assemble "lda #<$1234" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 #x34) (assembly-cells a))))
+  (let ((a (assemble "lda #>$1234" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 #x12) (assembly-cells a)))))
+
+(fiveam:test lo-hi-operators-mask-values-wider-than-16-bits
+  ;; The split is always the low/next 8 bits, however wide the value --
+  ;; unambiguous even against a machine whose own cells are wider than a
+  ;; byte.
+  (let ((a (assemble "lda #<$123456" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 #x56) (assembly-cells a))))
+  (let ((a (assemble "lda #>$123456" :machine 'wordaddr-test-machine)))
+    (fiveam:is (equalp #(1 #x34) (assembly-cells a)))))
+
 ;;; ONE-OF (#103): end-to-end assembly through MOO (tests/instruction.lisp,
 ;;; opcode #xF7), whose OO-INSTR-TWO mode gives each of its two operand
 ;;; holes an independent choice between a bare register-shaped EXPR and a

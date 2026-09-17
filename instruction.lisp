@@ -335,7 +335,9 @@ DCPU-16's \"i\") to its bank index -- SYMBOLS is tried first so a label
 always wins if a program somehow binds one anyway, though %BIND-SYMBOL!
 (assembler.lisp) rejects that collision outright. Signals UNRESOLVED-LABEL
 on an EXPR-LABEL matching neither, and UNRESOLVED-LOCATION on an
-EXPR-LOCATION when PC is NIL."
+EXPR-LOCATION when PC is NIL. :LO/:HI (below) are fixed 8-bit byte
+operators -- they split off the low/high byte of a value regardless of the
+target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
   (etypecase ast
     (expr-number (expr-number-value ast))
     (expr-label
@@ -355,6 +357,8 @@ EXPR-LOCATION when PC is NIL."
          (:neg (- v))
          (:pos v)
          (:lognot (lognot v))
+         ;; Fixed 8-bit split, independent of the machine's :CELL-WIDTH (#67) --
+         ;; a byte-packing convenience, not a cell-width-relative operator.
          (:lo (logand v #xff))
          (:hi (logand (ash v -8) #xff)))))
     (expr-binary
