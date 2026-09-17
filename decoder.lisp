@@ -76,6 +76,13 @@ opcode rather than failing outright, since #105's %CHECK-OPCODE-DECODABLE!
 not that every raw bit pattern at the opcode names exactly one of them --
 this trial-and-reject is what actually does the telling-apart.
 
+Layout-agnostic by construction (#140): every WORD-FIELD-CHOICE and
+WORD-CONSTANT already carries its own absolute WIDTH/SHIFT, resolved
+against DESCRIPTOR's own instruction-word layout at DEFINSTRUCTION time
+(instruction.lisp), so this function never needs to know which layout
+DESCRIPTOR named -- co-tenant candidates at one opcode may name different
+layouts.
+
 #127: a MATCH whose own WORD-FIELD-CHOICE-SIGNEDP is T reinterprets its raw
 bits as two's-complement before debiasing (:INLINE, over its own field
 WIDTH) or the fetched extra word (:EXTRA-WORD, over the match's own
@@ -137,9 +144,19 @@ returning the first that fully matches. A raw value matching no candidate's
 alternatives at all is :DECODE-FAILURE, same as an unregistered opcode -- an
 encoding no DEFINSTRUCTION on this machine ever declared.
 
+LAYOUT is always the machine's *default* instruction-word layout, never a
+candidate's own named one (#64) -- every WORD-FIELD/OPCODE field is fetched
+off it alone, sound for any candidate regardless of which layout it names
+because every layout is held (PARSE-INSTRUCTION-WORD-CLAUSE, machine.lisp)
+to the default's own :WIDTH and an identical OPCODE field. %TRY-DECODE-WORD-
+CANDIDATE itself never touches LAYOUT at all (#140) -- see its own
+docstring.
+
 Candidate order only matters for determinism, not correctness:
 %CHECK-OPCODE-DECODABLE! (instruction.lisp) requires every pair of
-co-tenant candidates to disagree at some shared field index, so at most one
+co-tenant candidates to disagree at some field range they share bits with
+(#140: candidates may name different layouts and even different field
+names, as long as some shared bit range disagrees), so at most one
 candidate can ever match a given fetched word -- the first-match loop below
 never has to arbitrate a genuine tie, it just stops as soon as it finds the
 one candidate that was always going to match.

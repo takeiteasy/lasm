@@ -102,15 +102,10 @@ a byte encoding carries no per-field discriminator to decode two modes
 apart, unlike a word-encoded machine's operand fields, unless every co-tenant
 declares its own distinct sub-opcode -- #125), or, on a word-encoded machine,
 two descriptors whose operand fields accept overlapping raw bit patterns at
-every hole (#105's %CHECK-OPCODE-DECODABLE!, which is what REASON
-:INDISTINGUISHABLE names), or, on a word-encoded machine declaring per-
-instruction layouts (#64), two co-tenants naming *different* instruction-word
-layouts (REASON :DIFFERENT-WORD-LAYOUT) -- %HOLE-DISJOINT-P compares hole I
-of one descriptor against hole I of the other purely positionally, with no
-check that the two actually occupy the same bits, so its answer is
-meaningless across layouts; #64 sidesteps this by requiring every co-tenant
-at one opcode to share one layout (a separate ticket tracks making
-%HOLE-DISJOINT-P itself layout-aware).")
+every field they share bits with (#105's %CHECK-OPCODE-DECODABLE!, which is
+what REASON :INDISTINGUISHABLE names) -- co-tenants may name different
+instruction-word layouts (#64/#140) or even different fields, as long as
+some field either occupies disagrees at the bits it actually sits at.")
   (:report (lambda (c s)
              (case (opcode-conflict-reason c)
                (:undecodable-byte-machine
@@ -137,13 +132,6 @@ give both a distinct (opcode ~S :sub s)"
                (:duplicate-sub-opcode
                 (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S ~
 under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct :SUB values"
-                        (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
-                        (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
-               (:different-word-layout
-                (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S ~
-naming a different instruction-word layout -- two co-tenants sharing one opcode must select ~
-the same (layout ...) (#64), since decode has no way to tell which layout's fields to read ~
-until it already knows which descriptor matched"
                         (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
                         (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
                (t
@@ -1487,118 +1475,103 @@ not on any hot path."
                                  (wrap-value v (word-field-choice-width choice))
                                  v))))))
 
-(defun %hole-disjoint-p (choices-a choices-b)
-  "T if the raw field values CHOICES-A and CHOICES-B (two holes' own
-WORD-FIELD-CHOICE lists, already established -- by %ANY-HOLE-DISJOINT-P
-below -- to be cut from the *same* WIDTH/SHIFT) accept are disjoint sets,
-i.e. no raw value decodes as a match under both."
-  (let ((values-a (mapcan #'%word-field-choice-values choices-a)))
-    (notany (lambda (c) (some (lambda (v) (%word-choice-matches-p v c)) values-a)) choices-b)))
+(defun %word-bit-constraint (choices)
+  "One hole's (WIDTH SHIFT VALUES) constraint -- CHOICES is a descriptor's
+single hole (a WORD-FIELD-CHOICE list, every entry sharing that hole's own
+WIDTH/SHIFT), VALUES the raw bit patterns any of its variants match. Used
+only to build %WORD-BIT-CONSTRAINTS below."
+  (list (word-field-choice-width (first choices))
+        (word-field-choice-shift (first choices))
+        (mapcan #'%word-field-choice-values choices)))
 
-(defun %word-field-choices-at (alternatives width shift)
-  "The one hole's WORD-FIELD-CHOICE list within ALTERNATIVES (a descriptor's
-WORD-ALTERNATIVES) cut from the field at WIDTH/SHIFT, or NIL if no hole of
-this descriptor occupies those bits -- every variant of one hole shares its
-spec's own WIDTH/SHIFT, so the first entry alone tells the hole apart.
-Used by %CONSTANT-DISTINGUISHES-P (#136) to find whether a (field-value ...)
-constant on one co-tenant lands on an ordinary operand hole on the other, and
-by %ANY-HOLE-DISJOINT-P below to pair up two descriptors' holes by bits
-instead of by position (#137)."
-  (find-if (lambda (choices) (and choices
-                                   (= (word-field-choice-width (first choices)) width)
-                                   (= (word-field-choice-shift (first choices)) shift)))
-            alternatives))
+(defun %word-bit-constraints (descriptor)
+  "Every bit-level constraint DESCRIPTOR's encoding imposes -- one
+(WIDTH SHIFT VALUES) per operand hole (WORD-ALTERNATIVES) plus one per
+(field-value ...) pin (WORD-CONSTANTS, #136, VALUES a singleton) -- as one
+uniform list. #140: a pin and a hole are the same kind of thing to
+%DESCRIPTORS-DISTINGUISHABLE-P below -- both simply constrain some range of
+the instruction word's bits to a set of raw values -- so co-tenancy no
+longer needs a separate hole-vs-hole and pin-vs-pin check."
+  (append (mapcar #'%word-bit-constraint (instruction-descriptor-word-alternatives descriptor))
+          (mapcar (lambda (c) (list (word-constant-width c) (word-constant-shift c)
+                                     (list (word-constant-value c))))
+                  (instruction-descriptor-word-constants descriptor))))
 
-(defun %any-hole-disjoint-p (alternatives-a alternatives-b)
-  "T if some hole of ALTERNATIVES-A (a descriptor's WORD-ALTERNATIVES) and
-the hole of ALTERNATIVES-B occupying the *same* WIDTH/SHIFT (found via
-%WORD-FIELD-CHOICES-AT) accept disjoint raw value sets (%HOLE-DISJOINT-P).
-Used by %CHECK-OPCODE-DECODABLE! to find one hole where two co-tenant
-candidates can never both match a fetched word.
+(defun %bit-constraints-disjoint-p (constraint-a constraint-b)
+  "T if CONSTRAINT-A and CONSTRAINT-B (two %WORD-BIT-CONSTRAINTS entries, each
+a possibly *different* WIDTH/SHIFT) share some bits of the instruction word
+and, projected onto only that shared range, accept disjoint raw value sets --
+NIL if they don't overlap in bits at all, the same non-distinguishing
+treatment a field only one side mentions has always had (#137).
 
-#137: pairs holes by the bits they actually occupy rather than by index --
-the prior positional pairing compared hole I of A against hole I of B
-regardless of whether they were cut from the same field, which could
-fabricate a disjointness that means nothing (two candidates' holes at
-different bits always look \"disjoint\" as raw value sets, since those sets
-were never comparable). A hole of ALTERNATIVES-B that no hole of
-ALTERNATIVES-A shares bits with (or vice versa) is simply never compared --
-the same non-distinguishing treatment %CONSTANT-DISTINGUISHES-P documents
-for a field one side ignores entirely.
+#140: this projection is the generalization that lets two fields of
+*different* width/shift still tell their descriptors apart, not just an
+exact width/shift match (the only case #137's positional-pairing fix
+handled) -- e.g. a 4-bit field at shift 8 and two 2-bit fields at shifts 10
+and 8 share bits [10, 12), and are distinguishable exactly when their values,
+narrowed to those two bits, are disjoint. An exact-match pair (today's only
+case before this ticket) projects onto its own whole width on both sides,
+so this is a strict generalization of the old %HOLE-DISJOINT-P/
+%CONSTANT-DISTINGUISHES-P answer, not a different one.
 
-One-sided iteration (over ALTERNATIVES-A only) suffices: %WORD-FIELD-
-CHOICES-AT matches by WIDTH/SHIFT, which is symmetric, so any shared-bit
-hole pair is found from either side -- unlike %CONSTANTS-DISJOINT-P, which
-checks both directions because a WORD-CONSTANT may exist on only one side."
-  (loop for choices-a in alternatives-a
-        thereis (let ((choices-b (%word-field-choices-at
-                                   alternatives-b
-                                   (word-field-choice-width (first choices-a))
-                                   (word-field-choice-shift (first choices-a)))))
-                  (and choices-b (%hole-disjoint-p choices-a choices-b)))))
+Each raw VALUE is already the field's own bit pattern, right-aligned at 0
+regardless of the field's SHIFT in the word (%WORD-FIELD-CHOICE-VALUES,
+WORD-CONSTANT-VALUE) -- LDB against (- OVERLAP-SHIFT SHIFT) re-aligns it to
+the shared range's own low bit before comparing.
 
-(defun %constant-distinguishes-p (constant other)
-  "T if CONSTANT (one of A's WORD-CONSTANTS, #136) tells A apart from OTHER --
-either OTHER pins the same (WIDTH . SHIFT) field to a different literal
-value, or OTHER has an ordinary operand hole there whose alternatives never
-match CONSTANT's own value (%WORD-CHOICE-MATCHES-P). NIL -- not
-distinguishing -- when OTHER mentions that field neither as a constant nor
-as a hole: it ignores those bits entirely at decode and would match
-CONSTANT's value vacuously, the same non-distinguishing case
-%ANY-HOLE-DISJOINT-P already treats a hole one side doesn't share bits with
-as (#137)."
-  (let ((other-constant (find-if (lambda (c) (and (= (word-constant-width c) (word-constant-width constant))
-                                                    (= (word-constant-shift c) (word-constant-shift constant))))
-                                  (instruction-descriptor-word-constants other))))
-    (if other-constant
-        (/= (word-constant-value other-constant) (word-constant-value constant))
-        (let ((choices (%word-field-choices-at (instruction-descriptor-word-alternatives other)
-                                                (word-constant-width constant) (word-constant-shift constant))))
-          (and choices (notany (lambda (c) (%word-choice-matches-p (word-constant-value constant) c)) choices))))))
+TODO: O(|VALUES-A|*|VALUES-B|) via MEMBER over two enumerated lists -- fine
+at the field widths every current machine uses (a handful of bits), same
+ceiling %WORD-FIELD-CHOICE-VALUES has always had (#105), but a wide field on
+a wide word would want range algebra over the projected intervals instead of
+enumeration."
+  (destructuring-bind (width-a shift-a values-a) constraint-a
+    (destructuring-bind (width-b shift-b values-b) constraint-b
+      (let ((lo (max shift-a shift-b))
+            (hi (min (+ shift-a width-a) (+ shift-b width-b))))
+        (and (< lo hi)
+             (let ((width (- hi lo)))
+               (flet ((project (value shift) (ldb (byte width (- lo shift)) value)))
+                 (let ((projected-a (mapcar (lambda (v) (project v shift-a)) values-a)))
+                   (notany (lambda (v) (member (project v shift-b) projected-a)) values-b)))))))))
 
-(defun %constants-disjoint-p (a b)
-  "T if some (field-value ...) constant A or B declares (#136) can never
-match the other's own encoding of that same field -- see
-%CONSTANT-DISTINGUISHES-P. Checked from both A's and B's constants, since
-only one side might pin the field at all."
-  (or (some (lambda (c) (%constant-distinguishes-p c b)) (instruction-descriptor-word-constants a))
-      (some (lambda (c) (%constant-distinguishes-p c a)) (instruction-descriptor-word-constants b))))
+(defun %descriptors-distinguishable-p (a b)
+  "T if some bit-level constraint of A (%WORD-BIT-CONSTRAINTS, #140) and some
+constraint of B share bits and disagree there (%BIT-CONSTRAINTS-DISJOINT-P)
+-- the sole decodability proof %CHECK-OPCODE-DECODABLE! needs. Checking every
+constraint of A against every constraint of B covers each unordered pair
+regardless of which descriptor it came from, so one nested loop suffices
+where the old hole/pin split needed two separate checks."
+  (let ((constraints-a (%word-bit-constraints a))
+        (constraints-b (%word-bit-constraints b)))
+    (loop for ca in constraints-a
+            thereis (some (lambda (cb) (%bit-constraints-disjoint-p ca cb)) constraints-b))))
 
 (defun %check-opcode-decodable! (machine-name name a b)
   "Signal OPCODE-CONFLICT unless A and B -- two INSTRUCTION-DESCRIPTORs about
 to share one opcode on word-encoded MACHINE-NAME (#105), neither a sibling
 combo of the other (%SIBLING-COMBOS-P) -- can be told apart at decode time.
 
-#64: first requires A and B to name the *same* instruction-word layout
-(:REASON :DIFFERENT-WORD-LAYOUT otherwise). %ANY-HOLE-DISJOINT-P pairs A's
-and B's holes by the bits they occupy (#137), not by index, so this
-requirement is no longer what keeps that comparison sound -- it remains an
-independent restriction (a separate ticket tracks relaxing it to \"same bits
-used, layout name aside\").
+#140: A and B need not name the same instruction-word layout (#64) --
+%DESCRIPTORS-DISTINGUISHABLE-P pairs their bit-level constraints (operand
+holes and (field-value ...) pins alike) by the bits they actually occupy,
+fully or partially overlapping, so decode never needs to know which layout
+matched before it can tell two candidates apart: every WORD-FIELD-CHOICE and
+WORD-CONSTANT already carries its own absolute WIDTH/SHIFT, resolved against
+its own descriptor's layout at DEFINSTRUCTION time. :REASON :INDISTINGUISHABLE
+when no such disagreement exists.
 
-Given a shared layout, :REASON :INDISTINGUISHABLE unless the two disagree at
-some shared hole -- %ANY-HOLE-DISJOINT-P finds no raw fetched value that
-would match both, at a hole cut from the same bits on each side -- or at some
-field either pins with (field-value ...) (#136, %CONSTANTS-DISJOINT-P).
-Requires *at least one* such disagreement, not that every hole/field
-disagrees -- decode only needs one field to tell the two apart. A no-operand
-descriptor's WORD-ALTERNATIVES is NIL, so %ANY-HOLE-DISJOINT-P finds nothing
-to check on its own -- %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) matches a
-no-operand descriptor vacuously, so it would collide with *any* co-tenant
-unless its own WORD-CONSTANTS (#136, a CLS/RET-shaped no-operand instruction
-pinning every field) supply the disagreement instead; two co-tenant
-no-operand descriptors with no constants are truly indistinguishable unless
-they are siblings (caught by %SIBLING-COMBOS-P above)."
+Requires *at least one* disagreement, not that every constraint disagrees --
+decode only needs one field to tell the two apart. A no-operand descriptor
+with no WORD-CONSTANTS has no constraints at all, so
+%DESCRIPTORS-DISTINGUISHABLE-P finds nothing to check on its own --
+%TRY-DECODE-WORD-CANDIDATE (decoder.lisp) matches a no-operand descriptor
+vacuously, so it would collide with *any* co-tenant unless its own
+WORD-CONSTANTS (#136, a CLS/RET-shaped no-operand instruction pinning every
+field) supply the disagreement instead; two co-tenant no-operand descriptors
+with no constants are truly indistinguishable unless they are siblings
+(caught by %SIBLING-COMBOS-P above)."
   (unless (%sibling-combos-p a b)
-    (unless (eq (instruction-descriptor-word-layout-name a) (instruction-descriptor-word-layout-name b))
-      (error 'opcode-conflict :machine machine-name
-                               :opcode (instruction-descriptor-opcode a)
-                               :mnemonic name
-                               :other-mnemonic (instruction-descriptor-name b)
-                               :reason :different-word-layout))
-    (unless (or (%any-hole-disjoint-p (instruction-descriptor-word-alternatives a)
-                                       (instruction-descriptor-word-alternatives b))
-                (%constants-disjoint-p a b))
+    (unless (%descriptors-distinguishable-p a b)
       (error 'opcode-conflict :machine machine-name
                                :opcode (instruction-descriptor-opcode a)
                                :mnemonic name

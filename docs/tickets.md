@@ -88,7 +88,6 @@ between them or on the chain above):
 
 | Ticket | Follows up on |
 |---|---|
-| #140 relax #64's same-layout-per-opcode restriction | #105, #64, unblocked by #137 |
 | #65 `.cell`/`.dat` directive | #53 |
 | #66 `:endian` option | #53 |
 | #67 `lo`/`hi` operators vs. cell width | #53 |
@@ -137,13 +136,26 @@ since closed: #137 (`%hole-disjoint-p`'s caller compared co-tenant holes
 positionally instead of by the bits they occupy -- pre-existing, exposed
 by this ticket's own co-tenancy check) and #138 (`(operand ... :field
 opcode)` silently corrupted the opcode field at encode time -- pre-existing
-on every word-encoded machine). #137's fix leaves the same-layout-per-opcode
-restriction itself no longer load-bearing; relaxing it is #140.
+on every word-encoded machine). #137's fix left the same-layout-per-opcode
+restriction itself no longer load-bearing; #140 (below) relaxes it.
 
 #136 (word-encoded constant discriminator fields) is now closed --
 `(field-value FIELD-NAME n)` pins an instruction-word field to a literal
 with no operand hole, participating in `%check-opcode-decodable!`'s
 co-tenancy check the same way a hole's raw bits already do.
+
+#140 (relax #64's same-layout-per-opcode restriction) is now closed -- two
+co-tenant descriptors at one opcode may now name different instruction-word
+layouts. `%check-opcode-decodable!`'s co-tenancy proof is now one uniform
+bit-constraint comparison (`%descriptors-distinguishable-p`) over every
+operand hole and `field-value` pin on both sides, pairing any two whose bit
+ranges overlap -- fully, as two same-layout fields of the same name always
+do, or partially, as two different-layout fields can -- and comparing their
+raw value sets narrowed to just the shared bits. This is a strict
+generalization of #137's own exact-width/shift pairing, so it subsumes the
+partial-bit-overlap case (e.g. a 4-bit field at shift 8 against two 2-bit
+fields at shifts 10 and 8) that #137 alone still rejected. `field-value`
+pins and operand holes are no longer checked separately.
 `examples/chip8word.lisp` is nibble-faithful for every CHIP8 opcode family
 this needed (`8XY_`, `5XY0`/`9XY0`, `EX9E`/`EXA1`, `FX__`, `00E0`/`00EE`)
 except `0NNN`, which cannot coexist with `00E0`/`00EE` under disjointness

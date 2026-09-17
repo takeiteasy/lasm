@@ -36,8 +36,8 @@
 ;;;; Scope: nibble-faithful for every opcode family below, with one
 ;;;; deliberate gap -- 0NNN (SYS addr) cannot coexist with 00E0/00EE here.
 ;;;; A catch-all NNN hole at opcode 0 would overlap both pinned values under
-;;;; any layout choice, which %HOLE-DISJOINT-P (instruction.lisp) rejects as
-;;;; :INDISTINGUISHABLE; telling them apart needs priority/ordering
+;;;; any layout choice, which %DESCRIPTORS-DISTINGUISHABLE-P (instruction.lisp)
+;;;; rejects as :INDISTINGUISHABLE; telling them apart needs priority/ordering
 ;;;; semantics this ticket does not add (tracked separately, #139).
 ;;;; HLT stands in for the one address 0NNN this example does use (0x000),
 ;;;; the same role SYS addr's "ignored by modern interpreters" already

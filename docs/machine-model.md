@@ -116,7 +116,13 @@ little-endian cells of that width, see "Cell- vs. word-encoded
 instructions" below. Every `(layout NAME ...)` alternate (#64) is held to
 the same field-width-sums-to-`:width` rule independently, plus the
 cross-layout checks above: layout names unique, and an `opcode` field
-identical in width and shift to the default's.
+identical in width and shift to the default's. Those two checks are what let
+two co-tenant descriptors at one opcode name *different* layouts (#140,
+see [Instructions, "Per-instruction
+layouts"](instructions.md#per-instruction-layouts-64)) — every layout
+shares one word size and one `opcode` position, so decode can fetch the
+opcode off the default layout alone and compare two candidates' fields
+bit-for-bit without first knowing which layout matched.
 
 ### Note on naming
 

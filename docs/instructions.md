@@ -589,12 +589,15 @@ co-tenancy (below) — the ordinary case, exactly one descriptor, enforced at
 sibling combos one `(modes ...)` clause's own operand-field variants expand
 into (`%expand-word-combos`, always compatible with each other), and,
 independently, several genuinely distinct descriptors — different mnemonics,
-or one mnemonic's different modes — that `definstruction` has verified are
-*decode-distinguishable*: some operand field's raw bits accept disjoint value
-sets between every such pair. Decode (`decode-instruction-at`) tries each
-candidate registered at an opcode in turn and returns the first whose fields
-the fetched bits actually match; since co-tenants are pairwise disjoint at
-some hole, at most one can ever match a given word, so this is never a race
+or one mnemonic's different modes, possibly naming different
+[per-instruction layouts](#per-instruction-layouts-64) — that `definstruction`
+has verified are *decode-distinguishable*: some field either candidate
+occupies (an operand hole or a `field-value` pin alike) accepts disjoint raw
+values from the other's, once both are narrowed down to only the bits they
+actually share. Decode (`decode-instruction-at`) tries each candidate
+registered at an opcode in turn and returns the first whose fields the
+fetched bits actually match; since co-tenants are pairwise disjoint
+somewhere, at most one can ever match a given word, so this is never a race
 between overlapping candidates.
 
 Declaring two descriptors at one opcode that are *not* decode-distinguishable
@@ -818,16 +821,20 @@ the one case where a no-operand instruction *does* need to name one.
 
 Two co-tenant descriptors sharing one opcode (multiple modes of one
 mnemonic, or distinct mnemonics — see ["Opcode to descriptor
-decode"](#opcode-to-descriptor-decode) below, #105) must name the *same*
-layout — decode has no way to tell which layout's fields to read until it
-already knows which descriptor matched, so mixing layouts at one opcode is
-rejected outright (`opcode-conflict`, reason `:different-word-layout`)
-rather than risked. Within a shared layout, decodability itself is checked
-bit-by-bit: two candidates are told apart the moment some field they both
-occupy — matched by the bits it actually sits at, not by declaration order —
-accepts disjoint raw values, or some `field-value` pin (below) disagrees. A
-field only one candidate mentions never counts as disagreement, since it
-ignores those bits entirely at decode and would match vacuously.
+decode"](#opcode-to-descriptor-decode) below, #105) may name *different*
+layouts (#140) — every `(operand ... :field F)` hole and `field-value` pin
+already resolves to an absolute bit position within the machine's own word
+size at `definstruction` time, so decode never needs to know which layout
+matched before it can compare two candidates bit-for-bit. Decodability is
+checked over every pair of fields the two candidates occupy, whether or not
+they share a layout, a field name, or even a width: two candidates are told
+apart the moment some pair of fields *overlapping in bits* — fully, as two
+same-layout fields of the same name always do, or partially, as two
+different-layout fields can — accepts disjoint raw values there, narrowed to
+only the bits they share; `field-value` pins (below) count the same way as
+operand holes. A field pair that shares no bits at all never counts as
+disagreement, since it ignores those bits entirely at decode and would match
+vacuously.
 
 ### `(field-value FIELD-NAME n)` — constant discriminator fields (#136)
 
@@ -863,13 +870,14 @@ fields — `cls` above needs `NNN`'s own `nnn` field to pin, which the
 machine's default layout doesn't have.
 
 Co-tenancy at one opcode treats a pinned field exactly like an ordinary
-hole's raw bits: two co-tenants are decodable once *some* field disagrees,
-whether that disagreement comes from an operand hole, a `field-value` pin
-against another pin, or a pin against a hole whose own range never covers
-the pinned value. A `field-value` neither side's other candidate mentions at
-all doesn't count as disagreement — those bits are simply not looked at
-when deciding whether that candidate matches, so a pin only distinguishes
-descriptors that actually address the same field. This is the word-encoded
+hole's raw bits (see "Per-instruction layouts" above): two co-tenants are
+decodable once *some* pair of bit-overlapping fields disagrees, whether that
+disagreement comes from an operand hole, a `field-value` pin against another
+pin, or a pin against a hole whose own range never covers the pinned value —
+and, since #140, that pair need not share a layout or a field name, only
+some bits. A `field-value` whose bits neither side's other candidate
+addresses at all doesn't count as disagreement — those bits are simply not
+looked at when deciding whether that candidate matches. This is the word-encoded
 counterpart of `(opcode n :sub s)` (above) — `field-value` is rejected
 outright on a byte-encoded machine, and `(opcode n :sub s)` is rejected on a
 word-encoded one, for the same reason: each scheme already has its own way

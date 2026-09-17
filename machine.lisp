@@ -147,11 +147,19 @@
            (opcode-field (find 'opcode fields :key #'first))
            (alternates (mapcar (lambda (f) (%parse-instruction-word-layout-form f width)) layout-forms)))
       ;; Cross-layout checks (#64): alternate names unique and non-NIL
-      ;; (NIL always names the default), and each alternate's OPCODE field
-      ;; identical in width and shift to the default's -- decode reads the
-      ;; OPCODE field off the machine's *default* layout alone
+      ;; (NIL always names the default), each alternate held to the same
+      ;; :WIDTH as the default (%PARSE-INSTRUCTION-WORD-FIELDS' own
+      ;; fields-sum-to-width check, applied per layout), and each alternate's
+      ;; OPCODE field identical in width and shift to the default's -- decode
+      ;; reads the OPCODE field off the machine's *default* layout alone
       ;; (%DECODE-WORD-INSTRUCTION), so every candidate must agree on where
-      ;; it lives regardless of which layout actually encoded it.
+      ;; it lives regardless of which layout actually encoded it. These two
+      ;; checks are also what makes #140's relaxed co-tenancy check sound: a
+      ;; descriptor's WORD-FIELD-CHOICE/WORD-CONSTANT entries carry absolute
+      ;; bit positions within one shared word size, so two co-tenants naming
+      ;; different layouts can still be compared bit-for-bit
+      ;; (%DESCRIPTORS-DISTINGUISHABLE-P, instruction.lisp) with no need to
+      ;; know which layout matched first.
       (let ((names (mapcar #'instruction-word-layout-name alternates)))
         (loop for tail on names
               when (member (first tail) (rest tail))

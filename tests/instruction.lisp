@@ -724,6 +724,51 @@
     (operand x :field x))
   (semantics (set! a x) (set! b y)))
 
+;; #140 fixtures: cross-layout co-tenancy, once the same-layout gate no
+;; longer applies. WIDEVALLO (default layout, field Y, 8@0) and
+;; NARROWVALHI (NARROW layout, field Z, also 8@0) share opcode 13 -- exact
+;; same bits, different layout *and* different field name, disjoint ranges.
+;; PINYA/PINZB share opcode 14, told apart purely by a (field-value ...) pin
+;; on the same 8@0 bits under different layouts/field names -- their own X
+;; holes (4@8 default vs. 2@10 narrow) overlap fully and never distinguish
+;; them, so this is a true test of cross-layout pin comparison. PARTIALLO/
+;; PARTIALHI share opcode 15 with only a *partial* bit overlap -- default's X
+;; (4@8, range 0-3) and narrow's X (2@10, range 1-3) share only bits 10-11,
+;; where PARTIALLO's range 0-3 always projects to 0 and PARTIALHI's range 1-3
+;; projects to 1-3 -- disjoint despite neither hole being disjoint outright.
+
+(definstruction word-layouts-test-machine widevallo
+  (modes word-layouts-x)
+  (encoding (opcode 13) (operand v :field y (variant (range 0 10) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine narrowvalhi
+  (modes word-layouts-x)
+  (encoding (opcode 13) (layout narrow) (operand v :field z (variant (range 11 255) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine pinya
+  (modes word-layouts-x)
+  (encoding (opcode 14) (field-value y 0)
+    (operand x :field x))
+  (semantics (set! a x)))
+
+(definstruction word-layouts-test-machine pinzb
+  (modes word-layouts-x)
+  (encoding (opcode 14) (layout narrow) (field-value z 1)
+    (operand x :field x))
+  (semantics (set! a x)))
+
+(definstruction word-layouts-test-machine partiallo
+  (modes word-layouts-x)
+  (encoding (opcode 15) (operand v :field x (variant (range 0 3) inline)))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine partialhi
+  (modes word-layouts-x)
+  (encoding (opcode 15) (layout narrow) (operand v :field x (variant (range 1 3) inline)))
+  (semantics (set! a v)))
+
 (fiveam:test instruction-word-layout-alternates-share-width-and-opcode-field
   (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor 'word-layouts-test-machine))))
     (fiveam:is (null (instruction-word-layout-name layout)))
@@ -805,11 +850,13 @@
              (encoding (opcode 6) (layout wide))
              (semantics)))))
 
-(fiveam:test definstruction-co-tenants-at-one-opcode-must-share-a-layout
-  ;; SETX (opcode 1, default layout) and a bogus second descriptor at the
-  ;; same opcode naming WIDE instead -- %HOLE-DISJOINT-P compares holes
-  ;; purely positionally, so mixing layouts at one opcode must be rejected
-  ;; outright (#64) rather than silently trusted.
+(fiveam:test definstruction-co-tenants-in-different-layouts-sharing-no-bits-are-rejected
+  ;; #140: SETX (opcode 1, default layout) and a bogus second descriptor at
+  ;; the same opcode naming WIDE instead -- mixing layouts is no longer
+  ;; rejected outright, but this pair is still genuinely indistinguishable:
+  ;; WIDE's X (12@0) overlaps both of SETX's fields (X 4@8, Y 8@0), and its
+  ;; full 0-4095 range projects onto every shared bit range as the full set
+  ;; either side ever produces, so no pair of fields disagrees.
   (handler-case
       (eval '(definstruction word-layouts-test-machine bogus
                (modes word-layouts-x)
@@ -817,7 +864,7 @@
                  (operand x :field x))
                (semantics (set! a x))))
     (opcode-conflict (c)
-      (fiveam:is (eq :different-word-layout (opcode-conflict-reason c))))
+      (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
     (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
 
 (fiveam:test encode-instruction-selects-fields-from-the-named-layout
@@ -1026,6 +1073,63 @@
                                     (decode-instruction-at (vector-cell-reader ab) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "ORDERBA" (instruction-descriptor-name
                                     (decode-instruction-at (vector-cell-reader ba) 0 'word-layouts-test-machine))))))
+
+;;; #140: two co-tenants may now name *different* instruction-word layouts,
+;;; once #137's bit-based pairing makes the same-layout gate unnecessary --
+;;; each pair below must round-trip through assemble/decode to its own
+;;; mnemonic, not merely register without error.
+
+(fiveam:test definstruction-co-tenants-in-different-layouts-same-bits-are-accepted
+  ;; WIDEVALLO (default layout, field Y, 8@0) and NARROWVALHI (NARROW
+  ;; layout, field Z, also 8@0) -- exact same bits, different layout and
+  ;; different field name, disjoint ranges (0-10 vs. 11-255).
+  (let ((lo (assembly-cells (assemble "widevallo 5" :machine 'word-layouts-test-machine)))
+        (hi (assembly-cells (assemble "narrowvalhi 200" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "WIDEVALLO" (instruction-descriptor-name
+                                       (decode-instruction-at (vector-cell-reader lo) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "NARROWVALHI" (instruction-descriptor-name
+                                         (decode-instruction-at (vector-cell-reader hi) 0 'word-layouts-test-machine))))))
+
+(fiveam:test definstruction-co-tenants-in-different-layouts-distinguished-by-pin-are-accepted
+  ;; PINYA (default layout, field-value Y=0) and PINZB (NARROW layout,
+  ;; field-value Z=1) -- both pins land on the same 8@0 bits. Each also
+  ;; carries an X hole (4@8 default, 2@10 narrow) that overlaps the other's
+  ;; fully and never distinguishes them on its own -- only the pin does.
+  (let ((a (assembly-cells (assemble "pinya 5" :machine 'word-layouts-test-machine)))
+        (b (assembly-cells (assemble "pinzb 2" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "PINYA" (instruction-descriptor-name
+                                  (decode-instruction-at (vector-cell-reader a) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "PINZB" (instruction-descriptor-name
+                                  (decode-instruction-at (vector-cell-reader b) 0 'word-layouts-test-machine))))))
+
+(fiveam:test definstruction-co-tenants-in-different-layouts-without-a-pin-are-rejected
+  ;; Same shape as PINYA/PINZB but with the pin removed from the second
+  ;; descriptor -- pins the previous test's own claim that the X holes alone
+  ;; never distinguish PINYA from PINZB, so PINYA + a PINZB-shaped no-pin
+  ;; bogus descriptor must be :INDISTINGUISHABLE.
+  (handler-case
+      (eval '(definstruction word-layouts-test-machine bogus
+               (modes word-layouts-x)
+               (encoding (opcode 14) (layout narrow)
+                 (operand x :field x))
+               (semantics (set! a x))))
+    (opcode-conflict (c)
+      (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+(fiveam:test definstruction-co-tenants-with-partial-bit-overlap-are-accepted
+  ;; PARTIALLO (default X, 4@8, range 0-3) and PARTIALHI (NARROW X, 2@10,
+  ;; range 1-3) share only bits 10-11 of their respective fields -- neither
+  ;; hole is disjoint from the other outright (both ranges are subsets of
+  ;; 0-15), but PARTIALLO's range always projects to 0 on those two bits
+  ;; while PARTIALHI's projects to 1-3, so the fields disagree once narrowed
+  ;; to the bits they actually share (#140's generalization of #137).
+  (let ((lo (assembly-cells (assemble "partiallo 2" :machine 'word-layouts-test-machine)))
+        (hi (assembly-cells (assemble "partialhi 2" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "PARTIALLO" (instruction-descriptor-name
+                                      (decode-instruction-at (vector-cell-reader lo) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "PARTIALHI" (instruction-descriptor-name
+                                      (decode-instruction-at (vector-cell-reader hi) 0 'word-layouts-test-machine))))))
 
 ;;; #138: an (operand ... :field opcode) hole would OR its own bits into the
 ;;; already-placed opcode field at encode time (%ENCODE-WORD-INSTRUCTION) --
