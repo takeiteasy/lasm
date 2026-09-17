@@ -31,7 +31,14 @@ local macro instead of a symbol-macro -- symbol-macrolet can't express an
 indexed form like (V 3) with a run-time index. So (V idx) reads bank IDX of
 V (expanding to REGREF), and (set! (V idx) val) writes it (through SET!'s
 plain SETF expansion to (SETF (REGREF ...) VAL)). See the storage-element
-:count docstring in storage.lisp."
+:count docstring in storage.lisp.
+
+A banked register's own :names (#72) additionally bind one ordinary
+symbol-macro per alias, each with its bank index baked in -- e.g. DCPU-16's
+I becomes (REGREF MACHINE-VAR 'REG 6), no run-time index needed, so
+(set! I val) reaches (SETF (REGREF ...) VAL) exactly like any scalar
+register's symbol-macro. The (V idx) macrolet stays available alongside
+these for a run-time-computed index."
   (let ((descriptor (find-machine-descriptor machine-name)))
     (let (symbol-macros stack-names banked-names)
       (dolist (element (machine-descriptor-elements descriptor))
@@ -40,7 +47,11 @@ plain SETF expansion to (SETF (REGREF ...) VAL)). See the storage-element
            (let ((name (storage-element-name element)))
              (if (= (storage-element-count element) 1)
                  (cl:push `(,name (sref ,machine-var ',name)) symbol-macros)
-                 (cl:push name banked-names))))
+                 (progn
+                   (cl:push name banked-names)
+                   (loop for alias in (storage-element-names element)
+                         for index from 0
+                         do (cl:push `(,alias (regref ,machine-var ',name ,index)) symbol-macros))))))
           (:flag
            (let ((name (storage-element-name element)))
              (cl:push `(,name (flag ,machine-var ',name)) symbol-macros)))

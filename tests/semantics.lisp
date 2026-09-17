@@ -42,6 +42,24 @@
     (fiveam:is (= 1 (bank 0)))
     (fiveam:is (= 2 (bank 1)))))
 
+;; #72: BANK's :names (bank0 bank1 bank2 bank3) each bind as an ordinary
+;; symbol-macro with their bank index baked in -- an alternative to (bank
+;; idx) for a compile-time-known index, reading and writing the same cells.
+
+(fiveam:test with-machine-register-alias-reads-and-writes-its-bank-cell
+  (with-machine (m test-machine)
+    (set! bank1 7)
+    (fiveam:is (= 7 bank1))
+    (fiveam:is (= 7 (bank 1)))
+    (fiveam:is (= 0 bank0))))
+
+(fiveam:test with-machine-register-alias-and-indexed-form-share-state
+  (with-machine (m test-machine)
+    (set! (bank 2) 5)
+    (fiveam:is (= 5 bank2))
+    (set! bank2 (+ bank2 1))
+    (fiveam:is (= 6 (bank 2)))))
+
 ;; #57: TEST-MACHINE declares exactly one stack (S), so PUSH/POP may omit the
 ;; stack name and resolve to it -- mirroring emulator.lisp's %RESOLVE-MEMORY
 ;; convention for the sole :memory element. This makes the design draft's own

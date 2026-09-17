@@ -24,10 +24,10 @@ widths against a machine defined earlier in the same file.
 
 ### Clauses
 
-- `(register NAME :width n [:count n])` — a fixed-width storage cell.
-  `:count n` (n > 1) declares a *banked* register (e.g. CHIP8's 16 `V`
-  registers, [`examples/chip8.lisp`](../examples/chip8.lisp)). A scalar
-  register (`:count 1`, the default) is read/written by `sref`/
+- `(register NAME :width n [:count n] [:names (A B C ...)])` — a
+  fixed-width storage cell. `:count n` (n > 1) declares a *banked* register
+  (e.g. CHIP8's 16 `V` registers, [`examples/chip8.lisp`](../examples/chip8.lisp)).
+  A scalar register (`:count 1`, the default) is read/written by `sref`/
   `(setf sref)` and, inside `with-machine`/instruction semantics, bound
   directly by name (e.g. `a`). A banked register is read/written by
   `regref`/`(setf regref)`, which take a run-time bank index and mask/wrap
@@ -37,6 +37,17 @@ widths against a machine defined earlier in the same file.
   `with-machine`/instruction semantics, a banked register is bound as a
   local macro taking an index, e.g. `(v idx)` reads bank `idx` of `v` and
   `(set! (v idx) n)` writes it — see [Semantics vocabulary](semantics.md).
+
+  `:names` gives each bank cell a symbolic alias, one per cell in index
+  order — CHIP8's `V0`–`VF` or DCPU-16's `A B C X Y Z I J`
+  ([`examples/dcpu16.lisp`](../examples/dcpu16.lisp)). `:count` defaults to
+  `(length names)` when `:names` is given alone; giving both requires them
+  to agree. An alias folds like an ordinary symbol in assembly source (so
+  `set a, 5` assembles identically to `set 0, 5`), resolved after the
+  symbol table on any name it doesn't already bind — a label or `.equ`
+  colliding with an alias (case-insensitively) is an assembly error rather
+  than a silent shadow. Every alias shares one machine-wide namespace with
+  every other storage element name and every other register's aliases.
 - `(stack NAME :width n :depth n)` — a fixed-depth LIFO stack of `:width`-bit
   values. Grows upward: the stack pointer starts at 0 and always equals the
   number of live entries, incrementing on push and decrementing on pop.

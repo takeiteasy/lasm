@@ -1155,3 +1155,37 @@ next: wnop" :machine 'word-relative-test-machine)))
       (fiveam:is (string= "WBRA" (instruction-descriptor-name descriptor)))
       (fiveam:is (equal '(600) values))
       (fiveam:is (= 4 size)))))
+
+;;; #72: register aliases resolve during assembly like any other symbol.
+;;; DCPU16-TEST-MACHINE's REG element carries :names (a b c x y z i j).
+
+(fiveam:test register-alias-resolves-in-an-operand
+  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine))
+        (b (assemble "set 0, 5" :machine 'dcpu16-test-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells b)))))
+
+(fiveam:test register-alias-resolves-case-insensitively
+  (let ((lower (assemble "set a, 5" :machine 'dcpu16-test-machine))
+        (upper (assemble "set A, 5" :machine 'dcpu16-test-machine)))
+    (fiveam:is (equalp (assembly-cells lower) (assembly-cells upper)))))
+
+(fiveam:test register-alias-resolves-inside-an-expression
+  (let ((alias (assemble "set (a+1), 5" :machine 'dcpu16-test-machine))
+        (literal (assemble "set 1, 5" :machine 'dcpu16-test-machine)))
+    (fiveam:is (equalp (assembly-cells alias) (assembly-cells literal)))))
+
+(fiveam:test register-alias-is-not-listed-as-a-symbol
+  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine)))
+    (fiveam:is (not (nth-value 1 (gethash "a" (assembly-symbols a)))))))
+
+(fiveam:test label-colliding-with-register-alias-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "i: hlt" :machine 'dcpu16-test-machine)))
+
+(fiveam:test label-colliding-with-register-alias-case-insensitively-signals
+  (fiveam:signals assembly-error
+    (assemble "I: hlt" :machine 'dcpu16-test-machine)))
+
+(fiveam:test equ-colliding-with-register-alias-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".equ i, 5" :machine 'dcpu16-test-machine)))

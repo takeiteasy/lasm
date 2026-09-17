@@ -332,6 +332,22 @@
              (encoding (opcode #xFF) (operand z :width 1) (operand :width 1))
              (semantics nil)))))
 
+;; #72: a dedicated byte-encoded fixture with an aliased banked register --
+;; ALIAS-TEST-MACHINE's V carries :names (v0 v1), so an operand named V0
+;; would shadow that alias's symbol-macro exactly as silently as a scalar
+;; register or a banked register's own name would.
+(defmachine alias-test-machine
+  (register v :width 8 :names (v0 v1))
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(fiveam:test multi-operand-instruction-operand-name-shadowing-register-alias-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFF) (operand v0 :width 1) (operand :width 1))
+             (semantics nil)))))
+
 ;;; ONE-OF (#103): a mode's hole count still comes from the pattern, whether
 ;;; a hole is a plain EXPR or a ONE-OF alternation -- DEFINSTRUCTION requires
 ;;; one (operand ...) subclause per hole exactly as for any other mode.
@@ -2222,12 +2238,12 @@ wsi #-100" :machine 'mixed-field-test-machine)
 
 (defmachine chip8-test-machine
   (register pc :width 12)
-  (register v :width 8 :count 16)
+  (register v :width 8 :names (v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 va vb vc vd ve vf))
   (register i :width 12)
   (memory ram :width 8 :addr-width 12))
 
-(defmode chip8-v-imm "V" expr "," "#" expr)
-(defmode chip8-v-only "V" expr)
+(defmode chip8-v-imm expr "," "#" expr)
+(defmode chip8-v-only expr)
 
 (definstruction chip8-test-machine ldv
   (modes chip8-v-imm)
@@ -2288,13 +2304,13 @@ wsi #-100" :machine 'mixed-field-test-machine)
 
 (fiveam:test chip8-machine-end-to-end
   ;; Mirrors examples/chip8.lisp's *SOURCE* verbatim.
-  (let ((a (assemble "ldv V 0, #$fa
-ldv V 1, #5
-addv V 0, #10
+  (let ((a (assemble "ldv v0, #$fa
+ldv v1, #5
+addv v0, #10
 ldi #$ffe
-addi V 1
+addi v1
 jp skip
-ldv V 2, #99
+ldv v2, #99
 skip: hlt" :machine 'chip8-test-machine)))
     (fiveam:is (= 21 (length (assembly-cells a))))
     (let ((m (make-machine 'chip8-test-machine)))
@@ -2422,17 +2438,17 @@ done:
 
 ;;; Word-addressed memory + bitfield/variant encoding combined (#55, M4) --
 ;;; DCPU16FOO mirrors examples/dcpu16.lisp: DCPU-16's real instruction-word
-;;; layout (6-bit A, 5-bit B, 5-bit OPCODE fields) over :CELL-WIDTH 16
-;;; memory, and a banked (#13) 16-bit REG register standing in for DCPU-16's
-;;; eight named registers, addressed here by index.
+;;; layout (6-bit AV, 5-bit BV, 5-bit OPCODE fields) over :CELL-WIDTH 16
+;;; memory, and a banked (#13) 16-bit REG register carrying DCPU-16's own
+;;; register names (#72's :names) rather than bare indices.
 
 (defmachine dcpu16-test-machine
   (register pc :width 16)
-  (register reg :width 16 :count 8)
+  (register reg :width 16 :names (a b c x y z i j))
   (memory ram :width 16 :addr-width 16 :cell-width 16)
   (instruction-word :width 16
-    (field a 6)
-    (field b 5)
+    (field av 6)
+    (field bv 5)
     (field opcode 5)))
 
 (defmode dcpu16-rr expr "," expr)
@@ -2441,8 +2457,8 @@ done:
   (modes dcpu16-rr)
   (encoding
     (opcode 1)
-    (operand dst :field b)
-    (operand src :field a
+    (operand dst :field bv)
+    (operand src :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f))))
   (semantics (set! (reg dst) src)))
@@ -2451,8 +2467,8 @@ done:
   (modes dcpu16-rr)
   (encoding
     (opcode 2)
-    (operand dst :field b)
-    (operand src :field a
+    (operand dst :field bv)
+    (operand src :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f))))
   (semantics (set! (reg dst) (wrap-value (+ (reg dst) src) 16))))
@@ -2461,18 +2477,18 @@ done:
   (modes dcpu16-rr)
   (encoding
     (opcode 3)
-    (operand dst :field b)
-    (operand srcreg :field a))
+    (operand dst :field bv)
+    (operand srcreg :field av))
   (semantics (set! (reg dst) (wrap-value (+ (reg dst) (reg srcreg)) 16))))
 
 (definstruction dcpu16-test-machine sto
   (modes dcpu16-rr)
   (encoding
     (opcode 4)
-    (operand addr :field a
+    (operand addr :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f)))
-    (operand dst :field b))
+    (operand dst :field bv))
   (semantics (setf (mref machine 'ram addr) (reg dst))))
 
 (definstruction dcpu16-test-machine hlt
@@ -2480,24 +2496,24 @@ done:
   (semantics (trap :halt)))
 
 (fiveam:test dcpu16-set-small-value-packs-inline-one-cell
-  (let ((a (assemble "set 0, 5" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 1 (length (assembly-cells a))))))
 
 (fiveam:test dcpu16-set-large-value-escapes-to-extra-cell
-  (let ((a (assemble "set 1, 1000" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set b, 1000" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 2 (length (assembly-cells a))))
     (fiveam:is (= 1000 (aref (assembly-cells a) 1)))))
 
 (fiveam:test dcpu16-addr-registers-both-plain-inline-one-cell
-  (let ((a (assemble "addr 0, 1" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "addr a, b" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 1 (length (assembly-cells a))))))
 
 (fiveam:test dcpu16-machine-end-to-end
   ;; Mirrors examples/dcpu16.lisp's *SOURCE* verbatim.
-  (let ((a (assemble "set 0, 5
-set 1, 1000
-addr 0, 1
-sto result, 0
+  (let ((a (assemble "set a, 5
+set b, 1000
+addr a, b
+sto result, a
 hlt
 result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 16 (assembly-cell-width a)))

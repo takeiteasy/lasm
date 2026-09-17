@@ -824,7 +824,17 @@ signals identically either way: both a label and an .EQU claim a name in
 the same flat table. Also records a SYMBOL-INFO (#37) under the same key in
 INFO, capturing NAME (the unqualified spelling), KIND (:LABEL or :EQU),
 SCOPE (the enclosing global, or NIL), and LOCALP -- at bind time, so this
-metadata never has to be recovered later by splitting QUALIFIED-NAME (#36)."
+metadata never has to be recovered later by splitting QUALIFIED-NAME (#36).
+
+#72: also signals if NAME collides (case-insensitively) with a register
+alias in scope (*REGISTER-ALIASES*, instruction.lisp) -- a label or .EQU
+silently shadowing e.g. DCPU-16's I register would be a worse surprise than
+an outright error. LOCALP names are already qualified against their
+enclosing scope by %QUALIFY-LOCALS! before reaching here, so a local label
+like \".a\" can't collide with alias \"a\"."
+  (when (and *register-aliases* (nth-value 1 (gethash name *register-aliases*)))
+    (%assembly-error line "~A ~S collides with a register alias of the same name"
+                      (if (eq kind :equ) ".equ" "Label") name))
   (when (nth-value 1 (gethash qualified-name symbols))
     (%assembly-error line "Duplicate symbol ~S" qualified-name))
   (setf (gethash qualified-name symbols) value)
@@ -1394,7 +1404,11 @@ LISTING-LINE list in address order; see listing.lisp for how it's rendered
 and looked up. Also retains %LAYOUT's scope/kind metadata (#37) as
 ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
   (with-source-context source
-    (let ((cell-width (%machine-cell-width machine memory)))
+    ;; #72: *REGISTER-ALIASES* (instruction.lisp) in scope for both EVAL-EXPR
+    ;; (operand/`.equ` folding, below) and %BIND-SYMBOL!'s alias-collision
+    ;; check, for the whole of this assembly.
+    (let* ((cell-width (%machine-cell-width machine memory))
+           (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine))))
       (multiple-value-bind (symbols sized final-address asm-origin info)
           (%layout (expand-macros statements) machine origin cell-width)
         (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width)

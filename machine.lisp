@@ -9,12 +9,31 @@
   value)
 
 (defun parse-register-clause (name-form)
-  ;; (register NAME :width n [:count n])
-  (destructuring-bind (name &key width (count 1)) name-form
+  ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
+  ;; an optional list of alias symbols, one per bank cell in index order
+  ;; (CHIP8's V0-VF, DCPU-16's A/B/C/X/Y/Z/I/J). COUNT defaults to (length
+  ;; NAMES) when NAMES is given and COUNT is not; when both are given they
+  ;; must agree, since a mismatched pair almost certainly indicates a typo
+  ;; in one or the other rather than an intentional partial naming.
+  (destructuring-bind (name &key width count names) name-form
     (unless width (error "register ~S requires :width" name))
+    (when names
+      (unless (every #'symbolp names)
+        (error "register ~S :names must be a list of symbols, got ~S" name names))
+      (let ((dup (loop for (n . rest) on names
+                        when (member n rest :test #'string-equal) return n)))
+        (when dup
+          (error "register ~S :names: duplicate alias ~S" name dup)))
+      (if count
+          (unless (= count (length names))
+            (error "register ~S: :count ~D disagrees with :names' length ~D"
+                   name count (length names)))
+          (setf count (length names))))
+    (setf count (or count 1))
     (make-storage-element :name name :kind :register
                            :width (%check-positive width ":width" name)
-                           :count (%check-positive count ":count" name))))
+                           :count (%check-positive count ":count" name)
+                           :names names)))
 
 (defun parse-stack-clause (form)
   ;; (stack NAME :width n :depth n)
@@ -314,7 +333,18 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
                  (storage-element-name element) name))
         (setf (gethash (storage-element-name element) seen) t)
         (setf (gethash (storage-element-name element) (machine-descriptor-table descriptor))
-              element))
+              element)
+        ;; #72: an aliased register's :names share the same namespace as
+        ;; every storage element name -- SEEN also catches an alias
+        ;; colliding with another element (or another register's alias),
+        ;; not just with a bare element name.
+        (loop for alias in (storage-element-names element)
+              for index from 0
+              do (when (gethash alias seen)
+                   (error "Duplicate storage element name ~S in machine ~S" alias name))
+                 (setf (gethash alias seen) t)
+                 (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
+                       index)))
       (setf (machine-descriptor-elements descriptor) elements)
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH can only be finished now
       ;; that every MEMORY element is known (#53) -- see
@@ -329,12 +359,21 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
 
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:
-     (register NAME :width n [:count n])
+     (register NAME :width n [:count n] [:names (A B C ...)])
      (stack NAME :width n :depth n)
      (memory NAME :width n :addr-width n [:cell-width n])
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
+
+A register's :names (#72) gives each bank cell of a banked (:count > 1)
+register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
+-- resolving to that cell's index. :count defaults to (length names) when
+:names is given alone. An alias folds like a plain symbol in assembly source
+(EVAL-EXPR, instruction.lisp) and binds as a symbol-macro over REGREF inside
+semantics (WITH-MACHINE-BINDINGS, semantics.lisp). Every alias shares one
+machine-wide namespace with every storage element name -- see MACHINE-
+DESCRIPTOR-REGISTER-ALIASES (storage.lisp).
 
 INSTRUCTION-WORD (#20, M4) declares a fixed-width instruction word split into
 named bit fields (MSB-first, one of them named OPCODE) instead of the

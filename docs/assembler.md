@@ -470,6 +470,16 @@ location-counter symbol, below) resolves from `pc` instead, independently of
 `symbols` — `eval-expr-constant` still folds no labels, but a caller can
 still supply `:pc` to fold a location-counter reference.
 
+### Register aliases (#72)
+
+A `symbols` miss falls back to `*register-aliases*`, a special bound by
+`assemble-statements` to the target machine's alias table (`register NAME
+:names (...)`, see [Machine model](machine-model.md)) — so `set a, 5`
+resolves `a` to its bank index exactly as `set 0, 5` folds the literal.
+Symbols are tried first, but the fallback never actually shadows anything:
+`%bind-symbol!` (below) rejects a label or `.equ` name that collides with an
+alias outright, so the two tables never disagree on a name they both hold.
+
 ## Location counter
 
 ```lisp
@@ -618,9 +628,11 @@ at, `.org` can still move it further before the first byte).
 ## Conditions
 
 - `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate symbol (a
-  label or `.equ` name bound twice, in any combination), a local label or
-  `.equ` name with no enclosing global label (see "Local-label scoping"
-  above), an operand whose syntax matches none of the mnemonic's declared
+  label or `.equ` name bound twice, in any combination), a label or `.equ`
+  name colliding (case-insensitively) with a register alias (#72, see
+  "Register aliases" above), a local label or `.equ` name with no enclosing
+  global label (see "Local-label scoping" above), an operand whose syntax
+  matches none of the mnemonic's declared
   addressing-mode variants (naming the accepted modes and the operand given —
   see [Diagnostics](diagnostics.md)), a `relative`-mode offset that doesn't
   fit its operand's width (see "PC-relative offsets" above), a strict-mode

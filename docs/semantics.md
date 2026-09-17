@@ -22,7 +22,11 @@ evaluates `body` with:
   run-time index instead, e.g. `(v idx)` reads bank `idx` of `v` (expanding
   to `regref`) and `(set! (v idx) n)` writes it (through `set!`'s plain
   `setf` expansion, so no separate write form is needed) — see
-  [Machine model](machine-model.md).
+  [Machine model](machine-model.md). A banked register's own `:names`
+  additionally bind one ordinary symbol-macro per alias, its bank index
+  baked in — e.g. DCPU-16's `i` reads/writes bank 6 of `reg` directly,
+  same as a scalar register's own symbol, alongside the indexed `(reg idx)`
+  form for a run-time-computed index.
 - the operators below, available as local macros for the extent of `body`.
 - memory accessed by name through the `mref` accessor, since it takes an
   explicit address operand. Stacks are accessed through `push`/`pop` by

@@ -9,6 +9,10 @@
 ;;;; into the other has to show the width difference: V wraps at 8 bits, I
 ;;;; at 12.
 ;;;;
+;;;; #72: V's bank cells carry CHIP8's own names (V0-VF) via :names, so
+;;;; source reads "ldv v0, #$fa" rather than "ldv V 0, #$fa" -- each alias
+;;;; folds to its bank index like any other symbol.
+;;;;
 ;;;; This deliberately uses the ordinary opcode-plus-operand-cells encoding
 ;;;; (M1-M3), not #20's (instruction-word ...) clause -- #54's own
 ;;;; deliverable is non-uniform *register* widths, not instruction
@@ -29,14 +33,14 @@
 
 (defmachine chip8foo
   (register pc :width 12)
-  (register v :width 8 :count 16)
+  (register v :width 8 :names (v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 va vb vc vd ve vf))
   (register i :width 12)
   (memory ram :width 8 :addr-width 12))
 
-;; V-IMM: "V 0, #10" -- a V-register index and an immediate byte, for
-;; LDV/ADDV. V-ONLY: "V 1" -- just a V-register index, for ADDI.
-(defmode v-imm "V" expr "," "#" expr)
-(defmode v-only "V" expr)
+;; V-IMM: "v0, #10" -- a V-register alias and an immediate byte, for
+;; LDV/ADDV. V-ONLY: "v1" -- just a V-register alias, for ADDI.
+(defmode v-imm expr "," "#" expr)
+(defmode v-only expr)
 
 ;; LDV Vx, #nn -- load an immediate byte into bank X of V.
 (definstruction chip8foo ldv
@@ -82,13 +86,13 @@
 ;; ADDI push I past 255 and then past 4095, proving I's own 12-bit wrap;
 ;; JP skips a marker write to V2 that would prove JP failed if it ran.
 (defparameter *source*
-  "ldv V 0, #$fa    ; V0 = 250
-ldv V 1, #5      ; V1 = 5
-addv V 0, #10    ; V0 = 260 -> wraps mod 256 = 4
-ldi #$ffe        ; I = 4094 (needs 12 bits -- V's own width can't hold it)
-addi V 1         ; I = 4094 + V1(5) = 4099 -> wraps mod 4096 = 3
+  "ldv v0, #$fa    ; V0 = 250
+ldv v1, #5      ; V1 = 5
+addv v0, #10    ; V0 = 260 -> wraps mod 256 = 4
+ldi #$ffe       ; I = 4094 (needs 12 bits -- V's own width can't hold it)
+addi v1         ; I = 4094 + V1(5) = 4099 -> wraps mod 4096 = 3
 jp skip
-ldv V 2, #99     ; unreached if JP works -- would prove otherwise
+ldv v2, #99     ; unreached if JP works -- would prove otherwise
 skip: hlt")
 
 (format t "~&Source:~%~A~2%" *source*)

@@ -80,6 +80,14 @@
   ;; but a :count > 1 register as a MACROLET expanding to REGREF, since
   ;; symbol-macrolet can't express an indexed form like (V x).
   (count 1 :type (integer 1))
+  ;; #72: an optional :names (A B C ...) on a banked register clause, one
+  ;; alias symbol per bank cell in index order -- CHIP8's V0-VF, DCPU-16's
+  ;; A/B/C/X/Y/Z/I/J. NIL when the clause declares none. MACHINE-DESCRIPTOR-
+  ;; REGISTER-ALIASES (below) is the flat name -> index table built from
+  ;; this; NAMES itself is kept on the element for error messages and for
+  ;; WITH-MACHINE-BINDINGS (semantics.lisp) to walk when binding each
+  ;; alias's symbol-macro.
+  (names nil :type list)
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
   (cell-width nil :type (or null (integer 1)))) ; memory, defaults to width
@@ -158,6 +166,15 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
   ;; MACHINE-CYCLES below need no clock speed at all.
   (clock-speed nil :type (or null (integer 1)))
+  ;; #72: alias name (upcased string) -> bank index, flattened across every
+  ;; banked register's :names -- one machine-wide table, since an alias is
+  ;; unique across the whole machine (BUILD-MACHINE-DESCRIPTOR's SEEN check),
+  ;; so the index alone is enough for EVAL-EXPR (instruction.lisp) to resolve
+  ;; "a" without also knowing which register it names. EQUALP so lookup is
+  ;; case-insensitive, matching how mnemonics and mode literals already
+  ;; compare (STRING-EQUAL). Empty (never NIL) on a machine with no aliased
+  ;; register.
+  (register-aliases (make-hash-table :test 'equalp))
   ;; #63: lazy memo for %DESCRIPTOR-CELL-WIDTH's no-MEMORY-NAME case
   ;; (machine.lisp) -- that path rebuilds ELEMENTS' memory sublist and calls
   ;; REMOVE-DUPLICATES on every call otherwise, and it's read once per

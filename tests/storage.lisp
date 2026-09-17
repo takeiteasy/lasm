@@ -173,6 +173,39 @@
     (eval '(defmachine bad-width-test
             (register a :width 0)))))
 
+;;; #72: :names on a banked register clause.
+
+(fiveam:test defmachine-names-derives-count
+  (eval '(defmachine names-derive-count-test
+          (register v :width 8 :names (v0 v1 v2))))
+  (let ((element (descriptor-element (find-machine-descriptor 'names-derive-count-test) 'v)))
+    (fiveam:is (= 3 (storage-element-count element)))
+    (fiveam:is (equal '(v0 v1 v2) (storage-element-names element)))))
+
+(fiveam:test defmachine-rejects-names-count-mismatch
+  (fiveam:signals error
+    (eval '(defmachine bad-names-count-test
+            (register v :width 8 :count 4 :names (v0 v1 v2))))))
+
+(fiveam:test defmachine-rejects-duplicate-alias-within-clause
+  (fiveam:signals error
+    (eval '(defmachine dup-alias-test
+            (register v :width 8 :names (v0 v1 v0))))))
+
+(fiveam:test defmachine-rejects-alias-colliding-with-element-name
+  (fiveam:signals error
+    (eval '(defmachine alias-element-collision-test
+            (register a :width 8)
+            (register v :width 8 :names (v0 a))))))
+
+(fiveam:test defmachine-register-aliases-table-populated
+  (eval '(defmachine names-table-test
+          (register reg :width 16 :names (a b c))))
+  (let ((descriptor (find-machine-descriptor 'names-table-test)))
+    (fiveam:is (= 0 (gethash "A" (machine-descriptor-register-aliases descriptor))))
+    (fiveam:is (= 1 (gethash "b" (machine-descriptor-register-aliases descriptor))))
+    (fiveam:is (= 2 (gethash "C" (machine-descriptor-register-aliases descriptor))))))
+
 (fiveam:test reset-zeroes-all-storage
   (let ((m (make-machine 'test-machine)))
     (setf (sref m 'a) 9)

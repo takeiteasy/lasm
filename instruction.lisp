@@ -304,20 +304,37 @@ than each caller assuming a byte opcode."
 
 ;;; Constant folding (the evaluated-operand slice of full expression evaluation)
 
+;; #72: the target machine's alias name (string) -> bank index table
+;; (MACHINE-DESCRIPTOR-REGISTER-ALIASES, storage.lisp), bound by
+;; ASSEMBLE-STATEMENTS (assembler.lisp) around layout and encoding. A
+;; special rather than an EVAL-EXPR argument -- like *STRICT-OPERAND-RANGE*
+;; (diagnostic.lisp) -- so %BIND-SYMBOL! (assembler.lisp) can also see it,
+;; to reject a label/.EQU name that collides with an alias, with no
+;; signature change to either call chain. NIL (the default) means no
+;; aliases are in scope, e.g. outside of ASSEMBLE-STATEMENTS.
+(defvar *register-aliases* nil)
+
 (defun eval-expr (ast &key symbols pc)
   "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when
 given, is a hash table (string -> value -- a label's address, or an .EQU's
 folded value, #35) resolving EXPR-LABEL nodes -- the assembler pass
 (assembler.lisp) calls this with its completed layout symbol table. PC, when
 given, is the integer address EXPR-LOCATION (the \"*\" location-counter
-symbol, #15) folds to. Signals UNRESOLVED-LABEL on an EXPR-LABEL whose name
-is not in SYMBOLS (or when SYMBOLS is NIL), and UNRESOLVED-LOCATION on an
+symbol, #15) folds to. An EXPR-LABEL not found in SYMBOLS falls back to
+*REGISTER-ALIASES* (#72), resolving a banked register's symbolic name (e.g.
+DCPU-16's \"i\") to its bank index -- SYMBOLS is tried first so a label
+always wins if a program somehow binds one anyway, though %BIND-SYMBOL!
+(assembler.lisp) rejects that collision outright. Signals UNRESOLVED-LABEL
+on an EXPR-LABEL matching neither, and UNRESOLVED-LOCATION on an
 EXPR-LOCATION when PC is NIL."
   (etypecase ast
     (expr-number (expr-number-value ast))
     (expr-label
      (multiple-value-bind (value foundp)
          (and symbols (gethash (expr-label-name ast) symbols))
+       (unless foundp
+         (multiple-value-setq (value foundp)
+           (and *register-aliases* (gethash (expr-label-name ast) *register-aliases*))))
        (unless foundp (error 'unresolved-label :name (expr-label-name ast)))
        value))
     (expr-location
@@ -571,15 +588,16 @@ SPEC, not left in VARIANT-FORMS, so a bare :MODE (which takes no arg) and a
 (defun %scalar-bindable-names (machine-name)
   "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds for
 MACHINE-NAME: every register (scalar as a symbol-macro, banked (#13) as a
-macrolet taking an index) plus every flag. An operand field name colliding
-with one of these would be silently shadowed inside (semantics ...) -- see
-%CHECK-OPERAND-NAMES. Despite the name (kept for history), this now covers
-banked registers too -- a macrolet binding shadows exactly as silently as a
-symbol-macrolet one."
+macrolet taking an index, plus one symbol-macro per #72 alias) plus every
+flag. An operand field name colliding with one of these would be silently
+shadowed inside (semantics ...) -- see %CHECK-OPERAND-NAMES. Despite the
+name (kept for history), this now covers banked registers and their
+aliases too -- a macrolet or alias symbol-macro binding shadows exactly as
+silently as a scalar symbol-macrolet one."
   (let ((descriptor (find-machine-descriptor machine-name)))
     (loop for element in (machine-descriptor-elements descriptor)
           when (member (storage-element-kind element) '(:flag :register))
-            collect (storage-element-name element))))
+            append (cons (storage-element-name element) (storage-element-names element)))))
 
 (defun %check-operand-names (names machine name mode-name)
   "Signal an error naming instruction NAME (on MACHINE) and addressing mode
@@ -597,8 +615,8 @@ more than once" machine name mode-name dup)))
     (dolist (n given)
       (when (member n (%scalar-bindable-names machine))
         (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names an operand ~S, ~
-which is also a register or flag on ~S -- (semantics ...) can only see one ~
-of them" machine name mode-name n machine)))))
+which is also a register, flag, or register alias on ~S -- (semantics ...) ~
+can only see one of them" machine name mode-name n machine)))))
 
 (defun %parse-byte-sub-variant-form (form hole-name)
   "Parse one (variant (choice m) (sub s)) form (#126) -- the byte-encoded
