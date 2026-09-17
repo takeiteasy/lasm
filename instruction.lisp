@@ -188,10 +188,12 @@ until it already knows which descriptor matched"
   ;; the opcode table, to tell an inline value from an escaped extra-word
   ;; marker apart by comparing against the actually fetched bits.
   (word-alternatives nil :type list)
-  ;; Count of :EXTRA-WORD fields in WORD-FIELDS -- this combo's extra encoded
-  ;; words, each one INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS wide (#53). 0 for a
-  ;; byte-encoded descriptor and for an all-inline word combo alike.
-  (extra-words 0 :type (integer 0))
+  ;; #135: total cells every :EXTRA-WORD field in WORD-FIELDS spills into --
+  ;; the sum of each such field's own WORD-FIELD-CHOICE-EXTRA-CELLS, which
+  ;; may now differ per field (formerly EXTRA-WORDS, a plain field count,
+  ;; each one implicitly INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS wide, #53). 0
+  ;; for a byte-encoded descriptor and for an all-inline word combo alike.
+  (extra-cells 0 :type (integer 0))
   ;; #125 (M4): non-NIL only on a byte-encoded machine, and only when this
   ;; descriptor's own (opcode n :sub s) subclause -- or, per #126 below, a
   ;; hole-selected (variant (choice m) (sub s)) -- gave one. Lets several
@@ -297,16 +299,18 @@ rationale as INSTRUCTION-DESCRIPTOR-WORD-LAYOUT."
   "Total encoded cells for one use of DESCRIPTOR -- 1 (opcode cell), plus 1
 more for a sub-opcode cell when SUB-OPCODE is non-NIL (#125), plus operand
 cell widths on an ordinary byte/cell-encoded machine, or
-INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS * (1 + EXTRA-WORDS) on a word-encoded one
-(#20; SUB-OPCODE is always NIL there -- #125's sub-opcode cell is a
-byte-machine-only mechanism). Centralizes what used to be five separate
-\"1 + operand width\" computations scattered across the assembler's
-layout/relaxation, its relative-branch offset arithmetic, and the emulator's
-fetch loop, so a word-encoded descriptor's size is computed identically
-everywhere rather than each caller assuming a byte opcode."
+INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS + EXTRA-CELLS on a word-encoded one (#20;
+SUB-OPCODE is always NIL there -- #125's sub-opcode cell is a byte-machine-
+only mechanism). #135: EXTRA-CELLS is a plain sum, not WIDTH-CELLS times an
+extra-word count, since each :EXTRA-WORD field may now declare its own
+width. Centralizes what used to be five separate \"1 + operand width\"
+computations scattered across the assembler's layout/relaxation, its
+relative-branch offset arithmetic, and the emulator's fetch loop, so a
+word-encoded descriptor's size is computed identically everywhere rather
+than each caller assuming a byte opcode."
   (let ((layout (instruction-descriptor-word-layout descriptor)))
     (if layout
-        (* (instruction-word-layout-width-cells layout) (1+ (instruction-descriptor-extra-words descriptor)))
+        (+ (instruction-word-layout-width-cells layout) (instruction-descriptor-extra-cells descriptor))
         (+ 1 (if (instruction-descriptor-sub-opcode descriptor) 1 0)
            (instruction-descriptor-total-operand-width descriptor)))))
 
@@ -1302,6 +1306,12 @@ alternatives don't override it. MODE-SPECIFIED (#129,
   (bias 0 :type integer)                 ; :inline only
   (range nil :type (or null cons))       ; :inline only, pre-bias (lo . hi)
   (escape nil :type (or null integer))   ; :extra-word only
+  ;; #135: :extra-word only -- the trailing word's own width in cells. Parsed
+  ;; raw (NIL when the (extra-word ...) form gave no :CELLS) and defaulted to
+  ;; the layout's own WIDTH-CELLS once %PARSE-WORD-OPERAND-SUBCLAUSE has a
+  ;; LAYOUT to default against, so every downstream reader (word-field-choice,
+  ;; below) always sees a concrete positive integer.
+  (extra-cells nil :type (or null (integer 1)))
   ;; #104: non-NIL for a (CHOICE M) selector -- the ONE-OF alternative
   ;; mode-name symbol M that must be this hole's matched alternative
   ;; (mode.lisp's hole-aligned CHOICES) for this variant to apply, rather
@@ -1352,6 +1362,13 @@ alternatives don't override it. MODE-SPECIFIED (#129,
   (bias 0 :type integer)
   (range nil :type (or null cons))
   (escape nil :type (or null integer))
+  ;; #135: :EXTRA-WORD only -- mirrors WORD-VARIANT-EXTRA-CELLS, already
+  ;; resolved to a concrete positive integer by DEFINSTRUCTION time. The
+  ;; trailing word's own width in cells, read by ENCODE-INSTRUCTION,
+  ;; %TRY-DECODE-WORD-CANDIDATE (decoder.lisp), and the assembler's own fit
+  ;; checks (%WORD-VARIANT-FITS-P, %WORD-RELATIVE-OFFSET-FITS-P) instead of
+  ;; always the instruction word's own WIDTH-CELLS.
+  (extra-cells nil :type (or null (integer 1)))
   ;; #104: mirrors WORD-VARIANT-CHOICE -- non-NIL only for a variant
   ;; selected by matched ONE-OF alternative rather than by value. Carried
   ;; through to every descriptor's WORD-FIELDS/WORD-ALTERNATIVES so
@@ -1592,13 +1609,19 @@ they are siblings (caught by %SIBLING-COMBOS-P above)."
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
 into a WORD-VARIANT. SELECTOR is (range LO HI) for a value-selected :INLINE
 variant (optionally :BIAS N, default 0), :ELSE for the value-selected
-:EXTRA-WORD fallback (kind form (extra-word :escape n)), or (choice M) (#104)
-for a variant selected by hole M matching mode.lisp's hole-aligned CHOICES
-instead of by the operand's folded value -- kind form INLINE (requiring its
-own :RANGE (lo hi), since unlike (range lo hi) a CHOICE selector carries no
-range to double as one; optionally :BIAS N, default 0) or (extra-word
-:escape n), the latter an *unconditional* trailing word once M is the
-matched alternative, not a value-triggered fallback."
+:EXTRA-WORD fallback (kind form (extra-word :escape n [:cells k])), or
+(choice M) (#104) for a variant selected by hole M matching mode.lisp's
+hole-aligned CHOICES instead of by the operand's folded value -- kind form
+INLINE (requiring its own :RANGE (lo hi), since unlike (range lo hi) a
+CHOICE selector carries no range to double as one; optionally :BIAS N,
+default 0) or (extra-word :escape n [:cells k]), the latter an
+*unconditional* trailing word once M is the matched alternative, not a
+value-triggered fallback.
+
+#135: :CELLS K gives the trailing word its own width in cells, rather than
+always the instruction word's own WIDTH-CELLS -- left NIL here (parsed raw)
+when omitted; %PARSE-WORD-OPERAND-SUBCLAUSE defaults it to the layout's
+WIDTH-CELLS once it has a LAYOUT to default against."
   (destructuring-bind (head selector &rest tail) form
     (unless (eq head 'variant)
       (error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
@@ -1617,21 +1640,21 @@ INLINE, got ~S" field-name tail))
        (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
          (error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
 (extra-word :escape n), got ~S" field-name tail))
-       (destructuring-bind (extra-word-kw &key escape) (first tail)
+       (destructuring-bind (extra-word-kw &key escape cells) (first tail)
          (declare (ignore extra-word-kw))
          (unless escape
            (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
-         (make-word-variant :kind :extra-word :escape escape)))
+         (make-word-variant :kind :extra-word :escape escape :extra-cells cells)))
       ((and (consp selector) (eq (first selector) 'choice))
        (destructuring-bind (choice-kw choice-name) selector
          (declare (ignore choice-kw))
          (cond
            ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
-            (destructuring-bind (extra-word-kw &key escape) (first tail)
+            (destructuring-bind (extra-word-kw &key escape cells) (first tail)
               (declare (ignore extra-word-kw))
               (unless escape
                 (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
-              (make-word-variant :kind :extra-word :escape escape :choice choice-name)))
+              (make-word-variant :kind :extra-word :escape escape :choice choice-name :extra-cells cells)))
            ((eq (first tail) 'inline)
             (destructuring-bind (inline-sym &key range (bias 0)) tail
               (declare (ignore inline-sym))
@@ -1755,6 +1778,12 @@ not fit its ~D-bit field" field-name lo hi field-width)))))
            (when (or (< e 0) (> e max))
              (error "DEFINSTRUCTION: field ~S: escape ~D does not fit its ~D-bit field"
                     field-name e field-width))
+           ;; #135: EXTRA-CELLS is defaulted by the time this runs
+           ;; (%PARSE-WORD-OPERAND-SUBCLAUSE), so any non-positive-integer
+           ;; value here is an explicit, invalid :CELLS.
+           (unless (typep (word-variant-extra-cells v) '(integer 1))
+             (error "DEFINSTRUCTION: field ~S: (extra-word ...) :cells ~S must be a ~
+positive integer" field-name (word-variant-extra-cells v)))
            (cl:push e escapes)))))
     (dolist (e escapes)
       (dolist (r inline-chunks)
@@ -1974,6 +2003,16 @@ layout~;instruction-word layout ~:*~S~] on machine ~S" field-name layout-name ma
                                       :range (if hole-signedp
                                                  (cons (- (ash 1 (1- fwidth))) (1- (ash 1 (1- fwidth))))
                                                  (cons 0 (1- (ash 1 fwidth)))))))))
+            ;; #135: an :EXTRA-WORD variant with no explicit :CELLS defaults
+            ;; to the layout's own WIDTH-CELLS -- today's assumption, now
+            ;; just the default rather than the only option. Defaulted here,
+            ;; not at parse time, since %PARSE-WORD-VARIANT-FORM has no
+            ;; LAYOUT to default against; %CHECK-WORD-VARIANTS below then
+            ;; validates every variant's EXTRA-CELLS -- explicit or
+            ;; defaulted -- as one concrete positive integer.
+            (dolist (v variants)
+              (when (and (%word-variant-extra-p v) (null (word-variant-extra-cells v)))
+                (setf (word-variant-extra-cells v) (instruction-word-layout-width-cells layout))))
             (%check-word-variants variants fwidth field-name hole-signedp)
             (%check-word-variant-choices! variants field-name hole-alternatives)
             (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
@@ -2025,10 +2064,12 @@ field may carry at most one operand" machine name mode-name dup)))
 (defun %expand-word-combos (specs)
   "Cartesian product of SPECS' (WORD-OPERAND-SPEC) variant lists -- one combo
 per element, each a list of (SPEC . VARIANT) pairs parallel to SPECS. Ordered
-by ascending total :EXTRA-WORD count, ties in declaration order -- matching
-%CHOOSE-VARIANT's documented \"narrower before wider\" convention
-(assembler.lisp) so an all-inline combo is always tried before one needing an
-extra word."
+by ascending total :EXTRA-WORD cells (#135; formerly a plain :EXTRA-WORD
+count, back when every extra word was implicitly one instruction-word wide),
+ties in declaration order -- matching %CHOOSE-VARIANT's documented
+\"narrower before wider\" convention (assembler.lisp) so an all-inline combo
+is always tried before one needing an extra word, and a combo needing a
+narrower extra word before one needing a wider one."
   (let ((combos (list nil)))
     (dolist (spec specs)
       (setf combos
@@ -2036,7 +2077,10 @@ extra word."
                   append (loop for variant in (word-operand-spec-variants spec)
                                collect (append combo (list (cons spec variant)))))))
     (stable-sort combos #'<
-                 :key (lambda (combo) (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo)))))
+                 :key (lambda (combo)
+                        (reduce #'+ combo :key (lambda (p) (if (%word-variant-extra-p (cdr p))
+                                                                (word-variant-extra-cells (cdr p))
+                                                                0)))))))
 
 (defun %word-field-choice-form (spec variant hole-signedp)
   "#127/#62/#63: VARIANT's own SIGNEDP is stamped from its CHOICE
@@ -2057,6 +2101,7 @@ which value-selected variant a given combo happens to pick."
     :bias ,(word-variant-bias variant)
     :range ',(word-variant-range variant)
     :escape ,(word-variant-escape variant)
+    :extra-cells ,(word-variant-extra-cells variant)
     :choice ',(word-variant-choice variant)
     :signedp ,(if (word-variant-choice variant)
                   (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant)))
@@ -2112,7 +2157,12 @@ every combo the same way ALTERNATIVES-FORM already is."
          (word-fields-form `(list ,@(mapcar (lambda (p hole-signedp)
                                                (%word-field-choice-form (car p) (cdr p) hole-signedp))
                                              combo hole-signedp-list)))
-         (extra-words (count-if (lambda (p) (%word-variant-extra-p (cdr p))) combo))
+         ;; #135: sum of each :EXTRA-WORD field's own cell width, not a
+         ;; plain count -- a combo mixing a narrow and a wide extra word no
+         ;; longer overstates or understates the total.
+         (extra-cells (reduce #'+ combo :key (lambda (p) (if (%word-variant-extra-p (cdr p))
+                                                               (word-variant-extra-cells (cdr p))
+                                                               0))))
          (relative-index (%word-relative-hole-index combo hole-relativep-list)))
     `(make-instruction-descriptor
       :name ,(string-upcase (symbol-name name))
@@ -2123,7 +2173,7 @@ every combo the same way ALTERNATIVES-FORM already is."
       :operand-names ',operand-names
       :word-fields ,word-fields-form
       :word-alternatives ,alternatives-form
-      :extra-words ,extra-words
+      :extra-cells ,extra-cells
       :relative-hole-index ',relative-index
       :word-layout-name ',layout-name
       :word-constants ,constants-form
@@ -2169,7 +2219,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                 :operand-names nil
                 :word-fields nil
                 :word-alternatives nil
-                :extra-words 0
+                :extra-cells 0
                 :word-layout-name ',layout-name
                 :word-constants ,constants-form
                 :cycles ,cycles
@@ -2978,7 +3028,8 @@ chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES) into one
 LAYOUT-WIDTH-bit word by shift, then emit that word little-endian
 (%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH) followed by each
 :EXTRA-WORD operand's own value, also little-endian, in operand declaration
-order."
+order, each at its own WORD-FIELD-CHOICE-EXTRA-CELLS width (#135; formerly
+always LAYOUT's own WIDTH-CELLS)."
   (let ((word 0) extra-word-values (cell-width (instruction-word-layout-cell-width layout)))
     (destructuring-bind (opcode-width opcode-shift)
         (rest (instruction-word-field layout 'opcode))
@@ -2996,10 +3047,10 @@ order."
                (:extra-word
                 (setf word (logior word (ash (word-field-choice-escape choice)
                                               (word-field-choice-shift choice))))
-                (cl:push value extra-word-values))))
+                (cl:push (cons value (word-field-choice-extra-cells choice)) extra-word-values))))
     (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width)
-            (loop for value in (nreverse extra-word-values)
-                  append (%encode-value-cells value (instruction-word-layout-width-cells layout) cell-width)))))
+            (loop for (value . extra-cells) in (nreverse extra-word-values)
+                  append (%encode-value-cells value extra-cells cell-width)))))
 
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of

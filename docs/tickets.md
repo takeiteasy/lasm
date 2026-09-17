@@ -88,7 +88,6 @@ between them or on the chain above):
 
 | Ticket | Follows up on |
 |---|---|
-| #135 per-field extra-word width on a word-encoded machine | #20, split off #63 |
 | #140 relax #64's same-layout-per-opcode restriction | #105, #64, unblocked by #137 |
 | #65 `.cell`/`.dat` directive | #53 |
 | #66 `:endian` option | #53 |
@@ -105,8 +104,28 @@ between them or on the chain above):
 overlap check) is now closed -- its signed gap, memoization, and overlap
 check landed together (the overlap check turned out already covered by
 #104/#127, only lacking a regression test); its extra-word-width item split
-off to #135 above, being by far the largest of the four and needing its own
+off to #135, being by far the largest of the four and needing its own
 syntax design.
+
+#135 (per-field extra-word width on a word-encoded machine) is now closed --
+an `(extra-word :escape n)` variant may declare `:cells k`, its trailing
+word's own width in cells, defaulting to the instruction word's own
+`width-cells` (#63's original assumption) when omitted. The width lives on
+the *variant*, not the field, so one field may mix differently-sized extra
+words across its `(choice mode)`-selected alternatives for free -- decode
+already tells them apart by which variant's `:escape` the fetched bits
+match, and each match now carries its own width alongside it. The
+`instruction-descriptor` slot this replaces (`extra-words`, a word count)
+is now `extra-cells`, a cell count, threaded through encode, decode, and
+the assembler's relaxation/fit-check/relative-offset paths alike. Extending
+the value filter to bound an `:extra-word` field's own width (previously
+unconditionally "fits") surfaced a latent crash: a `choice`-narrowed
+candidate that now overflows on the final relaxation pass reached
+`%word-choice-overflow-values`, which scanned only `:inline` fields and
+would have returned `nil` for an all-`:extra-word`-overflow candidate --
+fixed alongside the main change, with a regression test. An over-wide value
+still wraps silently (unaffected by #134, filed separately, which already
+covers the general non-`:strict` gap on word-encoded holes).
 
 #64 (per-instruction, non-uniform instruction-word layouts) is now closed --
 named `(layout NAME ...)` alternates share the machine's `:width` and

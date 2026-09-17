@@ -78,8 +78,10 @@ this trial-and-reject is what actually does the telling-apart.
 
 #127: a MATCH whose own WORD-FIELD-CHOICE-SIGNEDP is T reinterprets its raw
 bits as two's-complement before debiasing (:INLINE, over its own field
-WIDTH) or the fetched extra word (:EXTRA-WORD, over WIDTH-CELLS*CELL-WIDTH
-bits) -- the exact inverse of how ENCODE-INSTRUCTION's %ENCODE-WORD-
+WIDTH) or the fetched extra word (:EXTRA-WORD, over the match's own
+EXTRA-CELLS*CELL-WIDTH bits, #135 -- not always WIDTH-CELLS*CELL-WIDTH,
+since an extra word may now be narrower or wider than the instruction word
+itself) -- the exact inverse of how ENCODE-INSTRUCTION's %ENCODE-WORD-
 INSTRUCTION writes a signed value (WRAP-VALUE of a possibly negative,
 already-biased quantity). SIGNEDP is only ever T on a CHOICE-selected MATCH
 (instruction.lisp's %WORD-FIELD-CHOICE-FORM), so an ungoverned or
@@ -115,11 +117,12 @@ rejected before any extra word is ever fetched."
                                    raw)
                               (word-field-choice-bias match)))
                   (:extra-word
-                   (prog1 (let ((v (%fetch-cells read-cell (+ address offset) width-cells cell-width)))
-                            (if (word-field-choice-signedp match)
-                                (signed-value v (* width-cells cell-width))
-                                v))
-                     (incf offset width-cells))))
+                   (let ((extra-cells (word-field-choice-extra-cells match)))
+                     (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width)))
+                              (if (word-field-choice-signedp match)
+                                  (signed-value v (* extra-cells cell-width))
+                                  v))
+                       (incf offset extra-cells)))))
           into values
         collect match into matches
         finally (return (values values offset matches t))))
@@ -143,13 +146,13 @@ one candidate that was always going to match.
 
 SIZE (the third return value on success) is accumulated as cells are
 consumed, never read off INSTRUCTION-DESCRIPTOR-SIZE -- %EXPAND-WORD-COMBOS
-(instruction.lisp) sorts a mnemonic's sibling combos ascending by extra-word
-count, so a mnemonic's own combo actually matched here need not be the one
-INSTRUCTION-DESCRIPTOR-SIZE would compute for whichever combo happens to
-sit first in the candidate list. INSTRUCTION-DESCRIPTOR-SIZE would overstate
-the size of any narrower encoding genuinely present in the stream; it is
-only trustworthy in the encode direction (assembler.lisp) and on the
-byte-encoded path below.
+(instruction.lisp) sorts a mnemonic's sibling combos ascending by total
+extra-word cells (#135), so a mnemonic's own combo actually matched here
+need not be the one INSTRUCTION-DESCRIPTOR-SIZE would compute for whichever
+combo happens to sit first in the candidate list. INSTRUCTION-DESCRIPTOR-SIZE
+would overstate the size of any narrower encoding genuinely present in the
+stream; it is only trustworthy in the encode direction (assembler.lisp) and
+on the byte-encoded path below.
 
 CHOICES (the fourth return value on success, #104) is the matched
 WORD-FIELD-CHOICE per operand hole, in hole order -- exactly the alternative

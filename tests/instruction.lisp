@@ -1051,15 +1051,17 @@
 ;;; Variant expansion / registration
 
 (fiveam:test word-instruction-expands-into-one-descriptor-per-variant
+  ;; SET's :else fallback declares no :CELLS, so it defaults to the layout's
+  ;; own WIDTH-CELLS -- 2, for this 16-bit word / 8-bit cell machine (#135).
   (let ((variants (find-instruction-variants 'word-test-machine "SET")))
     (fiveam:is (= 2 (length variants)))
-    (fiveam:is (equal '(0 1) (mapcar #'instruction-descriptor-extra-words variants)))
+    (fiveam:is (equal '(0 2) (mapcar #'instruction-descriptor-extra-cells variants)))
     (fiveam:is (every (lambda (d) (= 1 (instruction-descriptor-opcode d))) variants))))
 
 (fiveam:test word-instruction-no-operand-descriptor
   (let ((hlt (find-instruction 'word-test-machine 'hlt)))
     (fiveam:is (null (instruction-descriptor-word-fields hlt)))
-    (fiveam:is (= 0 (instruction-descriptor-extra-words hlt)))))
+    (fiveam:is (= 0 (instruction-descriptor-extra-cells hlt)))))
 
 ;;; Decodability checks (#20's own ambiguity, %CHECK-WORD-VARIANTS)
 
@@ -1434,6 +1436,135 @@
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil)))))
 
+;;; Per-field extra-word width (#135) -- an (extra-word ...) variant's own
+;;; :CELLS, defaulting to the layout's WIDTH-CELLS (2, for this 16-bit word
+;;; / 8-bit cell machine) when omitted. SETN's fallback is narrower than
+;;; that default (1 cell); SETW's is wider (4 cells).
+
+(definstruction word-test-machine setn
+  (modes word-imm)
+  (encoding
+    (opcode 0)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff :cells 1))))
+  (semantics (set! a operand)))
+
+(definstruction word-test-machine setw
+  (modes word-imm)
+  (encoding
+    (opcode 3)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff :cells 4))))
+  (semantics (set! a operand)))
+
+(fiveam:test word-extra-word-explicit-cells-narrower-than-layout-default
+  (let ((variants (find-instruction-variants 'word-test-machine "SETN")))
+    (fiveam:is (equal '(0 1) (mapcar #'instruction-descriptor-extra-cells variants)))
+    (fiveam:is (equal '(2 3) (mapcar #'instruction-descriptor-size variants)))))
+
+(fiveam:test word-extra-word-explicit-cells-wider-than-layout-default
+  (let ((variants (find-instruction-variants 'word-test-machine "SETW")))
+    (fiveam:is (equal '(0 4) (mapcar #'instruction-descriptor-extra-cells variants)))
+    (fiveam:is (equal '(2 6) (mapcar #'instruction-descriptor-size variants)))))
+
+(fiveam:test word-extra-word-cells-1-encode-and-round-trip
+  ;; 100 is out of SETN's -1..30 inline range but fits comfortably in one
+  ;; 8-bit extra cell -- a 3-cell instruction, not a 4-cell one.
+  (let ((cells (assembly-cells (assemble "setn #100" :machine 'word-test-machine))))
+    (fiveam:is (= 3 (length cells)))
+    (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
+      (fiveam:is (string= "SETN" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(100) values)))))
+
+(fiveam:test word-extra-word-cells-4-encode-and-round-trip
+  ;; 100000 needs more than one 16-bit instruction word could hold as its
+  ;; own trailing word -- SETW's 4-cell (32-bit) extra word covers it.
+  (let ((cells (assembly-cells (assemble "setw #100000" :machine 'word-test-machine))))
+    (fiveam:is (= 6 (length cells)))
+    (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
+      (fiveam:is (string= "SETW" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(100000) values)))))
+
+(fiveam:test word-extra-word-cells-zero-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (range -1 30) inline :bias 1)
+                         (variant :else (extra-word :escape #x3ff :cells 0))))
+             (semantics nil)))))
+
+(fiveam:test word-extra-word-cells-non-integer-signals-error
+  (fiveam:signals error
+    (eval '(definstruction word-test-machine bogus
+             (modes word-imm)
+             (encoding (opcode 12)
+                       (operand value :field src
+                         (variant (range -1 30) inline :bias 1)
+                         (variant :else (extra-word :escape #x3ff :cells 1.5))))
+             (semantics nil)))))
+
+;; WCXMIX: one field mixing two different :CELLS widths across its
+;; CHOICE-selected :EXTRA-WORD variants -- WCM-IND escapes to a 1-cell extra
+;; word, WCM-FAR to a 4-cell one, decode telling them apart purely by which
+;; alternative the operand's own syntax matched, same as any other
+;; CHOICE-selected pair (#104). A dedicated machine/modes, not WORD-TEST-
+;; MACHINE's own WC-*: its 4-bit OPCODE field has no slot left free (#134's
+;; own decode-failure fixture, tests/emulator.lisp, pins the one remaining
+;; opcode as deliberately unregistered), and WC-MEM's "(" ")" syntax is
+;; indistinguishable from WC-REG's plain EXPR once parenthesized grouping
+;; (parser.lisp) is in play -- "(70000)" parses as EXPR 70000, matching
+;; WC-REG first regardless of ONE-OF order.
+(defmachine word-cells-mix-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field src 12)))
+
+(defmode wcm-reg expr)
+(defmode wcm-ind "[" expr "]")
+(defmode wcm-far "#" expr)
+(defmode wcm-three (one-of wcm-reg wcm-ind wcm-far))
+
+(definstruction word-cells-mix-test-machine wcxmix
+  (modes wcm-three)
+  (encoding
+    (opcode 1)
+    (operand value :field src
+      (variant (choice wcm-reg) inline :range (0 7))
+      (variant (choice wcm-ind) (extra-word :escape #x3fe :cells 1))
+      (variant (choice wcm-far) (extra-word :escape #x3ff :cells 4))))
+  (semantics (set! a operand)))
+
+(fiveam:test choice-selected-field-mixes-extra-word-cell-widths
+  (let* ((variants (find-instruction-variants 'word-cells-mix-test-machine "WCXMIX"))
+         (extra-cells-for (lambda (choice-name)
+                             (word-field-choice-extra-cells
+                              (first (instruction-descriptor-word-fields
+                                      (find choice-name variants
+                                            :key (lambda (d) (word-field-choice-choice
+                                                               (first (instruction-descriptor-word-fields d)))))))))))
+    (fiveam:is (= 3 (length variants)))
+    (fiveam:is (= 1 (funcall extra-cells-for 'wcm-ind)))
+    (fiveam:is (= 4 (funcall extra-cells-for 'wcm-far)))))
+
+(fiveam:test choice-selected-mixed-extra-word-widths-round-trip
+  (let ((narrow (assembly-cells (assemble "wcxmix [200]" :machine 'word-cells-mix-test-machine)))
+        (wide (assembly-cells (assemble "wcxmix #70000" :machine 'word-cells-mix-test-machine))))
+    (fiveam:is (= 3 (length narrow)))
+    (fiveam:is (= 6 (length wide)))
+    (multiple-value-bind (d1 v1) (decode-instruction-at (vector-cell-reader narrow) 0 'word-cells-mix-test-machine)
+      (fiveam:is (string= "WCXMIX" (instruction-descriptor-name d1)))
+      (fiveam:is (equal '(200) v1)))
+    (multiple-value-bind (d2 v2) (decode-instruction-at (vector-cell-reader wide) 0 'word-cells-mix-test-machine)
+      (fiveam:is (string= "WCXMIX" (instruction-descriptor-name d2)))
+      (fiveam:is (equal '(70000) v2)))))
+
 ;;; CHOICE-CASE semantics dispatch (#73) -- reading back which ONE-OF
 ;;; alternative a hole actually matched from inside (semantics ...), rather
 ;;; than every CHOICE-selected sibling sharing one runtime effect.
@@ -1779,6 +1910,19 @@ wsi #-100" :machine 'mixed-field-test-machine)
 (definstruction word-relative-test-machine whlt
   (encoding (opcode 8))
   (semantics (trap :halt)))
+
+;; WBRN (#135): an extra-word fallback narrower than WBRA's own default --
+;; :CELLS 1 (signed -128..127) is a *subset* of the inline range (-256..255)
+;; here, so no offset ever genuinely needs it; its only purpose is to give
+;; %WORD-RELATIVE-OFFSET-FITS-P a narrow width to reject against, for the
+;; assembler-side test of an offset that fits neither the inline range nor
+;; this narrow extra word.
+(definstruction word-relative-test-machine wbrn
+  (modes relative)
+  (encoding (opcode 9) (operand value :field src
+                          (variant (range -256 255) inline :bias 0)
+                          (variant :else (extra-word :escape #x200 :cells 1))))
+  (semantics (set! pc (+ pc value))))
 
 (fiveam:test word-whole-mode-relative-descriptors-carry-relative-hole-index
   (let ((variants (find-instruction-variants 'word-relative-test-machine "WBRA")))

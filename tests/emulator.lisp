@@ -828,6 +828,18 @@ hlt" :machine 'word-test-machine)))
     (fiveam:is (= 1000 (sref m 'a)))
     (fiveam:is (= 4 (sref m 'pc)))))    ; instruction word + one extra word
 
+;; #135: SETN's fallback is a single cell, not WORD-TEST-MACHINE's default
+;; two -- PC must advance by 3, not 4, and the fetched byte must decode back
+;; unsigned (SETN's mode declares no :SIGNED of its own).
+(fiveam:test step-machine-word-encoded-narrow-extra-word-round-trip
+  (let ((m (make-machine 'word-test-machine))
+        (a (assemble "setn #100
+hlt" :machine 'word-test-machine)))
+    (load-program m a)
+    (fiveam:is (string= "SETN" (instruction-descriptor-name (step-machine m))))
+    (fiveam:is (= 100 (sref m 'a)))
+    (fiveam:is (= 3 (sref m 'pc)))))    ; instruction word + one 1-cell extra word
+
 (fiveam:test step-machine-word-encoded-negative-inline-round-trip
   ;; Exercises the :BIAS mechanism's actual reason for existing: WORD-IMM
   ;; (tests/instruction.lisp) declares no :SIGNED of its own, so -1 packs

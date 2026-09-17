@@ -852,6 +852,46 @@ target: hlt" :machine 'word-test-machine)))
   (let ((a (assemble "hlt" :machine 'word-test-machine)))
     (fiveam:is (equalp #(#x00 #x20) (assembly-cells a)))))
 
+;;; Per-field extra-word width (#135) -- reuses SETN/SETW (WORD-TEST-MACHINE)
+;;; and WBRN (WORD-RELATIVE-TEST-MACHINE) from tests/instruction.lisp.
+
+(fiveam:test word-extra-word-narrower-than-default-encodes-fewer-cells
+  ;; SETN's fallback is 1 cell, not WORD-TEST-MACHINE's default 2 -- a
+  ;; value that needs the fallback at all (out of -1..30) but fits one
+  ;; unsigned byte encodes 3 cells total, not 4.
+  (let ((a (assemble "setn #100" :machine 'word-test-machine)))
+    (fiveam:is (= 3 (length (assembly-cells a))))))
+
+(fiveam:test word-extra-word-wider-than-default-encodes-more-cells
+  (let ((a (assemble "setw #100000" :machine 'word-test-machine)))
+    (fiveam:is (= 6 (length (assembly-cells a))))))
+
+(fiveam:test word-relative-offset-fitting-neither-inline-nor-narrow-extra-word-errors
+  ;; WBRN's :CELLS 1 extra word is narrower than its own inline range, so no
+  ;; offset ever actually needs it -- but %WORD-RELATIVE-OFFSET-FITS-P must
+  ;; still test against its own EXTRA-CELLS (1 => signed -128..127), not the
+  ;; layout's WIDTH-CELLS (2 => signed -32768..32767): an offset far outside
+  ;; both bounds must be an unconditional ASSEMBLY-ERROR (#62's own
+  ;; no-wider-sibling behavior), not silently accepted as fitting a
+  ;; full-word extra word it was never declared to have.
+  (fiveam:signals assembly-error
+    (assemble "wbrn target
+.res 40000
+target: whlt" :machine 'word-relative-test-machine)))
+
+;;; #135 regression: once an :EXTRA-WORD field can fail to fit
+;;; (%WORD-VARIANT-FITS-P), a CHOICE-narrowed candidate that overflows on
+;;; the final relaxation pass reaches %SIGNAL-WORD-CHOICE-OVERFLOW ->
+;;; %WORD-CHOICE-OVERFLOW-VALUES, which used to scan only :INLINE fields and
+;;; return NIL for an all-:EXTRA-WORD-overflow candidate, crashing
+;;; (NTH NIL OPERAND-NAMES) instead of reporting a range error. Reuses
+;;; WCXMIX/WORD-CELLS-MIX-TEST-MACHINE (tests/instruction.lisp): WCM-IND's
+;;; extra word is 1 cell (unsigned 0..255), and 300 doesn't fit it.
+
+(fiveam:test choice-selected-extra-word-overflow-signals-error-not-crash
+  (fiveam:signals assembly-error
+    (assemble "wcxmix [300]" :machine 'word-cells-mix-test-machine)))
+
 ;;; Per-instruction word layouts (#64) -- reuses WORD-LAYOUTS-TEST-MACHINE
 ;;; and its SETX/SETWIDE/SETNARROW instructions from tests/instruction.lisp.
 ;;; Each instruction names a different (layout ...) sharing one 16-bit word

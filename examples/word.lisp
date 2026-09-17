@@ -94,16 +94,32 @@
       (variant :else (extra-word :escape #x200))))
   (semantics (set! a (wrap-value value 16))))
 
+;; SETD (#135): the same unsigned inline/escape split as SETA/SETB, but its
+;; escape's own trailing word is declared only 1 cell wide -- an 8-bit
+;; immediate after the 16-bit instruction word, rather than another whole
+;; instruction word. A value out of SETD's -1..30 inline range but within a
+;; byte (0..255) now costs 3 bytes total, not 4.
+(definstruction wordfoo setd
+  (modes wimm)
+  (encoding
+    (opcode 6)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 1)
+      (variant :else (extra-word :escape #x3ff :cells 1))))
+  (semantics (set! a operand)))
+
 ;; SETA's operand (5) fits inline; SETB's (1000) needs its own extra word --
 ;; one program exercising both forms of the same instruction. SETC then
 ;; exercises the same inline/extra-word split again, but signed: -5 fits its
-;; field directly, -5000 does not.
+;; field directly, -5000 does not. SETD's escape (200) fits its own 1-byte
+;; extra word.
 (defparameter *source*
   "seta #5          ; A = 5, packs inline into SRC
 setb #1000       ; B = 1000, does not fit -- SRC escapes, value in its own word
 add              ; A = A + B
 setc #-5         ; A = -5, sign-extended from an inline two's-complement field
 setc #-5000      ; A = -5000, sign-extended from SRC's own escaped extra word
+setd #200        ; A = 200, escapes to SRC's own 1-byte extra word, not a full one
 hlt")
 
 (format t "~&Source:~%~A~2%" *source*)
@@ -112,9 +128,9 @@ hlt")
 (let ((assembly (assemble *source* :machine 'wordfoo)))
   (format t "  bytes:  ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  length: ~D bytes (2 each for SETA/ADD/HLT/SETC's one word, 4 for ~
-SETB/SETC's extra-word forms)~%"
+SETB/SETC's extra-word forms, 3 for SETD's own 1-byte extra word)~%"
           (length (assembly-cells assembly)))
-  (assert (= 16 (length (assembly-cells assembly))))
+  (assert (= 19 (length (assembly-cells assembly))))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'wordfoo)))
@@ -128,10 +144,13 @@ SETB/SETC's extra-word forms)~%"
     (format t "  after SETC #-5, A = ~D (expected 65531, i.e. -5 as 16-bit)~%" (sref m 'a))
     (assert (= 65531 (sref m 'a)))
     (assert (= -5 (signed-value (sref m 'a) 16)))
+    (step-machine m)
+    (format t "  after SETC #-5000, A = ~D, signed ~D (expected -5000)~%" (sref m 'a) (signed-value (sref m 'a) 16))
+    (assert (= -5000 (signed-value (sref m 'a) 16)))
     (multiple-value-bind (reason steps) (run m)
       (format t "  stopped: ~A after ~D more step~:P~%" reason steps)
-      (format t "  A = ~D, signed ~D (expected -5000)~%" (sref m 'a) (signed-value (sref m 'a) 16))
+      (format t "  after SETD #200, A = ~D (expected 200)~%" (sref m 'a))
       (assert (eq :trap reason))
       (assert (= 2 steps))
-      (assert (= -5000 (signed-value (sref m 'a) 16)))
+      (assert (= 200 (sref m 'a)))
       (format t "~%All assertions passed.~%"))))

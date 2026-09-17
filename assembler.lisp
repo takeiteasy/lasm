@@ -285,17 +285,22 @@ begin with."
   (let ((next-address (+ address (instruction-descriptor-size descriptor))))
     (%fits-signed-width-p (- value next-address) width cell-width)))
 
-(defun %word-variant-fits-p (values descriptor)
+(defun %word-variant-fits-p (values descriptor cell-width)
   "T if VALUES -- one already-evaluated operand value per DESCRIPTOR's
 WORD-FIELDS entry, in order (#20) -- fits this word-field combo: an
-:EXTRA-WORD field always fits (any value there is spilled into its own
-word); an :INLINE field fits only when VALUE falls in that field's declared
-(pre-bias) RANGE. Parallel to %FITS-WIDTH-P/%FITS-SIGNED-WIDTH-P for the
-byte-encoded case, used by %CHOOSE-VARIANT's value filter to pick the
-narrowest (fewest extra words) combo a value actually fits."
+:EXTRA-WORD field fits when VALUE fits its own CHOICE-EXTRA-CELLS width
+(#135; unconditionally T before -- an extra word could only ever be the
+whole instruction word, which every operand value already has to fit
+somewhere), signed when the field is SIGNEDP, else unsigned; an :INLINE
+field fits only when VALUE falls in that field's declared (pre-bias) RANGE.
+Parallel to %FITS-WIDTH-P/%FITS-SIGNED-WIDTH-P for the byte-encoded case,
+used by %CHOOSE-VARIANT's value filter to pick the narrowest (fewest extra
+cells) combo a value actually fits."
   (every (lambda (value choice)
            (ecase (word-field-choice-kind choice)
-             (:extra-word t)
+             (:extra-word (if (word-field-choice-signedp choice)
+                               (%fits-signed-width-p value (word-field-choice-extra-cells choice) cell-width)
+                               (%fits-width-p value (word-field-choice-extra-cells choice) cell-width)))
              (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
                         (<= lo value hi)))))
          values (instruction-descriptor-word-fields descriptor)))
@@ -566,7 +571,7 @@ accepts ~A"
                                   ;; declared in.
                                   (word-fields (%word-variant-fits-p
                                                 (%relative-adjusted-values address descriptor vals)
-                                                descriptor))
+                                                descriptor cell-width))
                                   ;; #124/#127/#130: per hole, not per whole
                                   ;; mode -- DESCRIPTOR's own OPERAND-
                                   ;; SIGNEDNESS (instruction.lisp) already
@@ -609,23 +614,25 @@ accepts ~A"
                      (fitting fitting)
                      (any-unresolvedp narrowest)
                      ((and finalp choice-narrowed)
-                      (%signal-word-choice-overflow statement choice-narrowed symbols address anchor))
+                      (%signal-word-choice-overflow statement choice-narrowed symbols address anchor cell-width))
                      (t widest))))
       (when finalp
         (%maybe-warn-ambiguous-mode statement candidates chosen))
       (values-list chosen))))
 
-(defun %word-choice-overflow-values (candidate symbols address)
+(defun %word-choice-overflow-values (candidate symbols address cell-width)
   "CANDIDATE is (descriptor asts), a word-encoded %CHOOSE-VARIANT candidate
 (#104) none of whose CHOICE-selected variants fit. Evaluates ASTS and finds
-the first :INLINE field whose value falls outside its own (biased) RANGE.
-Returns (VALUES hole-index value lo hi choice-name), or NIL if every field
-does fit (not reachable from %CHOOSE-VARIANT's own call site, which only
-calls this once %WORD-VARIANT-FITS-P has already said no). #62:
-%RELATIVE-ADJUSTED-VALUES folds a RELATIVE-HOLE-INDEX entry down to its raw
-offset first (a no-op when DESCRIPTOR has none), so a relative hole's own
-overflow, if that's the one that doesn't fit, is reported as the offset it
-actually tried to encode, not the absolute branch target."
+the first field whose value falls outside its own bound -- an :INLINE
+field's (biased) RANGE, or, #135, an :EXTRA-WORD field's own EXTRA-CELLS
+width (via %OPERAND-RANGE, signed when the field is SIGNEDP). Returns
+(VALUES hole-index value lo hi choice-name), or NIL if every field does fit
+(not reachable from %CHOOSE-VARIANT's own call site, which only calls this
+once %WORD-VARIANT-FITS-P has already said no). #62: %RELATIVE-ADJUSTED-
+VALUES folds a RELATIVE-HOLE-INDEX entry down to its raw offset first (a
+no-op when DESCRIPTOR has none), so a relative hole's own overflow, if
+that's the one that doesn't fit, is reported as the offset it actually
+tried to encode, not the absolute branch target."
   (let* ((descriptor (first candidate))
          (vals (%relative-adjusted-values
                 address descriptor
@@ -633,13 +640,16 @@ actually tried to encode, not the absolute branch target."
     (loop for value in vals
           for field-choice in (instruction-descriptor-word-fields descriptor)
           for i from 0
-          when (and (eq (word-field-choice-kind field-choice) :inline)
-                    (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
-                      (not (<= lo value hi))))
-            return (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
-                     (values i value lo hi (word-field-choice-choice field-choice))))))
+          do (multiple-value-bind (lo hi)
+                 (ecase (word-field-choice-kind field-choice)
+                   (:inline (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
+                              (values lo hi)))
+                   (:extra-word (%operand-range (word-field-choice-extra-cells field-choice)
+                                                 cell-width (word-field-choice-signedp field-choice))))
+               (unless (<= lo value hi)
+                 (return (values i value lo hi (word-field-choice-choice field-choice))))))))
 
-(defun %signal-word-choice-overflow (statement candidate symbols address anchor)
+(defun %signal-word-choice-overflow (statement candidate symbols address anchor cell-width)
   "Signal ASSEMBLY-ERROR (#104) for CANDIDATE (a word-encoded %CHOOSE-VARIANT
 candidate, instruction.lisp's #20), whose matched CHOICE-selected addressing
 form's own operand value doesn't fit that form's declared :RANGE -- see
@@ -649,7 +659,7 @@ diagnostic at the whole operand's first token (#74), same as every other
 mode-mismatch error in this file -- there is no per-hole token position kept
 this far from parsing to point at just the offending hole."
   (multiple-value-bind (hole value lo hi choice-name)
-      (%word-choice-overflow-values candidate symbols address)
+      (%word-choice-overflow-values candidate symbols address cell-width)
     (let* ((descriptor (first candidate))
            (operand-name (nth hole (instruction-descriptor-operand-names descriptor))))
       (%assembly-error-at anchor
@@ -1106,21 +1116,21 @@ own error would otherwise short-circuit."
                 collect (if (eql i relative-index) (- v next-address) v)))
         values)))
 
-(defun %word-relative-offset-fits-p (offset choice layout)
+(defun %word-relative-offset-fits-p (offset choice cell-width)
   "T if OFFSET -- a word-encoded RELATIVE hole's already-computed signed
 offset (#62) -- fits CHOICE, the relative hole's own WORD-FIELD-CHOICE:
 membership in its own (pre-bias) RANGE for an :INLINE choice, exactly
 %WORD-VARIANT-FITS-P's own :INLINE test (above) applied to this one field in
-isolation; signed fit within the instruction word's own extra-word width
-(LAYOUT's WIDTH-CELLS * CELL-WIDTH bits) for an :EXTRA-WORD choice, mirroring
-%RELATIVE-FITS-P's byte-path bound but sized to a whole instruction word
-rather than an OPERAND-WIDTHS cell count, since that's what an escaped
-extra-word actually spills into (ENCODE-INSTRUCTION, instruction.lisp)."
+isolation; signed fit within CHOICE's own extra-word width (#135; CHOICE's
+own EXTRA-CELLS * CELL-WIDTH bits, not always the instruction word's own
+WIDTH-CELLS) for an :EXTRA-WORD choice, mirroring %RELATIVE-FITS-P's
+byte-path bound but sized to the chosen extra word rather than an
+OPERAND-WIDTHS cell count, since that's what an escaped extra-word actually
+spills into (ENCODE-INSTRUCTION, instruction.lisp)."
   (ecase (word-field-choice-kind choice)
     (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
                (<= lo offset hi)))
-    (:extra-word (%fits-signed-width-p offset (instruction-word-layout-width-cells layout)
-                                        (instruction-word-layout-cell-width layout)))))
+    (:extra-word (%fits-signed-width-p offset (word-field-choice-extra-cells choice) cell-width))))
 
 (defun %relative-offset (address descriptor value line cell-width)
   "VALUE is the absolute target address the RELATIVE hole named by
@@ -1158,9 +1168,8 @@ per-hole computation too."
          (next-address (+ address (instruction-descriptor-size descriptor)))
          (offset (- value next-address)))
     (if word-fields
-        (let* ((choice (nth relative-index word-fields))
-               (layout (instruction-descriptor-word-layout descriptor)))
-          (unless (%word-relative-offset-fits-p offset choice layout)
+        (let ((choice (nth relative-index word-fields)))
+          (unless (%word-relative-offset-fits-p offset choice cell-width)
             (%assembly-error line
                               "~A: relative branch offset ~D out of range for its instruction-word ~
 field" (instruction-descriptor-name descriptor) offset)))

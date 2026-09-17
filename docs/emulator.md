@@ -133,9 +133,10 @@ follows in its own word (fetched and consumed in turn); a value inside some
 alternative's biased inline range means the value *is* the field, debiased.
 A raw value matching no candidate's alternatives at all is `:decode-failure`,
 the same as an unregistered opcode. `pc` advances by the actual number of
-words consumed — the matched candidate's instruction word plus one per
-`extra-word` field decoded, which need not match any one candidate's own
-`extra-words` count, since decode reconstructs the real encoding from the
+cells consumed — the matched candidate's instruction word plus, for each
+`extra-word` field decoded, that matched variant's own declared cell width
+(#135, `:cells`) — which need not match any one candidate's own
+`extra-cells` total, since decode reconstructs the real encoding from the
 fetched bits rather than trusting which combo it happened to try first.
 
 A value-selected field's negative-value handling is entirely its variant's

@@ -210,7 +210,7 @@
    #:instruction-descriptor-cycles
    #:instruction-descriptor-word-fields
    #:instruction-descriptor-word-alternatives
-   #:instruction-descriptor-extra-words
+   #:instruction-descriptor-extra-cells
    #:instruction-descriptor-word-layout
    #:instruction-descriptor-size
    #:word-field-choice

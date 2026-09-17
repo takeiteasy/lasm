@@ -671,13 +671,14 @@ and turning it into bytes or an executed effect:
   instruction): on an ordinary cell-encoded machine, the opcode followed by
   each field's cells little-endian in turn; on a word-encoded one (#20), the
   instruction word (opcode and every field packed in by bit shift) followed
-  by each `:extra-word` field's own value, also little-endian.
+  by each `:extra-word` field's own value, also little-endian, each at its
+  own declared cell width (`:cells`, below).
 - `(instruction-descriptor-size descriptor)` — total encoded cells for one
   use of `descriptor`, covering both encoding schemes: `1 +` operand cell
   widths on a cell-encoded machine, or the instruction-word's own cell
-  width times `1 +` its extra-word count on a word-encoded one. This is what
-  the assembler's layout/relaxation and the emulator's fetch loop use
-  instead of assuming a one-byte opcode.
+  width plus the total cells every `:extra-word` field spends on a
+  word-encoded one. This is what the assembler's layout/relaxation and the
+  emulator's fetch loop use instead of assuming a one-byte opcode.
 - `(execute-instruction descriptor machine values)` runs `descriptor`'s
   semantics against a live `machine`, the same list `values` bound as
   `operand` (and any named fields) in the semantics body.
@@ -693,7 +694,7 @@ reads differently:
 ```lisp
 (operand [NAME] :field FIELD-NAME
   [(variant (range LO HI) inline [:bias N])
-   (variant :else (extra-word :escape N))]*)
+   (variant :else (extra-word :escape N [:cells K]))]*)
 ```
 
 `NAME` binds as before; `FIELD-NAME` names one of the machine's declared
@@ -713,9 +714,19 @@ equivalent of `(operand :mode)`'s implicit default. With one or more:
   `:bias` is what lets a small *negative* value (DCPU-16's own `-1..30`) pack
   into a field with no sign bit of its own — `-1` biased by `+1` is `0`,
   decoded back by subtracting the same bias.
-- `(variant :else (extra-word :escape N))` — the fallback: instead of
-  packing the value, the field holds the literal `N` and the real value
-  follows in its own word, immediately after the instruction word.
+- `(variant :else (extra-word :escape N [:cells K]))` — the fallback:
+  instead of packing the value, the field holds the literal `N` and the
+  real value follows in its own trailing word, immediately after the
+  instruction word (or after any earlier `:extra-word` field's own trailing
+  word — declaration order). `:cells` gives that trailing word its own
+  width in cells (`K` an integer ≥ 1); omitted, it defaults to the
+  instruction word's own cell width, matching every `definstruction` from
+  before this option existed. The width is per-*variant*, not per-field —
+  a field mixing several `(choice MODE)`-selected `:extra-word` variants
+  (below) may give each its own `:cells`, e.g. a narrow 8-bit immediate for
+  one addressing form and a wide 32-bit one for another, told apart at
+  decode by which variant's `:escape` the fetched bits actually match, the
+  same as any other `(choice MODE)` pair.
 
 ```lisp
 (defmachine wordfoo
@@ -745,8 +756,8 @@ word — the same way a multi-mode `(modes (MODE ...) ...)` clause expands
 into one descriptor per mode. Choosing between them per statement is
 `%choose-variant`'s job (see [Assembler](assembler.md#choosing-a-mode)):
 exactly the same syntax → floor → value filter pipeline that picks between
-two addressing-mode widths, generalized to pick between extra-word counts
-instead, all-inline tried before any variant needing an extra word.
+two addressing-mode widths, generalized to pick between total extra-word
+cells instead, all-inline tried first, then narrowest-extra-word-first.
 
 Both a variant's biased inline range and any `:else` escape value must fit
 `FIELD-NAME`'s declared bit width, and an escape value may never fall inside
@@ -924,12 +935,13 @@ the word-encoded case:
 - The offset counts **cells**, not bytes — on a `:cell-width 16` machine an
   offset of 3 means three 16-bit words, not three bytes.
 
-A relative field may declare an `(extra-word :escape n)` fallback exactly
-like any other word field's `(variant ...)` forms above: an offset outside
-the inline range's own bounds spills into its own following word, relaxed
-into by the same narrow-before-wide combo ordering (`%expand-word-combos`,
-[Assembler](assembler.md#choosing-a-mode)) that already relaxes an ordinary
-value-selected field. A relative field is implicitly signed regardless of
+A relative field may declare an `(extra-word :escape n [:cells k])`
+fallback exactly like any other word field's `(variant ...)` forms above:
+an offset outside the inline range's own bounds spills into its own
+following word — `:cells` cells wide, defaulting to the instruction word's
+own width — relaxed into by the same narrow-before-wide combo ordering
+(`%expand-word-combos`, [Assembler](assembler.md#choosing-a-mode)) that
+already relaxes an ordinary value-selected field. A relative field is implicitly signed regardless of
 whether it names a `(choice m)` alternative or is plain value-selected —
 its own `MODE`'s `:relative t` already implies `:signed t`
 (`mode-descriptor-signedp`, [Addressing modes](modes.md#signed-operands)) —
@@ -950,7 +962,7 @@ modes"](modes.md#per-operand-modes)) a hole actually matched:
 ```lisp
 (operand [NAME] :field FIELD-NAME
   [(variant (choice MODE) inline :range (LO HI) [:bias N])
-   (variant (choice MODE) (extra-word :escape N))]*)
+   (variant (choice MODE) (extra-word :escape N [:cells K]))]*)
 ```
 
 `MODE` must be one of the alternatives named by the `one-of` element that
@@ -959,10 +971,14 @@ produced this hole — declaring `(choice mode)` for a hole that isn't a
 alternatives, is a `definstruction`-time error. A `choice`-selected `inline`
 variant requires its own `:range (LO HI)` — unlike `(range LO HI)`, the
 selector itself carries no range to double as one. A `choice`-selected
-`(extra-word :escape N)` variant writes `N` into the field and spends the
-value's own trailing word **unconditionally** once `MODE` is the matched
-alternative, regardless of what the value actually is — unlike `:else`,
-which only escapes when no inline variant's range fits.
+`(extra-word :escape N [:cells K])` variant writes `N` into the field and
+spends the value's own trailing word **unconditionally** once `MODE` is the
+matched alternative, regardless of what the value actually is — unlike
+`:else`, which only escapes when no inline variant's range fits. Because
+`:cells` is per-*variant*, a field with several `choice`-selected
+`extra-word` variants may give each its own width — one addressing form's
+escape spending a single byte, another's spending four — decode still tells
+them apart purely by which variant's `:escape` the fetched bits match.
 
 A field's variants may freely mix `choice`-selected and value-selected
 (`range`/`:else`) ones (#118) — the value-selected variants are then

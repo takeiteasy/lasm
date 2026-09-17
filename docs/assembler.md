@@ -105,8 +105,8 @@ reaches `assemble-statements` after parsing.
    (`instruction-descriptor-size` — `1 +` the sum of its operand field
    widths, all counted in the machine's own memory cells (#53), on an
    ordinary cell-encoded machine, or a word-encoded one's own word size
-   times `1 +` its extra-word count, #20; see "Word-encoded instructions"
-   below). A variant may wire up more than one field, one per
+   plus its total extra-word cells (#20, #135; see "Word-encoded
+   instructions" below). A variant may wire up more than one field, one per
    hole of its mode; see "Multi-operand instructions" below. Directive lookup
    has to come first:
    `find-instruction-variants` signals on an unregistered name, so it can't
@@ -230,9 +230,9 @@ declared in `(modes ...)`:
      non-`nil` — see "Word-encoded instructions" below) fits by a different
      rule entirely: each hole's value must fall inside that candidate's own
      declared `(range LO HI)` for an inline field, while an `extra-word`
-     field always fits (any value spills into its own word) — `operand-
-     widths` is `nil` for these descriptors, so none of the byte-width
-     branches above apply.
+     field fits when the value fits its own declared cell width (#135) —
+     `operand-widths` is `nil` for these descriptors, so none of the
+     byte-width branches above apply.
    - If **no** candidate fits — `ldx #300` on a one-byte `immediate` — fall
      back to the **widest** syntax-and-floor-matching candidate (by total
      operand width) and let `encode-instruction`'s existing `wrap-value`
@@ -361,17 +361,22 @@ the same `%choose-variant` pipeline described above, generalized via
 - A variant-bearing operand field expands `definstruction` into several
   `instruction-descriptor`s sharing one mnemonic, mode, and opcode
   value — one all-inline, one (or more) needing an extra word — ordered
-  all-inline first, exactly the "declare narrower modes before wider ones"
-  convention above, generalized from addressing-mode width to extra-word
-  count.
+  all-inline first, then narrowest-total-extra-word-cells first, exactly
+  the "declare narrower modes before wider ones" convention above,
+  generalized from addressing-mode width to extra-word cells (#135; an
+  `extra-word` field's own trailing word may be narrower or wider than the
+  instruction word, via its `:cells` declaration — see
+  [Instructions](instructions.md#word-encoded-instructions-20)).
 - The value filter's word-encoded branch (above) checks each field's value
   against its own declared inline range rather than a cell width; an
-  `extra-word` field always fits, since any value can spill into its own
-  word.
-- `instruction-descriptor-size` — a word-encoded machine's own word cell
-  width (#53, the target memory's `:cell-width`) times `1 +` its chosen
-  variant's extra-word count — replaces `1 + total-operand-width` everywhere
-  layout and relative-offset arithmetic used to assume a single-cell opcode.
+  `extra-word` field fits when the value fits *its own* declared width
+  (`:cells`, signed when the field is signed) — no longer unconditionally,
+  now that width can be narrower than a full instruction word.
+- `instruction-descriptor-size` — a word-encoded machine's own instruction
+  word cell width (#53, the target memory's `:cell-width`) plus its chosen
+  variant's total extra-word cells (#135) — replaces `1 + total-operand-width`
+  everywhere layout and relative-offset arithmetic used to assume a
+  single-cell opcode.
 - A `:relative` addressing mode, whole-mode or per-hole alike, works the
   same as on a byte-encoded machine (#62, see
   [Instructions, "PC-relative operands"](instructions.md#pc-relative-operands-62))
@@ -381,7 +386,8 @@ the same `%choose-variant` pipeline described above, generalized via
 
 `encode-instruction` packs the opcode and every inline field's (biased)
 value into one instruction word by bit shift, then appends each
-`extra-word` field's own value as a separate little-endian word — see
+`extra-word` field's own value as a separate little-endian word, at that
+field's own declared cell width (#135) — see
 [Instructions](instructions.md#operand-pipeline). See
 [`examples/word.lisp`](../examples/word.lisp) for a complete program
 assembled and run end to end.
@@ -431,8 +437,9 @@ On a word-encoded descriptor (#62), `relative-hole-index` names a hole into
 `word-fields` rather than `operand-widths` (`operand-widths` is always
 `nil` there), and the "width the offset is range-checked against" above is
 that hole's own `word-field-choice` instead: an `:inline` field's own
-(pre-bias) `range`, or, for an `:extra-word` field, a signed fit within the
-whole instruction word's own `width-cells * cell-width` bits
+(pre-bias) `range`, or, for an `:extra-word` field, a signed fit within
+*that field's own* declared `extra-cells * cell-width` bits (#135 — not
+always the whole instruction word's own `width-cells`)
 (`%word-relative-offset-fits-p`, `assembler.lisp`). The check is just as
 unconditional as the byte-encoded one above — `%check-strict-operand-range!`
 is already a no-op for a word-encoded descriptor regardless of `:strict`,
