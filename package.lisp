@@ -15,8 +15,11 @@
    ;; Conditions
    #:lasm-error
    #:storage-error
+   #:storage-error-machine
+   #:storage-error-name
    #:unknown-storage
    #:address-out-of-range
+   #:address-out-of-range-address
    #:memory-write-protected
    #:memory-write-protected-address
    #:stack-overflow
@@ -24,12 +27,15 @@
    #:stack-index-out-of-range
    #:stack-index-out-of-range-index
    #:register-index-out-of-range
+   #:register-index-out-of-range-index
    #:no-such-device
    #:no-such-device-machine
    #:no-such-device-index
    #:interrupt-queue-full
    #:interrupt-queue-full-machine
    #:lasm-trap
+   #:lasm-trap-tag
+   #:lasm-trap-data
    #:lasm-syntax-error
    #:lasm-syntax-error-message
    #:lasm-syntax-error-line
@@ -275,6 +281,11 @@
    #:no-matching-choice-operand
    #:no-matching-choice-choice
    #:opcode-conflict
+   #:opcode-conflict-machine
+   #:opcode-conflict-opcode
+   #:opcode-conflict-mnemonic
+   #:opcode-conflict-other-mnemonic
+   #:opcode-conflict-reason
    #:instruction-descriptor
    #:instruction-descriptor-p
    #:instruction-descriptor-name

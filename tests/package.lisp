@@ -17,3 +17,17 @@
                   "MACHINE-PEEK-READER" "OPCODE-CONFLICT"))
     (fiveam:is (eq :external (nth-value 1 (find-symbol name '#:lasm)))
                "~A is not external in #:lasm" name)))
+
+;; #170: a public condition type's slot readers are public too -- these 11
+;; leaked internal despite their condition types being exported, forcing a
+;; consumer to reach into lasm:: to read a caught condition's own slots.
+(fiveam:test condition-readers-are-external
+  (dolist (name '("STORAGE-ERROR-MACHINE" "STORAGE-ERROR-NAME"
+                  "ADDRESS-OUT-OF-RANGE-ADDRESS"
+                  "REGISTER-INDEX-OUT-OF-RANGE-INDEX"
+                  "LASM-TRAP-TAG" "LASM-TRAP-DATA"
+                  "OPCODE-CONFLICT-MACHINE" "OPCODE-CONFLICT-OPCODE"
+                  "OPCODE-CONFLICT-MNEMONIC" "OPCODE-CONFLICT-OTHER-MNEMONIC"
+                  "OPCODE-CONFLICT-REASON"))
+    (fiveam:is (eq :external (nth-value 1 (find-symbol name '#:lasm)))
+               "~A is not external in #:lasm" name)))
