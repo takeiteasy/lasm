@@ -94,6 +94,7 @@ checking the machine's current PC — against the breakpoint table for
 | `:until` | `debug-continue-to` reached its target |
 | `:trap` | an instruction's semantics signalled `lasm-trap` (e.g. `hlt`) |
 | `:decode-failure` | the byte(s) at PC don't decode to a registered opcode |
+| `:idle` | `debug-continue`/`debug-continue-to` only (#110) — the machine went idle with nothing left to wake it, see [Emulator](emulator.md#idle-steps-110). `debug-step` instead counts an idle step as an ordinary executed step, reporting `:step` |
 | `:max-steps` | the runaway-program guard tripped with no other stop |
 
 **Continuing from a breakpoint runs past it, not immediately again.** `stop-p`

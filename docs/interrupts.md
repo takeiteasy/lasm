@@ -137,19 +137,52 @@ declared order, restoring exactly what delivery pushed. Signals an error
 at macroexpansion time on a machine declaring no `(interrupts ...)`
 clause.
 
+## Waking an idle machine (#110)
+
+The `idle` semantics primitive ([Semantics vocabulary](semantics.md)) marks
+a machine idle — `step-machine` then skips fetch/decode/execute (see
+[Emulator, "Idle steps"](emulator.md#idle-steps-110)) until something wakes
+it back up.
+
+**Delivery is what wakes it.** `deliver-pending-interrupt` clears the idle
+flag as part of delivering, exactly as it pushes state and sets `pc` — so
+an idling machine wakes and starts executing its handler in the very same
+step. A signal merely reaching the queue does *not* wake it: masking
+(above) still applies, so a masked machine keeps idling while signals pile
+up, and only wakes once unmasked and delivery actually runs.
+
+**One-step lag, same as any tick-raised signal.** A device's own `:tick`
+call to `device-signal` while the machine is idle is queued too late for
+that idle step's own delivery check, which already ran before it — same
+rule as an ordinary running step (see "Delivery" above). It delivers, and
+wakes the machine, on the *next* `step-machine` call.
+
+**The zero-vector footgun.** With the default `:drop-on-zero-vector t`, a
+machine that idles while `:vector`'s register currently reads 0 has every
+incoming signal dropped at enqueue, before it ever reaches the queue — such
+a machine can never wake on its own. (A diagnostic for this is tracked as a
+follow-up, #165.)
+
+**No `(interrupts ...)` clause is not an error.** Unlike `interrupt-return`,
+`idle` macroexpands fine on any machine — nothing on such a machine can
+wake it, but a host can call `wake-machine` (emulator.lisp) directly, and
+`run` (see [Emulator](emulator.md#run)) reports `:idle` rather than
+spinning to `:max-steps`.
+
 ## `reset`
 
-Clears the pending queue unconditionally — it's machine state. The
-auto-installed hook is host wiring, same as before #109: `reset` leaves
-whatever is currently installed on `machine-interrupt-hook` alone,
-whether that's the auto-installed default or something a host replaced
-it with.
+Clears the pending queue unconditionally — it's machine state. #110's idle
+flag is the same — `reset` clears it too. The auto-installed hook is host
+wiring, same as before #109: `reset` leaves whatever is currently installed
+on `machine-interrupt-hook` alone, whether that's the auto-installed
+default or something a host replaced it with.
 
 ## Scope
 
-Nested-interrupt priority/depth ordering, privilege levels (gating who
-may mask or who a handler runs as), and CPU idle/sleep resumed by an
-interrupt are not covered here — see the tracker for those as separate
-tickets. `trap` (the M1 halt primitive, see [Semantics
-vocabulary](semantics.md)) is untouched by this subsystem; a unified
-trap/interrupt/exception model remains future work.
+Nested-interrupt priority/depth ordering and privilege levels (gating who
+may mask or who a handler runs as) are not covered here — see the tracker
+for those as separate tickets. `trap` (the M1 halt primitive, see
+[Semantics vocabulary](semantics.md)) is untouched by this subsystem; a
+unified trap/interrupt/exception model remains future work. CPU idle/sleep
+resumed by an interrupt *is* now covered — see "Waking an idle machine"
+above.

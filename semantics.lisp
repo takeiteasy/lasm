@@ -133,6 +133,13 @@ clause declared" machine-name)))
                                            assignments)))
                       (trap (tag &optional data)
                         `(error 'lasm-trap :tag ,tag :data ,data))
+                      ;; #110: unlike TRAP, IDLE does not unwind -- it just
+                      ;; sets a flag STEP-MACHINE (emulator.lisp) checks
+                      ;; next step, so the rest of this semantics body (and
+                      ;; the instruction's own cycle cost) still runs to
+                      ;; completion.
+                      (idle ()
+                        `(setf (machine-idle ,',machine-var) t))
                       (interrupt-return ()
                         (when ',interrupt-error (error ',interrupt-error))
                         ',interrupt-form))

@@ -218,6 +218,14 @@
     (fiveam:is (= 0 (mref m 'ram 0)))
     (fiveam:is (= 0 (flag m 'z)))))
 
+;; #110: IDLE state -- machine state like INTERRUPT-QUEUE, so RESET clears
+;; it unconditionally too.
+(fiveam:test reset-clears-idle
+  (let ((m (make-machine 'test-machine)))
+    (setf (machine-idle m) t)
+    (reset m)
+    (fiveam:is (not (machine-idle-p m)))))
+
 ;;; #107: region-mapped memory (ROM/RAM/MMIO). REGION-TEST-MACHINE dedicates
 ;;; a distinct address range to each region kind so the tests below can
 ;;; exercise them independently: 0-15 plain (no region), 16-31 :RAM (named
