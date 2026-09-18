@@ -285,7 +285,7 @@ an `(interrupts ...)` clause's `:queue` depth with the default
 `lasm-trap` is signalled by the `trap` semantics operator (see [Semantics
 vocabulary](semantics.md)) and, on an `:on-overflow :trap` machine, by
 `signal-interrupt` past its `:queue` depth as well; neither is a storage
-error.
+error. See [Conditions](conditions.md) for each condition's readers.
 
 None of these storage conditions are currently a `run` stop reason (see
 [Emulator, "Stop reasons"](emulator.md#stop-reasons)) — an instruction that

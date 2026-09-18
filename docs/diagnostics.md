@@ -10,7 +10,8 @@ right after `storage.lisp`) is the shared mechanism this document covers;
 [Lexer](lexer.md), [Statement grammar & expression parser](parser.md), and
 [Assembler](assembler.md) each still document their own conditions in full —
 this page is about the rendering and the two opt-in behaviors (the
-ambiguity warning, strict operand range), not a duplicate condition list.
+ambiguity warning, strict operand range), not a duplicate condition list —
+see [Conditions](conditions.md) for every condition type and its readers.
 
 ## `diagnostic-text`
 
