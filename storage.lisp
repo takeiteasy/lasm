@@ -23,6 +23,19 @@
                      (address-out-of-range-address c)
                      (storage-error-name c) (storage-error-machine c)))))
 
+;; #107: signalled by (SETF MREF) for a store into a :ROM region declaring
+;; :ON-WRITE :ERROR -- the default :ON-WRITE :IGNORE silently drops the
+;; store instead (a ROM's writes are just discarded, matching real ROM
+;; behavior); :ERROR is the opt-in for catching a program that shouldn't be
+;; storing there. Mirrors ADDRESS-OUT-OF-RANGE's shape.
+(define-condition memory-write-protected (storage-error)
+  ((address :initarg :address :reader memory-write-protected-address))
+  (:report (lambda (c s)
+             (format s "Write to address ~S rejected by read-only region on ~
+memory ~S on machine ~S"
+                     (memory-write-protected-address c)
+                     (storage-error-name c) (storage-error-machine c)))))
+
 (define-condition stack-overflow (storage-error) ()
   (:report (lambda (c s)
              (format s "Stack overflow on ~S (machine ~S)"
@@ -91,7 +104,67 @@
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
   (cell-width nil :type (or null (integer 1)))  ; memory, defaults to width
-  (endian nil :type (or null keyword)))         ; memory, :little or :big, #66
+  (endian nil :type (or null keyword))          ; memory, :little or :big, #66
+  ;; #107: sub-ranges of a memory element with distinct access behavior --
+  ;; ROM (writes discarded or rejected), a device window (reads/writes
+  ;; forwarded to handlers instead of touching backing storage). NIL on every
+  ;; machine before this ticket and on any memory element declaring no
+  ;; (region ...) forms, which is what keeps MREF/(SETF MREF)'s no-region
+  ;; path a single NULL test with no added indirection. Declaration order
+  ;; doesn't matter for lookup (%REGION-AT scans all of them), only for
+  ;; MACHINE-MODEL.MD's rendering of them.
+  (regions nil :type list))
+
+;; #107: one declared (region NAME start end ...) form inside a memory
+;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
+;; form becomes this. START/END are both inclusive and within the memory
+;; element's own address range; regions never overlap (machine.lisp checks
+;; this once, at DEFMACHINE time, so %REGION-AT never has to worry about
+;; more than one match).
+;;   :RAM    -- ordinary backing-array storage, same as no region at all.
+;;              Only useful to attach a name to a sub-range for documentation
+;;              purposes, or (a follow-up ticket) later banking.
+;;   :ROM    -- reads hit backing storage; writes are dropped (:ON-WRITE
+;;              :IGNORE, the default) or signal MEMORY-WRITE-PROTECTED
+;;              (:ON-WRITE :ERROR). LOAD-PROGRAM/the debugger burn a ROM
+;;              image in via %POKE, which bypasses this -- a ROM image is
+;;              burned, not stored by the CPU.
+;;   :DEVICE -- reads and writes are forwarded to READ/WRITE instead of
+;;              touching backing storage at all; a device region with no
+;;              READ reads as 0, one with no WRITE discards the store. READ
+;;              and WRITE are function designators (a symbol naming a
+;;              function, or a function object) called as (FUNCALL READ
+;;              MACHINE ADDRESS) and (FUNCALL WRITE MACHINE ADDRESS VALUE) --
+;;              both the *absolute* address, not a region-relative offset.
+;;              A symbol, not #'NAME, is the form to write in a DEFMACHINE
+;;              clause -- DEFMACHINE quotes its whole clause body
+;;              (see its EVAL-WHEN expansion), so #'NAME there would freeze
+;;              to the literal list (FUNCTION NAME) rather than an actual
+;;              function; a bare symbol survives quoting unevaluated and
+;;              FUNCALL resolves it to the live function at call time. Kept
+;;              to a plain function-designator pair rather than a device
+;;              object so #108's device model can layer over this hook
+;;              without this ticket knowing devices exist.
+(defstruct memory-region
+  (name nil :type symbol)
+  (start nil :type (integer 0))
+  (end nil :type (integer 0))
+  (kind :ram :type (member :ram :rom :device))
+  (on-write :ignore :type (member :ignore :error))     ; :rom only
+  (read nil :type (or null symbol function))           ; :device only
+  (write nil :type (or null symbol function)))         ; :device only
+
+(defun %region-at (element address)
+  "The MEMORY-REGION in ELEMENT containing ADDRESS, or NIL when ELEMENT
+declares no regions or none of them cover ADDRESS. NIL up front on the
+common case (no REGIONS at all) so an unregioned memory element's MREF/
+(SETF MREF) does no scanning whatsoever.
+TODO: linear region scan; bucket/page table if region counts grow (#107
+follow-up)."
+  (let ((regions (storage-element-regions element)))
+    (and regions
+         (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
+                   regions))))
 
 ;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
 ;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
@@ -250,10 +323,11 @@ machine's default layout -- callers hold no other kind (#64)."
      (cons (make-array (storage-element-depth element) :initial-element 0)
            0))
     (:memory
-     ;; Eager allocation of 2^addr-width cells. This is a deliberate M0
-     ;; simplification kept behind this constructor: M5 introduces a
-     ;; region-mapped/sparse memory backend (ROM/RAM/MMIO, banking) that
-     ;; will replace this without touching MREF/accessor call sites.
+     ;; Eager allocation of 2^addr-width cells, unconditionally -- #107's
+     ;; region overlays (STORAGE-ELEMENT-REGIONS) change what MREF/(SETF
+     ;; MREF) do with a range of this array, not how the array itself is
+     ;; allocated, so a ROM or device region still occupies backing cells
+     ;; here even though ordinary reads/writes route around them.
      (let ((cell-width (or (storage-element-cell-width element)
                             (storage-element-width element))))
        (make-array (ash 1 (storage-element-addr-width element))
@@ -365,23 +439,77 @@ declares no NAMES or INDEX is outside them."
     (declare (ignore element))
     (setf (aref slot 0) (if value 1 0))))
 
-(defun mref (machine name address)
-  "Read memory element NAME on MACHINE at ADDRESS."
+;; #107: shared bounds-checked lookup for MREF/(SETF MREF)/MPEEK/%POKE --
+;; keeps the ADDRESS-OUT-OF-RANGE check and %SLOT call in one place so the
+;; four memory accessors below can't drift on it. Returns (VALUES SLOT
+;; ELEMENT REGION), REGION being the #107 MEMORY-REGION covering ADDRESS (or
+;; NIL).
+(defun %memory-slot-checked (machine name address)
   (multiple-value-bind (slot element) (%slot machine name :memory)
-    (declare (ignore element))
     (unless (and (>= address 0) (< address (length slot)))
       (error 'address-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                     :name name :address address))
-    (aref slot address)))
+    (values slot element (%region-at element address))))
+
+(defun %memory-cell-width (element)
+  (or (storage-element-cell-width element) (storage-element-width element)))
+
+(defun mref (machine name address)
+  "Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
+in a :DEVICE region calls that region's READ instead of touching backing
+storage (0 when the region declares no READ); every other address --
+including one in a :RAM or :ROM region -- reads backing storage directly,
+same as before this ticket."
+  (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
+    (declare (ignore element))
+    (if (and region (eq (memory-region-kind region) :device))
+        (let ((read (memory-region-read region)))
+          (if read (funcall read machine address) 0))
+        (aref slot address))))
 
 (defun (setf mref) (value machine name address)
-  (multiple-value-bind (slot element) (%slot machine name :memory)
-    (unless (and (>= address 0) (< address (length slot)))
-      (error 'address-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
-                                    :name name :address address))
-    (let ((cell-width (or (storage-element-cell-width element)
-                           (storage-element-width element))))
-      (setf (aref slot address) (wrap-value value cell-width)))))
+  "Write memory element NAME on MACHINE at ADDRESS. #107: a store into a
+:ROM region is dropped (:ON-WRITE :IGNORE, the default) or signals
+MEMORY-WRITE-PROTECTED (:ON-WRITE :ERROR); a store into a :DEVICE region
+calls that region's WRITE instead of touching backing storage (discarded
+when the region declares no WRITE), passed the same cell-width-wrapped
+value every other memory write receives. Use %POKE to bypass region write
+policy entirely -- LOAD-PROGRAM and the debugger burn a ROM image in that
+way. Returns the wrapped value in every case, matching plain (SETF MREF)'s
+existing return contract."
+  (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
+    (let ((wrapped (wrap-value value (%memory-cell-width element))))
+      (cond
+        ((and region (eq (memory-region-kind region) :rom))
+         (when (eq (memory-region-on-write region) :error)
+           (error 'memory-write-protected :machine (machine-descriptor-name (machine-descriptor machine))
+                                           :name name :address address)))
+        ((and region (eq (memory-region-kind region) :device))
+         (let ((write (memory-region-write region)))
+           (when write (funcall write machine address wrapped))))
+        (t (setf (aref slot address) wrapped)))
+      wrapped)))
+
+(defun mpeek (machine name address)
+  "Read memory element NAME on MACHINE at ADDRESS directly from backing
+storage, bypassing any #107 region -- a :DEVICE region's READ is never
+called (returning 0, since a device region has no backing cell of its own),
+and a :ROM region's read-only status is irrelevant since this never writes.
+For inspection paths (the debugger's hex dump, disassembly) that must not
+trigger a device's read side effects merely by displaying memory."
+  (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
+    (declare (ignore element))
+    (if (and region (eq (memory-region-kind region) :device))
+        0
+        (aref slot address))))
+
+(defun %poke (machine name address value)
+  "Write memory element NAME on MACHINE at ADDRESS directly into backing
+storage, bypassing any #107 region's write policy -- a :ROM region accepts
+this store and a :DEVICE region's WRITE is never called. For LOAD-PROGRAM
+and the debugger: a ROM image is burned in, not stored by the CPU."
+  (multiple-value-bind (slot element) (%memory-slot-checked machine name address)
+    (setf (aref slot address) (wrap-value value (%memory-cell-width element)))))
 
 (defun stack-push (machine name value)
   (multiple-value-bind (slot element) (%slot machine name :stack)

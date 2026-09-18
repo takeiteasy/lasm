@@ -253,7 +253,11 @@ rows of 8, each row labelled by address (ADDR-DIGITS) with each cell padded
 to SESSION's own HEX-DIGITS -- sized from the memory's actual cell width
 (%LISTING-HEX-DIGITS) rather than hardcoded to 2, the mistake open bug #87
 tracks against PRINT-DISASSEMBLY. Returns a string when STREAM is NIL
-(default); otherwise writes to STREAM and returns NIL."
+(default); otherwise writes to STREAM and returns NIL.
+
+#107: reads via MPEEK, not MREF -- a hex dump is inspection, not an actual
+CPU access, so it must not trigger a :DEVICE region's :READ side effects
+merely by displaying memory."
   (let* ((machine (debug-session-machine session))
          (memory (debug-session-memory session))
          (addr-digits (debug-session-addr-digits session))
@@ -262,7 +266,7 @@ tracks against PRINT-DISASSEMBLY. Returns a string when STREAM is NIL
                  (loop for row-start from address below (+ address count) by 8
                        do (format s "~V,'0X:" addr-digits row-start)
                           (loop for a from row-start below (min (+ row-start 8) (+ address count))
-                                do (format s " ~V,'0X" cell-digits (mref machine memory a)))
+                                do (format s " ~V,'0X" cell-digits (mpeek machine memory a)))
                           (format s "~%")))))
     (setf (debug-session-last-x-address session) (+ address count))
     (if stream (progn (write-string body stream) nil) body)))

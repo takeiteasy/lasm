@@ -217,3 +217,148 @@
     (fiveam:is (= 0 (stack-depth m 's)))
     (fiveam:is (= 0 (mref m 'ram 0)))
     (fiveam:is (= 0 (flag m 'z)))))
+
+;;; #107: region-mapped memory (ROM/RAM/MMIO). REGION-TEST-MACHINE dedicates
+;;; a distinct address range to each region kind so the tests below can
+;;; exercise them independently: 0-15 plain (no region), 16-31 :RAM (named
+;;; but behaviorally identical to plain), 32-47 :ROM (:ON-WRITE :IGNORE, the
+;;; default), 48-63 :ROM :ON-WRITE :ERROR, 64-79 :DEVICE with both handlers,
+;;; 80-95 :DEVICE with neither.
+
+(defvar *device-log* nil
+  "Addresses/values seen by REGION-TEST-MACHINE's device handlers below --
+reset at the start of each test that reads it.")
+
+(defun %region-test-device-read (machine address)
+  (declare (ignore machine))
+  (cl:push (list :read address) *device-log*)
+  #xAA)
+
+(defun %region-test-device-write (machine address value)
+  (declare (ignore machine))
+  (cl:push (list :write address value) *device-log*))
+
+(defmachine region-test-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region plain-rom #x20 #x2F :kind :rom)
+    (region strict-rom #x30 #x3F :kind :rom :on-write :error)
+    (region io #x40 #x4F :kind :device
+            :read %region-test-device-read :write %region-test-device-write)
+    (region blind-io #x50 #x5F :kind :device)))
+
+(fiveam:test region-ram-behaves-as-plain-memory
+  (let ((m (make-machine 'region-test-machine)))
+    (setf (mref m 'ram 0) 7)   ; no region at all
+    (fiveam:is (= 7 (mref m 'ram 0)))))
+
+(fiveam:test region-rom-ignores-writes
+  (let ((m (make-machine 'region-test-machine)))
+    (%poke m 'ram #x20 42) ; burn in a value directly, bypassing region policy
+    (setf (mref m 'ram #x20) 99) ; dropped
+    (fiveam:is (= 42 (mref m 'ram #x20)))))
+
+(fiveam:test region-rom-on-write-error
+  (let ((m (make-machine 'region-test-machine)))
+    (fiveam:signals memory-write-protected (setf (mref m 'ram #x30) 1))))
+
+(fiveam:test region-device-routes-reads-and-writes
+  (let ((*device-log* nil)
+        (m (make-machine 'region-test-machine)))
+    (fiveam:is (= #xAA (mref m 'ram #x40)))
+    (setf (mref m 'ram #x41) 5)
+    (fiveam:is (equal (list (list :write #x41 5) (list :read #x40)) *device-log*))
+    ;; backing storage is never touched by a device region -- MPEEK bypasses
+    ;; the region entirely and reads the raw (never-written) cell
+    (fiveam:is (= 0 (mpeek m 'ram #x41)))))
+
+(fiveam:test region-device-write-value-wraps-to-cell-width
+  ;; A :DEVICE region's :WRITE receives the same cell-width-wrapped value
+  ;; every other memory write receives, not the raw unwrapped argument.
+  (let ((*device-log* nil)
+        (m (make-machine 'region-test-machine)))
+    (setf (mref m 'ram #x41) 300) ; wraps mod 256, same as plain memory
+    (fiveam:is (equal (list (list :write #x41 44)) *device-log*))))
+
+(fiveam:test region-device-without-handlers
+  (let ((m (make-machine 'region-test-machine)))
+    (fiveam:is (= 0 (mref m 'ram #x50)))
+    (setf (mref m 'ram #x50) 99) ; discarded, no error
+    (fiveam:is (= 0 (mref m 'ram #x50)))))
+
+(fiveam:test mpeek-bypasses-device-handlers
+  (let ((*device-log* nil)
+        (m (make-machine 'region-test-machine)))
+    (fiveam:is (= 0 (mpeek m 'ram #x40)))
+    (fiveam:is (null *device-log*))))
+
+(fiveam:test poke-writes-through-rom
+  (let ((m (make-machine 'region-test-machine)))
+    (%poke m 'ram #x30 7) ; strict-rom, :on-write :error -- %POKE bypasses it
+    (fiveam:is (= 7 (mref m 'ram #x30)))))
+
+(fiveam:test load-program-burns-into-rom
+  ;; Regression for the #107/LOAD-PROGRAM collision: a program assembled at
+  ;; a ROM region's origin must still load, since LOAD-PROGRAM burns cells in
+  ;; via %POKE rather than storing them via (SETF MREF).
+  (let ((m (make-machine 'region-test-machine)))
+    (load-program m (vector 1 2 3) :origin #x20)
+    (fiveam:is (= 1 (mref m 'ram #x20)))
+    (fiveam:is (= 2 (mref m 'ram #x21)))
+    (fiveam:is (= 3 (mref m 'ram #x22)))))
+
+(fiveam:test reset-zeroes-regioned-memory
+  (let ((m (make-machine 'region-test-machine)))
+    (%poke m 'ram #x20 42)
+    (reset m)
+    (fiveam:is (= 0 (mref m 'ram #x20)))))
+
+(fiveam:test defmachine-rejects-overlapping-regions
+  (fiveam:signals error
+    (eval '(defmachine overlap-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :rom)
+              (region b 10 20 :kind :rom))))))
+
+(fiveam:test defmachine-rejects-duplicate-region-name
+  (fiveam:signals error
+    (eval '(defmachine dup-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :rom)
+              (region a 16 31 :kind :rom))))))
+
+(fiveam:test defmachine-rejects-region-name-colliding-with-element
+  (fiveam:signals error
+    (eval '(defmachine region-element-collision-test
+            (memory ram :width 8 :addr-width 8
+              (region ram 0 15 :kind :rom))))))
+
+(fiveam:test defmachine-rejects-region-out-of-address-range
+  (fiveam:signals error
+    (eval '(defmachine region-range-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 256 :kind :rom))))))
+
+(fiveam:test defmachine-rejects-inverted-region-range
+  (fiveam:signals error
+    (eval '(defmachine inverted-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 15 0 :kind :rom))))))
+
+(fiveam:test defmachine-rejects-unknown-region-kind
+  (fiveam:signals error
+    (eval '(defmachine bad-kind-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :bogus))))))
+
+(fiveam:test defmachine-rejects-on-write-on-non-rom
+  (fiveam:signals error
+    (eval '(defmachine bad-on-write-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :ram :on-write :error))))))
+
+(fiveam:test defmachine-rejects-read-write-on-non-device
+  (fiveam:signals error
+    (eval '(defmachine bad-read-region-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :rom :read (lambda (m a) (declare (ignore m a)) 0)))))))

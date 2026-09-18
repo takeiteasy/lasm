@@ -59,7 +59,11 @@ otherwise 0. Signals if CELLS is an ASSEMBLY whose own ASSEMBLY-CELL-WIDTH
 does not match MEMORY's declared :CELL-WIDTH (#53) -- e.g. a program
 assembled against a byte-addressed memory element loaded into a
 word-addressed one would otherwise place every assembled cell one address
-too far apart with no other symptom."
+too far apart with no other symptom.
+
+#107: writes via %POKE, not MREF -- a ROM image is burned in here, not
+stored by the CPU, so this ignores any :ROM region's write protection at
+ORIGIN. A :DEVICE region's :WRITE is likewise never called."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
@@ -73,7 +77,7 @@ too far apart with no other symptom."
 match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
     (let ((address origin))
       (map nil (lambda (cell)
-                 (setf (mref machine memory address) cell)
+                 (%poke machine memory address cell)
                  (incf address))
            data))
     (setf (sref machine 'pc) origin)
