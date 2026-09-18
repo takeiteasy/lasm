@@ -319,6 +319,7 @@
    ;; Assembler
    #:assemble
    #:assemble-statements
+   #:assemble-file
    #:assembly
    #:assembly-p
    #:assembly-cells

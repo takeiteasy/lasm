@@ -1450,3 +1450,20 @@ SOURCE-CONTEXT (#74), on any LASM-SYNTAX-ERROR either stage signals."
   (with-source-context source
     (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory
                           :source source)))
+
+(defun %read-source-file (path)
+  "The text of the file at PATH, lines joined with #\\Newline. A missing file
+signals the ordinary CL FILE-ERROR."
+  (with-open-file (in path)
+    (with-output-to-string (out)
+      (loop for line = (read-line in nil nil)
+            for first = t then nil
+            while line
+            do (unless first (write-char #\Newline out))
+               (write-string line out)))))
+
+(defun assemble-file (path &key machine (lexer 'default) (origin 0) memory)
+  "Read the source file at PATH (conventionally .asm or .s) and ASSEMBLE its
+text; see ASSEMBLE for the keys and conditions. A missing or unreadable file
+signals the ordinary CL FILE-ERROR."
+  (assemble (%read-source-file path) :machine machine :lexer lexer :origin origin :memory memory))

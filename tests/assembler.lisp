@@ -1249,3 +1249,26 @@ next: wnop" :machine 'word-relative-test-machine)))
 (fiveam:test equ-colliding-with-register-alias-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble ".equ i, 5" :machine 'dcpu16-test-machine)))
+
+;;; assemble-file
+
+(defparameter *fixture-directory*
+  (asdf:system-relative-pathname :lasm "tests/fixtures/"))
+
+(fiveam:test assemble-file-matches-assemble-on-the-same-text
+  (let ((from-file (assemble-file (merge-pathnames "simple.asm" *fixture-directory*)
+                                  :machine 'instr-test-machine))
+        (from-text (assemble "start: ldx #10
+       nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp (assembly-cells from-text) (assembly-cells from-file)))
+    (fiveam:is (= 0 (gethash "start" (assembly-symbols from-file))))))
+
+(fiveam:test assemble-file-passes-origin-through
+  (let ((a (assemble-file (merge-pathnames "simple.asm" *fixture-directory*)
+                          :machine 'instr-test-machine :origin #x200)))
+    (fiveam:is (= #x200 (assembly-origin a)))))
+
+(fiveam:test assemble-file-missing-path-signals-file-error
+  (fiveam:signals file-error
+    (assemble-file (merge-pathnames "no-such-file.asm" *fixture-directory*)
+                   :machine 'instr-test-machine)))
