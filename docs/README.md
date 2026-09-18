@@ -14,6 +14,7 @@
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Includes](includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
+- [Snapshots](snapshots.md) — `machine-snapshot`/`restore-snapshot`, versioned snapshot files
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`

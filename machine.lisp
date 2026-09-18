@@ -207,14 +207,14 @@ function), got ~S" context name (car fn) (cdr fn))))
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
 ;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
-;;   [:tick fn] [:receive fn] [:detach fn]) -- a bus-addressed peripheral,
+;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]) -- a bus-addressed peripheral,
 ;; independent of #107's memory regions (a machine can declare one without
 ;; declaring any MMIO region at all). NAME is validated as a symbol here;
 ;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
 ;; machine's namespace, same as a region's or a register alias's name.
 (defun parse-device-clause (form)
   (destructuring-bind (name &key (id 0) (version 0) (manufacturer 0)
-                             init tick receive detach)
+                             init tick receive detach save load)
       form
     (unless (symbolp name)
       (error "device ~S: name must be a symbol" name))
@@ -222,12 +222,14 @@ function), got ~S" context name (car fn) (cdr fn))))
       (unless (and (integerp (cdr v)) (>= (cdr v) 0))
         (error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
     (dolist (fn (list (cons :init init) (cons :tick tick)
-                       (cons :receive receive) (cons :detach detach)))
+                       (cons :receive receive) (cons :detach detach)
+                       (cons :save save) (cons :load load)))
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
         (error "device ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" name (car fn) (cdr fn))))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
-                             :init init :tick tick :receive receive :detach detach)))
+                             :init init :tick tick :receive receive :detach detach
+                             :save save :load load)))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]

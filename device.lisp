@@ -14,9 +14,8 @@
 ;;;; MAKE-MACHINE (storage.lisp) now auto-wires the hook to the real
 ;;;; delivery queue on any machine declaring an (interrupts ...) clause
 ;;;; (machine.lisp) -- see docs/interrupts.md for the queue/masking/
-;;;; overflow model this seam now feeds. Serializing device state for a
-;;;; snapshot is #112's -- MACHINE-DEVICES and DEVICE-STATE below are what
-;;;; it walks.
+;;;; overflow model this seam now feeds. A device's :SAVE/:LOAD hooks feed
+;;;; snapshots (snapshot.lisp).
 
 (in-package #:lasm)
 
@@ -39,7 +38,7 @@ table (machine.lisp) would have rejected at DEFMACHINE time."
 
 ;;; Attach / detach
 
-(defun attach-device (machine name &key id version manufacturer init tick receive detach)
+(defun attach-device (machine name &key id version manufacturer init tick receive detach save load)
   "Attach a device to MACHINE's bus and return its (fixed) index.
 
 NAME either names a DEVICE-DESCRIPTOR already declared on MACHINE's own
@@ -62,7 +61,8 @@ an index returned here stays valid until this device itself is detached."
                           name (machine-descriptor-name descriptor)))
                  (make-device-descriptor :name name :id (or id 0) :version (or version 0)
                                           :manufacturer (or manufacturer 0)
-                                          :init init :tick tick :receive receive :detach detach)))))
+                                          :init init :tick tick :receive receive :detach detach
+                                          :save save :load load)))))
     (let ((devices (machine-devices machine)))
       (vector-push-extend (%instantiate-device machine device-descriptor (fill-pointer devices))
                            devices))))

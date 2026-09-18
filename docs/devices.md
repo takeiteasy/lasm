@@ -18,7 +18,8 @@ a device without declaring any MMIO region, or the reverse, or both.
 
 ```lisp
 (device NAME [:id n] [:version n] [:manufacturer n]
-             [:init fn] [:tick fn] [:receive fn] [:detach fn])
+             [:init fn] [:tick fn] [:receive fn] [:detach fn]
+             [:save fn] [:load fn])
 ```
 
 `:id`/`:version`/`:manufacturer` (each a non-negative integer, defaulting to
@@ -26,7 +27,7 @@ a device without declaring any MMIO region, or the reverse, or both.
 instruction's own semantics decide which registers each value lands in (see
 "Semantics vocabulary" below).
 
-`:init`/`:tick`/`:receive`/`:detach` are all optional hooks, each a function
+`:init`/`:tick`/`:receive`/`:detach`/`:save`/`:load` are all optional hooks, each a function
 *designator* — write the bare function name, not `#'name`, for the same
 reason a `:device` [region](machine-model.md#memory-regions)'s `:read`/
 `:write` are: `defmachine` quotes its whole clause body, so a `#'`-form there
@@ -39,6 +40,8 @@ function.
 | `:tick` | `(fn machine device cycles)` | Once per `step-machine` with that step's declared cycle cost, and again for any `extra-cycles` — see "Ticking" below. |
 | `:receive` | `(fn machine device)` | An `HWI`-style message send (`device-send`). A device with no `:receive` ignores the send. |
 | `:detach` | `(fn machine device)` | Just before `detach-device` clears the device's bus slot. |
+| `:save` | `(fn machine device)` | At `machine-snapshot`; returns the device's state as readable data. |
+| `:load` | `(fn machine device data)` | At `restore-snapshot`, with what `:save` returned. See [Snapshots](snapshots.md). |
 
 A device declares none of these and is still enumerable — a `:device` region
 with no `:read`/`:write` is the closest existing precedent.
@@ -72,7 +75,7 @@ signals `no-such-device` (`device-at`, `detach-device`, `device-info`,
 
 | Function | Behavior |
 |---|---|
-| `attach-device machine name &key id version manufacturer init tick receive detach` | Appends a device, returns its index. |
+| `attach-device machine name &key id version manufacturer init tick receive detach save load` | Appends a device, returns its index. |
 | `detach-device machine index` | Runs `:detach`, then clears the slot to a hole. |
 | `device-at machine index` | The `device` at `index`. Signals `no-such-device` on a hole or out-of-range index. |
 | `device-count machine` | Bus size, holes included — the high-water index bound (`HWN`). |
@@ -133,9 +136,7 @@ policy, and `signal-interrupt`, the device-optional entry point a software
 
 ## Scope
 
-Serializing device state for a machine snapshot is out of scope here —
-`machine-devices` and each device's own `device-state` are what a snapshot
-feature walks; no on-disk format is defined here.
+Saving and restoring device state is covered by [Snapshots](snapshots.md).
 
 Binding a `:device` memory region to a declared device — so one device
 object is both bus-addressed and memory-mapped — is not supported; a region

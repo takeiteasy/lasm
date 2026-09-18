@@ -106,6 +106,8 @@
    #:device-descriptor-tick
    #:device-descriptor-receive
    #:device-descriptor-detach
+   #:device-descriptor-save
+   #:device-descriptor-load
    #:device
    #:device-p
    #:device-index
@@ -159,6 +161,19 @@
    #:device-signal
    #:machine-devices
    #:machine-interrupt-hook
+
+   ;; Snapshots (#112)
+   #:machine-snapshot
+   #:restore-snapshot
+   #:write-snapshot
+   #:read-snapshot
+   #:+snapshot-version+
+   #:snapshot-error
+   #:snapshot-error-detail
+   #:snapshot-version-mismatch
+   #:snapshot-machine-mismatch
+   #:snapshot-malformed
+   #:snapshot-device-unknown
 
    ;; Interrupts (#109)
    #:signal-interrupt

@@ -27,6 +27,11 @@ just the reader table.
 | `no-such-device` | `lasm-error` | `no-such-device-machine`, `no-such-device-index` |
 | `lasm-trap` | `lasm-error` | `lasm-trap-tag`, `lasm-trap-data` |
 | `interrupt-queue-full` | `lasm-error` | `interrupt-queue-full-machine` |
+| `snapshot-error` | `lasm-error` | `snapshot-error-detail` |
+| `snapshot-version-mismatch` | `snapshot-error` | — |
+| `snapshot-machine-mismatch` | `snapshot-error` | — |
+| `snapshot-malformed` | `snapshot-error` | — |
+| `snapshot-device-unknown` | `snapshot-error` | — |
 | `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-source` (writable — see [Diagnostics](diagnostics.md)) |
 | `lex-error` | `lasm-syntax-error` | — |
 | `parse-failure` | `lasm-syntax-error` | — |

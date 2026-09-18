@@ -22,6 +22,7 @@ architectures, not real silicon.
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Binary output](docs/binary-output.md) — `write-binary`, `write-intel-hex`
 - [Command line](docs/cli.md) — `lasm` assemble/run/disassemble/listing
+- [Snapshots](docs/snapshots.md) — `machine-snapshot`/`restore-snapshot`, versioned snapshot files
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](docs/listing.md) — retained address/statement mapping, `print-listing`, scope-aware symbol table

@@ -34,6 +34,7 @@
                (:file "disassembler")
                (:file "listing")
                (:file "output")
+               (:file "snapshot")
                (:file "cli")
                (:file "debugger")))
 
@@ -65,5 +66,6 @@
                (:file "disassembler")
                (:file "listing")
                (:file "output")
+               (:file "snapshot")
                (:file "cli")
                (:file "debugger")))
