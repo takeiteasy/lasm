@@ -220,7 +220,9 @@ see [Instructions, "CHOICE-selected word
 fields"](instructions.md#choice-selected-word-fields) and
 [`examples/anima16.lisp`](../examples/anima16.lisp), where `reg`, `[reg]`,
 and `(addr)` genuinely encode to different field codes for the identical
-value 0. A `(semantics ...)` body can read this back too: `choice-case`
+value 0. Two alternatives may also share one field code as spellings of the
+same encoding — see [Instructions, "Aliased
+escapes"](instructions.md#aliased-escapes). A `(semantics ...)` body can read this back too: `choice-case`
 (see [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case))
 dispatches on which alternative a hole actually matched, so `[reg]` really
 dereferences while a bare `reg` reads the value directly, on a word-encoded
