@@ -38,7 +38,9 @@
   :description "Tests for lasm"
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
-  :depends-on (#:lasm #:fiveam)
+  ;; #171: closer-mop walks condition-class-precedence-lists to check
+  ;; every slot reader is exported -- test-only, #:lasm stays dependency-free.
+  :depends-on (#:lasm #:fiveam #:closer-mop)
   :pathname "tests/"
   :serial t
   :components ((:file "suites")

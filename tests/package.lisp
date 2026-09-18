@@ -18,16 +18,38 @@
     (fiveam:is (eq :external (nth-value 1 (find-symbol name '#:lasm)))
                "~A is not external in #:lasm" name)))
 
-;; #170: a public condition type's slot readers are public too -- these 11
-;; leaked internal despite their condition types being exported, forcing a
-;; consumer to reach into lasm:: to read a caught condition's own slots.
+;; #171: a public condition type's slot readers are public too (#106, #170
+;; found this by hand, twice). Walk every external condition's slots via the
+;; MOP and assert each reader/writer is external, instead of auditing by eye.
+;; CLASS-SLOTS' effective slots have no applicable SLOT-DEFINITION-READERS
+;; method on SBCL, so this walks direct slots up the precedence list; the
+;; package filter drops inherited CL readers like SIMPLE-CONDITION-FORMAT-
+;; CONTROL that would otherwise show up as false positives.
 (fiveam:test condition-readers-are-external
-  (dolist (name '("STORAGE-ERROR-MACHINE" "STORAGE-ERROR-NAME"
-                  "ADDRESS-OUT-OF-RANGE-ADDRESS"
-                  "REGISTER-INDEX-OUT-OF-RANGE-INDEX"
-                  "LASM-TRAP-TAG" "LASM-TRAP-DATA"
-                  "OPCODE-CONFLICT-MACHINE" "OPCODE-CONFLICT-OPCODE"
-                  "OPCODE-CONFLICT-MNEMONIC" "OPCODE-CONFLICT-OTHER-MNEMONIC"
-                  "OPCODE-CONFLICT-REASON"))
-    (fiveam:is (eq :external (nth-value 1 (find-symbol name '#:lasm)))
-               "~A is not external in #:lasm" name)))
+  (let ((pkg (find-package '#:lasm))
+        (condition-class (find-class 'condition))
+        (types '())
+        (reader-count 0))
+    (do-external-symbols (name pkg)
+      (let ((class (find-class name nil)))
+        (when (and class (subtypep class condition-class))
+          (cl:push name types))))
+    ;; A walk that finds nothing passes trivially -- guard against that
+    ;; instead of only checking for leaks.
+    (fiveam:is (>= (length types) 20)
+               "expected at least 20 external condition types, found ~D"
+               (length types))
+    (dolist (type types)
+      (dolist (super (closer-mop:class-precedence-list (find-class type)))
+        (dolist (slot (closer-mop:class-direct-slots super))
+          (dolist (accessor (append (closer-mop:slot-definition-readers slot)
+                                     (closer-mop:slot-definition-writers slot)))
+            (let ((name (if (consp accessor) (second accessor) accessor)))
+              (when (eq (symbol-package name) pkg)
+                (incf reader-count)
+                (fiveam:is (eq :external (nth-value 1 (find-symbol (symbol-name name) pkg)))
+                           "~A is not external in #:lasm (reachable from ~A via ~A)"
+                           name type super)))))))
+    (fiveam:is (>= reader-count 60)
+               "expected at least 60 reader/writer occurrences, found ~D"
+               reader-count)))
