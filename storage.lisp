@@ -322,6 +322,11 @@ follow-up)."
   (cell-width nil :type (integer 1))
   (endian nil :type (or null keyword)) ; :little or :big, #66
   (fields nil :type list)           ; (name width shift), MSB-first as declared
+  ;; #191: field names, in the order their trailing words follow the
+  ;; instruction word. NIL (the default) is operand-hole order. Default
+  ;; layout only -- it applies machine-wide, resolved per descriptor by
+  ;; field name (%WORD-EMIT-ORDER, instruction.lisp).
+  (extra-word-order nil :type list)
   (alternates nil :type list))      ; list of INSTRUCTION-WORD-LAYOUT, default only
 
 (defun instruction-word-field (layout name)

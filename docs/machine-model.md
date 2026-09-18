@@ -129,6 +129,18 @@ widths against a machine defined earlier in the same file.
   `definstruction` names which layout it encodes against with its own
   `(layout NAME)` encoding subclause (default when omitted) — see
   [Instructions, "Per-instruction layouts"](instructions.md#per-instruction-layouts-64).
+  `(extra-word-order FIELD...)` inside the clause (#191) sets the order in
+  which trailing words follow the instruction word: the named fields' words
+  first, in the order listed, then any other operand's in hole order.
+  Without it trailing words follow operand hole order. It applies to every
+  instruction on the machine, resolved through each instruction's own layout:
+
+  ```lisp
+  (instruction-word :width 16
+    (field av 6) (field bv 5) (field opcode 5)
+    (extra-word-order av bv))   ; `a`'s word first, though `b` is written first
+  ```
+
   A field can also be pinned to a constant with no operand hole at all via
   `(field-value FIELD-NAME n)` — see [Instructions, "Constant discriminator
   fields"](instructions.md#field-value-field-name-n--constant-discriminator-fields-136),
