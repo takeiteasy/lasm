@@ -194,6 +194,11 @@ memory ~S on machine ~S"
 ;;           device.lisp); a device with no RECEIVE ignores it.
 ;;   DETACH  (machine device) -- called by DETACH-DEVICE just before the
 ;;           bus slot is cleared to a hole.
+;;   SAVE    (machine device) -> plain readable data, stored by
+;;           MACHINE-SNAPSHOT (snapshot.lisp) as the device's state.
+;;   LOAD    (machine device data) -- called by RESTORE-SNAPSHOT on a freshly
+;;           INIT'd device with the data SAVE returned. A device without
+;;           both hooks is re-INIT'd on restore and carries no saved state.
 (defstruct device-descriptor
   (name nil :type symbol)
   (id 0 :type (integer 0))
@@ -202,7 +207,9 @@ memory ~S on machine ~S"
   (init nil :type (or null symbol function))
   (tick nil :type (or null symbol function))
   (receive nil :type (or null symbol function))
-  (detach nil :type (or null symbol function)))
+  (detach nil :type (or null symbol function))
+  (save nil :type (or null symbol function))
+  (load nil :type (or null symbol function)))
 
 ;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
