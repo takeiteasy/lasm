@@ -1190,16 +1190,21 @@ compile error, preserving typo protection."
                                             ',operand-names ',hole-alternatives-list ',mode-operand-names)))
              ,@semantics-forms))))))
 
-(defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-forms
-                          &optional hole-alternatives-list sub-opcode sub-choices operand-signedness
+(defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
+                          &optional sub-opcode sub-choices operand-signedness
                             relative-hole-index word-layout-name word-constants-form)
-  "WORD-LAYOUT-NAME/WORD-CONSTANTS-FORM (#136) are only ever non-NIL from the
-no-mode (encoding ...) DEFINSTRUCTION path -- a no-operand, word-encoded
-instruction (CLS/RET-shaped) that pins one or more fields via
-(field-value ...); every other caller of this function is byte-encoded and
-leaves both at their NIL default. WORD-CONSTANTS-FORM is an already-quoted
-%WORD-CONSTANTS-FORM builder form, not a bare list, mirroring how
-%WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted."
+  "SEMANTICS-FN-FORM is an already-built %SEMANTICS-FN-FORM lambda form, or a
+gensym bound to one by the caller's own LET* (#150) -- built once and shared
+across every sibling descriptor whose SEMANTICS-FN-FORM inputs (SEMANTICS-
+FORMS/OPERAND-NAMES/HOLE-ALTERNATIVES-LIST) are the same, rather than
+rebuilt (and so re-emitted as compiled code) once per sibling; see
+%BYTE-DESCRIPTOR-FORMS. WORD-LAYOUT-NAME/WORD-CONSTANTS-FORM (#136) are only
+ever non-NIL from the no-mode (encoding ...) DEFINSTRUCTION path -- a
+no-operand, word-encoded instruction (CLS/RET-shaped) that pins one or more
+fields via (field-value ...); every other caller of this function is
+byte-encoded and leaves both at their NIL default. WORD-CONSTANTS-FORM is an
+already-quoted %WORD-CONSTANTS-FORM builder form, not a bare list, mirroring
+how %WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted."
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -1214,7 +1219,7 @@ leaves both at their NIL default. WORD-CONSTANTS-FORM is an already-quoted
     :word-layout-name ',word-layout-name
     :word-constants ,word-constants-form
     :cycles ,cycles
-    :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
+    :semantics-fn ,semantics-fn-form))
 
 (defun %byte-operand-signedness (mode hole-alternatives-list sub-choices n)
   "Hole-aligned list of N booleans -- this descriptor's own per-hole
@@ -1361,30 +1366,42 @@ OPERAND-SIGNEDNESS's and RELATIVE-HOLE-INDEX's own MODE-DESCRIPTOR-SIGNEDP/
 subclause) that %BYTE-OPERAND-WIDTHS falls back to at a hole whose
 alternatives don't override it. MODE-SPECIFIED (#129,
 %PARSE-OPERAND-SUBCLAUSES/%RESOLVE-OPERAND-FIELDS) is the hole-aligned gate
-%BYTE-OPERAND-WIDTHS needs to know where such an override is allowed."
+%BYTE-OPERAND-WIDTHS needs to know where such an override is allowed.
+
+Returns (VALUES BINDINGS FORMS) (#150) -- BINDINGS is a LET* binding list
+the caller must wrap FORMS in. SEMANTICS-FORMS' own %SEMANTICS-FN-FORM
+expansion is identical for every sibling here (its inputs -- SEMANTICS-
+FORMS/OPERAND-NAMES/HOLE-ALTERNATIVES-LIST -- don't vary by SUB-SPEC pair),
+so it is built once, bound to one gensym in BINDINGS, and referenced from
+every sibling descriptor's :SEMANTICS-FN slot instead of re-emitted as
+compiled code once per sibling."
   (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
-  (let ((n (length operand-widths)))
-    (if (null sub-spec)
-        (list (%descriptor-form machine name mode-form opcode
-                                 (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified)
-                                 operand-names cycles
-                                 semantics-forms hole-alternatives-list explicit-sub nil
-                                 (%byte-operand-signedness mode hole-alternatives-list nil n)
-                                 (%byte-relative-hole-index mode hole-alternatives-list nil n)))
-        (destructuring-bind (hole-indices . pairs) sub-spec
-          (mapcar (lambda (pair)
-                    (let ((sub-choices (make-list n :initial-element nil)))
-                      (loop for idx in hole-indices
-                            for chosen-name in (car pair)
-                            do (setf (nth idx sub-choices) chosen-name))
-                      (%descriptor-form machine name mode-form opcode
-                                         (%byte-operand-widths hole-alternatives-list sub-choices operand-widths
-                                                                mode-specified)
-                                         operand-names cycles
-                                         semantics-forms hole-alternatives-list (cdr pair) sub-choices
-                                         (%byte-operand-signedness mode hole-alternatives-list sub-choices n)
-                                         (%byte-relative-hole-index mode hole-alternatives-list sub-choices n))))
-                  pairs)))))
+  (let ((n (length operand-widths))
+        (semantics-fn-gensym (gensym "SEMANTICS-FN")))
+    (values
+     (list (list semantics-fn-gensym
+                 (%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
+     (if (null sub-spec)
+         (list (%descriptor-form machine name mode-form opcode
+                                  (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified)
+                                  operand-names cycles
+                                  semantics-fn-gensym explicit-sub nil
+                                  (%byte-operand-signedness mode hole-alternatives-list nil n)
+                                  (%byte-relative-hole-index mode hole-alternatives-list nil n)))
+         (destructuring-bind (hole-indices . pairs) sub-spec
+           (mapcar (lambda (pair)
+                     (let ((sub-choices (make-list n :initial-element nil)))
+                       (loop for idx in hole-indices
+                             for chosen-name in (car pair)
+                             do (setf (nth idx sub-choices) chosen-name))
+                       (%descriptor-form machine name mode-form opcode
+                                          (%byte-operand-widths hole-alternatives-list sub-choices operand-widths
+                                                                 mode-specified)
+                                          operand-names cycles
+                                          semantics-fn-gensym (cdr pair) sub-choices
+                                          (%byte-operand-signedness mode hole-alternatives-list sub-choices n)
+                                          (%byte-relative-hole-index mode hole-alternatives-list sub-choices n))))
+                   pairs))))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
 ;;; operand encoding, kept as its own code path parallel to the byte-encoded
@@ -2310,9 +2327,8 @@ variant, not one per combo."
                                                       :value ,(word-constant-value c)))
                     constants)))
 
-(defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-forms
-                               hole-alternatives-list hole-signedp-list hole-relativep-list layout-name
-                               constants-form &optional mode-operand-names)
+(defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-fn-form
+                               hole-signedp-list hole-relativep-list layout-name constants-form)
   "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
 . VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order). RELATIVE-HOLE-
 INDEX (#62) is COMBO's own %WORD-RELATIVE-HOLE-INDEX -- computed per combo,
@@ -2324,11 +2340,16 @@ signedness is an independent per-hole boolean any number of holes may set,
 while RELATIVE-HOLE-INDEX is positional, at most one hole ever. LAYOUT-NAME
 (#64) is this mode's own selected instruction-word layout name, stamped
 straight onto every combo -- see INSTRUCTION-DESCRIPTOR-WORD-LAYOUT-NAME.
-CONSTANTS-FORM (#136) is this variant's %WORD-CONSTANTS-FORM, shared across
-every combo the same way ALTERNATIVES-FORM already is. MODE-OPERAND-NAMES
-(#120) is the union of every sibling alternative-tuple's own OPERAND-NAMES
-for this mode -- %SEMANTICS-FN-FORM's own union-binding parameter, passed
-through unchanged."
+
+ALTERNATIVES-FORM, SEMANTICS-FN-FORM, and CONSTANTS-FORM (#150) are each
+either an already-built form or a gensym the caller's own LET* binds to
+one, shared across every combo of one tuple the same way ALTERNATIVES-FORM
+already was documented to be -- %WORD-MODE-DESCRIPTOR-FORMS builds each at
+most once per tuple (ALTERNATIVES-FORM, SEMANTICS-FN-FORM) or once per mode
+(CONSTANTS-FORM, which doesn't vary by which value-range combo a mnemonic's
+operand happened to expand into) and passes the gensym through here, rather
+than each being rebuilt -- and so re-emitted as compiled code -- once per
+combo."
   (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
          (word-fields-form `(list ,@(mapcar (lambda (p hole-signedp)
                                                (%word-field-choice-form (car p) (cdr p) hole-signedp))
@@ -2354,8 +2375,7 @@ through unchanged."
       :word-layout-name ',layout-name
       :word-constants ,constants-form
       :cycles ,cycles
-      :semantics-fn ,(%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list
-                                          mode-operand-names))))
+      :semantics-fn ,semantics-fn-form)))
 
 (defun %parse-for-choice-subclause (subclause)
   "SUBCLAUSE is one whole (for-choice ALT (operand ...)*) form (#120) -- the
@@ -2519,7 +2539,18 @@ pinned field doesn't vary by which value-range combo the mode's own operand
 expanded into. FOR-CHOICE-SUBCLAUSES (#120) is every (for-choice ALT
 (operand ...)...) subclause given alongside OPERAND-SUBCLAUSES, supplying
 the extra holes an over-count alternative of MODE's varying ONE-OF element
-(if it has one) contributes beyond OPERAND-SUBCLAUSES' own base count."
+(if it has one) contributes beyond OPERAND-SUBCLAUSES' own base count.
+
+Returns (VALUES BINDINGS FORMS) (#150) -- BINDINGS is a LET* binding list
+the caller must wrap FORMS in. CONSTANTS-FORM doesn't vary across the whole
+mode (see above), so it is bound once, at mode scope, ahead of every
+tuple's own bindings; ALTERNATIVES-FORM and %SEMANTICS-FN-FORM's own
+expansion are each identical across every combo of one tuple (a combo
+varies only which VARIANT half of each SPEC pair is chosen, never the
+SPECS/OPERAND-NAMES/HOLE-ALTERNATIVES themselves), so each is built once
+per tuple and bound to its own gensym, referenced from every combo's
+descriptor instead of rebuilt -- and so re-emitted as compiled code -- once
+per combo."
   (when (and (null operand-subclauses) (plusp (%mode-hole-count mode)))
     (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
 (operand ...) subclause was given -- a word-encoded operand has no default ~
@@ -2538,20 +2569,21 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
          (constants-form (%word-constants-form constants)))
     (%check-for-choice-subclauses! mode for-choice-alist machine name)
     (if (null operand-subclauses)
-        (list `(make-instruction-descriptor
-                :name ,(string-upcase (symbol-name name))
-                :machine ',machine
-                :mode ,mode-form
-                :opcode ,opcode
-                :operand-widths nil
-                :operand-names nil
-                :word-fields nil
-                :word-alternatives nil
-                :extra-cells 0
-                :word-layout-name ',layout-name
-                :word-constants ,constants-form
-                :cycles ,cycles
-                :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil)))
+        (values nil
+                (list `(make-instruction-descriptor
+                        :name ,(string-upcase (symbol-name name))
+                        :machine ',machine
+                        :mode ,mode-form
+                        :opcode ,opcode
+                        :operand-widths nil
+                        :operand-names nil
+                        :word-fields nil
+                        :word-alternatives nil
+                        :extra-cells 0
+                        :word-layout-name ',layout-name
+                        :word-constants ,constants-form
+                        :cycles ,cycles
+                        :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil))))
         ;; #120: two passes -- SPECS must be known for every tuple before
         ;; MODE-OPERAND-NAMES (the union of every tuple's own operand names)
         ;; can be computed, and every tuple's %SEMANTICS-FN-FORM needs that
@@ -2576,27 +2608,40 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                (mode-operand-names (remove-duplicates
                                      (mapcan (lambda (pair) (remove nil (mapcar #'word-operand-spec-name (cdr pair))))
                                              tuple-specs)
-                                     :from-end t)))
+                                     :from-end t))
+               (constants-gensym (gensym "WORD-CONSTANTS"))
+               (bindings (list (list constants-gensym constants-form)))
+               (forms nil))
           (loop for (tuple . specs) in tuple-specs
                 for tuple-hole-alternatives = (mode-hole-tuple-hole-alternatives tuple)
                 for hole-signedp-list = (%word-hole-signedp-list mode tuple-hole-alternatives
                                                                   (length tuple-hole-alternatives))
                 for hole-relativep-list = (%word-hole-relativep-list mode tuple-hole-alternatives
                                                                       (length tuple-hole-alternatives))
-                append
-                (progn
-                  (%check-word-one-of-signed specs tuple-hole-alternatives machine name)
-                  (%check-word-one-of-width tuple-hole-alternatives machine name)
-                  (let ((alternatives-form (%word-alternatives-form specs hole-signedp-list))
-                        (combos (%expand-word-combos specs)))
-                    (%check-word-one-of-relative specs combos tuple-hole-alternatives hole-relativep-list
-                                                  machine name)
-                    (mapcar (lambda (combo)
-                              (%word-descriptor-form machine name mode-form opcode alternatives-form combo
-                                                      cycles semantics-forms tuple-hole-alternatives
-                                                      hole-signedp-list hole-relativep-list layout-name
-                                                      constants-form mode-operand-names))
-                            combos))))))))
+                for operand-names = (mapcar #'word-operand-spec-name specs)
+                do (%check-word-one-of-signed specs tuple-hole-alternatives machine name)
+                   (%check-word-one-of-width tuple-hole-alternatives machine name)
+                   (let* ((alternatives-form (%word-alternatives-form specs hole-signedp-list))
+                          (alternatives-gensym (gensym "WORD-ALTERNATIVES"))
+                          (semantics-fn-gensym (gensym "SEMANTICS-FN"))
+                          (combos (%expand-word-combos specs)))
+                     (%check-word-one-of-relative specs combos tuple-hole-alternatives hole-relativep-list
+                                                   machine name)
+                     (setf bindings (nconc bindings
+                                            (list (list alternatives-gensym alternatives-form)
+                                                  (list semantics-fn-gensym
+                                                        (%semantics-fn-form semantics-forms machine name
+                                                                             operand-names tuple-hole-alternatives
+                                                                             mode-operand-names)))))
+                     (setf forms (nconc forms
+                                         (mapcar (lambda (combo)
+                                                   (%word-descriptor-form machine name mode-form opcode
+                                                                           alternatives-gensym combo cycles
+                                                                           semantics-fn-gensym hole-signedp-list
+                                                                           hole-relativep-list layout-name
+                                                                           constants-gensym))
+                                                 combos)))))
+          (values bindings forms)))))
 
 (defun %check-word-opcode (machine name opcode)
   "Signal an error if OPCODE doesn't fit MACHINE's instruction-word OPCODE
@@ -2997,10 +3042,12 @@ byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
 (defun %parse-mode-variant-clause-forms (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
 (MODE-NAME (opcode n [:sub s]) (operand ...)* [(semantics form...)] [(cycles n)]).
-Returns a list of INSTRUCTION-DESCRIPTOR forms for this variant -- more than
-one on a word-encoded machine (#20), where a variant-bearing operand field
-expands into several descriptors sharing this one mode/opcode, and likewise
-on a byte-encoded machine (#126/#128) when an (operand ...) subclause here
+Returns (VALUES BINDINGS FORMS) (#150) for this variant, forwarded unchanged
+from whichever of %WORD-MODE-DESCRIPTOR-FORMS/%BYTE-DESCRIPTOR-FORMS below
+produced it -- FORMS has more than one INSTRUCTION-DESCRIPTOR form on a
+word-encoded machine (#20), where a variant-bearing operand field expands
+into several descriptors sharing this one mode/opcode, and likewise on a
+byte-encoded machine (#126/#128) when an (operand ...) subclause here
 carries a hole-selected (variant (choice m) (sub s)) sub-opcode selector, or
 a (sub-opcode ...) table subclause names several -- one descriptor per
 combination claimed (%BYTE-DESCRIPTOR-FORMS). :SUB (#125, byte-machine-only)
@@ -3286,8 +3333,9 @@ layout has no effect" machine name))
                     (register-instruction-variants!
                      ',machine
                      (list ,(%descriptor-form machine name nil opcode nil nil
-                                               cycles-form (rest semantics-clause) nil sub
-                                               nil nil nil layout-name constants-form)))
+                                               cycles-form
+                                               (%semantics-fn-form (rest semantics-clause) machine name nil nil)
+                                               sub nil nil nil layout-name constants-form)))
                     ',name))))))
         ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
         ((consp (first mode-forms))
@@ -3298,14 +3346,23 @@ each mode its own (opcode n) -- a top-level (encoding ...) clause is not allowed
          (unless (rest mode-forms)
            (error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause needs ~
 at least two modes -- use (modes MODE) with (encoding ...) for just one" machine name))
-         (let ((default-semantics-forms (and semantics-clause (rest semantics-clause))))
+         (let ((default-semantics-forms (and semantics-clause (rest semantics-clause)))
+               (all-bindings nil)
+               (all-forms nil))
+           ;; #150: each mode's own BINDINGS/FORMS accumulate separately --
+           ;; one shared LET* below wraps every mode's descriptors, so a
+           ;; sibling descriptor's semantics/alternatives/constants form is
+           ;; compiled once per tuple/mode rather than once per descriptor.
+           (dolist (variant-form mode-forms)
+             (multiple-value-bind (bindings forms)
+                 (%parse-mode-variant-clause-forms variant-form machine name
+                                                    default-semantics-forms cycles-form)
+               (setf all-bindings (nconc all-bindings bindings))
+               (setf all-forms (nconc all-forms forms))))
            `(eval-when (:compile-toplevel :load-toplevel :execute)
               (register-instruction-variants!
                ',machine
-               (list ,@(mapcan (lambda (variant-form)
-                                  (%parse-mode-variant-clause-forms variant-form machine name
-                                                                     default-semantics-forms cycles-form))
-                                mode-forms)))
+               (let* (,@all-bindings) (list ,@all-forms)))
               ',name)))
         ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
         ;; all shared with the rest of the instruction -- the M1 shape.
@@ -3350,15 +3407,17 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
            (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
              (%check-word-opcode machine name opcode)
              (if (%word-machine-p machine)
-                 `(eval-when (:compile-toplevel :load-toplevel :execute)
-                    (register-instruction-variants!
-                     ',machine
-                     (list ,@(%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                                           opcode operand-subclauses
-                                                           mode mode-sym machine
-                                                           cycles-form (rest semantics-clause) layout-name
-                                                           field-value-subclauses for-choice-subclauses)))
-                    ',name)
+                 (multiple-value-bind (bindings forms)
+                     (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                   opcode operand-subclauses
+                                                   mode mode-sym machine
+                                                   cycles-form (rest semantics-clause) layout-name
+                                                   field-value-subclauses for-choice-subclauses)
+                   `(eval-when (:compile-toplevel :load-toplevel :execute)
+                      (register-instruction-variants!
+                       ',machine
+                       (let* (,@bindings) (list ,@forms)))
+                      ',name))
                  (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
                      (progn
                        (%check-no-varying-one-of! mode machine name)
@@ -3367,15 +3426,17 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                    (%check-byte-one-of-signed (%mode-hole-alternatives mode) sub-spec machine name)
                    (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
                    (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
-                   `(eval-when (:compile-toplevel :load-toplevel :execute)
-                      (register-instruction-variants!
-                       ',machine
-                       (list ,@(%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                                        opcode sub operand-widths operand-names
-                                                        cycles-form (rest semantics-clause)
-                                                        (%mode-hole-alternatives mode) sub-spec mode
-                                                        mode-specified)))
-                      ',name)))))))))))
+                   (multiple-value-bind (bindings forms)
+                       (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                opcode sub operand-widths operand-names
+                                                cycles-form (rest semantics-clause)
+                                                (%mode-hole-alternatives mode) sub-spec mode
+                                                mode-specified)
+                     `(eval-when (:compile-toplevel :load-toplevel :execute)
+                        (register-instruction-variants!
+                         ',machine
+                         (let* (,@bindings) (list ,@forms)))
+                        ',name))))))))))))
 
 ;;; Encoding / execution
 

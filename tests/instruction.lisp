@@ -1449,6 +1449,22 @@
     (fiveam:is (= 2 (length variants)))
     (fiveam:is (equal '(wc-ind wc-reg) choices))))
 
+(fiveam:test choice-selected-siblings-share-one-semantics-fn
+  ;; #150: WCX's two combos come from one tuple (WC-TWO has no varying ONE-OF
+  ;; element), so %WORD-MODE-DESCRIPTOR-FORMS builds their SEMANTICS-FN,
+  ;; WORD-ALTERNATIVES, and WORD-CONSTANTS once and shares the same object
+  ;; across both -- rather than re-emitting (and so re-compiling) an
+  ;; identical semantics lambda and variant-menu builder once per combo, the
+  ;; actual code-size blow-up #150 was filed against.
+  (let ((variants (find-instruction-variants 'word-test-machine "WCX")))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (eq (instruction-descriptor-semantics-fn (first variants))
+                   (instruction-descriptor-semantics-fn (second variants))))
+    (fiveam:is (eq (instruction-descriptor-word-alternatives (first variants))
+                   (instruction-descriptor-word-alternatives (second variants))))
+    (fiveam:is (eq (instruction-descriptor-word-constants (first variants))
+                   (instruction-descriptor-word-constants (second variants))))))
+
 ;; #132: the byte-machine hazard above has a word-machine equivalent --
 ;; %WORD-FIELD-CHOICE-FORM stamps a CHOICE-selected variant's SIGNEDP from
 ;; the alternative it names, never from MODE's own SIGNEDP -- so a
@@ -1654,6 +1670,20 @@
       (fiveam:is (= 2 (instruction-descriptor-size two-hole)))
       (fiveam:is (= 0 (instruction-descriptor-extra-cells one-hole)))
       (fiveam:is (= 1 (instruction-descriptor-extra-cells two-hole))))))
+
+(fiveam:test varying-hole-tuples-do-not-share-across-tuples
+  ;; #150's sharing is per-tuple, not per-mode: ONE-HOLE and TWO-HOLE come
+  ;; from different alternative-tuples (%MODE-HOLE-TUPLES) with different
+  ;; OPERAND-NAMES, so %WORD-MODE-DESCRIPTOR-FORMS must build each tuple its
+  ;; own SEMANTICS-FN/WORD-ALTERNATIVES gensym rather than forcing every
+  ;; descriptor in the mode onto one shared binding.
+  (let* ((variants (find-instruction-variants 'varying-hole-test-machine 'ldv))
+         (one-hole (find 2 variants :key (lambda (d) (length (instruction-descriptor-operand-names d)))))
+         (two-hole (find 3 variants :key (lambda (d) (length (instruction-descriptor-operand-names d))))))
+    (fiveam:is (not (eq (instruction-descriptor-semantics-fn one-hole)
+                         (instruction-descriptor-semantics-fn two-hole))))
+    (fiveam:is (not (eq (instruction-descriptor-word-alternatives one-hole)
+                         (instruction-descriptor-word-alternatives two-hole))))))
 
 (fiveam:test varying-hole-counts-governing-field-filtered-per-tuple
   ;; The one-hole tuple's own field-SRC menu must NOT include the two-hole
@@ -1928,6 +1958,27 @@
     (choice-case value
       (wc-reg (set! a value))
       (wc-ind (set! b value)))))
+
+(fiveam:test choice-case-shared-semantics-fn-still-dispatches-per-sibling
+  ;; #150: WCC's two sibling descriptors share one SEMANTICS-FN object (same
+  ;; sharing as WCX above), yet CHOICE-CASE still reaches its WC-REG-only or
+  ;; WC-IND-only branch correctly for each -- dispatch reads EXECUTE-
+  ;; INSTRUCTION's runtime CHOICES argument, never anything stamped onto the
+  ;; descriptor itself, so sharing the function changes nothing about which
+  ;; branch a given call takes.
+  (let* ((variants (find-instruction-variants 'word-test-machine "WCC"))
+         (reg (find 'wc-reg variants
+                     :key (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d))))))
+         (ind (find 'wc-ind variants
+                     :key (lambda (d) (word-field-choice-choice (first (instruction-descriptor-word-fields d))))))
+         (m (make-machine 'word-test-machine)))
+    (fiveam:is (eq (instruction-descriptor-semantics-fn reg) (instruction-descriptor-semantics-fn ind)))
+    (execute-instruction reg m (list 5) (list (make-word-field-choice :width 6 :shift 0 :kind :inline :choice 'wc-reg)))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 0 (sref m 'b)))
+    (execute-instruction ind m (list 7) (list (make-word-field-choice :width 6 :shift 0 :kind :inline :choice 'wc-ind)))
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= 7 (sref m 'b)))))
 
 ;; WCCM: a second operand (DST, a plain value-selected field with no variant
 ;; forms of its own) alongside SRC's CHOICE-selected one -- pins down that
@@ -3068,6 +3119,17 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (not (null ind)))
     (fiveam:is (equal '(oo-instr-reg) (instruction-descriptor-sub-choices reg)))
     (fiveam:is (equal '(oo-instr-ind) (instruction-descriptor-sub-choices ind)))))
+
+(fiveam:test hole-selected-sub-opcode-siblings-share-one-semantics-fn
+  ;; #150: SCLD's SUB-SPEC pairs share OPCODE, OPERAND-NAMES, and SEMANTICS-
+  ;; FORMS (%BYTE-DESCRIPTOR-FORMS' own docstring) -- %SEMANTICS-FN-FORM's
+  ;; expansion is built once for the whole SUB-SPEC, not once per pair, so
+  ;; SCLD's two sibling descriptors share one SEMANTICS-FN object even though
+  ;; their own SUB-OPCODE/SUB-CHOICES differ.
+  (let ((variants (find-instruction-variants 'instr-test-machine 'scld)))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (eq (instruction-descriptor-semantics-fn (first variants))
+                   (instruction-descriptor-semantics-fn (second variants))))))
 
 ;; Registration's own pairwise check (REGISTER-INSTRUCTION-VARIANTS!) has no
 ;; sibling exemption on the byte path -- it runs on these two expanded
