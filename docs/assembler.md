@@ -30,7 +30,7 @@ the result.
 ```
 
 `assemble` is `parse` (see [Statement grammar & expression
-parser](parser.md)) followed by `assemble-statements` — a caller already
+parser](parser.md)) and `expand-includes` ([Includes](includes.md)) followed by `assemble-statements` — a caller already
 holding a `statement` list (e.g. from its own preprocessing) can call the
 latter directly. Both return an `assembly`:
 
@@ -103,6 +103,15 @@ Reads the source file at `PATH` and `assemble`s its text; keys and conditions
 are `assemble`'s. `.asm` or `.s` is the conventional extension for target
 source (`.lasm` is reserved for machine definitions); it is not enforced. A
 missing or unreadable file signals the ordinary CL `file-error`.
+
+## Include expansion
+
+`assemble` runs `expand-includes` ([Includes](includes.md)) right after
+parsing, before macro expansion, so an included file's `.macro` and `.equ`
+statements are visible to the includer. `assemble-statements` does not: it has
+no lexer to parse an included file, so a statement list passed to it directly
+must already have `.include` expanded, otherwise layout signals
+`include-error`.
 
 ## Macro expansion
 
@@ -663,6 +672,8 @@ at, `.org` can still move it further before the first byte).
   an `.org`/`.res` operand referencing a non-pure `.equ`, an `.equ`'s value
   referencing a symbol not yet defined, or a backward-moving `.org` — see
   [Directives](directives.md)).
+- `include-error` — a malformed or unresolvable `.include` (see
+  [Includes](includes.md)).
 - `macro-error` — a malformed `.macro`/`.endm` block or invocation (see
   [Macros](macros.md)).
 - `unknown-instruction` — an unregistered mnemonic (from

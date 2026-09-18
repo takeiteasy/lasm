@@ -18,6 +18,7 @@ architectures, not real silicon.
 - [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
 - [Directives](docs/directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
 - [Macros](docs/macros.md) — `.macro`/`.endm`, parameter substitution, expansion
+- [Includes](docs/includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity

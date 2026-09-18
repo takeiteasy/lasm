@@ -1063,6 +1063,9 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                             (incf address (* width (length asts)))
                             (setf emitted-p t)))))
                       (t
+                       (when (%include-statement-p statement)
+                         (%include-error line ".include is not expanded; run ~
+EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                        (let ((variants (find-instruction-variants machine mnemonic)))
                          (multiple-value-bind (descriptor asts choices)
                              (%choose-variant statement variants address
@@ -1442,28 +1445,21 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
-ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
+EXPAND-INCLUDES (include.lisp) and ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
 front end, for what MEMORY selects, and for how SOURCE (passed through
 automatically here) is retained as ASSEMBLY-SOURCE (#25) and, via WITH-
 SOURCE-CONTEXT (#74), on any LASM-SYNTAX-ERROR either stage signals."
   (with-source-context source
-    (assemble-statements (parse source :lexer lexer) :machine machine :origin origin :memory memory
-                          :source source)))
-
-(defun %read-source-file (path)
-  "The text of the file at PATH, lines joined with #\\Newline. A missing file
-signals the ordinary CL FILE-ERROR."
-  (with-open-file (in path)
-    (with-output-to-string (out)
-      (loop for line = (read-line in nil nil)
-            for first = t then nil
-            while line
-            do (unless first (write-char #\Newline out))
-               (write-string line out)))))
+    (assemble-statements (expand-includes (parse source :lexer lexer) :lexer lexer)
+                         :machine machine :origin origin :memory memory :source source)))
 
 (defun assemble-file (path &key machine (lexer 'default) (origin 0) memory)
   "Read the source file at PATH (conventionally .asm or .s) and ASSEMBLE its
 text; see ASSEMBLE for the keys and conditions. A missing or unreadable file
 signals the ordinary CL FILE-ERROR."
-  (assemble (%read-source-file path) :machine machine :lexer lexer :origin origin :memory memory))
+  (let* ((text (%read-source-file path))
+         (file (truename path))
+         (*include-directory* (%file-directory file))
+         (*include-chain* (list file)))
+    (assemble text :machine machine :lexer lexer :origin origin :memory memory)))

@@ -103,6 +103,13 @@ A two-parameter `.macro` expands twice against two different call sites,
 each under its own global label — see [Macros](macros.md).
 
 ```sh
+sbcl --script examples/include/include.lisp
+```
+
+A program split across `main.asm` and a shared `defs.asm` via `.include`,
+loaded with `assemble-file` — see [Includes](includes.md).
+
+```sh
 sbcl --script examples/complete.lisp
 ```
 

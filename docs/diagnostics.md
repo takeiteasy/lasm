@@ -49,8 +49,8 @@ extra to call at the point a condition is handled.
 A condition's `source` slot isn't filled at the point it's signalled — the
 lexer only has the string it's tokenizing, the parser only the token
 stream, and neither necessarily has the *original* source text a caller
-started from (e.g. after `.include` composes several files, a follow-up
-concern tracked in the issue tracker). Instead, `tokenize`,
+started from (e.g. after `.include` composes several files, where an assembly error
+renders against the top-level source text). Instead, `tokenize`,
 `parse`, and `assemble` each wrap their own body in:
 
 ```lisp
@@ -259,8 +259,8 @@ full picture and a worked example.
   currently points at the macro's own body line, with no indication of
   which invocation produced it (see [Macros](macros.md)).
 - **Source file name.** `diagnostic-text` renders `line N` with no file
-  name; once file-based source loading (`assemble-file`, `.include`) lands,
-  a diagnostic spanning files needs one.
+  name, and a diagnostic spanning `.include`d files does not say which file a
+  line belongs to (see [Includes](includes.md)).
 - **`unresolved-label`.** The most common real assembly error — an
   undefined label — doesn't subtype `lasm-syntax-error` and carries no
   position at all; it prints as a bare message while everything documented

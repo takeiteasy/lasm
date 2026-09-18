@@ -36,6 +36,7 @@ just the reader table.
 | `no-matching-choice` | `lasm-error` | `no-matching-choice-machine`, `no-matching-choice-instruction`, `no-matching-choice-operand`, `no-matching-choice-choice` |
 | `opcode-conflict` | `lasm-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |
 | `macro-error` | `lasm-syntax-error` | — |
+| `include-error` | `lasm-syntax-error` | — |
 | `assembly-error` | `lasm-syntax-error` | — |
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
