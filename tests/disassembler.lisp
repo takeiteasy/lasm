@@ -692,3 +692,99 @@ hlt" :machine 'disasm-word-machine))
     (let* ((text (disassembly-text lines))
            (a2 (assemble text :machine 'disasm-word-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
+
+;;; #143: register-index operands disassemble as their own #72 :names alias.
+;;; Own fixtures, not additions to DISASM-TEST-MACHINE/DISASM-WORD-MACHINE
+;;; above -- those two back ~30 tests already, and giving either machine a
+;;; :NAMES bank has machine-wide side effects (%BIND-SYMBOL! turns a
+;;; colliding label/.EQU into an assembly error; %CHECK-OPERAND-NAMES errors
+;;; on any existing operand field name that now collides with a new alias)
+;;; that risk breaking tests unrelated to this feature.
+
+(defmachine disasm-alias-machine
+  (register pc :width 16)
+  (register v :width 8 :names (v0 v1 v2 v3))
+  (memory ram :width 8 :addr-width 16))
+
+(defmode disasm-alias-v-imm expr "," "#" expr)
+
+(definstruction disasm-alias-machine ldv
+  (modes disasm-alias-v-imm)
+  (encoding (opcode #x01) (operand x :width 1 :register v) (operand nn :width 1))
+  (semantics (set! (v x) nn)))
+
+(definstruction disasm-alias-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(defmachine disasm-word-alias-machine
+  (register pc :width 16)
+  (register reg :width 16 :names (a b c d))
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16
+    (field av 6)
+    (field bv 5)
+    (field opcode 5)))
+
+(defmode disasm-alias-rr expr "," expr)
+
+(definstruction disasm-word-alias-machine addr
+  (modes disasm-alias-rr)
+  (encoding
+    (opcode 1)
+    (operand dst :field bv :register reg)
+    (operand srcreg :field av :register reg))
+  (semantics (set! (reg dst) (wrap-value (+ (reg dst) (reg srcreg)) 16))))
+
+(definstruction disasm-word-alias-machine hlt
+  (encoding (opcode 2))
+  (semantics (trap :halt)))
+
+(fiveam:test disassemble-byte-register-hole-renders-alias
+  (let* ((a (assemble "ldv v1, #10
+hlt" :machine 'disasm-alias-machine))
+         (lines (disassemble-assembly a :machine 'disasm-alias-machine :labels nil)))
+    (fiveam:is (string= "ldv v1,#$A" (disassembly-line-text (first lines))))))
+
+(fiveam:test disassemble-word-register-hole-renders-alias
+  (let* ((a (assemble "addr a, b
+hlt" :machine 'disasm-word-alias-machine))
+         (lines (disassemble-assembly a :machine 'disasm-word-alias-machine :labels nil)))
+    (fiveam:is (string= "addr a,b" (disassembly-line-text (first lines))))))
+
+(fiveam:test disassemble-register-hole-out-of-range-index-renders-hex
+  ;; DISASM-ALIAS-MACHINE's V bank has 4 cells (V0-V3); a hand-built cell
+  ;; naming index 5 (LDV's X field is a full byte, well beyond V's own
+  ;; :NAMES) has no alias to render -- REGISTER-ALIAS-AT falls through to
+  ;; %RENDER-VALUE's ordinary hex rendering, never NIL/blank.
+  (let* ((lines (disassemble-cells (list #x01 5 10 #x00) :machine 'disasm-alias-machine :labels nil)))
+    (fiveam:is (string= "ldv $5,#$A" (disassembly-line-text (first lines))))))
+
+(fiveam:test disassemble-register-alias-wins-over-a-same-valued-label
+  ;; A label bound to address 0 must not be substituted for a register-index
+  ;; hole's own decoded value of 0 -- alias beats label, same as alias beats
+  ;; a bare hex render.
+  (let* ((a (assemble "ldv v0, #10
+hlt" :machine 'disasm-alias-machine))
+         (symbols (let ((h (make-hash-table :test 'equal)))
+                    (setf (gethash "zero" h) 0)
+                    h))
+         (lines (disassemble-cells (coerce (assembly-cells a) 'list) :machine 'disasm-alias-machine
+                                    :labels t :symbols symbols)))
+    (fiveam:is (string= "ldv v0,#$A" (disassembly-line-text (first lines))))))
+
+(fiveam:test round-trip-byte-register-alias
+  (let* ((a (assemble "ldv v2, #99
+hlt" :machine 'disasm-alias-machine))
+         (lines (disassemble-assembly a :machine 'disasm-alias-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'disasm-alias-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
+(fiveam:test round-trip-word-register-alias
+  (let* ((a (assemble "addr c, d
+hlt" :machine 'disasm-word-alias-machine))
+         (lines (disassemble-assembly a :machine 'disasm-word-alias-machine :labels nil))
+         (text (disassembly-text lines))
+         (a2 (assemble text :machine 'disasm-word-alias-machine)))
+    (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))

@@ -26,7 +26,10 @@
 ;;;; The instruction-word's own fields are named `av`/`bv` (not `a`/`b`) so
 ;;;; they don't collide with those aliases -- field names and register
 ;;;; aliases are separate namespaces, but sharing spelling would read badly
-;;;; next to each other.
+;;;; next to each other. #143: SET/ADD/STO/ADDR's own register-index holes
+;;;; (field BV, and ADDR's own field AV) each carry a `:register reg`
+;;;; subclause, so DISASSEMBLE-* renders them back as REG's own aliases too --
+;;;; see examples/disasm.lisp for the round trip.
 ;;;;
 ;;;; BRA below (#62, M4) is a PC-relative branch -- its operand syntax names
 ;;;; an absolute target, same as SET/ADD/STO above, but what packs into
@@ -68,7 +71,7 @@
   (modes rr)
   (encoding
     (opcode 1)
-    (operand dst :field bv)
+    (operand dst :field bv :register reg)
     (operand src :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f))))
@@ -79,7 +82,7 @@
   (modes rr)
   (encoding
     (opcode 2)
-    (operand dst :field bv)
+    (operand dst :field bv :register reg)
     (operand src :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f))))
@@ -93,8 +96,8 @@
   (modes rr)
   (encoding
     (opcode 3)
-    (operand dst :field bv)
-    (operand srcreg :field av))
+    (operand dst :field bv :register reg)
+    (operand srcreg :field av :register reg))
   (semantics (set! (reg dst) (wrap-value (+ (reg dst) (reg srcreg)) 16))))
 
 ;; STO addr, dst -- RAM[addr] = reg[dst]. addr reuses SET/ADD's field-AV
@@ -107,7 +110,7 @@
     (operand addr :field av
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f)))
-    (operand dst :field bv))
+    (operand dst :field bv :register reg))
   (semantics (setf (mref machine 'ram addr) (reg dst))))
 
 (definstruction dcpu16foo hlt

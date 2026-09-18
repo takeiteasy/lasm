@@ -174,6 +174,25 @@ where a real record exists — the mixed-field and byte-machine cases
 respectively — and [`examples/orthogonal.lisp`](../examples/orthogonal.lisp)
 for the no-record fallback case.
 
+### Register-index operand rendering
+
+A hole whose `definstruction` gave it a `:register ELEM` subclause ([Instructions,
+`operand-registers`](instructions.md#operand-registers)) renders its decoded
+value as `ELEM`'s own [`:names`](machine-model.md#defmachine) alias (#72)
+instead of a bare integer — disassembling `examples/dcpu16.lisp`'s own output
+now prints `addr a, b`, not `addr $0, $1`. Precedence at such a hole is
+**alias → label → hex**: an alias wins over a label bound to the same
+numeric value (an ordinary label at address `0` is otherwise
+indistinguishable from a register index of `0`), and an index outside
+`ELEM`'s own `:names` (e.g. a field wider than the bank) falls through to
+the ordinary hex rendering, same as any unaliased value — never blank.
+
+A hole with no `:register` subclause is unaffected, and rendering is always
+on wherever `:register` was given — there is no `disassemble-*` keyword to
+turn it off, since an alias folds back to its own index in `eval-expr`
+(assembler.lisp) exactly like any other symbol, so re-assembling aliased
+output is round-trip-safe by construction.
+
 ### Relative operand rendering
 
 A `relative` hole's decoded value is a signed offset from the address of the

@@ -348,6 +348,50 @@
              (encoding (opcode #xFF) (operand v0 :width 1) (operand :width 1))
              (semantics nil)))))
 
+;;; #143: (operand ... :register ELEM) -- validated at DEFINSTRUCTION time,
+;;; reusing ALIAS-TEST-MACHINE above (its V bank carries :NAMES (v0 v1)).
+
+(fiveam:test operand-register-naming-unknown-element-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFE) (operand x :width 1 :register nosuch) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test operand-register-naming-a-non-register-element-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFE) (operand x :width 1 :register ram) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test operand-register-naming-an-unnamed-register-signals-error
+  ;; ALIAS-TEST-MACHINE's PC is a scalar register declaring no #72 :NAMES --
+  ;; :REGISTER only makes sense against a bank the disassembler can alias.
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes two-hole-test-mode)
+             (encoding (opcode #xFE) (operand x :width 1 :register pc) (operand :width 1))
+             (semantics nil)))))
+
+(fiveam:test operand-register-on-a-relative-hole-signals-error
+  ;; A relative hole's value is adjusted to an absolute target at render
+  ;; time (disassembler.lisp's %OPERAND-RENDER-VALUES) -- combined with
+  ;; :REGISTER, that would corrupt a bank index rather than merely
+  ;; mis-render one.
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes relative)
+             (encoding (opcode #xFE) (operand :mode :register v))
+             (semantics nil)))))
+
+(fiveam:test operand-register-on-a-signed-hole-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes instr-signed-imm-test-mode)
+             (encoding (opcode #xFE) (operand :mode :register v))
+             (semantics nil)))))
+
 ;;; ONE-OF (#103): a mode's hole count still comes from the pattern, whether
 ;;; a hole is a plain EXPR or a ONE-OF alternation -- DEFINSTRUCTION requires
 ;;; one (operand ...) subclause per hole exactly as for any other mode.

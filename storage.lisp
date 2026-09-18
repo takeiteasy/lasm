@@ -336,6 +336,19 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
                                            :name name :index index))
     (setf (aref slot index) (wrap-value value (storage-element-width element)))))
 
+;; #143: the read direction of #72's NAMES -- resolving a decoded bank INDEX
+;; back to its alias, for the disassembler (and #144's debugger) to render
+;; symbolically instead of as a bare integer. Takes the STORAGE-ELEMENT
+;; itself, not a machine/name pair, since a caller here typically already has
+;; it (e.g. off an INSTRUCTION-DESCRIPTOR's own machine) and REGREF's
+;; MACHINE/NAME indirection would be pure overhead.
+(defun register-alias-at (element index)
+  "ELEMENT's #72 :NAMES alias at bank INDEX, downcased, or NIL when ELEMENT
+declares no NAMES or INDEX is outside them."
+  (let ((names (storage-element-names element)))
+    (and names (>= index 0) (< index (length names))
+         (string-downcase (symbol-name (nth index names))))))
+
 (defun flag (machine name)
   "Read a flag by NAME as 0 or 1."
   (multiple-value-bind (slot element) (%slot machine name :flag)

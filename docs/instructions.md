@@ -134,6 +134,13 @@ error.
 - `(operand NAME :mode)` / `(operand NAME :width n)` — as above, and also
   bind `NAME` to this field's value in `(semantics ...)` (see "Named operand
   fields" below).
+- `:register ELEM` — appended after `:mode`/`:width n` on any of the above:
+  this hole indexes banked register `ELEM`'s bank, so `disassemble-*` (#143,
+  see [Disassembler](disassembler.md#register-index-operand-rendering))
+  renders its decoded value as `ELEM`'s own [`:names`](machine-model.md#defmachine)
+  alias instead of a bare integer. `ELEM` must declare `:names` — naming an
+  unaliased bank, an unknown element, or a relative or signed hole is a
+  `definstruction`-time error, since none of those can render a real alias.
 
 A single-hole mode needs exactly one `(operand ...)` subclause here; a mode
 with more holes (see "Repeated `(operand ...)` subclauses" below) needs one
@@ -407,6 +414,18 @@ lookup `operand-signedness` uses — so two sibling descriptors sharing one
 opcode can have genuinely different total sizes. Computed once per expanded
 descriptor (`%byte-descriptor-forms`), for the same reason
 `operand-signedness` is.
+
+### `operand-registers`
+
+Every `instruction-descriptor`, cell- or word-encoded alike, also carries a
+hole-aligned `operand-registers` list, parallel to `operand-widths`/
+`operand-names` — entry *i* names the storage element hole *i*'s `:register`
+subclause (#143, above) gave, or `nil` for a hole with none. Shared across
+every sibling descriptor the same way `operand-names` is: which hole indexes
+which register doesn't vary by `sub-choices` or field-variant combo. See
+[Disassembler, "Register-index operand
+rendering"](disassembler.md#register-index-operand-rendering) for what reads
+it.
 
 ### `relative-hole-index`
 
@@ -702,7 +721,7 @@ single fixed-width word split into named bit fields, and `(operand ...)`
 reads differently:
 
 ```lisp
-(operand [NAME] :field FIELD-NAME
+(operand [NAME] :field FIELD-NAME [:register ELEM]
   [(variant (range LO HI) inline [:bias N])
    (variant :else (extra-word :escape N [:cells K]))]*)
 ```
@@ -711,7 +730,9 @@ reads differently:
 `instruction-word` fields instead of giving a byte width — naming `opcode`
 (already given by the instruction's own `(opcode n)`), or naming a field a
 sibling `(operand ...)` subclause here already claims, is a
-macroexpansion-time error. With no
+macroexpansion-time error. `:register ELEM` (#143) works exactly as it does
+on the cell-encoded path above — see there for what it does and its
+`definstruction`-time checks. With no
 `(variant ...)` forms at all, the field just holds the value directly
 (biased by 0) over its own full range — unsigned, `[0, 2^width-1]`, unless
 the mode itself declares `:signed t` (see ["Signed word

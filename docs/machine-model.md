@@ -48,6 +48,12 @@ widths against a machine defined earlier in the same file.
   colliding with an alias (case-insensitively) is an assembly error rather
   than a silent shadow. Every alias shares one machine-wide namespace with
   every other storage element name and every other register's aliases.
+
+  The read direction — decoding a bank index back to its alias — is a
+  `definstruction` encoding subclause, not a machine-model one: see
+  [Instructions, `:register`](instructions.md#encoding-opcode-n-operand)
+  and [Disassembler, "Register-index operand
+  rendering"](disassembler.md#register-index-operand-rendering).
 - `(stack NAME :width n :depth n)` — a fixed-depth LIFO stack of `:width`-bit
   values. Grows upward: the stack pointer starts at 0 and always equals the
   number of live entries, incrementing on push and decrementing on pop.

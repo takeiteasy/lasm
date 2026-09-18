@@ -203,7 +203,7 @@ hole's own value gets this adjustment, mirroring %CHOOSE-VARIANT's and
               collect (if (eql i relative-index) (+ address size v) v))
         values)))
 
-(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices)
+(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements)
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -211,6 +211,18 @@ carry any punctuation (e.g. INDIRECT-Y's pattern renders \"($10),Y\", not
 \"( $10 ) , Y\"). Values are paired by hole order, never by
 INSTRUCTION-DESCRIPTOR-OPERAND-NAMES -- an unnamed field's entry there is
 NIL.
+
+HOLE-ELEMENTS, when given, is #143's own hole-aligned record -- one
+STORAGE-ELEMENT (or NIL) per hole, from a (operand ... :register ELEM)
+subclause's own ELEM (instruction.lisp's INSTRUCTION-DESCRIPTOR-OPERAND-
+REGISTERS, resolved once by %HOLE-ELEMENTS below), popped at each :EXPR in
+lockstep with RENDER-VALUES/HOLE-CHOICES, :ONE-OF recursion included. A
+non-NIL element's #72 alias for the hole's own decoded value
+(REGISTER-ALIAS-AT, storage.lisp) wins over a label of the same numeric
+value -- an ordinary label bound to the address 0 or 5 is otherwise
+indistinguishable from a register index of 0 or 5 -- and an out-of-range
+index (REGISTER-ALIAS-AT returning NIL, e.g. a field wider than the bank)
+falls through to hex like any unaliased value, never blank.
 
 HOLE-CHOICES, when given, is DECODE-INSTRUCTION-AT's own hole-aligned matched
 per-hole record -- a WORD-FIELD-CHOICE list on a word-encoded machine (#104)
@@ -243,18 +255,32 @@ instruction but no record of its own is unaffected either way. #126's byte
 path has no mixed case: every alternative of a sub-selected hole is claimed
 by construction (%CHECK-BYTE-SUB-VARIANTS!)."
   (with-output-to-string (s)
-    (let ((vals render-values) (choices hole-choices))
+    (let ((vals render-values) (choices hole-choices) (elements hole-elements))
       (labels ((render-pattern (pattern)
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
                      (:expr (cl:pop choices)
-                            (let ((v (cl:pop vals)))
-                              (write-string (%render-value v lexer :label (gethash v reverse-symbols)) s)))
+                            (let* ((v (cl:pop vals))
+                                   (element (cl:pop elements))
+                                   (alias (and element (register-alias-at element v))))
+                              (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s)))
                      (:one-of
                       (let ((alt-name (or (%matched-choice-name choices 0) (second el))))
                         (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
+
+;; TODO: this does a FIND-MACHINE-DESCRIPTOR/GETHASH pair per rendered line
+;; even when OPERAND-REGISTERS is entirely NIL (the common case, every
+;; machine before #143) -- a (WHEN (SOME #'IDENTITY ...) ...) short-circuit
+;; would skip the lookup there; left as the straightforward version since
+;; %RENDER-LINE is not the emulator's hot path.
+(defun %hole-elements (descriptor)
+  "DESCRIPTOR's own OPERAND-REGISTERS (#143), hole-aligned, resolved from
+storage-element names to STORAGE-ELEMENTs -- NIL throughout for a descriptor
+with no :REGISTER hole, same shape as OPERAND-NAMES/OPERAND-WIDTHS."
+  (let ((table (machine-descriptor-table (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+    (mapcar (lambda (r) (and r (gethash r table))) (instruction-descriptor-operand-registers descriptor))))
 
 (defun %mnemonic-suffix-text (descriptor lexer)
   "The gas-style forced-mode suffix (mode.lisp's DEFMODE :SUFFIX, e.g. \"w\")
@@ -283,7 +309,7 @@ MODE-SUFFIX-SEPARATOR to write it with."
     (if mode
         (format nil "~A ~A" mnemonic
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
-                                       lexer reverse-symbols choices))
+                                       lexer reverse-symbols choices (%hole-elements descriptor)))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)

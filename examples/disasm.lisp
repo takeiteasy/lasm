@@ -6,7 +6,9 @@
 ;;;; and re-assemble that text to the same cells. First on an ordinary
 ;;;; byte-encoded machine (a small 6502-shaped one, like examples/modes.lisp),
 ;;;; then on a DCPU-16-shaped word-encoded machine (examples/dcpu16.lisp) to
-;;;; show an instruction that spends an extra word.
+;;;; show an instruction that spends an extra word, then (#143) the same
+;;;; shape again with a #72 :names bank, to show a register-index operand
+;;;; disassembling back to its own alias rather than a bare integer.
 ;;;;
 ;;;; Run with:  sbcl --script examples/disasm.lisp
 
@@ -124,6 +126,69 @@ hlt")
 
     (let* ((text (disassembly-text lines))
            (reassembled (assemble text :machine 'disasm-dcpu16)))
+      (format t "~%Re-assembled disassembly text:~%~A~%" text)
+      (assert (equalp (assembly-cells assembly) (assembly-cells reassembled)))
+      (format t "Round trip OK: re-assembled cells match the original.~%"))))
+
+;;; Part 3: #143 -- a register-index operand disassembles to its own alias
+
+;; Same DCPU-16 shape as Part 2 and examples/dcpu16.lisp, but REG carries
+;; #72's :names and both instructions' register holes carry #143's own
+;; :register -- the ticket's own claim, disproved directly: disassembling
+;; "addr a, b" must print "addr a,b", not "addr $0,$1".
+
+(defmachine disasm-dcpu16-alias
+  (register pc :width 16)
+  (register reg :width 16 :names (a b c x y z i j))
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16
+    (field a-field 6)
+    (field b-field 5)
+    (field opcode 5)))
+
+(definstruction disasm-dcpu16-alias set
+  (modes disasm-rr)
+  (encoding
+    (opcode 1)
+    (operand dst :field b-field :register reg)
+    (operand src :field a-field
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f))))
+  (semantics (set! (reg dst) src)))
+
+(definstruction disasm-dcpu16-alias addr
+  (modes disasm-rr)
+  (encoding
+    (opcode 2)
+    (operand dst :field b-field :register reg)
+    (operand srcreg :field a-field :register reg))
+  (semantics (set! (reg dst) (wrap-value (+ (reg dst) (reg srcreg)) 16))))
+
+(definstruction disasm-dcpu16-alias hlt
+  (encoding (opcode 3))
+  (semantics (trap :halt)))
+
+(defparameter *alias-source*
+  "set a, 5        ; reg[a] = 5, packs inline into field A-FIELD
+addr a, b       ; reg[a] += reg[b], both plain register indices
+hlt")
+
+(format t "~2%Part 3: register-index operands render as #72 aliases (#143)~2%Source:~%~A~2%"
+        *alias-source*)
+
+(let ((assembly (assemble *alias-source* :machine 'disasm-dcpu16-alias)))
+  (format t "Assembled ~D cells.~2%" (length (assembly-cells assembly)))
+
+  (format t "Disassembly listing:~%")
+  (let ((lines (disassemble-assembly assembly :machine 'disasm-dcpu16-alias :labels nil)))
+    (print-disassembly lines)
+    (assert (= 3 (length lines)))
+    (assert (string= "set a,$5" (disassembly-line-text (first lines))))
+    (assert (string= "addr a,b" (disassembly-line-text (second lines))))
+    (assert (string= "hlt" (disassembly-line-text (third lines))))
+
+    (let* ((text (disassembly-text lines))
+           (reassembled (assemble text :machine 'disasm-dcpu16-alias)))
       (format t "~%Re-assembled disassembly text:~%~A~%" text)
       (assert (equalp (assembly-cells assembly) (assembly-cells reassembled)))
       (format t "Round trip OK: re-assembled cells match the original.~%"))))

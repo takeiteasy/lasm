@@ -157,6 +157,13 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; NAME in the semantics body; an unnamed one only ever binds OPERAND
   ;; (which aliases the first field, named or not).
   (operand-names nil :type list)
+  ;; #143: one storage-element name (or NIL) per operand hole, parallel to
+  ;; OPERAND-NAMES/OPERAND-WIDTHS -- a hole whose (operand ... :register ELEM)
+  ;; subclause named ELEM indexes that banked register's bank, so the
+  ;; disassembler (%RENDER-OPERAND-TEXT, disassembler.lisp) can render its
+  ;; decoded value as ELEM's own #72 :NAMES alias instead of a bare integer.
+  ;; NIL throughout for a descriptor with no :REGISTER hole.
+  (operand-registers nil :type list)
   (semantics-fn nil :type (or null function))
   ;; #75: this variant's cycle cost. NIL (no (cycles n) clause given) means
   ;; the default of 1 -- resolved by %DESCRIPTOR-CYCLE-COST (emulator.lisp),
@@ -583,21 +590,42 @@ from the rest, it doesn't care what shape the rest takes."
         (values nil rest)
         (values (first rest) (rest rest)))))
 
+(defun %parse-operand-register-clause (tail subclause)
+  "TAIL is an (operand ...) subclause's own spec tail with :MODE/:WIDTH n (and,
+on the word path, :FIELD f) already stripped off the front. Returns (VALUES
+register-sym remaining-tail): an optional leading (:register ELEM . more)
+(#143) is consumed and ELEM returned, else NIL and TAIL unchanged. SUBCLAUSE
+is the whole original form, for the error naming it when :REGISTER appears
+anywhere but this fixed position (immediately after :MODE/:WIDTH n/:FIELD f,
+before any (variant ...) forms)."
+  (cond
+    ((eq (first tail) :register) (values (second tail) (cddr tail)))
+    ((member :register tail)
+     (error "Malformed operand encoding spec ~S -- :REGISTER must come right after ~
+:MODE, :WIDTH n, or :FIELD f, before any (variant ...) forms" subclause))
+    (t (values nil tail))))
+
 (defun %parse-byte-operand-subclause (subclause)
   "Like %PARSE-OPERAND-SUBCLAUSE, but for the byte-encoded path: returns
-(VALUES name spec variant-forms), further splitting SPEC's own tail off any
-trailing (variant (choice m) (sub s)) forms (#126, byte-encoded machines
-only) -- NIL for the plain (operand :mode)/(operand :width n) forms every
-mnemonic used before #126. :WIDTH's own numeric arg is consumed as part of
-SPEC, not left in VARIANT-FORMS, so a bare :MODE (which takes no arg) and a
-:WIDTH N (which does) are told apart correctly."
+(VALUES name spec variant-forms register), further splitting SPEC's own tail
+off any leading :REGISTER ELEM (#143) and trailing (variant (choice m)
+(sub s)) forms (#126, byte-encoded machines only) -- both NIL for the plain
+(operand :mode)/(operand :width n) forms every mnemonic used before them.
+:WIDTH's own numeric arg is consumed as part of SPEC, not left in
+VARIANT-FORMS, so a bare :MODE (which takes no arg) and a :WIDTH N (which
+does) are told apart correctly."
   (multiple-value-bind (name rest) (%parse-operand-subclause subclause)
     (destructuring-bind (spec-head &rest spec-tail) rest
-      (case spec-head
-        (:mode (values name (list :mode) spec-tail))
-        (:width (values name (list :width (first spec-tail)) (rest spec-tail)))
-        (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)"
-                  subclause))))))
+      (multiple-value-bind (spec after-spec)
+          (case spec-head
+            (:mode (values (list :mode) spec-tail))
+            (:width (values (list :width (first spec-tail)) (rest spec-tail)))
+            (:register (error "Malformed operand encoding spec ~S -- :REGISTER must come after ~
+:MODE or :WIDTH n, e.g. (operand NAME :mode :register ELEM), not before it" subclause))
+            (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)"
+                      subclause)))
+        (multiple-value-bind (register variant-forms) (%parse-operand-register-clause after-spec subclause)
+          (values name spec variant-forms register))))))
 
 (defun %scalar-bindable-names (machine-name)
   "The set of names WITH-MACHINE-BINDINGS (semantics.lisp) binds for
@@ -631,6 +659,48 @@ more than once" machine name mode-name dup)))
         (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names an operand ~S, ~
 which is also a register, flag, or register alias on ~S -- (semantics ...) ~
 can only see one of them" machine name mode-name n machine)))))
+
+(defun %check-operand-registers! (registers machine name mode-name mode hole-alternatives)
+  "Signal a DEFINSTRUCTION-time error naming instruction NAME (on MACHINE) and
+addressing mode MODE-NAME for each non-NIL entry of REGISTERS (#143, hole-
+aligned, parallel to OPERAND-WIDTHS/OPERAND-NAMES) that names an unknown
+storage element, one that isn't a banked :REGISTER, or one declaring no #72
+:NAMES to render as an alias -- the whole point of :REGISTER is naming an
+aliased bank, so any of these would leave it rendering nothing. Also rejects
+a :REGISTER hole that is RELATIVE or SIGNED for any of HOLE-ALTERNATIVES (or,
+at an ungoverned hole, MODE itself): a relative hole's value is adjusted to
+an absolute target at render time (disassembler.lisp's %OPERAND-RENDER-
+VALUES) and a signed hole may decode negative (decoder.lisp's per-hole sign
+extension) -- either would corrupt a bank index rather than merely mis-render
+one, so this is checked unconditionally, not only when :REGISTER is given."
+  (let ((descriptor (find-machine-descriptor machine)))
+    (loop for register in registers
+          for alts in hole-alternatives
+          for i from 0
+          when register
+            do (let ((element (gethash register (machine-descriptor-table descriptor))))
+                 (unless element
+                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+names no storage element on ~S" machine name mode-name register i machine))
+                 (unless (eq (storage-element-kind element) :register)
+                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+is not a register on ~S" machine name mode-name register i machine))
+                 (unless (storage-element-names element)
+                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+declares no #72 :NAMES -- there is no alias for the disassembler to render" machine name mode-name
+                          register i))
+                 (when (if alts
+                           (some #'mode-descriptor-relativep (mapcar #'find-mode-descriptor alts))
+                           (mode-descriptor-relativep mode))
+                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both RELATIVE ~
+and :REGISTER ~S -- a relative hole's value is adjusted to an absolute target at render time, ~
+which would corrupt a register index" machine name mode-name i register))
+                 (when (if alts
+                           (some #'mode-descriptor-signedp (mapcar #'find-mode-descriptor alts))
+                           (mode-descriptor-signedp mode))
+                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both SIGNED ~
+and :REGISTER ~S -- a signed hole may decode negative, which is not a valid register index"
+                          machine name mode-name i register))))))
 
 (defun %parse-byte-sub-variant-form (form hole-name)
   "Parse one (variant (choice m) (sub s)) form (#126) -- the byte-encoded
@@ -863,11 +933,13 @@ be claimed" machine name (length missing) missing (rest missing))))
   "SUBCLAUSES is every (operand ...) form declared for one variant of
 instruction NAME (on MACHINE) using addressing MODE (named MODE-NAME in
 diagnostics), in declaration order. Returns (VALUES widths names sub-spec
-mode-specified), one WIDTHS/NAMES/MODE-SPECIFIED entry per subclause --
-their count must equal MODE's EXPR hole count exactly, since each hole needs
-somewhere to put its parsed value and each operand subclause needs a hole to
-size itself against; mismatch in either direction is an error. Named fields
-are also checked for collisions (%CHECK-OPERAND-NAMES).
+mode-specified registers), one WIDTHS/NAMES/MODE-SPECIFIED/REGISTERS entry
+per subclause -- their count must equal MODE's EXPR hole count exactly, since
+each hole needs somewhere to put its parsed value and each operand subclause
+needs a hole to size itself against; mismatch in either direction is an
+error. Named fields are also checked for collisions (%CHECK-OPERAND-NAMES).
+REGISTERS entries (#143, an (operand ... :register ELEM) subclause) are
+validated by %CHECK-OPERAND-REGISTERS!.
 
 MODE-SPECIFIED (#129) is T at hole I when that hole's own (operand ...)
 subclause was (operand :mode) rather than an explicit (operand :width n) --
@@ -899,18 +971,21 @@ per hole" machine name mode-name holes n (= n 1))))
          (parsed (loop for subclause in subclauses
                        for alts in hole-alternatives
                        for i from 0
-                       collect (multiple-value-bind (op-name spec variant-forms)
+                       collect (multiple-value-bind (op-name spec variant-forms register)
                                    (%parse-byte-operand-subclause subclause)
                                  (list op-name (%operand-width mode spec machine-name)
                                        (%check-byte-sub-variants!
                                         variant-forms alts machine name
                                         (or op-name (format nil "~D" i)))
-                                       (eq (first spec) :mode)))))
+                                       (eq (first spec) :mode)
+                                       register))))
          (widths (mapcar #'second parsed))
          (names (mapcar #'first parsed))
          (mode-specified (mapcar #'fourth parsed))
+         (registers (mapcar #'fifth parsed))
          (carrying (loop for p in parsed for i from 0 when (third p) collect (cons i (third p)))))
     (%check-operand-names names machine name mode-name)
+    (%check-operand-registers! registers machine name mode-name mode hole-alternatives)
     (when (rest carrying)
       (error "DEFINSTRUCTION ~S ~S: more than one operand hole declares its own sub-opcode ~
 selector -- combine them in a (sub-opcode ...) table instead" machine name))
@@ -929,7 +1004,8 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
                  (cons (list hole-index)
                        (mapcar (lambda (p) (cons (list (car p)) (cdr p))) pairs))))
               (t nil))
-            mode-specified)))
+            mode-specified
+            registers)))
 
 (defun %check-mode-hole-attributes (mode machine name)
   ;; A whole-mode RELATIVE mode (mode.lisp, MODE-DESCRIPTOR-RELATIVEP) marks
@@ -1192,7 +1268,7 @@ compile error, preserving typo protection."
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
                           &optional sub-opcode sub-choices operand-signedness
-                            relative-hole-index word-layout-name word-constants-form)
+                            relative-hole-index word-layout-name word-constants-form operand-registers)
   "SEMANTICS-FN-FORM is an already-built %SEMANTICS-FN-FORM lambda form, or a
 gensym bound to one by the caller's own LET* (#150) -- built once and shared
 across every sibling descriptor whose SEMANTICS-FN-FORM inputs (SEMANTICS-
@@ -1204,7 +1280,10 @@ no-operand, word-encoded instruction (CLS/RET-shaped) that pins one or more
 fields via (field-value ...); every other caller of this function is
 byte-encoded and leaves both at their NIL default. WORD-CONSTANTS-FORM is an
 already-quoted %WORD-CONSTANTS-FORM builder form, not a bare list, mirroring
-how %WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted."
+how %WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted.
+OPERAND-REGISTERS (#143) is shared across every sibling descriptor exactly
+like OPERAND-NAMES -- which hole indexes which register doesn't vary by
+SUB-CHOICES or field-variant combo."
   `(make-instruction-descriptor
     :name ,(string-upcase (symbol-name name))
     :machine ',machine
@@ -1214,6 +1293,7 @@ how %WORD-DESCRIPTOR-FORM splices its own WORD-FIELDS form in unquoted."
     :sub-choices ',sub-choices
     :operand-widths ',operand-widths
     :operand-names ',operand-names
+    :operand-registers ',operand-registers
     :operand-signedness ',operand-signedness
     :relative-hole-index ',relative-hole-index
     :word-layout-name ',word-layout-name
@@ -1305,19 +1385,20 @@ hole sharing a common :WIDTH -- that shared value)."
                                  &optional sub-opcode-subclause)
   "Resolve the (operand ...) subclauses (zero or more whole forms, in
 declaration order) given for one addressing-mode use into (VALUES widths
-names sub-spec mode-specified), one WIDTHS/NAMES/MODE-SPECIFIED entry per
-MODE hole. With no subclauses at all, MODE must have exactly one hole (a
-bare width can't be inferred for more) -- its default width
-(%MODE-OPERAND-WIDTH) is used, unnamed, SUB-SPEC is NIL, and MODE-SPECIFIED
-is (T) (the default width traces back to :MODE, not an explicit :WIDTH),
-unless SUB-OPCODE-SUBCLAUSE was given, which is an error -- a defaulted
-single-hole operand has no (operand ...) subclause to attach a per-hole
-selector to, and a (sub-opcode ...) table has nothing to name without
-explicit per-hole subclauses either; the same absence of a subclause means a
-width-disagreeing hole can never reach this branch (#129) -- one can only
-exist under an explicit (operand ...) subclause carrying a selector. With
-one or more subclauses, their count must match MODE's hole count exactly,
-and SUB-SPEC (#126/#128) and MODE-SPECIFIED (#129) are whatever
+names sub-spec mode-specified registers), one WIDTHS/NAMES/MODE-SPECIFIED/
+REGISTERS entry per MODE hole. With no subclauses at all, MODE must have
+exactly one hole (a bare width can't be inferred for more) -- its default
+width (%MODE-OPERAND-WIDTH) is used, unnamed, SUB-SPEC is NIL, MODE-SPECIFIED
+is (T) (the default width traces back to :MODE, not an explicit :WIDTH), and
+REGISTERS is (NIL) (#143, no subclause means no :REGISTER either), unless
+SUB-OPCODE-SUBCLAUSE was given, which is an error -- a defaulted single-hole
+operand has no (operand ...) subclause to attach a per-hole selector to, and
+a (sub-opcode ...) table has nothing to name without explicit per-hole
+subclauses either; the same absence of a subclause means a width-disagreeing
+hole can never reach this branch (#129) -- one can only exist under an
+explicit (operand ...) subclause carrying a selector. With one or more
+subclauses, their count must match MODE's hole count exactly, and SUB-SPEC
+(#126/#128), MODE-SPECIFIED (#129), and REGISTERS (#143) are whatever
 %PARSE-OPERAND-SUBCLAUSES resolved."
   (if operand-subclauses
       (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name
@@ -1328,7 +1409,7 @@ and SUB-SPEC (#126/#128) and MODE-SPECIFIED (#129) are whatever
               (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
 (operand ...) subclauses -- a defaulted single-hole operand has no room to declare one"
                      machine name mode-name))
-            (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t)))
+            (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t) (list nil)))
           (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
 -- an (operand ...) subclause is required per hole" machine name mode-name
                  (%mode-hole-count mode)))))
@@ -1345,7 +1426,8 @@ hole-selected one would both be trying to write it."
            machine name)))
 
 (defun %byte-descriptor-forms (machine name mode-form opcode explicit-sub operand-widths operand-names cycles
-                                semantics-forms hole-alternatives-list sub-spec mode mode-specified)
+                                semantics-forms hole-alternatives-list sub-spec mode mode-specified
+                                &optional operand-registers)
   "One INSTRUCTION-DESCRIPTOR form per byte-encoded addressing-mode use for
 one (MODES ...) variant or single-mode (ENCODING ...) clause -- a single one
 when SUB-SPEC is NIL (the ordinary case, sharing EXPLICIT-SUB, #125's plain
@@ -1387,7 +1469,8 @@ compiled code once per sibling."
                                   operand-names cycles
                                   semantics-fn-gensym explicit-sub nil
                                   (%byte-operand-signedness mode hole-alternatives-list nil n)
-                                  (%byte-relative-hole-index mode hole-alternatives-list nil n)))
+                                  (%byte-relative-hole-index mode hole-alternatives-list nil n)
+                                  nil nil operand-registers))
          (destructuring-bind (hole-indices . pairs) sub-spec
            (mapcar (lambda (pair)
                      (let ((sub-choices (make-list n :initial-element nil)))
@@ -1400,7 +1483,8 @@ compiled code once per sibling."
                                           operand-names cycles
                                           semantics-fn-gensym (cdr pair) sub-choices
                                           (%byte-operand-signedness mode hole-alternatives-list sub-choices n)
-                                          (%byte-relative-hole-index mode hole-alternatives-list sub-choices n))))
+                                          (%byte-relative-hole-index mode hole-alternatives-list sub-choices n)
+                                          nil nil operand-registers)))
                    pairs))))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
@@ -1455,7 +1539,11 @@ compiled code once per sibling."
   (field nil :type (or null symbol))    ; instruction-word field name
   (width nil :type (or null (integer 1)))
   (shift nil :type (or null (integer 0)))
-  (variants nil :type list))  ; list of WORD-VARIANT, declaration order
+  (variants nil :type list)   ; list of WORD-VARIANT, declaration order
+  ;; #143: this hole's (operand ... :register ELEM) storage-element name, or
+  ;; NIL -- carried through to INSTRUCTION-DESCRIPTOR-OPERAND-REGISTERS the
+  ;; same way NAME above becomes OPERAND-NAMES.
+  (register nil :type (or null symbol)))
 
 ;; #136 (M4): a (field-value FIELD-NAME n) encoding subclause -- a field
 ;; pinned to a literal value with no operand hole at all, discriminating
@@ -2140,13 +2228,13 @@ ALT afterwards, since there is no (choice m) syntax on a fieldless hole to
 carry it."
   (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
     (if (eq (first spec) :trailing-word)
-        (destructuring-bind (trailing-kw &key cells) spec
+        (destructuring-bind (trailing-kw &key cells register) spec
           (declare (ignore trailing-kw))
           (when (and cells (not (and (integerp cells) (plusp cells))))
             (error "DEFINSTRUCTION: (operand ~@[~S ~]:trailing-word :cells ~S): :CELLS must be ~
 a positive integer" name cells))
           (make-word-operand-spec
-           :name name :field nil :width nil :shift nil
+           :name name :field nil :width nil :shift nil :register register
            :variants (list (make-word-variant
                              :kind :trailing-word
                              :extra-cells (or cells (instruction-word-layout-width-cells layout))))))
@@ -2159,7 +2247,7 @@ a positive integer" name cells))
 #120 :TRAILING-WORD case above doesn't have to thread LAYOUT/FWIDTH through
 a branch that never uses them. NAME/SPEC are %PARSE-OPERAND-SUBCLAUSE's own
 split of SUBCLAUSE."
-  (destructuring-bind (field-kw field-name &rest variant-forms) spec
+  (destructuring-bind (field-kw field-name &rest after-field) spec
       (unless (eq field-kw :field)
         (error "DEFINSTRUCTION: malformed word operand spec ~S -- expected ~
 (operand [name] :field f ...) or (operand [name] :trailing-word [:cells k])" subclause))
@@ -2169,27 +2257,28 @@ split of SUBCLAUSE."
 layout~;instruction-word layout ~:*~S~] on machine ~S" field-name layout-name machine-name))
         (destructuring-bind (fname fwidth fshift) field
           (declare (ignore fname))
-          (let ((variants (if variant-forms
-                               (mapcar (lambda (f) (%parse-word-variant-form f field-name)) variant-forms)
-                               (list (make-word-variant
-                                      :kind :inline :bias 0
-                                      :range (if hole-signedp
-                                                 (cons (- (ash 1 (1- fwidth))) (1- (ash 1 (1- fwidth))))
-                                                 (cons 0 (1- (ash 1 fwidth)))))))))
-            ;; #135: an :EXTRA-WORD variant with no explicit :CELLS defaults
-            ;; to the layout's own WIDTH-CELLS -- today's assumption, now
-            ;; just the default rather than the only option. Defaulted here,
-            ;; not at parse time, since %PARSE-WORD-VARIANT-FORM has no
-            ;; LAYOUT to default against; %CHECK-WORD-VARIANTS below then
-            ;; validates every variant's EXTRA-CELLS -- explicit or
-            ;; defaulted -- as one concrete positive integer.
-            (dolist (v variants)
-              (when (and (%word-variant-extra-p v) (null (word-variant-extra-cells v)))
-                (setf (word-variant-extra-cells v) (instruction-word-layout-width-cells layout))))
-            (%check-word-variants variants fwidth field-name hole-signedp)
-            (%check-word-variant-choices! variants field-name hole-alternatives)
-            (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
-                                     :variants variants))))))
+          (multiple-value-bind (register variant-forms) (%parse-operand-register-clause after-field subclause)
+            (let ((variants (if variant-forms
+                                 (mapcar (lambda (f) (%parse-word-variant-form f field-name)) variant-forms)
+                                 (list (make-word-variant
+                                        :kind :inline :bias 0
+                                        :range (if hole-signedp
+                                                   (cons (- (ash 1 (1- fwidth))) (1- (ash 1 (1- fwidth))))
+                                                   (cons 0 (1- (ash 1 fwidth)))))))))
+              ;; #135: an :EXTRA-WORD variant with no explicit :CELLS defaults
+              ;; to the layout's own WIDTH-CELLS -- today's assumption, now
+              ;; just the default rather than the only option. Defaulted here,
+              ;; not at parse time, since %PARSE-WORD-VARIANT-FORM has no
+              ;; LAYOUT to default against; %CHECK-WORD-VARIANTS below then
+              ;; validates every variant's EXTRA-CELLS -- explicit or
+              ;; defaulted -- as one concrete positive integer.
+              (dolist (v variants)
+                (when (and (%word-variant-extra-p v) (null (word-variant-extra-cells v)))
+                  (setf (word-variant-extra-cells v) (instruction-word-layout-width-cells layout))))
+              (%check-word-variants variants fwidth field-name hole-signedp)
+              (%check-word-variant-choices! variants field-name hole-alternatives)
+              (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
+                                       :register register :variants variants)))))))
 
 (defun %parse-word-operand-subclauses (mode subclauses machine name mode-name machine-name layout layout-name
                                         &optional hole-alternatives-list)
@@ -2242,6 +2331,8 @@ opcode field is already given by this instruction's own (opcode n)" machine name
           (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: more than one (operand ... :field ~S) subclause -- a ~
 field may carry at most one operand" machine name mode-name dup)))
       (%check-operand-names (mapcar #'word-operand-spec-name specs) machine name mode-name)
+      (%check-operand-registers! (mapcar #'word-operand-spec-register specs) machine name mode-name mode
+                                  hole-alternatives)
       specs)))
 
 (defun %word-variant-extra-p (v)
@@ -2351,6 +2442,7 @@ operand happened to expand into) and passes the gensym through here, rather
 than each being rebuilt -- and so re-emitted as compiled code -- once per
 combo."
   (let* ((operand-names (mapcar (lambda (p) (word-operand-spec-name (car p))) combo))
+         (operand-registers (mapcar (lambda (p) (word-operand-spec-register (car p))) combo))
          (word-fields-form `(list ,@(mapcar (lambda (p hole-signedp)
                                                (%word-field-choice-form (car p) (cdr p) hole-signedp))
                                              combo hole-signedp-list)))
@@ -2368,6 +2460,7 @@ combo."
       :opcode ,opcode
       :operand-widths nil
       :operand-names ',operand-names
+      :operand-registers ',operand-registers
       :word-fields ,word-fields-form
       :word-alternatives ,alternatives-form
       :extra-cells ,extra-cells
@@ -2460,6 +2553,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                            :field (word-operand-spec-field spec)
                            :width (word-operand-spec-width spec)
                            :shift (word-operand-spec-shift spec)
+                           :register (word-operand-spec-register spec)
                            :variants (remove-if-not (lambda (v) (member (word-variant-choice v) own-alt-names))
                                                      (word-operand-spec-variants spec))))
 
@@ -3110,7 +3204,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
               ;; called here) -- it needs SPECS, which only that function
               ;; computes, and there is exactly one call site for it, unlike
               ;; %BYTE-DESCRIPTOR-FORMS' two.
-              (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
+              (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
                   (progn
                     (%check-no-varying-one-of! mode machine name)
                     (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine
@@ -3120,7 +3214,8 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                 (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
                 (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
                                          opcode sub operand-widths operand-names cycles-form semantics-forms
-                                         (%mode-hole-alternatives mode) sub-spec mode mode-specified)))))))))
+                                         (%mode-hole-alternatives mode) sub-spec mode mode-specified
+                                         operand-registers)))))))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -3418,7 +3513,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                        ',machine
                        (let* (,@bindings) (list ,@forms)))
                       ',name))
-                 (multiple-value-bind (operand-widths operand-names sub-spec mode-specified)
+                 (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
                      (progn
                        (%check-no-varying-one-of! mode machine name)
                        (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine
@@ -3431,7 +3526,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                                 opcode sub operand-widths operand-names
                                                 cycles-form (rest semantics-clause)
                                                 (%mode-hole-alternatives mode) sub-spec mode
-                                                mode-specified)
+                                                mode-specified operand-registers)
                      `(eval-when (:compile-toplevel :load-toplevel :execute)
                         (register-instruction-variants!
                          ',machine

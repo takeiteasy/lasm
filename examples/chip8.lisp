@@ -42,17 +42,19 @@
 (defmode v-imm expr "," "#" expr)
 (defmode v-only expr)
 
-;; LDV Vx, #nn -- load an immediate byte into bank X of V.
+;; LDV Vx, #nn -- load an immediate byte into bank X of V. #143: X's own
+;; :register v renders its decoded index back as V's own alias (e.g. "v0"),
+;; not a bare integer.
 (definstruction chip8foo ldv
   (modes v-imm)
-  (encoding (opcode 1) (operand x :width 1) (operand nn :width 1))
+  (encoding (opcode 1) (operand x :width 1 :register v) (operand nn :width 1))
   (semantics (set! (v x) nn)))
 
 ;; ADDV Vx, #nn -- add an immediate byte into bank X of V, wrapping at V's
 ;; own 8-bit width.
 (definstruction chip8foo addv
   (modes v-imm)
-  (encoding (opcode 2) (operand x :width 1) (operand nn :width 1))
+  (encoding (opcode 2) (operand x :width 1 :register v) (operand nn :width 1))
   (semantics (set! (v x) (wrap-value (+ (v x) nn) 8))))
 
 ;; LDI #nnn -- load a 12-bit immediate into I. :WIDTH 2 overrides
@@ -67,7 +69,7 @@
 ;; into a 12-bit destination.
 (definstruction chip8foo addi
   (modes v-only)
-  (encoding (opcode 4) (operand x :width 1))
+  (encoding (opcode 4) (operand x :width 1 :register v))
   (semantics (set! i (wrap-value (+ i (v x)) 12))))
 
 ;; JP addr -- unconditional jump. ABSOLUTE's default width (no explicit

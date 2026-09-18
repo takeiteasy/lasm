@@ -81,6 +81,7 @@
    #:stack-depth
    #:stack-ref
    #:flag
+   #:register-alias-at
    #:wrap-value
 
    ;; Semantics vocabulary
@@ -205,6 +206,7 @@
    #:instruction-descriptor-sub-opcode
    #:instruction-descriptor-operand-widths
    #:instruction-descriptor-operand-names
+   #:instruction-descriptor-operand-registers
    #:instruction-descriptor-total-operand-width
    #:instruction-descriptor-semantics-fn
    #:instruction-descriptor-cycles
