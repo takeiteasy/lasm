@@ -172,10 +172,12 @@ decoded, not just the operand values, on either encoding scheme.
 ### Device ticking (#108)
 
 `step-machine` also ticks every live [device](devices.md) on the machine's
-bus, with the step's own cycle cost, once per step — beside where
-`machine-cycles` is incremented, so a trapping instruction's devices still
-tick instead of that step silently going missing from device time. Not
-called on a `:decode-failure`, where nothing executed and no time elapsed.
+bus with the step's declared cycle cost — beside where `machine-cycles` is
+incremented, so a trapping instruction's devices still tick instead of that
+step silently going missing from device time. Cycles added with
+[`extra-cycles`](#dynamic-cycle-costs-90) tick devices a second time, after
+the semantics return. Not called on a `:decode-failure`, where nothing
+executed and no time elapsed.
 This runs the same way regardless of entry point — `run`/`run-for-cycles`/
 `run-for-duration` below and the debugger's single-instruction `debug-step`
 all go through `step-machine`.
@@ -330,11 +332,31 @@ mnemonic's shared default for that mode alone:
   (cycles 1)) ; default for a mode that declares no cycles of its own
 ```
 
-This is a *static* per-mode cost, fixed at `definstruction` time. Dynamic
-adjustments that depend on runtime state — a page-crossing penalty, a
-branch-taken penalty — are a separate, follow-up feature; they need the
-step loop to inspect the actual operand/branch outcome, not just which
-mode was chosen.
+This is a *static* per-mode cost, fixed at `definstruction` time.
+
+### Dynamic cycle costs (#90)
+
+A cost that depends on runtime state — a page-crossing or branch-taken
+penalty — is added from inside `(semantics ...)` with `(extra-cycles n)`:
+
+```lisp
+(definstruction m bne
+  (modes relative)
+  (encoding (opcode #xD0) (operand :mode))
+  (cycles 2)
+  (semantics (when (zerop z)
+               (when (page-crossed? pc (+ pc operand)) (extra-cycles 1))
+               (set! pc (+ pc operand))
+               (extra-cycles 1))))
+```
+
+`step-machine` adds the accumulated extra to `machine-cycles` — including
+when the instruction traps — and returns declared cost plus extra as its cost
+value, so `run-for-cycles`, `run-for-duration` and `machine-elapsed-seconds`
+all see it. Devices receive the extra in a second tick once the semantics
+return (not on a trap); a machine that never calls `extra-cycles` is ticked
+once per step, as before. `machine-extra-cycles` holds the running
+instruction's extra and is zeroed at the start of each step and by `reset`.
 
 ## Note on flags in your own semantics (#22)
 

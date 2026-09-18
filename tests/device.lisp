@@ -76,6 +76,17 @@ at the start of each test that reads it.")
   (semantics (trap :halt))
   (cycles 2))
 
+;; #90: 2 declared cycles plus 3 extra.
+(definstruction device-test-machine pen
+  (encoding (opcode #x05))
+  (semantics (extra-cycles 3))
+  (cycles 2))
+
+(definstruction device-test-machine xboom
+  (encoding (opcode #x06))
+  (semantics (extra-cycles 4) (trap :halt))
+  (cycles 1))
+
 (definstruction device-test-machine bad
   (encoding (opcode #xff))
   (semantics nil))
@@ -272,3 +283,39 @@ at the start of each test that reads it.")
              (register pc :width 8)
              (memory ram :width 8 :addr-width 8 (region io #x00 #x0F :kind :device))
              (device io)))))
+
+(fiveam:test step-machine-ticks-devices-for-extra-cycles
+  (let ((m (make-machine 'device-test-machine)))
+    (load-program m (list #x05))
+    (step-machine m)
+    (fiveam:is (= 5 (car (device-state (device-at m 0)))))))
+
+(defvar *tick-log* nil)
+
+(defun %log-tick (machine device cycles)
+  (declare (ignore machine device))
+  (cl:push cycles *tick-log*))
+
+(defmachine tick-log-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (device probe :id 3 :version 0 :manufacturer 0 :tick %log-tick))
+
+(definstruction tick-log-machine pen
+  (encoding (opcode #x05))
+  (semantics (extra-cycles 3))
+  (cycles 2))
+
+(fiveam:test step-machine-ticks-extra-cycles-separately-from-the-declared-cost
+  (let ((m (make-machine 'tick-log-machine))
+        (*tick-log* nil))
+    (load-program m (list #x05))
+    (step-machine m)
+    (fiveam:is (equal '(2 3) (reverse *tick-log*)))))
+
+(fiveam:test step-machine-skips-the-extra-tick-when-the-instruction-traps
+  (let ((m (make-machine 'device-test-machine)))
+    (load-program m (list #x06))
+    (fiveam:signals lasm-trap (step-machine m))
+    (fiveam:is (= 1 (car (device-state (device-at m 0)))))
+    (fiveam:is (= 5 (machine-cycles m)))))

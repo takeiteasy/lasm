@@ -125,6 +125,14 @@ than a crash. COST is the executed instruction's cycle cost (#75,
 %DESCRIPTOR-CYCLE-COST), already added to MACHINE-CYCLES by the time this
 returns.
 
+#90: an instruction's semantics may add cycles beyond its declared cost
+with (extra-cycles n) (semantics.lisp) -- a page-crossing or branch-taken
+penalty, say. They are added to MACHINE-CYCLES even if the instruction
+traps, ticked to devices in a second TICK-DEVICES call once the semantics
+return (never during a trap's unwind, where a signalling device would
+replace the LASM-TRAP), and included in the returned COST. A machine that
+never calls EXTRA-CYCLES sees exactly one tick per step, as before.
+
 PC is advanced past the whole instruction *before* executing its
 semantics, not after -- so a branch instruction's own (set! pc operand)
 in its semantics overrides the increment, rather than being clobbered by
@@ -189,13 +197,19 @@ decoded, not just the values."
             (let ((cost (%descriptor-cycle-cost descriptor)))
               (setf (sref machine pc) (+ address size))
               (incf (machine-cycles machine) cost)
-              ;; TODO: devices tick once per instruction, with that
-              ;; instruction's whole cost -- a device needing intra-
-              ;; instruction resolution can't express it; sub-instruction
-              ;; tick granularity is a follow-up (#108).
+              ;; TODO: devices tick once per instruction with its declared
+              ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
+              ;; device needing intra-instruction resolution can't express
+              ;; either; sub-instruction tick granularity is a follow-up
+              ;; (#108, #159).
               (tick-devices machine cost)
-              (execute-instruction descriptor machine values choices)
-              (values descriptor cost)))))))
+              (setf (machine-extra-cycles machine) 0)
+              (unwind-protect (execute-instruction descriptor machine values choices)
+                (incf (machine-cycles machine) (machine-extra-cycles machine)))
+              (let ((extra (machine-extra-cycles machine)))
+                (when (plusp extra)
+                  (tick-devices machine extra))
+                (values descriptor (+ cost extra)))))))))
 
 ;;; Run
 

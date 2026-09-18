@@ -36,7 +36,7 @@ function.
 | Hook | Called as | When |
 |---|---|---|
 | `:init` | `(fn machine device)` | Once, when the device is instantiated — at `make-machine`, at every `reset`, and (for a runtime-attached device) at `attach-device`. Its return value becomes the device's own `device-state`. |
-| `:tick` | `(fn machine device cycles)` | Once per `step-machine`, with that step's own cycle cost — see "Ticking" below. |
+| `:tick` | `(fn machine device cycles)` | Once per `step-machine` with that step's declared cycle cost, and again for any `extra-cycles` — see "Ticking" below. |
 | `:receive` | `(fn machine device)` | An `HWI`-style message send (`device-send`). A device with no `:receive` ignores the send. |
 | `:detach` | `(fn machine device)` | Just before `detach-device` clears the device's bus slot. |
 
@@ -95,9 +95,13 @@ nothing executed and no time elapsed. This runs identically under `run`,
 `run-for-cycles`, `run-for-duration`, and the debugger's single-instruction
 `debug-step` — every path into execution goes through `step-machine`.
 
+Cycles an instruction adds with [`extra-cycles`](emulator.md#dynamic-cycle-costs-90) tick devices a
+second time, after its semantics return. A step that traps skips that second
+tick, so its devices miss the extra cycles that `machine-cycles` still counts.
+
 A device ticks once per whole instruction, with that instruction's whole
-cost — a device needing intra-instruction resolution can't express it; a
-follow-up ticket tracks finer granularity.
+declared cost — a device needing intra-instruction resolution can't express
+it; a follow-up ticket tracks finer granularity.
 
 ## Semantics vocabulary
 

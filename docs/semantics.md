@@ -72,12 +72,18 @@ if the name is left out — name one explicitly in that case.
   body runs to completion. Works on any machine, including one declaring no
   `(interrupts ...)` clause; such a machine can only be woken by a host
   calling `wake-machine` directly.
+- `(extra-cycles n)` — add `n` cycles to the running instruction's cost, on
+  top of its declared `(cycles n)`; see [Emulator, "Dynamic cycle
+  costs"](emulator.md#dynamic-cycle-costs-90). Like `idle`, it does not
+  unwind. Multiple calls accumulate.
 - `(interrupt-return)` — on a machine declaring an `(interrupts ...)`
   clause (see [Interrupts](interrupts.md)), pops every `:save` place in
   reverse declared order, restoring exactly what delivery pushed. Signals
   an error at macroexpansion time on a machine declaring no such clause.
 - `(zero? value)`, `(bit-set? value bit)` — small predicates used in flag
   expressions.
+- `(page-crossed? from to &optional (page-size 256))` — true when `from` and
+  `to` lie in different pages; the test behind a page-crossing penalty.
 
 ## `choice-case`
 
