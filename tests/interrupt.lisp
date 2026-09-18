@@ -685,3 +685,82 @@
              (memory ram :width 16 :addr-width 16 :cell-width 16)
              (stack-pointer sp :memory ram)
              (interrupts :vector ia :message a :save (pc) :stack sp)))))
+
+;;; Banked-register places (:message/:save/:vector as (NAME INDEX)) and
+;;; :mask-on-deliver
+
+(defmachine interrupt-banked-place-test-machine
+  (register pc :width 16)
+  (register ia :width 16)
+  (register reg :width 16 :count 4)
+  (register sp :width 16)
+  (flags iaq)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down)
+  (interrupts :vector ia :message (reg 0) :save (pc (reg 0)) :stack sp
+              :mask-flag iaq :mask-on-deliver t))
+
+(definstruction interrupt-banked-place-test-machine nop
+  (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction interrupt-banked-place-test-machine rfi
+  (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(fiveam:test banked-place-delivery-pushes-pc-then-bank-cell-and-writes-message
+  (let ((m (make-machine 'interrupt-banked-place-test-machine)))
+    (setf (sref m 'ia) 10
+          (regref m 'reg 0) 77
+          (sref m 'pc) 5)
+    (signal-interrupt m 42)
+    (deliver-pending-interrupt m 'pc)
+    (fiveam:is (= 42 (regref m 'reg 0)))
+    (fiveam:is (= 10 (sref m 'pc)))
+    ;; PC pushed first, then the bank cell: the cell is on top.
+    (fiveam:is (= 77 (mref m 'ram (sref m 'sp))))
+    (fiveam:is (= 5 (mref m 'ram (1+ (sref m 'sp)))))))
+
+(fiveam:test banked-place-frame-round-trips-through-interrupt-return
+  (let ((m (make-machine 'interrupt-banked-place-test-machine)))
+    (setf (sref m 'ia) 10 (regref m 'reg 0) 77)
+    (load-program m (list #x01) :origin 10) ; rfi at the vector
+    (setf (sref m 'pc) 5) ; LOAD-PROGRAM points PC at the origin
+    (signal-interrupt m 42)
+    (step-machine m) ; delivers, then runs the rfi
+    (fiveam:is (= 77 (regref m 'reg 0)))
+    (fiveam:is (= 5 (sref m 'pc)))
+    (fiveam:is (zerop (sref m 'sp)))))
+
+(fiveam:test mask-on-deliver-sets-the-flag-before-the-handler-runs
+  (let ((m (make-machine 'interrupt-banked-place-test-machine)))
+    (setf (sref m 'ia) 10)
+    (signal-interrupt m 1)
+    (fiveam:is (zerop (flag m 'iaq)))
+    (deliver-pending-interrupt m 'pc)
+    (fiveam:is (= 1 (flag m 'iaq)))))
+
+(fiveam:test mask-on-deliver-holds-a-second-signal-in-the-queue
+  (let ((m (make-machine 'interrupt-banked-place-test-machine)))
+    (setf (sref m 'ia) 10)
+    (load-program m (list #x00) :origin 10)
+    (signal-interrupt m 1)
+    (signal-interrupt m 2)
+    (step-machine m)
+    (step-machine m)
+    (fiveam:is (= 1 (length (machine-interrupt-queue m))))
+    (fiveam:is (= 1 (regref m 'reg 0)))))
+
+(fiveam:test defmachine-rejects-an-out-of-range-banked-place
+  (fiveam:signals error
+    (eval '(defmachine interrupt-banked-range-test
+             (register pc :width 8) (register ia :width 8)
+             (register reg :width 8 :count 2)
+             (stack sp :width 8 :depth 4)
+             (memory ram :width 8 :addr-width 8)
+             (interrupts :vector ia :message (reg 2) :save (pc))))))
+
+(fiveam:test defmachine-rejects-mask-on-deliver-without-a-mask-flag
+  (fiveam:signals error
+    (eval '(defmachine interrupt-mask-on-deliver-no-flag-test
+             (register pc :width 8) (register ia :width 8) (register a :width 8)
+             (stack sp :width 8 :depth 4)
+             (memory ram :width 8 :addr-width 8)
+             (interrupts :vector ia :message a :save (pc) :mask-on-deliver t)))))

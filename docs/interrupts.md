@@ -24,7 +24,7 @@ hand-rolling delivery in Lisp semantics.
 (interrupts :vector reg :message reg :save (name...)
             [:stack name] [:queue n] [:on-overflow policy]
             [:mask-when fn] [:mask-flag name] [:cycles n]
-            [:drop-on-zero-vector t/nil])
+            [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
 ```
 
 At most one per machine. `:vector`/`:message`/`:save`/`:stack`/`:mask-flag`
@@ -36,6 +36,14 @@ known, so they may appear in any order relative to the elements they name.
 | `:vector` | Register holding the handler address. Written into `pc` on delivery. |
 | `:message` | Register a delivered signal's data is written into. |
 | `:save` | Registers/flags pushed, in order, before `:message`/`:vector` are written. `interrupt-return` (below) pops them in reverse. |
+
+`:vector`, `:message` and each `:save` entry may be a scalar register name or
+`(name index)`, one cell of a banked register — `:message (reg 0)`, `:save (pc
+(reg 0))`. A bare banked register name is rejected; an out-of-range index is
+rejected at `defmachine` time.
+
+| Key | Meaning |
+|---|---|
 | `:stack` | Which `stack` element, or which `(stack-pointer ...)`-bound register (#166 — see [Machine model, `stack-pointer`](machine-model.md)), `:save` pushes onto/pops from. Defaults to the machine's sole `stack` element, or (with none declared) its sole stack-pointer — an error on zero or more than one candidate of whichever kind applies, same as `push`/`pop` with no stack name (see [Semantics vocabulary](semantics.md)). |
 | `:queue` | Max pending, undelivered signals. Default 256. |
 | `:on-overflow` | Policy when `signal-interrupt` would exceed `:queue` — see "Overflow" below. Default `:error`. |
@@ -43,6 +51,7 @@ known, so they may appear in any order relative to the elements they name.
 | `:mask-flag` | A flag name, read the same way. |
 | `:cycles` | Delivery's own extra `machine-cycles` cost. Default 0. |
 | `:drop-on-zero-vector` | See "Zero vector" below. Default `t`. |
+| `:mask-on-deliver` | Sets `:mask-flag` when a signal is delivered, before the handler's first instruction. Requires `:mask-flag`. Default `nil`. |
 
 ## Raising an interrupt
 

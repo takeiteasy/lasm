@@ -145,7 +145,7 @@ widths against a machine defined earlier in the same file.
   [Emulator](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
 - `(interrupts :vector reg :message reg :save (name...) [:stack name]
   [:queue n] [:on-overflow policy] [:mask-when fn] [:mask-flag name]
-  [:cycles n] [:drop-on-zero-vector t/nil])` — the interrupt-delivery model
+  [:cycles n] [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])` — the interrupt-delivery model
   (#109): a vector register, what's saved/restored around delivery, a
   pending-signal queue, and optional masking — see
   [Interrupts](interrupts.md). `:stack` accepts either a `(stack ...)`

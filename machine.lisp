@@ -233,7 +233,8 @@ function), got ~S" name (car fn) (cdr fn))))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
-;;   [:mask-flag name] [:cycles n] [:drop-on-zero-vector t/nil]) -- the
+;;   [:mask-flag name] [:cycles n] [:drop-on-zero-vector t/nil]
+;;   [:mask-on-deliver t/nil]) -- the
 ;; machine's whole interrupt-delivery model. VECTOR/MESSAGE/SAVE/STACK/
 ;; MASK-FLAG are validated as symbols here only -- whether each actually
 ;; names a real storage element of the right kind can't be checked until
@@ -243,19 +244,27 @@ function), got ~S" name (car fn) (cdr fn))))
 ;; INSTRUCTION-WORD-LAYOUT's own two-pass split. Unlike DEVICE, this clause
 ;; introduces no new namespace names -- it only references existing ones --
 ;; so BUILD-MACHINE-DESCRIPTOR's SEEN table never needs to know about it.
+(defun %interrupt-place-designator-p (place)
+  "A scalar element name, or (NAME INDEX) naming one cell of a banked
+register (#163)."
+  (or (symbolp place)
+      (and (consp place) (= (length place) 2)
+           (symbolp (first place)) (integerp (second place)))))
+
 (defun parse-interrupts-clause (form)
   (destructuring-bind (&key vector message save stack (queue 256) (on-overflow :error)
-                             mask-when mask-flag (cycles 0) (drop-on-zero-vector t))
+                             mask-when mask-flag (cycles 0) (drop-on-zero-vector t)
+                             mask-on-deliver)
       form
     (unless vector (error "interrupts requires :vector"))
-    (unless (symbolp vector)
-      (error "interrupts :vector must be a symbol, got ~S" vector))
+    (unless (%interrupt-place-designator-p vector)
+      (error "interrupts :vector must be a symbol or (NAME INDEX), got ~S" vector))
     (unless message (error "interrupts requires :message"))
-    (unless (symbolp message)
-      (error "interrupts :message must be a symbol, got ~S" message))
+    (unless (%interrupt-place-designator-p message)
+      (error "interrupts :message must be a symbol or (NAME INDEX), got ~S" message))
     (unless save (error "interrupts requires :save"))
-    (unless (and (listp save) (every #'symbolp save))
-      (error "interrupts :save must be a list of symbols, got ~S" save))
+    (unless (and (listp save) (every #'%interrupt-place-designator-p save))
+      (error "interrupts :save must be a list of symbols or (NAME INDEX) places, got ~S" save))
     (when (and stack (not (symbolp stack)))
       (error "interrupts :stack must be a symbol, got ~S" stack))
     (unless (and (integerp queue) (plusp queue))
@@ -272,10 +281,13 @@ function), got ~S" mask-when))
       (error "interrupts :mask-flag must be a symbol, got ~S" mask-flag))
     (unless (and (integerp cycles) (>= cycles 0))
       (error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
+    (when (and mask-on-deliver (not mask-flag))
+      (error "interrupts :mask-on-deliver requires :mask-flag"))
     (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
                                 :queue-depth queue :on-overflow on-overflow
                                 :mask-when mask-when :mask-flag mask-flag :cycles cycles
-                                :drop-on-zero-vector (and drop-on-zero-vector t))))
+                                :drop-on-zero-vector (and drop-on-zero-vector t)
+                                :mask-on-deliver (and mask-on-deliver t))))
 
 ;; #109/#166: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or,
 ;; absent one, the machine's sole declared stack element -- exactly the way
@@ -331,27 +343,28 @@ element or stack-pointer is declared -- name one explicitly with :stack" name))
   (let ((interrupts (machine-descriptor-interrupts descriptor))
         (name (machine-descriptor-name descriptor)))
     (labels ((element (n) (gethash n (machine-descriptor-table descriptor)))
-             (require-kind (n kinds what)
-               (let ((e (element n)))
+             (require-kind (place kinds what)
+               (let* ((n (if (consp place) (first place) place))
+                      (e (element n)))
                  (unless e
                    (error "interrupts on machine ~S: ~A ~S is not a declared storage element"
                           name what n))
                  (unless (member (storage-element-kind e) kinds)
                    (error "interrupts on machine ~S: ~A ~S must be a ~{~S~^ or a ~} element, ~
 got ~S" name what n kinds (storage-element-kind e)))
-                 ;; #109: SREF/(SETF SREF) (storage.lisp), which DELIVER-
-                 ;; PENDING-INTERRUPT (interrupt.lisp) and INTERRUPT-RETURN
-                 ;; (semantics.lisp) both read/write every :VECTOR/:MESSAGE/
-                 ;; :SAVE place through, are scalar-only -- they signal
-                 ;; UNKNOWN-STORAGE on a banked (:count > 1) register (#13).
-                 ;; Rejecting one here, at DEFMACHINE time, turns that into a
-                 ;; clear error instead of a confusing runtime one the first
-                 ;; time an interrupt actually fires. Supporting a banked
-                 ;; register here (which bank index would VECTOR/MESSAGE
-                 ;; even mean?) is unscoped follow-up work, not this one's.
-                 (when (> (storage-element-count e) 1)
-                   (error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
-only a scalar register may be named here" name what n)))))
+                 ;; A bare banked register is ambiguous (which bank cell?) and
+                 ;; rejected at DEFMACHINE time rather than at first delivery.
+                 ;; #163: (NAME INDEX) names one cell of a banked register,
+                 ;; read/written through REGREF; a bare banked NAME stays
+                 ;; ambiguous and rejected.
+                 (if (consp place)
+                     (unless (and (eq (storage-element-kind e) :register)
+                                  (< -1 (second place) (storage-element-count e)))
+                       (error "interrupts on machine ~S: ~A ~S is out of range for register ~S ~
+(~D cell~:P)" name what place n (storage-element-count e)))
+                     (when (> (storage-element-count e) 1)
+                       (error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
+name one cell as (~S INDEX), or use a scalar register" name what n n))))))
       (require-kind (interrupt-descriptor-vector interrupts) '(:register) ":vector")
       (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
       (dolist (n (interrupt-descriptor-save interrupts))
@@ -371,12 +384,13 @@ only a scalar register may be named here" name what n)))))
         (let* ((sp (gethash stack-name (machine-descriptor-stack-pointers descriptor)))
                (memory (gethash (stack-pointer-descriptor-memory sp) (machine-descriptor-table descriptor)))
                (cell-width (or (storage-element-cell-width memory) (storage-element-width memory))))
-          (dolist (n (interrupt-descriptor-save interrupts))
-            (let ((width (storage-element-width (gethash n (machine-descriptor-table descriptor)))))
+          (dolist (place (interrupt-descriptor-save interrupts))
+            (let* ((n (if (consp place) (first place) place))
+                   (width (storage-element-width (gethash n (machine-descriptor-table descriptor)))))
               (when (> width cell-width)
                 (error "interrupts on machine ~S: :save place ~S is ~D bits wide, too wide ~
 for stack-pointer ~S's memory ~S (~D-bit cells)"
-                       name n width stack-name (stack-pointer-descriptor-memory sp) cell-width)))))))))
+                       name place width stack-name (stack-pointer-descriptor-memory sp) cell-width)))))))))
 
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
@@ -768,7 +782,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
      (interrupts :vector reg :message reg :save (name...)
                  [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:cycles n]
-                 [:drop-on-zero-vector t/nil])
+                 [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
 
 A register's :names (#72) gives each bank cell of a banked (:count > 1)
 register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J

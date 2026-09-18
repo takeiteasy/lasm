@@ -248,8 +248,10 @@ memory ~S on machine ~S"
 ;;                a (stack-pointer ...) clause, pushed/popped via SP-PUSH/
 ;;                SP-POP against that clause's own memory/direction; #166).
 (defstruct interrupt-descriptor
-  (vector nil :type symbol)
-  (message nil :type symbol)
+  ;; A place is a scalar register/flag name, or (NAME INDEX) for one cell of
+  ;; a banked register (#163).
+  (vector nil :type (or symbol list))
+  (message nil :type (or symbol list))
   (save nil :type list)
   (stack-name nil :type (or null symbol))
   (stack-kind :stack :type (member :stack :pointer))
@@ -258,7 +260,8 @@ memory ~S on machine ~S"
   (mask-when nil :type (or null symbol function))
   (mask-flag nil :type (or null symbol))
   (cycles 0 :type (integer 0))
-  (drop-on-zero-vector t :type boolean))
+  (drop-on-zero-vector t :type boolean)
+  (mask-on-deliver nil :type boolean))
 
 ;; #166: a (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
 ;; binds an existing scalar :register element as an address pointer into a
@@ -541,7 +544,7 @@ machine's default layout -- callers hold no other kind (#64)."
       (error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
              (machine-descriptor-name (machine-descriptor machine))))
     (when (and (interrupt-descriptor-drop-on-zero-vector interrupts)
-               (zerop (sref machine (interrupt-descriptor-vector interrupts))))
+               (zerop (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
       (return-from %enqueue-interrupt (values)))
     ;; TODO: a plain list with LENGTH/NCONC here is O(depth) per signal --
     ;; fine at :QUEUE's modest default (256) but a real cost at a much
@@ -694,6 +697,18 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
       (error 'register-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                            :name name :index index))
     (setf (aref slot index) (wrap-value value (storage-element-width element)))))
+
+;; #163: an interrupt :VECTOR/:MESSAGE/:SAVE place -- a scalar name read
+;; through SREF, or (NAME INDEX) naming one bank cell read through REGREF.
+(defun %interrupt-place (machine place)
+  (if (consp place)
+      (regref machine (first place) (second place))
+      (sref machine place)))
+
+(defun (setf %interrupt-place) (value machine place)
+  (if (consp place)
+      (setf (regref machine (first place) (second place)) value)
+      (setf (sref machine place) value)))
 
 ;; #143: the read direction of #72's NAMES -- resolving a decoded bank INDEX
 ;; back to its alias, for the disassembler (and #144's debugger) to render
