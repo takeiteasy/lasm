@@ -169,6 +169,17 @@ it straight through to `execute-instruction`, so a `(semantics ...)` body's
 "`choice-case`"](semantics.md#choice-case)) sees exactly what was actually
 decoded, not just the operand values, on either encoding scheme.
 
+### Device ticking (#108)
+
+`step-machine` also ticks every live [device](devices.md) on the machine's
+bus, with the step's own cycle cost, once per step — beside where
+`machine-cycles` is incremented, so a trapping instruction's devices still
+tick instead of that step silently going missing from device time. Not
+called on a `:decode-failure`, where nothing executed and no time elapsed.
+This runs the same way regardless of entry point — `run`/`run-for-cycles`/
+`run-for-duration` below and the debugger's single-instruction `debug-step`
+all go through `step-machine`.
+
 ## `run`
 
 ```lisp

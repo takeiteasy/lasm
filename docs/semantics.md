@@ -33,6 +33,11 @@ evaluates `body` with:
   name too, though the name may be omitted on a single-stack machine — see
   below.
 
+The [device](devices.md) bus API (`device-count`, `device-info`,
+`device-send`, ...) is likewise **not** bound here — an `hwn`/`hwq`/`hwi`-
+style instruction calls it directly, `machine` passed explicitly, the same
+way `mref` is.
+
 ## Operators
 
 - `(set! place value)` — `(setf place value)`. Works on any bound register/

@@ -23,6 +23,9 @@
    #:stack-underflow
    #:stack-index-out-of-range
    #:stack-index-out-of-range-index
+   #:no-such-device
+   #:no-such-device-machine
+   #:no-such-device-index
    #:lasm-trap
    #:lasm-syntax-error
    #:lasm-syntax-error-message
@@ -83,6 +86,21 @@
    #:instruction-word-layout-named
    #:machine-descriptor-clock-speed
    #:machine-cycles
+   #:machine-descriptor-devices
+   #:device-descriptor
+   #:device-descriptor-p
+   #:device-descriptor-name
+   #:device-descriptor-id
+   #:device-descriptor-version
+   #:device-descriptor-manufacturer
+   #:device-descriptor-init
+   #:device-descriptor-tick
+   #:device-descriptor-receive
+   #:device-descriptor-detach
+   #:device
+   #:device-p
+   #:device-index
+   #:device-state
 
    ;; Storage accessors
    #:sref
@@ -96,6 +114,19 @@
    #:flag
    #:register-alias-at
    #:wrap-value
+
+   ;; Devices (#108)
+   #:attach-device
+   #:detach-device
+   #:device-at
+   #:device-count
+   #:find-device
+   #:device-info
+   #:device-send
+   #:tick-devices
+   #:device-signal
+   #:machine-devices
+   #:machine-interrupt-hook
 
    ;; Semantics vocabulary
    #:with-machine

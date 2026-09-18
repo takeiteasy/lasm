@@ -150,6 +150,29 @@ function), got ~S" context name (car fn) (cdr fn))))
   (destructuring-bind (hz) form
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
+;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
+;;   [:tick fn] [:receive fn] [:detach fn]) -- a bus-addressed peripheral,
+;; independent of #107's memory regions (a machine can declare one without
+;; declaring any MMIO region at all). NAME is validated as a symbol here;
+;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
+;; machine's namespace, same as a region's or a register alias's name.
+(defun parse-device-clause (form)
+  (destructuring-bind (name &key (id 0) (version 0) (manufacturer 0)
+                             init tick receive detach)
+      form
+    (unless (symbolp name)
+      (error "device ~S: name must be a symbol" name))
+    (dolist (v (list (cons :id id) (cons :version version) (cons :manufacturer manufacturer)))
+      (unless (and (integerp (cdr v)) (>= (cdr v) 0))
+        (error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
+    (dolist (fn (list (cons :init init) (cons :tick tick)
+                       (cons :receive receive) (cons :detach detach)))
+      (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
+        (error "device ~S: ~A must be a function designator (a symbol or a ~
+function), got ~S" name (car fn) (cdr fn))))
+    (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
+                             :init init :tick tick :receive receive :detach detach)))
+
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
 ;; split into bit fields rather than a cell-per-operand stream. FIELDS is
@@ -434,7 +457,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed)
+  (let (elements instruction-word clock-speed devices)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -449,13 +472,15 @@ rationale as CELL-WIDTH-CACHE (#63)."
          (when clock-speed
            (error "DEFMACHINE: more than one clock-speed clause"))
          (setf clock-speed (parse-clock-speed-clause (rest clause))))
+        (device (cl:push (parse-device-clause (rest clause)) devices))
         (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
-    (values (nreverse elements) instruction-word clock-speed)))
+    (values (nreverse elements) instruction-word clock-speed (nreverse devices))))
 
 (defun build-machine-descriptor (name clauses)
-  (multiple-value-bind (elements instruction-word clock-speed) (parse-machine-clauses clauses)
+  (multiple-value-bind (elements instruction-word clock-speed devices)
+      (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
-                                                :clock-speed clock-speed))
+                                                :clock-speed clock-speed :devices devices))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
@@ -483,6 +508,14 @@ rationale as CELL-WIDTH-CACHE (#63)."
           (when (gethash (memory-region-name region) seen)
             (error "Duplicate storage element name ~S in machine ~S" (memory-region-name region) name))
           (setf (gethash (memory-region-name region) seen) t)))
+      ;; #108: a declared device's name joins the same namespace -- SEEN also
+      ;; catches a device colliding with an element name, register alias, or
+      ;; region name, and two devices sharing a name.
+      (dolist (device-descriptor devices)
+        (when (gethash (device-descriptor-name device-descriptor) seen)
+          (error "Duplicate storage element name ~S in machine ~S"
+                 (device-descriptor-name device-descriptor) name))
+        (setf (gethash (device-descriptor-name device-descriptor) seen) t))
       (setf (machine-descriptor-elements descriptor) elements)
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
       ;; now that every MEMORY element is known (#53, #66) -- see
@@ -507,6 +540,8 @@ rationale as CELL-WIDTH-CACHE (#63)."
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
+     (device NAME [:id n] [:version n] [:manufacturer n]
+             [:init fn] [:tick fn] [:receive fn] [:detach fn])
 
 A register's :names (#72) gives each bank cell of a banked (:count > 1)
 register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
@@ -564,6 +599,19 @@ CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
 RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to
 wall-time-equivalent seconds. Optional; a machine with no such clause can
 still use RUN-FOR-CYCLES and read MACHINE-CYCLES, just not RUN-FOR-DURATION.
+
+DEVICE (#108) declares a bus-addressed peripheral -- identity (an ID/
+VERSION/MANUFACTURER triple, an HWQ-style instruction's own semantics decide
+which registers it lands in) plus optional INIT/TICK/RECEIVE/DETACH hooks,
+each a function designator for the same reason a :DEVICE region's :READ/
+:WRITE are (see above). Independent of any memory region -- a machine can
+declare a device without declaring any MMIO region at all, or the reverse.
+Every declared device gets a fixed bus index in declaration order; a device
+may also be attached at runtime (ATTACH-DEVICE, device.lisp), appended after
+every declared one. See docs/devices.md for the full bus API (DEVICE-COUNT,
+DEVICE-INFO, DEVICE-SEND, DETACH-DEVICE) -- deliberately not bound inside
+WITH-MACHINE-BINDINGS, the same way :MEMORY elements aren't; an instruction's
+semantics call these directly with MACHINE, same as MREF.
 
 Registration happens inside an EVAL-WHEN so the resulting machine-descriptor
 is available at macroexpansion time, not only after this file is loaded --
