@@ -26,13 +26,20 @@ The pure fetch/decode step shared by [the emulator's `step-machine`](emulator.md
 and this file's `disassemble-*` functions — it reads cells, matches an
 opcode, and decodes operand values, but never writes a PC register and never
 executes anything. `read-cell` is a closure of one argument (an address)
-returning that cell's unsigned integer value; `machine-cell-reader` and
-`vector-cell-reader` build one over the two sources callers actually have:
+returning that cell's unsigned integer value; `machine-cell-reader`,
+`machine-peek-reader`, and `vector-cell-reader` build one over the sources
+callers actually have:
 
 ```lisp
 (machine-cell-reader machine memory)          ; reads via mref
+(machine-peek-reader machine memory)          ; reads via mpeek
 (vector-cell-reader cells &key (origin 0) end) ; reads a bare cell sequence
 ```
+
+`step-machine` (a real access) uses `machine-cell-reader`;
+`disassemble-memory` (inspection) uses `machine-peek-reader` instead, so
+disassembling across a [`:device` region](machine-model.md#memory-regions)
+never triggers its `:read` side effects.
 
 `vector-cell-reader` signals `address-out-of-range` outside `[origin, end)`
 — the same condition `mref` signals off the end of live memory — so a caller

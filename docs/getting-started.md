@@ -226,6 +226,18 @@ The same counter-loop program again, driven through the debugger's
 the loop label, steps, continues, and inspects registers and memory. See
 [Debugger](debugger.md).
 
+```sh
+sbcl --script examples/regions.lisp
+```
+
+A machine whose memory splits into a ROM code region (writes dropped), an
+ordinary RAM data region, and a `:device` output port whose write handler
+collects bytes instead of touching backing storage — `load-program` still
+loads at the ROM region's origin (it burns the image in, bypassing write
+protection), a CPU store into ROM is silently dropped, and `mpeek` confirms
+the device region never gets a backing cell of its own. See [Machine model,
+"Memory regions"](machine-model.md#memory-regions).
+
 ## Run the tests
 
 ```sh

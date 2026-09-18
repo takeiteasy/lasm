@@ -29,6 +29,14 @@ reading MACHINE's MEMORY element via MREF (storage.lisp) -- the source used
 by STEP-MACHINE (emulator.lisp)."
   (lambda (address) (mref machine memory address)))
 
+(defun machine-peek-reader (machine memory)
+  "A READ-CELL closure reading MACHINE's MEMORY element via MPEEK
+(storage.lisp) rather than MREF -- the source used by DISASSEMBLE-MEMORY
+(disassembler.lisp), which inspects memory rather than executing it and so
+must not trigger a #107 :DEVICE region's :READ side effects just by
+disassembling across one."
+  (lambda (address) (mpeek machine memory address)))
+
 (defun vector-cell-reader (cells &key (origin 0) end)
   "A READ-CELL closure reading a bare sequence CELLS (e.g. an ASSEMBLY-CELLS
 vector) as if it were mapped into address space starting at ORIGIN --

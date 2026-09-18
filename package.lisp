@@ -17,6 +17,8 @@
    #:storage-error
    #:unknown-storage
    #:address-out-of-range
+   #:memory-write-protected
+   #:memory-write-protected-address
    #:stack-overflow
    #:stack-underflow
    #:stack-index-out-of-range
@@ -59,6 +61,16 @@
    #:storage-element-depth
    #:storage-element-addr-width
    #:storage-element-cell-width
+   #:storage-element-regions
+   #:memory-region
+   #:memory-region-p
+   #:memory-region-name
+   #:memory-region-start
+   #:memory-region-end
+   #:memory-region-kind
+   #:memory-region-on-write
+   #:memory-region-read
+   #:memory-region-write
    #:machine-descriptor-instruction-word
    #:instruction-word-layout
    #:instruction-word-layout-p
@@ -76,6 +88,7 @@
    #:sref
    #:signed-value
    #:mref
+   #:mpeek
    #:stack-push
    #:stack-pop
    #:stack-depth

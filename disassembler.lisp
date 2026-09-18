@@ -397,12 +397,16 @@ sane default for \"the whole address space\" of a live machine. MEMORY
 defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE.
 SYMBOL-INFO (#37), when available (e.g. from the ASSEMBLY that produced this
 memory's contents), resolves the label/.EQU ambiguity and works standalone,
-without SYMBOLS -- see DISASSEMBLE-CELLS."
+without SYMBOLS -- see DISASSEMBLE-CELLS.
+
+#107: reads via MACHINE-PEEK-READER, not MACHINE-CELL-READER -- disassembly
+is inspection, not execution, so it must not trigger a :DEVICE region's
+:READ side effects merely by disassembling across it."
   (unless (and start count)
     (error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
-         (read-cell (machine-cell-reader machine memory))
+         (read-cell (machine-peek-reader machine memory))
          (end (+ start count))
          (lines (%disassemble-raw-lines read-cell start end machine-name memory)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))

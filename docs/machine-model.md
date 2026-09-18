@@ -74,18 +74,18 @@ widths against a machine defined earlier in the same file.
   validation case, a stack shared between ordinary data and an implicit
   call stack (`jsr`/`rts` pushing/popping `pc`), reaching an argument
   underneath its own return address via `stack-ref`.
-- `(memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])` —
+- `(memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
+  [(region NAME start end [:kind :ram/:rom/:device] [:on-write :ignore/:error]
+  [:read fn] [:write fn])...])` —
   addressable storage. `:addr-width` is the number of address bits (so the
   element has `2^addr-width` cells); `:cell-width` is the bit width of each
   cell and defaults to `:width` (byte-addressed). Set `:cell-width` different
   from 8 for word-addressed memory (DCPU-16-style). `:endian` (default
   `:little`) is which cell of a multi-cell value is the low-order one — see
   "Cell width and the assembler" below. Out-of-range addresses signal
-  `address-out-of-range`.
-  Memory is currently allocated eagerly as one array of `2^addr-width`
-  cells. This is deliberately kept behind the constructor in `storage.lisp`
-  so a later region-mapped/sparse backend (ROM/RAM/MMIO, banking) can
-  replace it without changing `mref`/`(setf mref)` call sites.
+  `address-out-of-range`. Memory is allocated eagerly as one array of
+  `2^addr-width` cells; a `region` declares a sub-range with different access
+  *behavior* over that same array — see "Memory regions" below.
 - `(flags NAME...)` — one or more single-bit flags.
 - `(instruction-word :width n (field NAME width)...)` — a fixed-width
   instruction word split into named bit fields, MSB-first as declared, one
@@ -150,6 +150,57 @@ bit-for-bit without first knowing which layout matched.
 that *sets* flags is named `set-flags!` instead, to avoid colliding with
 it — see [Semantics vocabulary](semantics.md).
 
+## Memory regions
+
+A memory element's `region` forms declare sub-ranges of its address space
+with distinct access behavior — `mref`/`(setf mref)` route through whichever
+region an address falls in; an address in no declared region keeps the
+element's plain, uniform behavior. `start`/`end` are both inclusive; regions
+never overlap and every name (region, register alias, or storage element)
+shares one machine-wide namespace, checked at `defmachine` time.
+
+```lisp
+(defmachine gb
+  (memory ram :width 8 :addr-width 16
+    (region bios #x0000 #x00FF :kind :rom)
+    (region vram #x8000 #x9FFF)                 ; :ram, the default
+    (region io   #xFF00 #xFF0F :kind :device
+                 :read io-read :write io-write)))
+```
+
+`:kind` is one of:
+
+- `:ram` (the default) — ordinary storage, identical to an address outside
+  any region. Only useful to name a sub-range, e.g. for later banking.
+- `:rom` — reads hit backing storage; writes are dropped (`:on-write
+  :ignore`, the default) or signal `memory-write-protected` (`:on-write
+  :error`). A ROM image is *burned in*, not stored by the CPU — `load-program`
+  and the debugger write through `%poke`, an internal accessor that bypasses
+  region write policy entirely, so loading a program at a ROM region's
+  origin still works.
+- `:device` — reads and writes are forwarded to `:read`/`:write` instead of
+  touching backing storage at all. A region with no `:read` reads as 0; one
+  with no `:write` discards the store. Both are function designators —
+  write the bare function name, not `#'name`: `defmachine` quotes its whole
+  clause body, so a `#'`-form there would freeze to the literal list
+  `(function name)` rather than an actual function; a bare symbol survives
+  quoting unevaluated and `funcall` resolves it at call time. `:read` is
+  called as `(funcall read machine address)`, `:write` as `(funcall write
+  machine address value)` — both the *absolute* address, not a
+  region-relative offset.
+
+`mpeek` reads backing storage directly, bypassing a `:device` region's
+`:read` (returning 0 there, since a device region has no backing cell of its
+own) — for inspection paths (the debugger's hex dump, disassembly) that must
+not trigger a device's read side effects merely by displaying memory.
+`mref`/instruction fetch are real accesses and always consult regions.
+
+Regions are an access-behavior overlay, not a separate storage backend:
+`reset` still zeroes the whole underlying array regardless of region, so a
+burned-in ROM image does not survive a `reset` and must be reloaded.
+Bank-switched regions (a region whose backing changes at runtime) are not
+yet supported.
+
 ## Runtime state
 
 `(make-machine 'NAME)` instantiates a fresh runtime `machine` for a
@@ -171,12 +222,15 @@ signed/unsigned mode.
 | register (scalar) / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
 | register (banked, `:count > 1`) | `(regref machine name index)` | `(setf (regref machine name index) v)` |
 | stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-ref machine name offset) v)` |
-| memory | `(mref machine name address)` | `(setf (mref machine name address) v)` |
+| memory | `(mref machine name address)`, `(mpeek machine name address)` | `(setf (mref machine name address) v)` |
 
 `regref` also works on a scalar (`:count 1`) register, treating it as a
 one-element bank (`index` 0); `sref` is the reverse restriction, and signals
 `unknown-storage` on a banked element rather than aliasing every index to
 one cell.
+
+`mpeek` is `mref`'s inspection-only sibling — see "Memory regions" above for
+what it bypasses and why.
 
 `flag` treats any non-`nil` value as 1 and `nil` as 0 on write, and reads
 back as `0`/`1`.
@@ -184,7 +238,9 @@ back as `0`/`1`.
 ## Conditions
 
 All signalled conditions inherit `lasm-error`: `unknown-storage`,
-`address-out-of-range`, `stack-overflow`, `stack-underflow`,
+`address-out-of-range`, `memory-write-protected` (a store into a `:rom`
+region declaring `:on-write :error` — see "Memory regions" above),
+`stack-overflow`, `stack-underflow`,
 `stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
 `(setf stack-ref)`), `register-index-out-of-range` (an out-of-range
 `index` to `regref`/`(setf regref)`). `lasm-trap` is signalled by the `trap` semantics

@@ -40,7 +40,10 @@ operand width when more than one memory element is declared.
 
 `cells` is an `assembly` (see [Assembler](assembler.md)) or any sequence of
 `(unsigned-byte n)`. Writes each cell into `memory` starting at `origin`,
-then sets the PC register to `origin`.
+then sets the PC register to `origin`. The write burns the image in directly
+regardless of any [memory region](machine-model.md#memory-regions) at
+`origin` — a `:rom` region's write protection doesn't apply, since a ROM
+image is burned in rather than stored by the CPU.
 
 `origin` defaults to the assembly's own `origin` slot when `cells` is an
 `assembly` — so `(assemble source :origin #x200)` and `load-program`

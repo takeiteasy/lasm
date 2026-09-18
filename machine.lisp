@@ -52,18 +52,88 @@ lay a multi-cell value down in."
                            :width (%check-positive width ":width" name)
                            :depth (%check-positive depth ":depth" name))))
 
+;; #107: (region NAME start end [:kind :ram/:rom/:device] [:on-write
+;; :ignore/:error] [:read fn] [:write fn]) -- one sub-range of a memory
+;; element with distinct access behavior. NAME is validated as a symbol
+;; here; PARSE-MEMORY-CLAUSE cross-checks it against every other name in the
+;; machine's namespace (BUILD-MACHINE-DESCRIPTOR's SEEN table) once the whole
+;; clause is parsed, same as a register's #72 :NAMES aliases. START/END are
+;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
+;; alone knows the element's address range.
+(defun %parse-memory-region-form (form context)
+  (destructuring-bind (head name start end &key (kind :ram) (on-write :ignore) read write) form
+    (unless (eq head 'region)
+      (error "~A: expected (region name start end ...), got ~S" context form))
+    (unless (symbolp name)
+      (error "~A: region name must be a symbol, got ~S" context name))
+    (unless (and (integerp start) (>= start 0))
+      (error "~A region ~S: start must be a non-negative integer, got ~S" context name start))
+    (unless (and (integerp end) (>= end 0))
+      (error "~A region ~S: end must be a non-negative integer, got ~S" context name end))
+    (unless (<= start end)
+      (error "~A region ~S: start ~D must not be greater than end ~D" context name start end))
+    (unless (member kind '(:ram :rom :device))
+      (error "~A region ~S: :kind must be :RAM, :ROM or :DEVICE, got ~S" context name kind))
+    (unless (member on-write '(:ignore :error))
+      (error "~A region ~S: :on-write must be :IGNORE or :ERROR, got ~S" context name on-write))
+    (unless (or (eq on-write :ignore) (eq kind :rom))
+      (error "~A region ~S: :on-write only applies to a :ROM region" context name))
+    (when (and (or read write) (not (eq kind :device)))
+      (error "~A region ~S: :read/:write only apply to a :DEVICE region" context name))
+    (dolist (fn (list (cons :read read) (cons :write write)))
+      (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
+        (error "~A region ~S: ~A must be a function designator (a symbol or a ~
+function), got ~S" context name (car fn) (cdr fn))))
+    (make-memory-region :name name :start start :end end :kind kind
+                         :on-write on-write :read read :write write)))
+
+;; Cross-region checks (#107): unique names and non-overlapping ranges,
+;; applied once every (region ...) form in the clause is parsed -- mirrors
+;; PARSE-INSTRUCTION-WORD-CLAUSE's own cross-layout checks after parsing
+;; every (layout ...) form.
+(defun %check-memory-regions (regions context)
+  (loop for (region . rest) on regions
+        do (when (member (memory-region-name region) rest :key #'memory-region-name)
+             (error "~A: duplicate region name ~S" context (memory-region-name region)))
+           (dolist (other rest)
+             (when (and (<= (memory-region-start region) (memory-region-end other))
+                        (<= (memory-region-start other) (memory-region-end region)))
+               (error "~A: region ~S (~D-~D) overlaps region ~S (~D-~D)"
+                      context (memory-region-name region) (memory-region-start region)
+                      (memory-region-end region) (memory-region-name other)
+                      (memory-region-start other) (memory-region-end other)))))
+  regions)
+
 (defun parse-memory-clause (form)
-  ;; (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])
+  ;; (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
+  ;;   (region NAME start end ...)...)
   ;; #66: ENDIAN defaults to :LITTLE, matching every machine before this
   ;; ticket -- see %ENCODE-VALUE-CELLS/%FETCH-CELLS for what it governs.
-  (destructuring-bind (name &key width addr-width cell-width (endian :little)) form
-    (unless width (error "memory ~S requires :width" name))
-    (unless addr-width (error "memory ~S requires :addr-width" name))
-    (make-storage-element :name name :kind :memory
-                           :width (%check-positive width ":width" name)
-                           :addr-width (%check-positive addr-width ":addr-width" name)
-                           :cell-width (%check-positive (or cell-width width) ":cell-width" name)
-                           :endian (%check-endian endian name))))
+  ;; #107: nested (region ...) forms are split out before DESTRUCTURING-BIND
+  ;; sees the rest as a plain plist, same shape as PARSE-INSTRUCTION-WORD-
+  ;; CLAUSE splitting out (layout ...) forms.
+  (let* ((region-forms (remove-if-not (lambda (f) (and (consp f) (eq (first f) 'region))) form))
+         (plist-forms (remove-if (lambda (f) (and (consp f) (eq (first f) 'region))) form)))
+    (destructuring-bind (name &key width addr-width cell-width (endian :little)) plist-forms
+      (unless width (error "memory ~S requires :width" name))
+      (unless addr-width (error "memory ~S requires :addr-width" name))
+      (%check-positive width ":width" name)
+      (%check-positive addr-width ":addr-width" name)
+      (let* ((context (format nil "memory ~S" name))
+             (max-address (1- (ash 1 addr-width)))
+             (regions (%check-memory-regions
+                       (mapcar (lambda (f) (%parse-memory-region-form f context)) region-forms)
+                       context)))
+        (dolist (r regions)
+          (when (> (memory-region-end r) max-address)
+            (error "~A region ~S: end ~D is outside the element's address range 0-~D"
+                   context (memory-region-name r) (memory-region-end r) max-address)))
+        (make-storage-element :name name :kind :memory
+                               :width width
+                               :addr-width addr-width
+                               :cell-width (%check-positive (or cell-width width) ":cell-width" name)
+                               :endian (%check-endian endian name)
+                               :regions regions)))))
 
 (defun parse-flags-clause (form)
   ;; (flags A B C ...) -- expands to one storage-element per flag, width 1
@@ -404,7 +474,15 @@ rationale as CELL-WIDTH-CACHE (#63)."
                    (error "Duplicate storage element name ~S in machine ~S" alias name))
                  (setf (gethash alias seen) t)
                  (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
-                       index)))
+                       index))
+        ;; #107: a memory element's region names share the same namespace too
+        ;; -- SEEN also catches a region colliding with an element name, a
+        ;; register alias, or another region, e.g. (region ram ...) inside
+        ;; (memory ram ...) itself.
+        (dolist (region (storage-element-regions element))
+          (when (gethash (memory-region-name region) seen)
+            (error "Duplicate storage element name ~S in machine ~S" (memory-region-name region) name))
+          (setf (gethash (memory-region-name region) seen) t)))
       (setf (machine-descriptor-elements descriptor) elements)
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
       ;; now that every MEMORY element is known (#53, #66) -- see
@@ -423,7 +501,9 @@ rationale as CELL-WIDTH-CACHE (#63)."
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:
      (register NAME :width n [:count n] [:names (A B C ...)])
      (stack NAME :width n :depth n)
-     (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big])
+     (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
+       (region NAME start end [:kind :ram/:rom/:device]
+                              [:on-write :ignore/:error] [:read fn] [:write fn])...)
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
@@ -436,6 +516,24 @@ register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
 semantics (WITH-MACHINE-BINDINGS, semantics.lisp). Every alias shares one
 machine-wide namespace with every storage element name -- see MACHINE-
 DESCRIPTOR-REGISTER-ALIASES (storage.lisp).
+
+A memory element's :REGION forms (#107) declare sub-ranges with distinct
+access behavior -- :RAM (the default, ordinary storage), :ROM (writes
+dropped or, with :ON-WRITE :ERROR, signal MEMORY-WRITE-PROTECTED), and
+:DEVICE (reads/writes forwarded to :READ/:WRITE instead of touching backing
+storage). MREF/(SETF MREF) (storage.lisp) route through whichever region an
+address falls in; MPEEK reads backing storage directly, bypassing a
+:DEVICE region's :READ, for inspection paths that must not trigger device
+side effects. A region name shares the same machine-wide namespace as every
+other storage element name and register alias.
+
+A :DEVICE region's :READ/:WRITE are function designators -- write the bare
+function name (e.g. :READ MY-DEVICE-READ), not #'MY-DEVICE-READ: DEFMACHINE
+quotes its whole clause body, so a #'-form there would freeze to the literal
+list (FUNCTION MY-DEVICE-READ) instead of an actual function. A bare symbol
+survives quoting unevaluated and FUNCALL resolves it at call time, which
+also means the function need not be defined yet at DEFMACHINE time, only by
+first access.
 
 INSTRUCTION-WORD (#20, M4) declares a fixed-width instruction word split into
 named bit fields (MSB-first, one of them named OPCODE) instead of the
