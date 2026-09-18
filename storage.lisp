@@ -88,6 +88,17 @@ memory ~S on machine ~S"
    (data :initarg :data :initform nil :reader lasm-trap-data))
   (:report (lambda (c s) (format s "Trap: ~S ~S" (lasm-trap-tag c) (lasm-trap-data c)))))
 
+;; #109: signalled by SIGNAL-INTERRUPT (interrupt.lisp) when a machine's
+;; (interrupts ...) clause declares :ON-OVERFLOW :ERROR (the default) and
+;; the pending queue is already at its declared :QUEUE depth. Mirrors
+;; STACK-OVERFLOW's shape -- MACHINE names the machine, no further detail is
+;; needed since a queue has no addressable slots to report.
+(define-condition interrupt-queue-full (lasm-error)
+  ((machine :initarg :machine :reader interrupt-queue-full-machine))
+  (:report (lambda (c s)
+             (format s "Interrupt queue full on machine ~S"
+                     (interrupt-queue-full-machine c)))))
+
 ;; LASM-SYNTAX-ERROR, LEX-ERROR and PARSE-FAILURE (formerly defined here) now
 ;; live in diagnostic.lisp, loaded immediately after this file -- they moved
 ;; there to sit alongside DIAGNOSTIC-TEXT, their shared report renderer (#74).
@@ -193,6 +204,49 @@ memory ~S on machine ~S"
   (receive nil :type (or null symbol function))
   (detach nil :type (or null symbol function)))
 
+;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
+;; vector/message/save registers are held here as plain symbol names by
+;; PARSE-INTERRUPTS-CLAUSE, then resolved against the machine's own storage
+;; elements by %FINISH-INTERRUPT-MODEL once ELEMENTS is known (the same
+;; two-pass split as %FINISH-INSTRUCTION-WORD-LAYOUT), so every use of a
+;; slot below except VECTOR/MESSAGE/SAVE/STACK-NAME/MASK-FLAG can assume
+;; those names are already valid.
+;;   VECTOR       register holding the handler address written to PC.
+;;   MESSAGE      register a delivered signal's DATA is written to.
+;;   SAVE         list of register/flag names pushed, in order, before
+;;                MESSAGE/VECTOR are written -- INTERRUPT-RETURN (semantics.
+;;                lisp) pops them in reverse.
+;;   STACK-NAME   which STACK element SAVE pushes onto/INTERRUPT-RETURN pops
+;;                from; NIL defers to the machine's sole stack the same way
+;;                WITH-MACHINE-BINDINGS's PUSH/POP do.
+;;   QUEUE-DEPTH  max pending signals; a positive integer.
+;;   ON-OVERFLOW  policy when SIGNAL-INTERRUPT (interrupt.lisp) would exceed
+;;                QUEUE-DEPTH -- :ERROR (signal INTERRUPT-QUEUE-FULL),
+;;                :TRAP (signal LASM-TRAP), :DROP (discard the incoming
+;;                signal), or :DROP-OLDEST (evict the queue's head first).
+;;   MASK-WHEN    function designator (machine) -> generalized boolean,
+;;                or NIL. At most one of MASK-WHEN/MASK-FLAG is non-NIL.
+;;   MASK-FLAG    a flag name read the same way, or NIL.
+;;   CYCLES       extra MACHINE-CYCLES cost of delivery itself; 0 by default.
+;;   DROP-ON-ZERO-VECTOR  when true (the default), SIGNAL-INTERRUPT drops a
+;;                signal outright, before it ever reaches the queue, while
+;;                VECTOR's register currently reads 0 -- DCPU-16/ANIMA-16's
+;;                "IA == 0 means interrupts are off" convention. A masked-
+;;                but-nonzero-vector machine still queues normally; this
+;;                knob exists because masking alone can't express "off"
+;;                without risking a queue that fills and hits ON-OVERFLOW.
+(defstruct interrupt-descriptor
+  (vector nil :type symbol)
+  (message nil :type symbol)
+  (save nil :type list)
+  (stack-name nil :type (or null symbol))
+  (queue-depth 256 :type (integer 1))
+  (on-overflow :error :type (member :error :trap :drop :drop-oldest))
+  (mask-when nil :type (or null symbol function))
+  (mask-flag nil :type (or null symbol))
+  (cycles 0 :type (integer 0))
+  (drop-on-zero-vector t :type boolean))
+
 (defun %region-at (element address)
   "The MEMORY-REGION in ELEMENT containing ADDRESS, or NIL when ELEMENT
 declares no regions or none of them cover ADDRESS. NIL up front on the
@@ -286,6 +340,13 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
   ;; declaring none.
   (devices nil :type list)
+  ;; #109: NIL unless DEFMACHINE declares an (interrupts ...) clause -- the
+  ;; machine's whole interrupt model (vector/message/save registers, queue
+  ;; depth/overflow policy, masking, delivery cost). NIL is what keeps
+  ;; DELIVER-PENDING-INTERRUPT (interrupt.lisp, called from STEP-MACHINE) a
+  ;; single NULL test on a machine declaring no interrupt model, the same
+  ;; way DEVICES being NIL keeps TICK-DEVICES a no-op loop.
+  (interrupts nil :type (or null interrupt-descriptor))
   ;; #72: alias name (upcased string) -> bank index, flattened across every
   ;; banked register's :names -- one machine-wide table, since an alias is
   ;; unique across the whole machine (BUILD-MACHINE-DESCRIPTOR's SEEN check),
@@ -355,12 +416,23 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; (device.lisp) extends it, DETACH-DEVICE clears a slot in place rather
   ;; than shrinking it.
   (devices (make-array 0 :adjustable t :fill-pointer 0))
-  ;; #108: NIL, or a function (machine device data) called by DEVICE-SIGNAL
-  ;; (device.lisp) -- the seam #109's interrupt queue installs itself into.
-  ;; A signal with no hook installed is simply dropped. Host wiring, not
-  ;; machine state -- RESET leaves it alone, the same way the debugger's own
-  ;; breakpoints (a DEBUG-SESSION, not the MACHINE) survive a RESET.
-  (interrupt-hook nil :type (or null function)))
+  ;; #108/#109: NIL, or a function (machine device data) called by
+  ;; DEVICE-SIGNAL (device.lisp). MAKE-MACHINE below auto-installs
+  ;; #'%DEFAULT-INTERRUPT-HOOK (interrupt.lisp) when the descriptor declares
+  ;; an (interrupts ...) clause; a signal with no hook installed at all is
+  ;; simply dropped. Host wiring, not machine state -- RESET below leaves
+  ;; whatever is currently installed here alone, unconditionally, the same
+  ;; way a DEBUG-SESSION's breakpoints (not the MACHINE) survive a RESET --
+  ;; this holds for the auto-installed default exactly as for anything a
+  ;; host replaced it with.
+  (interrupt-hook nil :type (or null function))
+  ;; #109: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp) but
+  ;; not yet delivered -- a list of (DEVICE . DATA) conses, oldest first,
+  ;; DEVICE possibly NIL for a software-raised (INT-style) signal. Capped at
+  ;; the descriptor's INTERRUPT-DESCRIPTOR-QUEUE-DEPTH by SIGNAL-INTERRUPT
+  ;; itself; this slot has no depth of its own. Machine state, unlike
+  ;; INTERRUPT-HOOK above -- RESET clears it.
+  (interrupt-queue nil :type list))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -402,6 +474,55 @@ machine's default layout -- callers hold no other kind (#64)."
                    :element-type `(unsigned-byte ,cell-width)
                    :initial-element 0)))))
 
+;; #109: append ENTRY (a (DEVICE . DATA) cons, DEVICE possibly NIL for a
+;; software-raised signal) to MACHINE's pending interrupt queue, honoring
+;; its descriptor's :DROP-ON-ZERO-VECTOR/:QUEUE/:ON-OVERFLOW policy. Lives
+;; here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below (which
+;; MAKE-MACHINE sharp-quotes) needs it and LASM.ASD is :SERIAL T with
+;; interrupt.lisp loading after this file -- the same reason %INSTANTIATE-
+;; DEVICE lives here rather than in device.lisp. SIGNAL-INTERRUPT
+;; (interrupt.lisp), the public device-optional entry point, is a second,
+;; equally thin wrapper around this -- it can't be the other way around
+;; (this calling out to interrupt.lisp) without creating the forward
+;; reference this split avoids.
+(defun %enqueue-interrupt (machine entry)
+  (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
+    (unless interrupts
+      (error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
+             (machine-descriptor-name (machine-descriptor machine))))
+    (when (and (interrupt-descriptor-drop-on-zero-vector interrupts)
+               (zerop (sref machine (interrupt-descriptor-vector interrupts))))
+      (return-from %enqueue-interrupt (values)))
+    ;; TODO: a plain list with LENGTH/NCONC here is O(depth) per signal --
+    ;; fine at :QUEUE's modest default (256) but a real cost at a much
+    ;; deeper declared queue. A ring buffer (sized to :QUEUE, tracking its
+    ;; own count) would make depth checks and both ends O(1) if that ever
+    ;; matters.
+    (when (>= (length (machine-interrupt-queue machine)) (interrupt-descriptor-queue-depth interrupts))
+      (ecase (interrupt-descriptor-on-overflow interrupts)
+        (:error (error 'interrupt-queue-full
+                        :machine (machine-descriptor-name (machine-descriptor machine))))
+        (:trap (error 'lasm-trap :tag :interrupt-queue-overflow :data entry))
+        (:drop (return-from %enqueue-interrupt (values)))
+        (:drop-oldest (cl:pop (machine-interrupt-queue machine)))))
+    (setf (machine-interrupt-queue machine)
+          (nconc (machine-interrupt-queue machine) (list entry))))
+  (values))
+
+;; #109: the hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
+;; HOOK when the descriptor declares (interrupts ...) -- DEVICE-SIGNAL
+;; (device.lisp) reaches this indirectly through the hook; a software
+;; INT-style instruction's semantics call SIGNAL-INTERRUPT (interrupt.lisp)
+;; instead, DEVICE-optional. Both funnel into %ENQUEUE-INTERRUPT above. A
+;; named top-level function, not an anonymous lambda, purely so a caller
+;; (a test, or introspecting host code) can EQ-compare MACHINE-INTERRUPT-
+;; HOOK against #'%DEFAULT-INTERRUPT-HOOK to tell "still the auto-installed
+;; default" from "something else was installed" -- RESET itself does not
+;; make this distinction (see its own docstring below): it leaves whatever
+;; is currently installed alone either way.
+(defun %default-interrupt-hook (machine device data)
+  (%enqueue-interrupt machine (cons device data)))
+
 ;; #108: instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
 ;; its INIT hook (if any). Shared by MAKE-MACHINE/RESET below (seeding the
 ;; declared bus) and ATTACH-DEVICE (device.lisp, appending a runtime one) --
@@ -429,6 +550,11 @@ machine's default layout -- callers hold no other kind (#64)."
         (vector-push-extend
          (%instantiate-device m device-descriptor (fill-pointer (machine-devices m)))
          (machine-devices m)))
+      ;; #109: auto-wire the real delivery hook when the descriptor declares
+      ;; an (interrupts ...) clause -- no host boilerplate needed. A machine
+      ;; declaring no such clause gets no hook, exactly as #108 left it.
+      (when (machine-descriptor-interrupts descriptor)
+        (setf (machine-interrupt-hook m) #'%default-interrupt-hook))
       m)))
 
 (defun reset (machine)
@@ -442,7 +568,11 @@ attached device (ATTACH-DEVICE, device.lisp) is dropped, every hole is
 refilled, and every declared device's INIT hook runs again, exactly as if a
 fresh MAKE-MACHINE had built the bus. MACHINE-INTERRUPT-HOOK is untouched --
 it's host wiring (who the bus signals), not machine state, so it survives a
-RESET the same way a DEBUG-SESSION's breakpoints do."
+RESET the same way a DEBUG-SESSION's breakpoints do; this holds for #109's
+auto-installed #'%DEFAULT-INTERRUPT-HOOK exactly as for a host's own hook,
+so a host that replaced it (including with NIL, to disable delivery) keeps
+that choice across a RESET. #109's pending INTERRUPT-QUEUE, unlike the
+hook, *is* machine state and is cleared unconditionally below."
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
@@ -456,6 +586,7 @@ RESET the same way a DEBUG-SESSION's breakpoints do."
       (vector-push-extend
        (%instantiate-device machine device-descriptor (fill-pointer devices))
        devices)))
+  (setf (machine-interrupt-queue machine) nil)
   machine)
 
 ;;; Accessors

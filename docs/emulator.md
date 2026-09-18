@@ -180,6 +180,20 @@ This runs the same way regardless of entry point — `run`/`run-for-cycles`/
 `run-for-duration` below and the debugger's single-instruction `debug-step`
 all go through `step-machine`.
 
+### Interrupt delivery (#109)
+
+`step-machine` also delivers a pending, unmasked interrupt — if the
+machine declares an `(interrupts ...)` clause and one is queued — before
+this step's own fetch even begins. Delivery pushes state, writes the
+signal's data and vector, then this same step continues into its ordinary
+fetch/decode/execute, now reading from the handler: one step both
+delivers the interrupt and executes the handler's first instruction. Zero
+cost on a machine declaring no `(interrupts ...)` clause. See
+[Interrupts](interrupts.md#delivery) for the full model. Like device
+ticking above, this runs identically under every entry point —
+`run`/`run-for-cycles`/`run-for-duration` and the debugger's `debug-step`
+all go through `step-machine`.
+
 ## `run`
 
 ```lisp
@@ -193,7 +207,7 @@ Calls `step-machine` in a loop until one of three stop conditions:
 
 | `reason` | Meaning |
 |---|---|
-| `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. A generalized interrupt/exception model replacing `trap` outright is M6. |
+| `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. `trap` and #109's interrupt delivery remain two separate mechanisms; a model unifying them is future M6 work. |
 | `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
 | `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer. `run-for-cycles`/`run-for-duration` below add the cycle-based budgets `(cycles n)` was accepted for. |
 | `:max-cycles` | `run-for-cycles` only — see below. |
@@ -212,7 +226,10 @@ instruction's semantics — `stack-overflow`, `stack-underflow`,
 "Conditions"](machine-model.md)) — propagates straight out of `run` as an
 ordinary Lisp error, since
 `step-machine` only catches `unknown-instruction` and `run` only catches
-`lasm-trap`. `tests/emulator.lisp`'s `stack-underflow-escapes-run` and
+`lasm-trap`. `interrupt-queue-full` (`signal-interrupt` past an
+`(interrupts ...)` clause's `:queue` depth with `:on-overflow :error`) is
+the same — an `:on-overflow :trap` machine gets `:trap` as its stop reason
+instead, since that path signals `lasm-trap`, not `interrupt-queue-full`. `tests/emulator.lisp`'s `stack-underflow-escapes-run` and
 `stack-overflow-escapes-run` pin this down as the current behaviour;
 whether `run` should instead catch `storage-error` and return a fourth stop
 reason is tracked as a follow-up.
@@ -321,8 +338,10 @@ resolved by `decode-instruction-at` itself, so `step-machine` sees one
 correctly-matched descriptor regardless of how many modes or mnemonics an
 opcode carries. It does not cover:
 
-- Interrupts, privilege levels, or a generalized trap/interrupt model
-  beyond the single `trap` primitive — M6.
+- Privilege levels, or a generalized trap/interrupt model unifying `trap`
+  with #109's interrupt delivery — future M6 work. Interrupt delivery
+  itself is covered — see "Interrupt delivery (#109)" above and
+  [Interrupts](interrupts.md).
 - Recovering source text from encoded cells — see [Disassembler](disassembler.md)
   (#21), built on this file's own `decode-instruction-at`.
 - Stopping at a chosen point and inspecting live state interactively — see

@@ -36,7 +36,8 @@ evaluates `body` with:
 The [device](devices.md) bus API (`device-count`, `device-info`,
 `device-send`, ...) is likewise **not** bound here — an `hwn`/`hwq`/`hwi`-
 style instruction calls it directly, `machine` passed explicitly, the same
-way `mref` is.
+way `mref` is. `signal-interrupt` (see [Interrupts](interrupts.md))
+follows the same convention for a software `int`-style instruction.
 
 ## Operators
 
@@ -53,9 +54,12 @@ when it runs) if the name is left out — name one explicitly in that case.
 - `(set-flags! (flag-name form)...)` — set each named flag to the result of
   evaluating `form`, e.g. `(set-flags! (c (> r 255)) (z (zero? a)))`.
 - `(trap tag &optional data)` — signal a `lasm-trap` condition carrying
-  `tag`/`data`. This is a placeholder for the full interrupt/exception model
-  planned for M6 (`deftrap`/`definterrupt`, vectors, priority/masking); for
-  now it's just a condition signal with no vectoring.
+  `tag`/`data`. Unchanged by #109's interrupt delivery (below) — the two
+  remain separate mechanisms; a model unifying them is future M6 work.
+- `(interrupt-return)` — on a machine declaring an `(interrupts ...)`
+  clause (see [Interrupts](interrupts.md)), pops every `:save` place in
+  reverse declared order, restoring exactly what delivery pushed. Signals
+  an error at macroexpansion time on a machine declaring no such clause.
 - `(zero? value)`, `(bit-set? value bit)` — small predicates used in flag
   expressions.
 

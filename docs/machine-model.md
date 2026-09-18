@@ -127,6 +127,12 @@ widths against a machine defined earlier in the same file.
   (which convert a cycle count to wall-time-equivalent seconds, and so need
   a rate to convert against). See
   [Emulator](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
+- `(interrupts :vector reg :message reg :save (name...) [:stack name]
+  [:queue n] [:on-overflow policy] [:mask-when fn] [:mask-flag name]
+  [:cycles n] [:drop-on-zero-vector t/nil])` — the interrupt-delivery model
+  (#109): a vector register, what's saved/restored around delivery, a
+  pending-signal queue, and optional masking — see
+  [Interrupts](interrupts.md).
 
 Widths and depths must be positive integers; duplicate element names and
 unknown clause heads are compile-time errors. `instruction-word`'s field
@@ -249,15 +255,21 @@ region declaring `:on-write :error` — see "Memory regions" above),
 `stack-overflow`, `stack-underflow`,
 `stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
 `(setf stack-ref)`), `register-index-out-of-range` (an out-of-range
-`index` to `regref`/`(setf regref)`). `lasm-trap` is signalled by the `trap` semantics
-operator (see [Semantics vocabulary](semantics.md)) and is not a storage
+`index` to `regref`/`(setf regref)`), `no-such-device` (see
+[Devices](devices.md)), `interrupt-queue-full` (a `signal-interrupt` past
+an `(interrupts ...)` clause's `:queue` depth with the default
+`:on-overflow :error` — see [Interrupts](interrupts.md#overflow)).
+`lasm-trap` is signalled by the `trap` semantics operator (see [Semantics
+vocabulary](semantics.md)) and, on an `:on-overflow :trap` machine, by
+`signal-interrupt` past its `:queue` depth as well; neither is a storage
 error.
 
 None of these storage conditions are currently a `run` stop reason (see
 [Emulator, "Stop reasons"](emulator.md#stop-reasons)) — an instruction that
-overflows or underflows a stack, or addresses memory out of range, escapes
-`run` as a raw Lisp condition rather than returning `:trap`,
-`:decode-failure`, or `:max-steps`.
+overflows or underflows a stack, addresses memory out of range, or
+overflows an interrupt queue with `:on-overflow :error`, escapes `run` as a
+raw Lisp condition rather than returning `:trap`, `:decode-failure`, or
+`:max-steps`.
 
 ## Cell- vs. word-encoded instructions
 

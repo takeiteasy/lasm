@@ -173,6 +173,118 @@ function), got ~S" name (car fn) (cdr fn))))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
                              :init init :tick tick :receive receive :detach detach)))
 
+;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
+;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
+;;   [:mask-flag name] [:cycles n] [:drop-on-zero-vector t/nil]) -- the
+;; machine's whole interrupt-delivery model. VECTOR/MESSAGE/SAVE/STACK/
+;; MASK-FLAG are validated as symbols here only -- whether each actually
+;; names a real storage element of the right kind can't be checked until
+;; every (register ...)/(stack ...)/(flags ...) clause is known, so that
+;; part is %FINISH-INTERRUPT-MODEL's job (below), called from BUILD-
+;; MACHINE-DESCRIPTOR once ELEMENTS is built, mirroring %FINISH-
+;; INSTRUCTION-WORD-LAYOUT's own two-pass split. Unlike DEVICE, this clause
+;; introduces no new namespace names -- it only references existing ones --
+;; so BUILD-MACHINE-DESCRIPTOR's SEEN table never needs to know about it.
+(defun parse-interrupts-clause (form)
+  (destructuring-bind (&key vector message save stack (queue 256) (on-overflow :error)
+                             mask-when mask-flag (cycles 0) (drop-on-zero-vector t))
+      form
+    (unless vector (error "interrupts requires :vector"))
+    (unless (symbolp vector)
+      (error "interrupts :vector must be a symbol, got ~S" vector))
+    (unless message (error "interrupts requires :message"))
+    (unless (symbolp message)
+      (error "interrupts :message must be a symbol, got ~S" message))
+    (unless save (error "interrupts requires :save"))
+    (unless (and (listp save) (every #'symbolp save))
+      (error "interrupts :save must be a list of symbols, got ~S" save))
+    (when (and stack (not (symbolp stack)))
+      (error "interrupts :stack must be a symbol, got ~S" stack))
+    (unless (and (integerp queue) (plusp queue))
+      (error "interrupts :queue must be a positive integer, got ~S" queue))
+    (unless (member on-overflow '(:error :trap :drop :drop-oldest))
+      (error "interrupts :on-overflow must be :ERROR, :TRAP, :DROP or :DROP-OLDEST, got ~S"
+             on-overflow))
+    (when (and mask-when mask-flag)
+      (error "interrupts: at most one of :mask-when/:mask-flag may be given"))
+    (when (and mask-when (not (or (symbolp mask-when) (functionp mask-when))))
+      (error "interrupts :mask-when must be a function designator (a symbol or a ~
+function), got ~S" mask-when))
+    (when (and mask-flag (not (symbolp mask-flag)))
+      (error "interrupts :mask-flag must be a symbol, got ~S" mask-flag))
+    (unless (and (integerp cycles) (>= cycles 0))
+      (error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
+    (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
+                                :queue-depth queue :on-overflow on-overflow
+                                :mask-when mask-when :mask-flag mask-flag :cycles cycles
+                                :drop-on-zero-vector (and drop-on-zero-vector t))))
+
+;; #109: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or, absent
+;; one, the machine's sole declared stack element -- exactly the way
+;; WITH-MACHINE-BINDINGS's PUSH/POP macrolets do at macroexpansion time
+;; (semantics.lisp), just resolved once here at DEFMACHINE time instead,
+;; since the whole machine descriptor is already in hand. Returns the
+;; resolved stack name, or signals if GIVEN doesn't name a real stack, or
+;; (with none given) the machine declares zero or more than one.
+(defun %resolve-interrupt-stack (descriptor given)
+  (let ((name (machine-descriptor-name descriptor)))
+    (if given
+        (let ((element (gethash given (machine-descriptor-table descriptor))))
+          (unless (and element (eq (storage-element-kind element) :stack))
+            (error "interrupts on machine ~S: :stack ~S is not a declared stack element"
+                   name given))
+          given)
+        (let ((stacks (remove-if-not (lambda (e) (eq (storage-element-kind e) :stack))
+                                      (machine-descriptor-elements descriptor))))
+          (cond
+            ((= (length stacks) 1) (storage-element-name (first stacks)))
+            ((null stacks)
+             (error "interrupts on machine ~S: :save needs a stack, but no stack element ~
+is declared -- name one explicitly with :stack" name))
+            (t (error "interrupts on machine ~S: more than one stack element declared ~
+(~{~S~^ ~}) -- name one explicitly with :stack" name (mapcar #'storage-element-name stacks))))))))
+
+;; #109: resolves an INTERRUPT-DESCRIPTOR's symbolic names -- :VECTOR/
+;; :MESSAGE/:SAVE/:STACK/:MASK-FLAG -- against DESCRIPTOR's own ELEMENTS,
+;; once they're fully known (BUILD-MACHINE-DESCRIPTOR, below, after the
+;; ELEMENTS loop). Mutates DESCRIPTOR-INTERRUPTS in place (its :STACK slot
+;; picks up %RESOLVE-INTERRUPT-STACK's resolved name); every other slot is
+;; validated but left as parsed. A machine declaring no (interrupts ...)
+;; clause never calls this.
+(defun %finish-interrupt-model (descriptor)
+  (let ((interrupts (machine-descriptor-interrupts descriptor))
+        (name (machine-descriptor-name descriptor)))
+    (labels ((element (n) (gethash n (machine-descriptor-table descriptor)))
+             (require-kind (n kinds what)
+               (let ((e (element n)))
+                 (unless e
+                   (error "interrupts on machine ~S: ~A ~S is not a declared storage element"
+                          name what n))
+                 (unless (member (storage-element-kind e) kinds)
+                   (error "interrupts on machine ~S: ~A ~S must be a ~{~S~^ or a ~} element, ~
+got ~S" name what n kinds (storage-element-kind e)))
+                 ;; #109: SREF/(SETF SREF) (storage.lisp), which DELIVER-
+                 ;; PENDING-INTERRUPT (interrupt.lisp) and INTERRUPT-RETURN
+                 ;; (semantics.lisp) both read/write every :VECTOR/:MESSAGE/
+                 ;; :SAVE place through, are scalar-only -- they signal
+                 ;; UNKNOWN-STORAGE on a banked (:count > 1) register (#13).
+                 ;; Rejecting one here, at DEFMACHINE time, turns that into a
+                 ;; clear error instead of a confusing runtime one the first
+                 ;; time an interrupt actually fires. Supporting a banked
+                 ;; register here (which bank index would VECTOR/MESSAGE
+                 ;; even mean?) is unscoped follow-up work, not this one's.
+                 (when (> (storage-element-count e) 1)
+                   (error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
+only a scalar register may be named here" name what n)))))
+      (require-kind (interrupt-descriptor-vector interrupts) '(:register) ":vector")
+      (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
+      (dolist (n (interrupt-descriptor-save interrupts))
+        (require-kind n '(:register :flag) ":save"))
+      (when (interrupt-descriptor-mask-flag interrupts)
+        (require-kind (interrupt-descriptor-mask-flag interrupts) '(:flag) ":mask-flag")))
+    (setf (interrupt-descriptor-stack-name interrupts)
+          (%resolve-interrupt-stack descriptor (interrupt-descriptor-stack-name interrupts)))))
+
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
 ;; split into bit fields rather than a cell-per-operand stream. FIELDS is
@@ -457,7 +569,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed devices)
+  (let (elements instruction-word clock-speed devices interrupts)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -473,14 +585,19 @@ rationale as CELL-WIDTH-CACHE (#63)."
            (error "DEFMACHINE: more than one clock-speed clause"))
          (setf clock-speed (parse-clock-speed-clause (rest clause))))
         (device (cl:push (parse-device-clause (rest clause)) devices))
+        (interrupts
+         (when interrupts
+           (error "DEFMACHINE: more than one interrupts clause"))
+         (setf interrupts (parse-interrupts-clause (rest clause))))
         (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
-    (values (nreverse elements) instruction-word clock-speed (nreverse devices))))
+    (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts)))
 
 (defun build-machine-descriptor (name clauses)
-  (multiple-value-bind (elements instruction-word clock-speed devices)
+  (multiple-value-bind (elements instruction-word clock-speed devices interrupts)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
-                                                :clock-speed clock-speed :devices devices))
+                                                :clock-speed clock-speed :devices devices
+                                                :interrupts interrupts))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
@@ -528,6 +645,11 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (when instruction-word
         (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)
                                           (%descriptor-endian descriptor)))
+      ;; #109: INTERRUPTS' :VECTOR/:MESSAGE/:SAVE/:STACK/:MASK-FLAG can only
+      ;; be resolved against real storage elements now that ELEMENTS is
+      ;; known -- same deferred-finishing reason as INSTRUCTION-WORD above.
+      (when interrupts
+        (%finish-interrupt-model descriptor))
       descriptor)))
 
 (defmacro defmachine (name &body clauses)
@@ -542,6 +664,10 @@ rationale as CELL-WIDTH-CACHE (#63)."
      (clock-speed n)
      (device NAME [:id n] [:version n] [:manufacturer n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn])
+     (interrupts :vector reg :message reg :save (name...)
+                 [:stack name] [:queue n] [:on-overflow policy]
+                 [:mask-when fn] [:mask-flag name] [:cycles n]
+                 [:drop-on-zero-vector t/nil])
 
 A register's :names (#72) gives each bank cell of a banked (:count > 1)
 register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
@@ -612,6 +738,28 @@ every declared one. See docs/devices.md for the full bus API (DEVICE-COUNT,
 DEVICE-INFO, DEVICE-SEND, DETACH-DEVICE) -- deliberately not bound inside
 WITH-MACHINE-BINDINGS, the same way :MEMORY elements aren't; an instruction's
 semantics call these directly with MACHINE, same as MREF.
+
+INTERRUPTS (#109) declares the machine's interrupt-delivery model:
+:VECTOR names the register holding the handler address, written to PC on
+delivery; :MESSAGE names the register a delivered signal's data is written
+to; :SAVE names the registers/flags pushed, in order, before MESSAGE/VECTOR
+are written -- INTERRUPT-RETURN (semantics.lisp) pops them in reverse.
+:STACK names which declared stack SAVE pushes onto, defaulting to the
+machine's sole one (an error if it declares none or more than one).
+:QUEUE (default 256) caps the number of pending, undelivered signals;
+:ON-OVERFLOW (default :ERROR) picks what SIGNAL-INTERRUPT (interrupt.lisp)
+does when a signal arrives past that cap -- :ERROR signals INTERRUPT-
+QUEUE-FULL, :TRAP signals LASM-TRAP, :DROP discards the incoming signal,
+:DROP-OLDEST evicts the queue's head first. :MASK-WHEN (a function
+designator, (machine) -> generalized boolean) or :MASK-FLAG (a flag name)
+-- at most one -- gates whether a *queued* signal is delivered this step;
+masking never blocks enqueueing. :CYCLES (default 0) is delivery's own
+extra MACHINE-CYCLES cost. :DROP-ON-ZERO-VECTOR (default T) drops a signal
+outright, before it ever reaches the queue, while :VECTOR's register
+currently reads 0 -- the DCPU-16/ANIMA-16 convention where a zero vector
+means interrupts are off; set it NIL on a machine whose handler legitimately lives
+at address 0. See docs/interrupts.md for the full delivery/masking/
+overflow model and SIGNAL-INTERRUPT/INTERRUPT-RETURN.
 
 Registration happens inside an EVAL-WHEN so the resulting machine-descriptor
 is available at macroexpansion time, not only after this file is loaded --

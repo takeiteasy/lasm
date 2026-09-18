@@ -14,7 +14,9 @@
 
 ;;; The clock: TICK counts down from its own STATE (an INIT-seeded cons cell
 ;;; holding the remaining count), and DEVICE-SIGNAL's when it hits zero --
-;;; dropped here, since no interrupt hook is installed (#109's job).
+;;; dropped here, since this machine declares no (interrupts ...) clause
+;;; and so installs no interrupt hook; see examples/interrupts.lisp for a
+;;; machine where the same DEVICE-SIGNAL call is actually delivered.
 (defun clock-init (machine device)
   (declare (ignore machine device))
   (cons 3 nil)) ; 3 ticks remaining
@@ -23,7 +25,12 @@
   (declare (ignore cycles))
   (let ((remaining (device-state device)))
     (when (and (plusp (car remaining)) (zerop (decf (car remaining))))
-      (device-signal machine device :expired))))
+      ;; An unsigned integer, not a keyword -- a delivered signal's data is
+      ;; written into the :MESSAGE register via SETF SREF (WRAP-VALUE,
+      ;; storage.lisp), which requires one. Dropped on this machine either
+      ;; way (see above), but examples/interrupts.lisp shows the same call
+      ;; on a machine that actually delivers it.
+      (device-signal machine device #xe0))))
 
 ;;; The output port: RECEIVE (an HWI-style message) prints whatever's in the
 ;;; A register at the time -- an instruction's semantics decide what "the
@@ -89,8 +96,10 @@
   (format t "~%Sending a message to the port:~%")
   (run m)
 
-  ;; Tick the clock down to expiry -- DEVICE-SIGNAL fires but is dropped, no
-  ;; interrupt hook installed (that's #109's seam, not this ticket's).
+  ;; Tick the clock down to expiry -- DEVICE-SIGNAL fires but is dropped:
+  ;; this machine declares no (interrupts ...) clause, so MAKE-MACHINE
+  ;; installed no hook. examples/interrupts.lisp shows the same call
+  ;; actually delivered.
   (setf (sref m 'pc) 0)
   (load-program m (list #x03 #x03 #x03 #xff)) ; nop*3, hlt
   (run m)

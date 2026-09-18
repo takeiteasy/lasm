@@ -8,12 +8,15 @@
 ;;;; for one enumerated and messaged the DCPU-16/ANIMA-16 way. A machine may
 ;;;; use either, both, or neither.
 ;;;;
-;;;; Delivery, queueing and masking of interrupts are out of scope here --
-;;;; DEVICE-SIGNAL only calls whatever MACHINE-INTERRUPT-HOOK is installed,
-;;;; and drops the signal when none is. That hook is the seam #109's
-;;;; trap/interrupt subsystem installs itself into. Serializing device state
-;;;; for a snapshot is #112's -- MACHINE-DEVICES and DEVICE-STATE below are
-;;;; what it walks.
+;;;; DEVICE-SIGNAL below is unchanged by #109's interrupt subsystem --
+;;;; it still only calls whatever MACHINE-INTERRUPT-HOOK is installed, and
+;;;; drops the signal when none is. What changed is what's installed there:
+;;;; MAKE-MACHINE (storage.lisp) now auto-wires the hook to the real
+;;;; delivery queue on any machine declaring an (interrupts ...) clause
+;;;; (machine.lisp) -- see docs/interrupts.md for the queue/masking/
+;;;; overflow model this seam now feeds. Serializing device state for a
+;;;; snapshot is #112's -- MACHINE-DEVICES and DEVICE-STATE below are what
+;;;; it walks.
 
 (in-package #:lasm)
 
@@ -132,13 +135,15 @@ bus index order, including a hole-skipping pass -- not once per hole."
                (when tick (funcall tick machine device cycles))))
   (values))
 
-;;; Interrupt seam (#109 installs the real queue here)
+;;; Interrupt seam (#109's queue is what's installed here now)
 
 (defun device-signal (machine device &optional data)
-  "The #108 interrupt seam: calls MACHINE-INTERRUPT-HOOK (storage.lisp) with
-MACHINE, DEVICE and DATA when one is installed, otherwise drops the signal.
-Delivery, queueing, masking and overflow policy are #109's -- this function
-only gives a device a way to raise its hand."
+  "The #108 interrupt seam, unchanged: calls MACHINE-INTERRUPT-HOOK
+(storage.lisp) with MACHINE, DEVICE and DATA when one is installed,
+otherwise drops the signal. On a machine declaring an (interrupts ...)
+clause, that hook is #109's real delivery queue -- see docs/interrupts.md
+for the full model (SIGNAL-INTERRUPT, masking, overflow policy). This
+function itself still only gives a device a way to raise its hand."
   (let ((hook (machine-interrupt-hook machine)))
     (when hook (funcall hook machine device data)))
   (values))
