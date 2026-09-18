@@ -125,6 +125,20 @@ time (EXECUTE-INSTRUCTION's LASM-TRAP unwinds straight past anything placed
 after it). Called with this step's own COST, not on the :DECODE-FAILURE
 early return below, where nothing executed and no time elapsed.
 
+#109: DELIVER-PENDING-INTERRUPT (interrupt.lisp) runs first, before PC is
+even read -- a pending, unmasked signal is delivered by pushing state,
+writing the vector into PC, and (if the machine's (interrupts ...) clause
+gives delivery a non-zero cost) ticking devices for it, all before this
+step's own fetch -- so the very same step both delivers the interrupt and
+executes the handler's first instruction. This is the only point where PC
+is unambiguously the next instruction to run -- delivering any later
+(e.g. after EXECUTE-INSTRUCTION) would push a return address that skips
+whatever this step was about to execute. Placed in STEP-MACHINE itself,
+not %RUN-LOOP (emulator.lisp), so single-stepping (DEBUG-STEP,
+debugger.lisp) sees delivery too, not just RUN. A machine declaring no
+(interrupts ...) clause pays nothing here -- DELIVER-PENDING-INTERRUPT is a
+single NULL test on MACHINE-DESCRIPTOR-INTERRUPTS.
+
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
 (disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
@@ -136,22 +150,23 @@ so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
 decoded, not just the values."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (pc (%resolve-pc machine-name pc))
-         (memory (%resolve-memory machine-name memory))
-         (address (sref machine pc)))
-    (multiple-value-bind (descriptor values size choices)
-        (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
-      (if (eq descriptor :decode-failure)
-          (values :decode-failure 0)
-          (let ((cost (%descriptor-cycle-cost descriptor)))
-            (setf (sref machine pc) (+ address size))
-            (incf (machine-cycles machine) cost)
-            ;; TODO: devices tick once per instruction, with that
-            ;; instruction's whole cost -- a device needing intra-
-            ;; instruction resolution can't express it; sub-instruction
-            ;; tick granularity is a follow-up (#108).
-            (tick-devices machine cost)
-            (execute-instruction descriptor machine values choices)
-            (values descriptor cost))))))
+         (memory (%resolve-memory machine-name memory)))
+    (deliver-pending-interrupt machine pc)
+    (let ((address (sref machine pc)))
+      (multiple-value-bind (descriptor values size choices)
+          (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
+        (if (eq descriptor :decode-failure)
+            (values :decode-failure 0)
+            (let ((cost (%descriptor-cycle-cost descriptor)))
+              (setf (sref machine pc) (+ address size))
+              (incf (machine-cycles machine) cost)
+              ;; TODO: devices tick once per instruction, with that
+              ;; instruction's whole cost -- a device needing intra-
+              ;; instruction resolution can't express it; sub-instruction
+              ;; tick granularity is a follow-up (#108).
+              (tick-devices machine cost)
+              (execute-instruction descriptor machine values choices)
+              (values descriptor cost)))))))
 
 ;;; Run
 

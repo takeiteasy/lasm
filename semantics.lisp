@@ -12,13 +12,20 @@
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
-operators SET!, PUSH, POP, SET-FLAGS!, and TRAP.
+operators SET!, PUSH, POP, SET-FLAGS!, TRAP, and INTERRUPT-RETURN.
 
 #108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
 device.lisp) is deliberately *not* bound here, the same way :MEMORY
 elements aren't (see below) -- an HWN/HWQ/HWI-style instruction's semantics
 call them directly as e.g. (device-info machine index), MACHINE-VAR passed
-explicitly, rather than through a macrolet.
+explicitly, rather than through a macrolet. #109's SIGNAL-INTERRUPT
+(interrupt.lisp) follows the same convention -- an INT-style instruction's
+semantics call (signal-interrupt machine data) directly. INTERRUPT-RETURN
+below *is* bound as a macrolet, unlike SIGNAL-INTERRUPT, purely so an
+RFI-style instruction's semantics reads as one primitive (like TRAP) rather
+than a hand-written reverse-order pop sequence -- everything it needs (the
+machine's :SAVE list and resolved :STACK name) is already known from the
+descriptor, the same way PUSH/POP's own SOLE-STACK is.
 
 Unlike WITH-MACHINE, this does not create a machine instance -- MACHINE-VAR
 must already be bound (by the caller) to a runtime MACHINE for descriptor
@@ -67,14 +74,45 @@ these for a run-time-computed index."
           ;; explicit address operand.
           ((:memory))))
       (setf stack-names (nreverse stack-names))
-      (let ((sole-stack (when (= (length stack-names) 1) (first stack-names)))
-            (stack-error (cond
-                           ((null stack-names)
-                            (format nil "PUSH/POP on machine ~S: no stack element declared"
-                                    machine-name))
-                           ((> (length stack-names) 1)
-                            (format nil "PUSH/POP on machine ~S: more than one stack element ~
-declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names)))))
+      (let* ((sole-stack (when (= (length stack-names) 1) (first stack-names)))
+             (stack-error (cond
+                            ((null stack-names)
+                             (format nil "PUSH/POP on machine ~S: no stack element declared"
+                                     machine-name))
+                            ((> (length stack-names) 1)
+                             (format nil "PUSH/POP on machine ~S: more than one stack element ~
+declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names))))
+             ;; #109: everything INTERRUPT-RETURN needs -- which places to
+             ;; pop, in what order, off which stack -- is already resolved
+             ;; on the descriptor (%FINISH-INTERRUPT-MODEL, machine.lisp),
+             ;; unlike PUSH/POP's SOLE-STACK, which is only a *default*
+             ;; still overridable per call. No per-call argument means no
+             ;; need for PUSH/POP's deferred-to-expansion-time style --
+             ;; INTERRUPT-FORM below is built directly, now.
+             (interrupts (machine-descriptor-interrupts descriptor))
+             (interrupt-error (unless interrupts
+                                 (format nil "INTERRUPT-RETURN on machine ~S: no (interrupts ...) ~
+clause declared" machine-name)))
+             (interrupt-form (when interrupts
+                                `(progn ,@(mapcar
+                                           (lambda (place)
+                                             ;; #22: (setf flag) treats its VALUE as a Lisp
+                                             ;; boolean, not an integer 0/1 -- a bare (setf
+                                             ;; ,place (stack-pop ...)) would set a saved flag
+                                             ;; to 1 whenever the popped word happens to be 0,
+                                             ;; since 0 is non-NIL. Every :SAVE place popped
+                                             ;; here through SETF's ordinary symbol-macro
+                                             ;; expansion, a :FLAG place alone needs its popped
+                                             ;; integer explicitly rebuilt into a boolean first.
+                                             (if (eq (storage-element-kind (gethash place (machine-descriptor-table descriptor)))
+                                                     :flag)
+                                                 `(setf ,place
+                                                        (plusp (stack-pop ,machine-var
+                                                                           ',(interrupt-descriptor-stack-name interrupts))))
+                                                 `(setf ,place
+                                                        (stack-pop ,machine-var
+                                                                   ',(interrupt-descriptor-stack-name interrupts)))))
+                                           (reverse (interrupt-descriptor-save interrupts)))))))
         `(symbol-macrolet ,(nreverse symbol-macros)
            (macrolet (,@(mapcar (lambda (name)
                                    `(,name (index) `(regref ,',machine-var ',',name ,index)))
@@ -94,7 +132,10 @@ declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names)))))
                                              `(setf (flag ,',machine-var ',(first a)) ,(second a)))
                                            assignments)))
                       (trap (tag &optional data)
-                        `(error 'lasm-trap :tag ,tag :data ,data)))
+                        `(error 'lasm-trap :tag ,tag :data ,data))
+                      (interrupt-return ()
+                        (when ',interrupt-error (error ',interrupt-error))
+                        ',interrupt-form))
              ,@body))))))
 
 (defmacro with-machine ((machine-var machine-name) &body body)

@@ -10,6 +10,7 @@ architectures, not real silicon.
 
 - [Machine model](docs/machine-model.md) — storage elements, `defmachine`
 - [Devices](docs/devices.md) — the device bus, attach/detach, ticking
+- [Interrupts](docs/interrupts.md) — `(interrupts ...)`, delivery, masking, overflow
 - [Semantics vocabulary](docs/semantics.md) — `with-machine`, `set!`, `push`/`pop`
 - [Lexer](docs/lexer.md) — `deflexer`, `tokenize`
 - [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`

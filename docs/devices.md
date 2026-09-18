@@ -117,16 +117,19 @@ above directly, `machine` passed explicitly:
 
 `device-signal machine device &optional data` calls `machine-interrupt-hook`
 — a function `(hook machine device data)` installed on a `machine` instance
-— when one is installed, and drops the signal otherwise. `reset` leaves the
-hook alone; it's host wiring (who the bus signals), not machine state.
+— when one is installed, and drops the signal otherwise. `reset` leaves a
+host-installed hook alone; it's host wiring (who the bus signals), not
+machine state.
+
+On a machine declaring an `(interrupts ...)` clause, that hook is
+auto-installed to the real interrupt-delivery queue — see
+[Interrupts](interrupts.md) for the full model (queueing, masking, overflow
+policy, and `signal-interrupt`, the device-optional entry point a software
+`INT`-style instruction calls directly).
 
 ## Scope
 
-Delivery, queueing, masking, and overflow policy for interrupts are out of
-scope here — `device-signal`/`machine-interrupt-hook` are the seam a real
-interrupt subsystem installs itself into, not that subsystem itself.
-
-Serializing device state for a machine snapshot is likewise out of scope —
+Serializing device state for a machine snapshot is out of scope here —
 `machine-devices` and each device's own `device-state` are what a snapshot
 feature walks; no on-disk format is defined here.
 

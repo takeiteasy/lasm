@@ -247,6 +247,15 @@ A machine with two declared devices, enumerated and messaged `HWN`/`HWQ`/
 runtime — independent of any memory region entirely. See
 [Devices](devices.md).
 
+```sh
+sbcl --script examples/interrupts.lisp
+```
+
+A machine declaring an `(interrupts ...)` clause — a device's own signal
+delivered through the auto-installed hook, a software `int`-style
+instruction raising one directly, masking via a flag, and `rfi`
+restoring exactly what delivery pushed. See [Interrupts](interrupts.md).
+
 ## Run the tests
 
 ```sh

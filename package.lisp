@@ -26,6 +26,8 @@
    #:no-such-device
    #:no-such-device-machine
    #:no-such-device-index
+   #:interrupt-queue-full
+   #:interrupt-queue-full-machine
    #:lasm-trap
    #:lasm-syntax-error
    #:lasm-syntax-error-message
@@ -101,6 +103,19 @@
    #:device-p
    #:device-index
    #:device-state
+   #:machine-descriptor-interrupts
+   #:interrupt-descriptor
+   #:interrupt-descriptor-p
+   #:interrupt-descriptor-vector
+   #:interrupt-descriptor-message
+   #:interrupt-descriptor-save
+   #:interrupt-descriptor-stack-name
+   #:interrupt-descriptor-queue-depth
+   #:interrupt-descriptor-on-overflow
+   #:interrupt-descriptor-mask-when
+   #:interrupt-descriptor-mask-flag
+   #:interrupt-descriptor-cycles
+   #:interrupt-descriptor-drop-on-zero-vector
 
    ;; Storage accessors
    #:sref
@@ -128,6 +143,11 @@
    #:machine-devices
    #:machine-interrupt-hook
 
+   ;; Interrupts (#109)
+   #:signal-interrupt
+   #:deliver-pending-interrupt
+   #:machine-interrupt-queue
+
    ;; Semantics vocabulary
    #:with-machine
    #:with-machine-bindings
@@ -136,6 +156,7 @@
    #:pop
    #:set-flags!
    #:trap
+   #:interrupt-return
    #:zero?
    #:bit-set?
 

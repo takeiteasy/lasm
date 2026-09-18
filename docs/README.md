@@ -3,6 +3,7 @@
 - [Getting started](getting-started.md) — install, load, run the example and tests
 - [Machine model](machine-model.md) — storage elements and `defmachine`
 - [Devices](devices.md) — the device bus, `(device ...)`, attach/detach, ticking
+- [Interrupts](interrupts.md) — `(interrupts ...)`, delivery, masking, overflow policy
 - [Semantics vocabulary](semantics.md) — `with-machine` and the DSL operators
 - [Lexer](lexer.md) — `deflexer` and `tokenize`
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`
