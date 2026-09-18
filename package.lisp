@@ -156,6 +156,7 @@
    #:pop
    #:set-flags!
    #:trap
+   #:idle
    #:interrupt-return
    #:zero?
    #:bit-set?
@@ -329,6 +330,10 @@
    #:run-for-cycles
    #:run-for-duration
    #:machine-elapsed-seconds
+
+   ;; Idle/sleep (#110)
+   #:wake-machine
+   #:machine-idle-p
 
    ;; Decoder (#21)
    #:decode-instruction-at

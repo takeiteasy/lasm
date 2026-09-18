@@ -147,6 +147,13 @@ what a human typing a small integer after `delete` almost certainly meant."
 ;;; MAX-STEPS-bounded stop including an ordinary `step N`). DETAIL is the
 ;;; number of instructions actually executed, or the LASM-TRAP condition
 ;;; for :TRAP.
+;;;
+;;; #110: an idle STEP-MACHINE result is not a stop condition here either --
+;;; DEBUG-STEP counts it as one of its N steps (so single-stepping through a
+;;; sleeping machine just burns steps one at a time, same as any other
+;;; instruction), and DEBUG-CONTINUE/DEBUG-CONTINUE-TO forward %RUN-LOOP's
+;;; own :IDLE straight through (see %RUN-UNTIL below) exactly like :TRAP/
+;;; :DECODE-FAILURE.
 
 (defun %pc (session)
   (sref (debug-session-machine session) (debug-session-pc session)))
@@ -173,20 +180,22 @@ into the debugger's (see this section's header comment)."
   (let ((machine (debug-session-machine session)))
     (multiple-value-bind (reason steps condition)
         (%run-loop machine :pc (debug-session-pc session) :memory (debug-session-memory session)
-                            :max-steps max-steps :stop-reason stop-reason :stop-p stop-p)
+                            :max-steps max-steps :stop-reason stop-reason :stop-p stop-p
+                            :idle-stop t)
       (values (case reason
                 (:trap :trap)
                 (:decode-failure :decode-failure)
+                (:idle :idle) ; #110 -- the machine went idle with nothing left to wake it
                 (:max-steps :max-steps)
                 (t reason)) ; STOP-REASON itself (:BREAKPOINT or :UNTIL), passed through
               steps condition))))
 
 (defun debug-continue (session &key (max-steps 10000))
   "Run SESSION's machine until it hits a breakpoint, traps, hits a decode
-failure, or MAX-STEPS instructions have executed with none of those
-happening (a runaway-program guard, mirroring RUN's own). Returns (VALUES
-REASON STEPS [CONDITION]) -- REASON one of :BREAKPOINT, :TRAP,
-:DECODE-FAILURE, :MAX-STEPS.
+failure, goes idle with nothing left to wake it (#110), or MAX-STEPS
+instructions have executed with none of those happening (a runaway-program
+guard, mirroring RUN's own). Returns (VALUES REASON STEPS [CONDITION]) --
+REASON one of :BREAKPOINT, :TRAP, :DECODE-FAILURE, :IDLE, :MAX-STEPS.
 
 STOP-P is checked *after* each step executes (%RUN-LOOP's own contract), so
 continuing from a PC that is itself a breakpoint runs past it rather than

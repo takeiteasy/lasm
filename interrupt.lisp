@@ -54,7 +54,11 @@ writes the signal's DATA into :MESSAGE, sets :VECTOR's value into PC, adds
 only when it's non-zero, so the default :CYCLES 0 doesn't add a second,
 redundant TICK-DEVICES call to every delivering step. Does nothing when
 the machine declares no (interrupts ...) clause, the queue is empty, or
-the queue's head is currently masked."
+the queue's head is currently masked.
+
+#110: also clears MACHINE-IDLE (storage.lisp) -- delivery is the only thing
+that wakes an idling machine; a masked machine's queue still fills, but it
+stays idle until unmasked, same as delivery itself."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (when (and interrupts
                (machine-interrupt-queue machine)
@@ -66,6 +70,7 @@ the queue's head is currently masked."
           (stack-push machine stack (sref machine place)))
         (setf (sref machine (interrupt-descriptor-message interrupts)) data)
         (setf (sref machine pc) (sref machine (interrupt-descriptor-vector interrupts)))
+        (setf (machine-idle machine) nil)
         (let ((cost (interrupt-descriptor-cycles interrupts)))
           (incf (machine-cycles machine) cost)
           (unless (zerop cost)

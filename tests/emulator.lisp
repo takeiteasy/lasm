@@ -48,6 +48,13 @@
   (encoding (opcode #x00))
   (semantics (trap :halt)))
 
+;; #110: EMU-TEST-MACHINE declares no (interrupts ...) clause -- exactly the
+;; case IDLE must still support, with WAKE-MACHINE as the only way back.
+(definstruction emu-test-machine slp
+  (encoding (opcode #x04))
+  (semantics (idle))
+  (cycles 1))
+
 ;; Sub-opcode cell (#125): IMMEDIATE and ABSOLUTE share opcode #xB0, told
 ;; apart at decode time by their own :SUB value rather than by opcode --
 ;; proves STEP-MACHINE (via DECODE-INSTRUCTION-AT) runs the *right* mode's
@@ -432,6 +439,56 @@ bne loop" :machine 'emu-test-machine)))
     (multiple-value-bind (reason steps) (run m :max-steps 4)
       (fiveam:is (eq :max-steps reason))
       (fiveam:is (= 4 steps)))))
+
+;;; idle (#110)
+
+(fiveam:test step-machine-idle-holds-pc-and-ticks-without-fetching
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (list #x04 #x00) :origin 0) ; slp, hlt
+    (step-machine m) ; executes slp itself -- pc advances past it, idle set
+    (fiveam:is (machine-idle-p m))
+    (fiveam:is (= 1 (sref m 'pc)))
+    (multiple-value-bind (result cost) (step-machine m)
+      (fiveam:is (eq :idle result))
+      (fiveam:is (= 1 cost))
+      (fiveam:is (= 1 (sref m 'pc))) ; still holding -- the hlt at 1 was never fetched
+      (fiveam:is (machine-idle-p m)))))
+
+(fiveam:test run-on-an-idle-machine-with-nothing-to-wake-it-returns-idle
+  (let ((m (make-machine 'emu-test-machine)))
+    ;; EMU-TEST-MACHINE declares no (interrupts ...) clause and no devices --
+    ;; nothing running this RUN could ever wake it back up.
+    (load-program m (list #x04) :origin 0) ; slp
+    (multiple-value-bind (reason steps) (run m)
+      (fiveam:is (eq :idle reason))
+      (fiveam:is (= 2 steps))))) ; slp itself, plus the one idle step that stops the loop
+
+(fiveam:test wake-machine-lets-a-host-resume-a-machine-with-no-interrupts-clause
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (list #x04 #x00) :origin 0) ; slp, hlt
+    (step-machine m) ; slp
+    (fiveam:is (machine-idle-p m))
+    (wake-machine m)
+    (fiveam:is (not (machine-idle-p m)))
+    (multiple-value-bind (reason) (run m)
+      (fiveam:is (eq :trap reason))))) ; fetches/executes the hlt at pc=1 normally
+
+(fiveam:test run-for-cycles-still-stops-on-budget-while-idle
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (list #x04) :origin 0) ; slp, own cost 1
+    (multiple-value-bind (reason steps) (run-for-cycles m 3)
+      (fiveam:is (eq :max-cycles reason))
+      (fiveam:is (= 3 (machine-cycles m)))
+      (fiveam:is (< 0 steps)))))
+
+(fiveam:test debug-step-counts-an-idle-step-as-an-ordinary-step
+  (let* ((m (make-machine 'emu-test-machine))
+         (session (progn (load-program m (list #x04) :origin 0)
+                          (make-debug-session m))))
+    (step-machine m) ; slp -- idle set
+    (multiple-value-bind (reason steps) (debug-step session)
+      (fiveam:is (eq :step reason))
+      (fiveam:is (= 1 steps)))))
 
 ;;; Multi-mode opcode decode (mode.lisp, #18)
 

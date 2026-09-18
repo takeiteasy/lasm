@@ -194,6 +194,21 @@ ticking above, this runs identically under every entry point —
 `run`/`run-for-cycles`/`run-for-duration` and the debugger's `debug-step`
 all go through `step-machine`.
 
+### Idle steps (#110)
+
+After that delivery attempt, if the machine is still idle — the `idle`
+semantics primitive ([Semantics vocabulary](semantics.md)) ran on some
+earlier step and nothing has woken it since — `step-machine` ticks devices
+and adds one cycle to `machine-cycles`, but does not fetch, decode,
+execute, or advance `pc`. Returns `(values :idle 1)` instead of an
+`instruction-descriptor`. Checked *after* delivery, not before, so a
+signal delivered this same step both wakes the machine and executes the
+handler's first instruction — the same one-step coincidence delivery
+itself gets against an ordinary fetch. See [Interrupts, "Waking an idle
+machine"](interrupts.md#waking-an-idle-machine-110) for how a machine
+wakes back up. TODO: the idle cost is fixed at 1 cycle — a declarable
+idle cost is a follow-up ticket (#164).
+
 ## `run`
 
 ```lisp
@@ -201,7 +216,7 @@ all go through `step-machine`.
 ;; => (values reason steps [condition])
 ```
 
-Calls `step-machine` in a loop until one of three stop conditions:
+Calls `step-machine` in a loop until one of several stop conditions:
 
 ### Stop reasons
 
@@ -209,16 +224,19 @@ Calls `step-machine` in a loop until one of three stop conditions:
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. `trap` and #109's interrupt delivery remain two separate mechanisms; a model unifying them is future M6 work. |
 | `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
+| `:idle` | #110: the machine went idle (see [Idle steps](#idle-steps-110) above) and, with `run`'s own no-budget call, nothing left running it could ever wake it back up — its pending interrupt queue is empty and no live device remains on its bus. A host can `signal-interrupt` or `wake-machine` and call `run` again, exactly as it already can after `:trap`. `run-for-cycles`/`run-for-duration` are unaffected by this check — an idle step there just keeps costing cycles until their own budget stops the loop. |
 | `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer. `run-for-cycles`/`run-for-duration` below add the cycle-based budgets `(cycles n)` was accepted for. |
 | `:max-cycles` | `run-for-cycles` only — see below. |
 | `:duration` | `run-for-duration` only — see below. |
 
 `steps` counts instructions that actually executed. A step that traps still
 counts (its semantics ran to completion before signalling); a step that
-fails to decode does not (nothing executed that iteration). The same rule
-governs `machine-cycles` (below): a trapping instruction's cost is still
-added (its semantics ran to completion before signalling); a decode failure
-adds nothing.
+fails to decode does not (nothing executed that iteration). An idle step
+(#110) counts too, even though it executes no instruction — it still cost
+a cycle and ticked devices, the same reasoning that counts a trapping step.
+The same rule governs `machine-cycles` (below): a trapping instruction's
+cost is still added (its semantics ran to completion before signalling); a
+decode failure adds nothing.
 
 **Not currently a stop reason:** a storage condition raised from inside an
 instruction's semantics — `stack-overflow`, `stack-underflow`,
@@ -341,7 +359,9 @@ opcode carries. It does not cover:
 - Privilege levels, or a generalized trap/interrupt model unifying `trap`
   with #109's interrupt delivery — future M6 work. Interrupt delivery
   itself is covered — see "Interrupt delivery (#109)" above and
-  [Interrupts](interrupts.md).
+  [Interrupts](interrupts.md). CPU idle/sleep resumed by an interrupt is
+  likewise covered — see "Idle steps (#110)" above and [Interrupts, "Waking
+  an idle machine"](interrupts.md#waking-an-idle-machine-110).
 - Recovering source text from encoded cells — see [Disassembler](disassembler.md)
   (#21), built on this file's own `decode-instruction-at`.
 - Stopping at a chosen point and inspecting live state interactively — see

@@ -45,6 +45,7 @@
 (definstruction interrupt-test-machine int
   (encoding (opcode #x02))
   (semantics (signal-interrupt machine (sref machine 'b))))
+(definstruction interrupt-test-machine slp (encoding (opcode #x03)) (semantics (idle)) (cycles 1))
 
 ;;; DEFMACHINE-time clause parsing / validation
 
@@ -403,6 +404,51 @@
     (fiveam:is (null (machine-interrupt-queue m)))
     (fiveam:is (= #xde (sref m 'a)))
     (fiveam:is (= (1+ #x0010) (sref m 'pc)))))
+
+;;; IDLE / wake (#110)
+
+(fiveam:test idle-signal-raised-mid-idle-step-delivers-on-the-next-step
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x0010)
+    (load-program m (list #x03) :origin 0) ; slp
+    (step-machine m) ; executes slp -- idle set, pc now 1
+    (fiveam:is (machine-idle-p m))
+    (fiveam:is (eq :idle (step-machine m))) ; idle step, queue empty, signaller not armed yet
+    (setf *armed* t)
+    (fiveam:is (eq :idle (step-machine m))) ; idle step -- its own tick raises the signal,
+    ;; too late for this same step's delivery check (which already ran at the top)
+    (fiveam:is (= 1 (length (machine-interrupt-queue m))))
+    (fiveam:is (machine-idle-p m)) ; still idle -- not delivered yet
+    (step-machine m) ; now delivers: clears idle, pc <- vector, then fetches there
+    (fiveam:is (not (machine-idle-p m)))
+    (fiveam:is (= #xde (sref m 'a)))
+    (fiveam:is (= (1+ #x0010) (sref m 'pc)))))
+
+(fiveam:test masked-machine-stays-idle-while-signals-queue-and-wakes-on-unmask
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x0010 (flag m 'iaq) t)
+    (load-program m (list #x03) :origin 0) ; slp
+    (step-machine m) ; idle set
+    (signal-interrupt m 7)
+    (step-machine m) ; delivery is masked -- stays idle, signal stays queued
+    (fiveam:is (machine-idle-p m))
+    (fiveam:is (= 1 (length (machine-interrupt-queue m))))
+    (setf (flag m 'iaq) nil)
+    (step-machine m) ; now delivers
+    (fiveam:is (not (machine-idle-p m)))
+    (fiveam:is (= 7 (sref m 'a)))))
+
+(fiveam:test wake-resumes-after-slp-not-back-at-it
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'b) 5)
+    (load-program m (list #x03) :origin 0) ; slp
+    (step-machine m) ; executes slp -- idle; pc now 1 (past slp)
+    (signal-interrupt m 42)
+    (load-program m (list #x01) :origin #x0010) ; rfi at the handler (load-program resets pc)
+    (setf (sref m 'pc) 1) ; put pc back where slp left it, before delivery
+    (step-machine m) ; delivers: pushes pc(1), b(5); a<-42; pc<-#x10; then runs rfi found there
+    (fiveam:is (= 1 (sref m 'pc))) ; resumes at the instruction after slp, not slp itself
+    (fiveam:is (= 5 (sref m 'b)))))
 
 (fiveam:test int-then-rfi-round-trips-through-a-software-interrupt
   (let ((m (make-machine 'interrupt-test-machine)))

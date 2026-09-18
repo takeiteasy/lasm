@@ -142,6 +142,16 @@
     (multiple-value-bind (reason) (debug-continue session)
       (fiveam:is (eq :decode-failure reason)))))
 
+;; #110: EMU-TEST-MACHINE declares no (interrupts ...) clause and no
+;; devices -- a SLP with nothing to wake it must report :IDLE, not spin to
+;; :MAX-STEPS, exactly like RUN itself.
+(fiveam:test debug-continue-reports-idle-with-nothing-left-to-wake-it
+  (let* ((m (make-machine 'emu-test-machine))
+         (session (make-debug-session m)))
+    (load-program m (list #x04) :origin 0) ; slp
+    (multiple-value-bind (reason) (debug-continue session)
+      (fiveam:is (eq :idle reason)))))
+
 ;;; Inspection
 
 (fiveam:test debug-state-text-covers-scalar-and-banked-registers

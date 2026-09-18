@@ -432,7 +432,14 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; the descriptor's INTERRUPT-DESCRIPTOR-QUEUE-DEPTH by SIGNAL-INTERRUPT
   ;; itself; this slot has no depth of its own. Machine state, unlike
   ;; INTERRUPT-HOOK above -- RESET clears it.
-  (interrupt-queue nil :type list))
+  (interrupt-queue nil :type list)
+  ;; #110: set by the IDLE semantics primitive (semantics.lisp) -- STEP-
+  ;; MACHINE (emulator.lisp) skips fetch/decode/execute while this is true,
+  ;; but still ticks devices and accounts cycles. Cleared by DELIVER-
+  ;; PENDING-INTERRUPT (interrupt.lisp) on delivery, or by WAKE-MACHINE
+  ;; (emulator.lisp) directly. Machine state, like INTERRUPT-QUEUE above --
+  ;; RESET clears it.
+  (idle nil :type boolean))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -572,7 +579,8 @@ RESET the same way a DEBUG-SESSION's breakpoints do; this holds for #109's
 auto-installed #'%DEFAULT-INTERRUPT-HOOK exactly as for a host's own hook,
 so a host that replaced it (including with NIL, to disable delivery) keeps
 that choice across a RESET. #109's pending INTERRUPT-QUEUE, unlike the
-hook, *is* machine state and is cleared unconditionally below."
+hook, *is* machine state and is cleared unconditionally below -- and so is
+#110's IDLE flag."
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
@@ -587,6 +595,7 @@ hook, *is* machine state and is cleared unconditionally below."
        (%instantiate-device machine device-descriptor (fill-pointer devices))
        devices)))
   (setf (machine-interrupt-queue machine) nil)
+  (setf (machine-idle machine) nil)
   machine)
 
 ;;; Accessors

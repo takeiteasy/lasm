@@ -56,6 +56,13 @@ when it runs) if the name is left out — name one explicitly in that case.
 - `(trap tag &optional data)` — signal a `lasm-trap` condition carrying
   `tag`/`data`. Unchanged by #109's interrupt delivery (below) — the two
   remain separate mechanisms; a model unifying them is future M6 work.
+- `(idle)` — mark the machine idle (see [Emulator, "Idle
+  steps"](emulator.md#idle-steps-110) and [Interrupts, "Waking an idle
+  machine"](interrupts.md#waking-an-idle-machine-110)). Unlike `trap`, this
+  is not a control transfer — it sets a flag and the rest of the semantics
+  body runs to completion. Works on any machine, including one declaring no
+  `(interrupts ...)` clause; such a machine can only be woken by a host
+  calling `wake-machine` directly.
 - `(interrupt-return)` — on a machine declaring an `(interrupts ...)`
   clause (see [Interrupts](interrupts.md)), pops every `:save` place in
   reverse declared order, restoring exactly what delivery pushed. Signals

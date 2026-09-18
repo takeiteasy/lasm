@@ -42,6 +42,21 @@
 
 (in-package #:lasm)
 
+;;; Idle/sleep (#110)
+
+(defun machine-idle-p (machine)
+  "T when MACHINE is currently idle (the IDLE semantics primitive,
+semantics.lisp, has run and no interrupt has been delivered since)."
+  (machine-idle machine))
+
+(defun wake-machine (machine)
+  "Clear MACHINE's idle state directly, without an interrupt. For a host
+driving a machine that declares no (interrupts ...) clause -- IDLE's own
+macroexpansion never signals on such a machine (#110), so this is the only
+way such a machine wakes back up."
+  (setf (machine-idle machine) nil)
+  machine)
+
 ;;; PC resolution
 
 (defun %resolve-pc (machine-name pc)
@@ -139,6 +154,16 @@ debugger.lisp) sees delivery too, not just RUN. A machine declaring no
 (interrupts ...) clause pays nothing here -- DELIVER-PENDING-INTERRUPT is a
 single NULL test on MACHINE-DESCRIPTOR-INTERRUPTS.
 
+#110: if MACHINE is still idle after that delivery attempt (the IDLE
+semantics primitive, semantics.lisp, ran on some earlier step and nothing
+has woken it since), this step ticks devices and accounts one cycle but
+does not fetch, decode, execute, or advance PC -- returning (VALUES :IDLE
+1) instead. Checked after DELIVER-PENDING-INTERRUPT, not before, so a
+signal delivered this same step both wakes the machine and executes the
+handler's first instruction, exactly the same one-step coincidence #109's
+own delivery gets against an ordinary fetch. TODO: the idle cost is fixed
+at 1 cycle -- a declarable idle cost is a follow-up ticket (#164).
+
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
 (disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
@@ -152,6 +177,10 @@ decoded, not just the values."
          (pc (%resolve-pc machine-name pc))
          (memory (%resolve-memory machine-name memory)))
     (deliver-pending-interrupt machine pc)
+    (when (machine-idle machine)
+      (incf (machine-cycles machine) 1)
+      (tick-devices machine 1)
+      (return-from step-machine (values :idle 1)))
     (let ((address (sref machine pc)))
       (multiple-value-bind (descriptor values size choices)
           (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
@@ -170,7 +199,7 @@ decoded, not just the values."
 
 ;;; Run
 
-(defun %run-loop (machine &key pc memory (max-steps 10000) stop-reason stop-p on-step)
+(defun %run-loop (machine &key pc memory (max-steps 10000) stop-reason stop-p on-step idle-stop)
   "Shared stop-condition loop behind RUN, RUN-FOR-CYCLES, and RUN-FOR-
 DURATION. Repeatedly STEP-MACHINE against MACHINE until one of:
   :TRAP           -- an instruction's semantics signalled LASM-TRAP; the
@@ -181,6 +210,7 @@ DURATION. Repeatedly STEP-MACHINE against MACHINE until one of:
                       step successfully executes, once its cost is already
                       on MACHINE-CYCLES) returned true. NIL/NIL is RUN's own
                       \"no extra budget\" case, where this never trips.
+  :IDLE           -- #110: see below. Only when IDLE-STOP is true.
   :MAX-STEPS      -- MAX-STEPS instructions executed without stopping
                       otherwise (a runaway-program guard, not a real timer).
 Returns (VALUES reason steps [condition]).
@@ -189,7 +219,24 @@ STOP-P is checked *after* the step executes -- a cycle/duration budget may
 be overshot by at most one instruction's own cost, since that cost isn't
 known until the instruction has already been decoded and run. ON-STEP, when
 given, is called with the step's cost after it executes but before STOP-P
-is checked (RUN-FOR-DURATION's :THROTTLE hook)."
+is checked (RUN-FOR-DURATION's :THROTTLE hook).
+
+#110: an :IDLE step from STEP-MACHINE is otherwise an ordinary executed
+step -- ON-STEP/STOP-P still run, so a cycle/duration budget still
+terminates normally (as its own STOP-REASON, e.g. :MAX-CYCLES) on a
+sleeping machine, checked before and entirely unaffected by the idle-
+exhausted check below. IDLE-STOP (true for RUN and the debugger's
+DEBUG-CONTINUE/DEBUG-CONTINUE-TO, false for RUN-FOR-CYCLES/RUN-FOR-
+DURATION -- a plain STOP-P being present or absent doesn't by itself say
+which case this is, since DEBUG-CONTINUE always passes one, its breakpoint
+predicate) gates whether that idle-exhausted check runs at all: when the
+machine is *still* idle after a step, its pending interrupt queue is
+empty, and no live device remains on its bus, nothing left running this
+loop could ever wake it -- so this returns :IDLE itself rather than
+spinning to :MAX-STEPS, the same way a decode failure short-circuits
+rather than running the budget dry. A host can SIGNAL-INTERRUPT
+(interrupt.lisp) or WAKE-MACHINE and call RUN/DEBUG-CONTINUE again,
+exactly as it already can after :TRAP."
   (loop for steps from 0 below max-steps
         do (handler-case
                (multiple-value-bind (result cost) (step-machine machine :pc pc :memory memory)
@@ -197,7 +244,13 @@ is checked (RUN-FOR-DURATION's :THROTTLE hook)."
                    (return-from %run-loop (values :decode-failure steps)))
                  (when on-step (funcall on-step cost))
                  (when (and stop-p (funcall stop-p))
-                   (return-from %run-loop (values stop-reason (1+ steps)))))
+                   (return-from %run-loop (values stop-reason (1+ steps))))
+                 (when (and idle-stop
+                            (eq result :idle)
+                            (machine-idle machine)
+                            (null (machine-interrupt-queue machine))
+                            (notany #'identity (machine-devices machine)))
+                   (return-from %run-loop (values :idle (1+ steps)))))
              (lasm-trap (c)
                ;; The trapping instruction's semantics ran to completion (the
                ;; trap fires from inside them) before signalling, so it
@@ -207,9 +260,10 @@ is checked (RUN-FOR-DURATION's :THROTTLE hook)."
         finally (return (values :max-steps steps))))
 
 (defun run (machine &key pc memory (max-steps 10000))
-  "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :DECODE-FAILURE, or
-:MAX-STEPS -- see %RUN-LOOP. Returns (VALUES reason steps [condition])."
-  (%run-loop machine :pc pc :memory memory :max-steps max-steps))
+  "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :DECODE-FAILURE,
+:IDLE (#110 -- the machine went idle with nothing left that could wake it,
+see %RUN-LOOP), or :MAX-STEPS. Returns (VALUES reason steps [condition])."
+  (%run-loop machine :pc pc :memory memory :max-steps max-steps :idle-stop t))
 
 ;;; Cycle-accurate execution (#75)
 
