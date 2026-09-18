@@ -788,3 +788,60 @@ hlt" :machine 'disasm-word-alias-machine))
          (text (disassembly-text lines))
          (a2 (assemble text :machine 'disasm-word-alias-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
+
+;;; Data regions (#82)
+
+(fiveam:test disassemble-cells-data-region-suppresses-decode
+  ;; $A2 $0A is LDX #$A; declared data, it renders as two .byte lines.
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+                                                             :labels nil :data-regions '((0 . 2)))))
+    (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines)))
+    (fiveam:is (null (disassembly-line-descriptor (first lines))))))
+
+(fiveam:test disassemble-cells-data-region-mid-stream
+  (let ((lines (disassemble-cells (list #xA2 #x01 #xA2 #x02 #xA2 #x03) :machine 'disasm-test-machine
+                                                                       :labels nil :data-regions '((2 . 4)))))
+    (fiveam:is (equal '("ldx #$1" ".byte $A2" ".byte $2" "ldx #$3") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test disassemble-cells-data-region-honours-origin
+  (let ((lines (disassemble-cells (list #xA2 #x0A) :machine 'disasm-test-machine :origin #x100
+                                                    :labels nil :data-regions '((#x100 . #x102)))))
+    (fiveam:is (equal '(#x100 #x101) (mapcar #'disassembly-line-address lines)))
+    (fiveam:is (every (lambda (l) (null (disassembly-line-descriptor l))) lines))))
+
+(fiveam:test disassemble-cells-instruction-never-straddles-a-region
+  ;; LDX is 2 cells; a region starting at 1 forces its first cell to data.
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+                                                             :labels nil :data-regions '((1 . 2)))))
+    (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test disassemble-cells-data-regions-are-merged-and-unordered-ok
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+                                                             :labels nil :data-regions '((2 . 3) (0 . 2) (1 . 4)))))
+    (fiveam:is (= 4 (length lines)))
+    (fiveam:is (every (lambda (l) (null (disassembly-line-descriptor l))) lines))))
+
+(fiveam:test disassemble-cells-rejects-malformed-data-region
+  (dolist (bad '((2 . 2) (3 . 1) (-1 . 2) (a . 2) 5))
+    (fiveam:signals error (disassemble-cells (list 0 0 0) :machine 'disasm-test-machine
+                                                          :data-regions (list bad)))))
+
+(fiveam:test disassemble-assembly-derives-data-regions-from-listing
+  (let* ((a (assemble "ldx #10
+table: .byte $A2, $0A
+hlt" :machine 'disasm-test-machine))
+         (auto (disassemble-assembly a :machine 'disasm-test-machine :labels nil))
+         (off (disassemble-assembly a :machine 'disasm-test-machine :labels nil :data-regions nil)))
+    (fiveam:is (equal '("ldx #$A" ".byte $A2" ".byte $A" "hlt") (mapcar #'disassembly-line-text auto)))
+    (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (mapcar #'disassembly-line-text off)))))
+
+(fiveam:test disassemble-assembly-explicit-data-regions-override-auto
+  (let* ((a (assemble "table: .byte $A2, $0A" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :data-regions '((0 . 1)))))
+    (fiveam:is (equal '(".byte $A2" ".byte $A") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test disassemble-memory-data-regions
+  (let ((m (make-machine 'disasm-test-machine)))
+    (load-program m (list #xA2 #x0A #xA2 #x0B))
+    (let ((lines (disassemble-memory m :start 0 :count 4 :labels nil :data-regions '((0 . 2)))))
+      (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines))))))

@@ -404,6 +404,7 @@
    ;; Symbol table (#37)
    #:assembly-symbol
    #:assembly-symbols-list
+   #:assembly-data-regions
    #:assembly-symbol-groups
    #:symbols-text
    #:print-symbols

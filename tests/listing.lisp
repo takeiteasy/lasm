@@ -261,3 +261,17 @@ start: nop
          (out (with-output-to-string (s)
                 (fiveam:is (eq a (print-symbols a :stream s))))))
     (fiveam:is (search "start" out))))
+
+;;; Data regions (#82)
+
+(fiveam:test assembly-data-regions-cover-emit-and-reserve
+  (let ((a (assemble "ldx #1
+.byte 1, 2
+.res 3
+nop
+.byte 9" :machine 'instr-test-machine)))
+    (fiveam:is (equal '((2 . 7) (8 . 9)) (assembly-data-regions a)))))
+
+(fiveam:test assembly-data-regions-empty-without-data-or-listing
+  (fiveam:is (null (assembly-data-regions (assemble "nop" :machine 'instr-test-machine))))
+  (fiveam:is (null (assembly-data-regions (make-assembly)))))

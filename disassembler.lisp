@@ -39,6 +39,14 @@
 ;;;; The resulting cells are still exactly re-assemblable, just as several
 ;;;; ".byte" lines rather than one ".word" line.
 ;;;;
+;;;; DATA REGIONS (#82): a caller may declare (START . END) cell ranges, END
+;;;; exclusive, as data. Every cell inside one renders as a ".byte" line with
+;;;; no decode attempted. A decode that succeeds but would run into a region
+;;;; is discarded for a ".byte" line as well, so an instruction never spans
+;;;; the boundary. DISASSEMBLE-ASSEMBLY derives its regions from the
+;;;; assembly's own .byte/.word/.res statements, so this straddle case only
+;;;; arises for hand-declared regions.
+;;;;
 ;;;; ROUND-TRIP FIDELITY -- the honest scope (see docs/disassembler.md):
 ;;;; ASSEMBLE -> DISASSEMBLE-* -> ASSEMBLE reproduces identical cells when
 ;;;; the input came from ASSEMBLE on the same machine, with :LABELS NIL and
@@ -53,7 +61,7 @@
 ;;;; across layout passes) -- re-assembling disassembled text re-runs layout
 ;;;; from scratch and can legitimately produce fewer cells; (c) comments,
 ;;;; macros, .EQU names, label names absent from :SYMBOLS, code/data
-;;;; boundaries (a data region decodes as instructions until one fails), and
+;;;; boundaries (unless declared, see DATA REGIONS above), and
 ;;;; original number radix/formatting -- none of these survive encoding at
 ;;;; all, so none can be recovered.
 
@@ -82,37 +90,64 @@
 
 ;;; Stage 1: decode
 
-(defun %disassemble-raw-lines (read-cell origin end machine-name memory)
+(defun %normalize-data-regions (regions)
+  "REGIONS, a list of (START . END) cell ranges (END exclusive), validated and
+returned sorted by START with overlapping or adjacent ranges merged."
+  (let ((sorted (sort (mapcar (lambda (r)
+                                (unless (and (consp r) (typep (car r) '(integer 0)) (typep (cdr r) '(integer 0))
+                                             (< (car r) (cdr r)))
+                                  (error "DISASSEMBLE: data region ~S is not (START . END) with 0 <= START < END" r))
+                                (cons (car r) (cdr r)))
+                              regions)
+                      #'< :key #'car))
+        merged)
+    (dolist (r sorted)
+      (if (and merged (<= (car r) (cdr (first merged))))
+          (setf (cdr (first merged)) (max (cdr r) (cdr (first merged))))
+          (cl:push r merged)))
+    (nreverse merged)))
+
+(defun %disassemble-raw-lines (read-cell origin end machine-name memory &optional data-regions)
   "Walk READ-CELL from ORIGIN to END (exclusive), decoding one instruction
 at a time via DECODE-INSTRUCTION-AT (decoder.lisp) and collecting one
 DISASSEMBLY-LINE per instruction or undecodable cell -- see this file's
-header comment for the mid-stream decode-failure policy. TEXT and LABEL are
-left NIL; %RENDER-LINES! fills them in once every line's address is known."
-  (let (lines)
-    (loop with address = origin
-          while (< address end)
-          do (multiple-value-bind (descriptor values size choices)
-                 (handler-case (decode-instruction-at read-cell address machine-name :memory memory)
-                   (address-out-of-range () (values :decode-failure nil nil nil)))
-               (if (eq descriptor :decode-failure)
-                   (multiple-value-bind (cell okp)
-                       (handler-case (values (funcall read-cell address) t)
-                         (address-out-of-range () (values nil nil)))
-                     (if okp
-                         (progn
-                           (cl:push (make-disassembly-line :address address :size 1 :cells (list cell))
-                                    lines)
-                           (incf address))
-                         ;; ADDRESS itself is unreadable (not merely a later
-                         ;; cell of a truncated multi-cell instruction) --
-                         ;; nothing more to disassemble.
-                         (setf address end)))
-                   (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
-                     (cl:push (make-disassembly-line :address address :size size :cells cells
-                                                      :descriptor descriptor :values values :choices choices)
-                              lines)
-                     (incf address size)))))
-    (nreverse lines)))
+header comment for the mid-stream decode-failure and data-region policies.
+TEXT and LABEL are left NIL; %RENDER-LINES! fills them in once every line's
+address is known."
+  (let ((regions (%normalize-data-regions data-regions))
+        lines)
+    (flet ((data-line (address)
+             "Emit a one-cell data line at ADDRESS; NIL when it is unreadable."
+             (multiple-value-bind (cell okp)
+                 (handler-case (values (funcall read-cell address) t)
+                   (address-out-of-range () (values nil nil)))
+               (when okp
+                 (cl:push (make-disassembly-line :address address :size 1 :cells (list cell)) lines))
+               okp)))
+      (loop with address = origin
+            while (< address end)
+            do (loop while (and regions (<= (cdr (first regions)) address))
+                     do (cl:pop regions))
+               (let ((region-start (and regions (car (first regions)))))
+                 (if (and region-start (<= region-start address))
+                     (if (data-line address) (incf address) (setf address end))
+                     (multiple-value-bind (descriptor values size choices)
+                         (handler-case (decode-instruction-at read-cell address machine-name :memory memory)
+                           (address-out-of-range () (values :decode-failure nil nil nil)))
+                       (cond
+                         ((or (eq descriptor :decode-failure)
+                              (and region-start (> (+ address size) region-start)))
+                          ;; ADDRESS itself unreadable (not merely a later cell
+                          ;; of a truncated multi-cell instruction): nothing
+                          ;; more to disassemble.
+                          (if (data-line address) (incf address) (setf address end)))
+                         (t
+                          (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
+                            (cl:push (make-disassembly-line :address address :size size :cells cells
+                                                             :descriptor descriptor :values values :choices choices)
+                                     lines)
+                            (incf address size))))))))
+      (nreverse lines))))
 
 ;;; Stage 2: which addresses may a label legitimately point at
 
@@ -339,7 +374,7 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
 ;;; Entry points
 
 (defun disassemble-cells (cells &key machine (origin 0) end symbols symbol-info (lexer 'default)
-                                     (labels t) (suffixes t) memory)
+                                     (labels t) (suffixes t) memory data-regions)
   "Disassemble a bare sequence CELLS (e.g. an ASSEMBLY-CELLS vector) as if
 mapped into address space starting at ORIGIN, through address END (exclusive,
 default ORIGIN + (LENGTH CELLS)). MACHINE (a machine name, required)
@@ -358,6 +393,8 @@ render (#81). Pass it whenever available; DISASSEMBLE-ASSEMBLY does so
 automatically. SUFFIXES (default T) renders a gas-style forced mode suffix
 (e.g. \"lda.w\") when needed for re-assembly fidelity; LEXER (default
 'DEFAULT) selects the surface syntax operand numbers and suffixes render in.
+DATA-REGIONS (#82), a list of (START . END) absolute cell ranges with END
+exclusive, are rendered as \".byte\" lines without decoding.
 
 Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
@@ -365,17 +402,21 @@ of round-trip fidelity."
   (unless machine (error "DISASSEMBLE-CELLS: :MACHINE is required"))
   (let* ((end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
-         (lines (%disassemble-raw-lines read-cell origin end machine memory)))
+         (lines (%disassemble-raw-lines read-cell origin end machine memory data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
-(defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory)
+(defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
+                                           (data-regions :auto))
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
 ORIGIN, SYMBOLS, and SYMBOL-INFO (#37) off it directly -- the natural way to
 round-trip ASSEMBLE's own output, and the reason its label substitution
 never suffers the .EQU-aliasing ambiguity #81 tracks for a bare-SYMBOLS
 caller. Signals if ASSEMBLY's own ASSEMBLY-CELL-WIDTH does not match
 MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
-(emulator.lisp) for the same mismatch."
+(emulator.lisp) for the same mismatch.
+
+DATA-REGIONS (#82) defaults to :AUTO, ASSEMBLY-DATA-REGIONS (listing.lisp);
+pass NIL to decode everything, or an explicit list to override."
   (unless machine (error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
   (let ((target-width (%machine-cell-width machine memory))
         (source-width (assembly-cell-width assembly)))
@@ -386,10 +427,13 @@ match the machine's cell width (~D)" machine source-width target-width)))
                       :machine machine :origin (assembly-origin assembly)
                       :symbols (assembly-symbols assembly)
                       :symbol-info (assembly-symbol-info assembly)
-                      :lexer lexer :labels labels :suffixes suffixes :memory memory))
+                      :lexer lexer :labels labels :suffixes suffixes :memory memory
+                      :data-regions (if (eq data-regions :auto)
+                                        (assembly-data-regions assembly)
+                                        data-regions)))
 
 (defun disassemble-memory (machine &key memory start count symbols symbol-info (lexer 'default)
-                                        (labels t) (suffixes t))
+                                        (labels t) (suffixes t) data-regions)
   "DISASSEMBLE-CELLS over MACHINE's live MEMORY (a MACHINE runtime instance,
 storage.lisp) from address START through START + COUNT (exclusive). START
 and COUNT are both required -- unlike DISASSEMBLE-CELLS' END, there is no
@@ -397,7 +441,7 @@ sane default for \"the whole address space\" of a live machine. MEMORY
 defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE.
 SYMBOL-INFO (#37), when available (e.g. from the ASSEMBLY that produced this
 memory's contents), resolves the label/.EQU ambiguity and works standalone,
-without SYMBOLS -- see DISASSEMBLE-CELLS.
+without SYMBOLS -- see DISASSEMBLE-CELLS. DATA-REGIONS (#82) is as there.
 
 #107: reads via MACHINE-PEEK-READER, not MACHINE-CELL-READER -- disassembly
 is inspection, not execution, so it must not trigger a :DEVICE region's
@@ -408,7 +452,7 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))
-         (lines (%disassemble-raw-lines read-cell start end machine-name memory)))
+         (lines (%disassemble-raw-lines read-cell start end machine-name memory data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
 ;;; Text output

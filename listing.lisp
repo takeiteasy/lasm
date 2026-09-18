@@ -67,6 +67,23 @@ LINE occupies no address space (a comment, a label-only line, .ORG, .EQU) or
 names no line in this ASSEMBLY at all."
   (remove-if-not (lambda (l) (= line (listing-line-line l))) (assembly-listing assembly)))
 
+;;; Data regions (#82)
+
+(defun assembly-data-regions (assembly)
+  "The (START . END) cell ranges, END exclusive, ASSEMBLY's .byte/.word/.res
+statements occupy, ascending, adjacent runs merged -- the :DATA-REGIONS
+DISASSEMBLE-ASSEMBLY passes by default. Empty when ASSEMBLY-LISTING is NIL."
+  (let (regions)
+    (dolist (l (assembly-listing assembly))
+      (when (and (member (listing-line-kind l) '(:emit :reserve))
+                 (plusp (listing-line-size l)))
+        (let ((start (listing-line-address l))
+              (end (+ (listing-line-address l) (listing-line-size l))))
+          (if (and regions (= start (cdr (first regions))))
+              (setf (cdr (first regions)) end)
+              (cl:push (cons start end) regions)))))
+    (nreverse regions)))
+
 ;;; Rendering
 
 (defun %listing-hex-digits (cell-width)
