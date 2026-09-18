@@ -130,3 +130,30 @@
     (fiveam:is (= 2 status))
     (fiveam:is (string= "" out))
     (fiveam:is (search "-m MACHINE.lasm is required" err))))
+
+(fiveam:test cli-disassemble-data-region-renders-bytes
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+    (let ((machine (%cli-path "examples/cli/sixtyfoo.lasm")))
+      (multiple-value-bind (status out)
+          (%run-cli (list "disassemble" (namestring path) "-m" machine "--data-region" "0:2"))
+        (fiveam:is (= 0 status))
+        (fiveam:is (search ".byte $A2" out))
+        (fiveam:is (not (search "ldx" out))))
+      ;; repeatable, and hex forms parse
+      (multiple-value-bind (status out)
+          (%run-cli (list "disassemble" (namestring path) "-m" machine
+                          "--data-region" "0:1" "--data-region" "$1:0x2"))
+        (fiveam:is (= 0 status))
+        (fiveam:is (not (search "ldx" out)))))))
+
+(fiveam:test cli-disassemble-rejects-malformed-data-region
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+    (dolist (bad '("5" "3:1" "2:2" "a:b" ":4"))
+      (multiple-value-bind (status out err)
+          (%run-cli (list "disassemble" (namestring path) "-m" (%cli-path "examples/cli/sixtyfoo.lasm")
+                          "--data-region" bad))
+        (fiveam:is (= 2 status) "~S" bad)
+        (fiveam:is (string= "" out))
+        (fiveam:is (search "--data-region" err))))))

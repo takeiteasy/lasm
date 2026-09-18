@@ -27,7 +27,7 @@ defined, the default lexer is used.
 | --- | --- | --- |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex` |
 | `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N` |
-| `disassemble FILE` | disassembles a binary file | `--annotate` |
+| `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END` |
 | `listing FILE` | prints the assembly listing | `--symbols` |
 
 Every command takes `-m FILE` (required), `--machine-name`, `--lexer`,
@@ -39,7 +39,9 @@ usage.
 [Binary output](binary-output.md) for the formats. `run` prints the stop reason,
 step count and final `pc`. `disassemble` prints re-assemblable source, or with
 `--annotate` an address/cells/text listing; it reads cells with the machine's
-cell width and endianness.
+cell width and endianness. `--data-region` (repeatable; `$hex`, `0xhex` or
+decimal bounds, `END` exclusive) renders that address range as `.byte` lines
+instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 
 ## Exit status
 

@@ -70,6 +70,17 @@ placeholder), returns an empty list.
 program sizes LASM currently targets; an address-indexed structure is a
 follow-up if that ever matters.
 
+## `assembly-data-regions`
+
+```lisp
+(assembly-data-regions assembly) ; => ((start . end) ...)
+```
+
+The cell ranges (`end` exclusive) that `assembly`'s `.byte`, `.word` and
+`.res` statements occupy, ascending, with adjacent runs merged. Empty when
+the assembly has no listing. [`disassemble-assembly`](disassembler.md#data-regions)
+passes these as its `:data-regions` by default.
+
 ## Rendering: `listing-text` / `print-listing`
 
 ```lisp

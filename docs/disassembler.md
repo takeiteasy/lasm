@@ -66,10 +66,11 @@ or a decodable-as-data byte is the caller's own policy.
 
 ```lisp
 (disassemble-cells cells &key machine (origin 0) end symbols symbol-info
-                              (lexer 'default) (labels t) (suffixes t) memory)
-(disassemble-assembly assembly &key machine (lexer 'default) (labels t) (suffixes t) memory)
+                              (lexer 'default) (labels t) (suffixes t) memory data-regions)
+(disassemble-assembly assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
+                                    (data-regions :auto))
 (disassemble-memory machine &key memory start count symbols symbol-info
-                                 (lexer 'default) (labels t) (suffixes t))
+                                 (lexer 'default) (labels t) (suffixes t) data-regions)
 ```
 
 All three return a list of `disassembly-line`, ascending by address.
@@ -118,6 +119,23 @@ buffer cannot safely assume `width-cells` more cells are readable, and one
 fallback path is less to get wrong than two. The resulting cells are still
 exactly re-assemblable, just as several `.byte` lines rather than one
 `.word` line.
+
+### Data regions
+
+`:data-regions` is a list of `(start . end)` absolute cell ranges, `end`
+exclusive. Every cell inside one renders as a one-cell `.byte` line with no
+decode attempted, so a table whose bytes happen to form valid instructions
+stays data. Ranges may be given in any order; overlapping and adjacent ranges
+merge. A malformed range (`start` not below `end`, or a non-integer) signals
+an error.
+
+A decode that would run from code into a region is discarded and its first
+cell rendered as `.byte`; an instruction never spans a region boundary.
+
+`disassemble-assembly` defaults `:data-regions` to `:auto`, which uses
+[`assembly-data-regions`](listing.md#assembly-data-regions) — the cells the
+assembly's own `.byte`/`.word`/`.res` statements occupy. Pass `nil` to decode
+everything, or a list to override.
 
 ### Rendering
 
@@ -283,9 +301,8 @@ input came from `assemble` on the same machine, with `:labels nil` and
   scratch and can legitimately produce fewer cells — this is why the
   round-trip example and tests pass `:labels nil`.
 - **Comments, macros, `.equ` names, label names absent from a given
-  `:symbols` table, code/data boundaries** (a data region decodes as
-  instructions until one fails to decode), **and original number
-  radix/formatting.** None of these survive encoding at all, so none of them
+  `:symbols` table, code/data boundaries** (unless declared, see [Data
+  regions](#data-regions)), **and original number radix/formatting.** None of these survive encoding at all, so none of them
   can be recovered by decoding.
 
 ## Scope
@@ -293,10 +310,8 @@ input came from `assemble` on the same machine, with `:labels nil` and
 This covers decoding already-encoded cells back into re-assemblable text and
 a human-readable listing. It does not cover:
 
-- Distinguishing genuine code from embedded data ahead of time — a `.byte`
-  table decodes as instructions until one fails to decode, which is the
-  data-line fallback's whole purpose, but nothing marks a region as data in
-  advance.
+- Inferring code versus data from the cells alone — a region is data only
+  when declared, or derived from an `assembly`'s listing.
 - Reconstructing an `.equ`'s *name* independent of whether its value
   happens to collide with an instruction address — see "Round-trip
   fidelity" above.

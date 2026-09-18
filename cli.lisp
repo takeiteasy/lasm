@@ -19,6 +19,7 @@ commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
   run FILE          assemble and run          [--max-steps N] [--cycles N]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate]
+                    [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols]
 
 options:
@@ -36,6 +37,9 @@ options:
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)))
 
+(defparameter *cli-repeatable-options*
+  '(("--data-region" . :data-regions)))
+
 (defparameter *cli-flag-options*
   '(("--symbols" . :symbols) ("--annotate" . :annotate)
     ("-h" . :help) ("--help" . :help)))
@@ -46,10 +50,14 @@ options:
     (loop while args
           do (let* ((arg (cl:pop args))
                     (value-key (cdr (assoc arg *cli-value-options* :test #'string=)))
+                    (repeat-key (cdr (assoc arg *cli-repeatable-options* :test #'string=)))
                     (flag-key (cdr (assoc arg *cli-flag-options* :test #'string=))))
                (cond (value-key
                       (unless args (%usage-error "~A needs a value" arg))
                       (setf (getf options value-key) (cl:pop args)))
+                     (repeat-key
+                      (unless args (%usage-error "~A needs a value" arg))
+                      (setf (getf options repeat-key) (append (getf options repeat-key) (list (cl:pop args)))))
                      (flag-key (setf (getf options flag-key) t))
                      ((and (> (length arg) 1) (char= (char arg 0) #\-))
                       (%usage-error "unknown option ~A" arg))
@@ -71,6 +79,17 @@ options:
 (defun %cli-option-integer (options key option)
   (let ((text (getf options key)))
     (and text (%cli-integer text option))))
+
+(defun %cli-data-regions (options)
+  "OPTIONS' --data-region START:END values as (START . END) conses."
+  (mapcar (lambda (text)
+            (let* ((colon (position #\: text))
+                   (start (and colon (%cli-integer (subseq text 0 colon) "--data-region")))
+                   (end (and colon (%cli-integer (subseq text (1+ colon)) "--data-region"))))
+              (unless (and start end (< start end))
+                (%usage-error "--data-region needs START:END with START < END, got ~S" text))
+              (cons start end)))
+          (getf options :data-regions)))
 
 ;;; Machine definitions
 
@@ -174,7 +193,8 @@ the calling image."
          (endian (if (> cell-width 8) (%machine-endian machine memory) :little))
          (origin (or (%cli-option-integer options :origin "--origin") 0))
          (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian)
-                                   :machine machine :origin origin :lexer lexer :memory memory)))
+                                   :machine machine :origin origin :lexer lexer :memory memory
+                                   :data-regions (%cli-data-regions options))))
     (if (getf options :annotate)
         (print-disassembly lines :stream out)
         (disassembly-text lines :stream out :origin origin))
