@@ -240,6 +240,9 @@ like any label reference. See [Assembler, "`.equ` / symbol
 assignment"](assembler.md#equ--symbol-assignment) for why (#41 tracks
 lifting it).
 
+`.include` is likewise not a directive; it is expanded before layout — see
+[Includes](includes.md).
+
 ## Scope: `.macro` is not a directive
 
 `.macro`/`.endm` is deliberately **not** built on `defdirective`. A directive

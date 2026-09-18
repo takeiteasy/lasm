@@ -12,6 +12,7 @@
 - [Instructions](instructions.md) — `definstruction`, encoding, semantics
 - [Directives](directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
+- [Includes](includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](disassembler.md) — decode cells back to source, round-trip fidelity

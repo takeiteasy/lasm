@@ -236,6 +236,8 @@
 
    ;; Macros
    #:expand-macros
+   #:expand-includes
+   #:include-error
    #:macro-error
    #:macro-descriptor
    #:macro-descriptor-p
