@@ -4602,3 +4602,70 @@ target: nop")
   (fiveam:signals error (%machine-endian 'endian-ambiguous-machine))
   (fiveam:is (eq :big (%machine-endian 'endian-ambiguous-machine 'rom)))
   (fiveam:is (eq :little (%machine-endian 'endian-ambiguous-machine 'ram))))
+
+;;; extra-word-order (#191) -- trailing words follow the declared field
+;;; order rather than operand hole order.
+
+(defmachine order-test-machine
+  (register pc :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 6)
+    (field src 6)
+    (extra-word-order src dst)))
+
+(defmode order-pair expr "," expr)
+
+(definstruction order-test-machine mv
+  (modes order-pair)
+  (encoding
+    (opcode 1)
+    (operand dst :field dst
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 63)))
+    (operand src :field src
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 63))))
+  (semantics nil))
+
+(defun order-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'order-test-machine)) 'list))
+
+(fiveam:test extra-word-order-emits-src-word-before-dst-word
+  (fiveam:is (equal (list (logior (ash 1 12) (ash 63 6) 63) 200 100)
+                    (order-cells "mv 100, 200"))))
+
+(fiveam:test extra-word-order-single-extra-word-is-unaffected
+  (fiveam:is (equal (list (logior (ash 1 12) (ash 63 6) 2) 100) (order-cells "mv 100, 2")))
+  (fiveam:is (equal (list (logior (ash 1 12) (ash 3 6) 63) 200) (order-cells "mv 3, 200"))))
+
+(fiveam:test extra-word-order-round-trips-through-the-disassembler
+  (let* ((asm (assemble "mv 100, 200" :machine 'order-test-machine))
+         (lines (disassemble-assembly asm :machine 'order-test-machine :labels nil)))
+    (fiveam:is (= 1 (length lines)))
+    (fiveam:is (equalp (assembly-cells asm)
+                       (assembly-cells (assemble (disassembly-text lines :origin 0)
+                                                 :machine 'order-test-machine))))))
+
+(fiveam:test extra-word-order-decodes-values-in-hole-order
+  (let ((cells (coerce (order-cells "mv 100, 200") 'vector)))
+    (multiple-value-bind (descriptor values size)
+        (decode-instruction-at (lambda (a) (aref cells a)) 0 'order-test-machine)
+      (declare (ignore descriptor))
+      (fiveam:is (equal '(100 200) values))
+      (fiveam:is (= 3 size)))))
+
+(fiveam:test extra-word-order-rejects-an-undeclared-field
+  (fiveam:signals error
+    (eval '(defmachine bogus-order-machine
+             (memory ram :width 16 :addr-width 16 :cell-width 16)
+             (instruction-word :width 16 (field opcode 8) (field dst 8)
+               (extra-word-order nope))))))
+
+(fiveam:test extra-word-order-rejects-a-repeated-field
+  (fiveam:signals error
+    (eval '(defmachine bogus-order-machine
+             (memory ram :width 16 :addr-width 16 :cell-width 16)
+             (instruction-word :width 16 (field opcode 8) (field dst 8)
+               (extra-word-order dst dst))))))

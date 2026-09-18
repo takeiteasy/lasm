@@ -482,11 +482,16 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
          ;; #64: (layout ...) forms are the machine's alternates; everything
          ;; else is the default layout's own (field ...) forms.
          (layout-forms (remove-if-not (lambda (f) (eq (first f) 'layout)) rest-forms))
-         (field-forms (remove-if (lambda (f) (eq (first f) 'layout)) rest-forms)))
+         ;; #191: (extra-word-order FIELD...) -- at most one, default layout only.
+         (order-forms (remove-if-not (lambda (f) (eq (first f) 'extra-word-order)) rest-forms))
+         (field-forms (remove-if (lambda (f) (member (first f) '(layout extra-word-order))) rest-forms)))
     (unless width (error "instruction-word requires :width"))
     (%check-positive width ":width" 'instruction-word)
+    (when (rest order-forms)
+      (error "instruction-word: more than one (extra-word-order ...) clause"))
     (let* ((fields (%parse-instruction-word-fields field-forms width "instruction-word"))
            (opcode-field (find 'opcode fields :key #'first))
+           (extra-word-order (rest (first order-forms)))
            (alternates (mapcar (lambda (f) (%parse-instruction-word-layout-form f width)) layout-forms)))
       ;; Cross-layout checks (#64): alternate names unique and non-NIL
       ;; (NIL always names the default), each alternate held to the same
@@ -502,6 +507,12 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
       ;; different layouts can still be compared bit-for-bit
       ;; (%DESCRIPTORS-DISTINGUISHABLE-P, instruction.lisp) with no need to
       ;; know which layout matched first.
+      (loop for tail on extra-word-order
+            do (unless (find (first tail) fields :key #'first)
+                 (error "instruction-word: extra-word-order names ~S, which is not a declared field"
+                        (first tail)))
+               (when (member (first tail) (rest tail))
+                 (error "instruction-word: extra-word-order names ~S twice" (first tail))))
       (let ((names (mapcar #'instruction-word-layout-name alternates)))
         (loop for tail on names
               when (member (first tail) (rest tail))
@@ -518,6 +529,7 @@ default layout's OPCODE field ~S -- every layout must place OPCODE identically"
        :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
        :cell-width 1  ; placeholder
        :fields fields
+       :extra-word-order extra-word-order
        :alternates alternates))))
 
 (defun %finish-instruction-word-layout (layout cell-width endian)

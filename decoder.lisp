@@ -129,39 +129,41 @@ rejected before any extra word is ever fetched."
     (unless (= (ldb (byte (word-constant-width constant) (word-constant-shift constant)) word)
                (word-constant-value constant))
       (return-from %try-decode-word-candidate (values nil nil nil nil))))
-  (loop with offset = width-cells
-        for alternatives in (instruction-descriptor-word-alternatives descriptor)
-        for choice0 = (first alternatives)
-        ;; #120: a :TRAILING-WORD hole has no field bits of its own --
-        ;; ALTERNATIVES is always its own single, unconditionally-matching
-        ;; entry, so RAW stays NIL (WORD-FIELD-CHOICE-WIDTH/-SHIFT are both
-        ;; NIL there, nothing to LDB) and MATCH is CHOICE0 directly, with no
-        ;; %WORD-CHOICE-MATCHES-P call at all. RAW is only ever read below
-        ;; from the :INLINE collect clause, unreachable for a :TRAILING-WORD
-        ;; MATCH (its own KIND is always :TRAILING-WORD, never :INLINE).
-        for trailingp = (eq (word-field-choice-kind choice0) :trailing-word)
-        for raw = (unless trailingp
-                    (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word))
-        for match = (if trailingp choice0 (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives))
-        do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
-        collect (ecase (word-field-choice-kind match)
-                  (:inline (- (if (word-field-choice-signedp match)
-                                   (signed-value raw (word-field-choice-width match))
-                                   raw)
-                              (word-field-choice-bias match)))
-                  ;; #120: :TRAILING-WORD fetches exactly like :EXTRA-WORD -- an
-                  ;; unconditional trailing value at OFFSET, of its own EXTRA-CELLS
-                  ;; width -- it just never had field bits to escape-match first.
-                  ((:extra-word :trailing-word)
-                   (let ((extra-cells (word-field-choice-extra-cells match)))
-                     (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
-                              (if (word-field-choice-signedp match)
-                                  (signed-value v (* extra-cells cell-width))
-                                  v))
-                       (incf offset extra-cells)))))
-          into values
-        collect match into matches
-        finally (return (values values offset matches t))))
+  (let* ((matches (loop for alternatives in (instruction-descriptor-word-alternatives descriptor)
+                        for choice0 = (first alternatives)
+                        ;; #120: a :TRAILING-WORD hole has no field bits of its own --
+                        ;; ALTERNATIVES is always its own single, unconditionally-matching
+                        ;; entry, so it needs no %WORD-CHOICE-MATCHES-P call at all.
+                        for trailingp = (eq (word-field-choice-kind choice0) :trailing-word)
+                        for raw = (unless trailingp
+                                    (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word))
+                        for match = (if trailingp choice0 (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives))
+                        do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
+                        collect (cons match raw)))
+         (values (make-array (length matches)))
+         (offset width-cells))
+    ;; #191: every hole's match is resolved from WORD alone before any extra
+    ;; word is fetched (so a rejected candidate never reads past its bounds),
+    ;; then trailing words are fetched in %WORD-EMIT-ORDER, not hole order.
+    (dolist (index (%word-emit-order descriptor (mapcar #'car matches)))
+      (destructuring-bind (match . raw) (nth index matches)
+        (setf (aref values index)
+              (ecase (word-field-choice-kind match)
+                (:inline (- (if (word-field-choice-signedp match)
+                                (signed-value raw (word-field-choice-width match))
+                                raw)
+                            (word-field-choice-bias match)))
+                ;; #120: :TRAILING-WORD fetches exactly like :EXTRA-WORD -- an
+                ;; unconditional trailing value at OFFSET, of its own EXTRA-CELLS
+                ;; width -- it just never had field bits to escape-match first.
+                ((:extra-word :trailing-word)
+                 (let ((extra-cells (word-field-choice-extra-cells match)))
+                   (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
+                            (if (word-field-choice-signedp match)
+                                (signed-value v (* extra-cells cell-width))
+                                v))
+                     (incf offset extra-cells))))))))
+    (values (coerce values 'list) offset (mapcar #'car matches) t)))
 
 (defun %decode-word-instruction (read-cell address machine-name layout)
   "DECODE-INSTRUCTION-AT's word-encoded (#20) path: fetch one

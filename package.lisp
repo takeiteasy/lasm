@@ -91,6 +91,7 @@
    #:instruction-word-layout-fields
    #:instruction-word-layout-name
    #:instruction-word-layout-alternates
+   #:instruction-word-layout-extra-word-order
    #:instruction-word-field
    #:instruction-word-layout-named
    #:machine-descriptor-clock-speed

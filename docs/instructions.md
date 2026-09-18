@@ -749,7 +749,8 @@ equivalent of `(operand :mode)`'s implicit default. With one or more:
   instead of packing the value, the field holds the literal `N` and the
   real value follows in its own trailing word, immediately after the
   instruction word (or after any earlier `:extra-word` field's own trailing
-  word — declaration order). `:cells` gives that trailing word its own
+  word — operand hole order, unless the machine's `instruction-word` declares
+  an [`extra-word-order`](machine-model.md)). `:cells` gives that trailing word its own
   width in cells (`K` an integer ≥ 1); omitted, it defaults to the
   instruction word's own cell width, matching every `definstruction` from
   before this option existed. The width is per-*variant*, not per-field —

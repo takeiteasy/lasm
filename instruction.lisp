@@ -3587,29 +3587,56 @@ cell goes at which address."
         for shift = (if (eq endian :big) (- width 1 i) i)
         collect (wrap-value (ash value (* (- cell-width) shift)) cell-width)))
 
+(defun %word-emit-order (descriptor choices)
+  "Hole indices of CHOICES (one WORD-FIELD-CHOICE per operand hole) in the
+order their trailing words follow the instruction word (#191). Holes whose
+field is named by the machine's (extra-word-order ...) come first, in that
+order; every other hole, and every fieldless :TRAILING-WORD one, keeps hole
+order after them. A choice's field is found in DESCRIPTOR's own layout by its
+width and shift. Hole order outright when the machine declares no order."
+  (let* ((indices (loop for i below (length choices) collect i))
+         (machine (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+         (default (machine-descriptor-instruction-word machine))
+         (order (and default (instruction-word-layout-extra-word-order default))))
+    (if (null order)
+        indices
+        (let ((layout (instruction-descriptor-word-layout descriptor)))
+          (flet ((rank (choice)
+                   (or (let ((field (and (word-field-choice-shift choice)
+                                         (find-if (lambda (f)
+                                                    (and (= (second f) (word-field-choice-width choice))
+                                                         (= (third f) (word-field-choice-shift choice))))
+                                                  (instruction-word-layout-fields layout)))))
+                         (and field (position (first field) order)))
+                       (length order))))
+            (stable-sort indices #'< :key (lambda (i) (rank (nth i choices)))))))))
+
 (defun %encode-word-instruction (descriptor layout values)
   "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode,
 each of its (field-value ...) WORD-CONSTANTS (#136), and each operand's
 chosen WORD-FIELD-CHOICE (WORD-FIELDS, parallel to VALUES) into one
 LAYOUT-WIDTH-bit word by shift, then emit that word in LAYOUT's own ENDIAN
 order (%ENCODE-VALUE-CELLS, at LAYOUT's own CELL-WIDTH, #66) followed by
-each :EXTRA-WORD operand's own value, also in LAYOUT's endian order, in
-operand declaration order, each at its own WORD-FIELD-CHOICE-EXTRA-CELLS
-width (#135; formerly always LAYOUT's own WIDTH-CELLS). The instruction word
-always precedes its extra words regardless of ENDIAN -- endianness only
-governs cell order *within* one multi-cell value, never field or word
-order."
+each :EXTRA-WORD operand's own value, also in LAYOUT's endian order, at its
+own WORD-FIELD-CHOICE-EXTRA-CELLS width (#135; formerly always LAYOUT's own
+WIDTH-CELLS). The extra words follow %WORD-EMIT-ORDER: operand declaration
+order unless the machine declares (extra-word-order ...) (#191). The
+instruction word always precedes its extra words regardless of ENDIAN --
+endianness only governs cell order *within* one multi-cell value, never field
+or word order."
   (let ((word 0) extra-word-values
         (cell-width (instruction-word-layout-cell-width layout))
-        (endian (instruction-word-layout-endian layout)))
+        (endian (instruction-word-layout-endian layout))
+        (choices (instruction-descriptor-word-fields descriptor)))
     (destructuring-bind (opcode-width opcode-shift)
         (rest (instruction-word-field layout 'opcode))
       (setf word (ash (wrap-value (instruction-descriptor-opcode descriptor) opcode-width) opcode-shift)))
     (dolist (constant (instruction-descriptor-word-constants descriptor))
       (setf word (logior word (ash (wrap-value (word-constant-value constant) (word-constant-width constant))
                                     (word-constant-shift constant)))))
-    (loop for choice in (instruction-descriptor-word-fields descriptor)
+    (loop for choice in choices
           for value in values
+          for index from 0
           do (ecase (word-field-choice-kind choice)
                (:inline
                 (setf word (logior word (ash (wrap-value (+ value (word-field-choice-bias choice))
@@ -3618,15 +3645,17 @@ order."
                (:extra-word
                 (setf word (logior word (ash (word-field-choice-escape choice)
                                               (word-field-choice-shift choice))))
-                (cl:push (cons value (word-field-choice-extra-cells choice)) extra-word-values))
+                (cl:push (list index value (word-field-choice-extra-cells choice)) extra-word-values))
                ;; #120: a :TRAILING-WORD choice ORs no bits into WORD at all --
                ;; it has no field of its own -- and spends its own trailing
-               ;; cells unconditionally, in hole order, same as :EXTRA-WORD.
+               ;; cells unconditionally.
                (:trailing-word
-                (cl:push (cons value (word-field-choice-extra-cells choice)) extra-word-values))))
+                (cl:push (list index value (word-field-choice-extra-cells choice)) extra-word-values))))
     (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width endian)
-            (loop for (value . extra-cells) in (nreverse extra-word-values)
-                  append (%encode-value-cells value extra-cells cell-width endian)))))
+            (loop for index in (%word-emit-order descriptor choices)
+                  for extra = (find index extra-word-values :key #'first)
+                  when extra
+                    append (%encode-value-cells (second extra) (third extra) cell-width endian)))))
 
 (defun encode-instruction (descriptor values)
   "Encode one use of instruction DESCRIPTOR with operand VALUES (a list of
