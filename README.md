@@ -20,6 +20,7 @@ architectures, not real silicon.
 - [Macros](docs/macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Includes](docs/includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
+- [Binary output](docs/binary-output.md) — `write-binary`, `write-intel-hex`
 - [Emulator](docs/emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](docs/disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](docs/listing.md) — retained address/statement mapping, `print-listing`, scope-aware symbol table

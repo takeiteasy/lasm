@@ -391,6 +391,13 @@
    #:listing-lines-for-source-line
    #:*listing-max-cells-shown*
 
+   ;; Binary output (#79)
+   #:assembly-bytes
+   #:bytes-to-cells
+   #:write-binary
+   #:hex-text
+   #:write-intel-hex
+
    ;; Symbol table (#37)
    #:assembly-symbol
    #:assembly-symbols-list

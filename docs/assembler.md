@@ -697,5 +697,5 @@ available — see [Diagnostics](diagnostics.md).
 This produces bytes and a symbol table from a statement list, including
 directives (`.org`, `.byte`/`.word`, `.res`, `.equ` — see
 [Directives](directives.md)) and macro expansion (`.macro`/`.endm` — see
-[Macros](macros.md)). It does not cover a listing / source-map output tying
-addresses back to source lines — a separate, follow-up ticket.
+[Macros](macros.md)). Listings are covered in [Listing and source
+map](listing.md) and standalone output files in [Binary output](binary-output.md).
