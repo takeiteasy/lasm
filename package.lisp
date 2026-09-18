@@ -177,6 +177,8 @@
    #:interrupt-return
    #:zero?
    #:bit-set?
+   #:page-crossed?
+   #:extra-cycles
 
    ;; Lexer
    #:deflexer
@@ -360,6 +362,7 @@
    ;; Idle/sleep (#110)
    #:wake-machine
    #:machine-idle-p
+   #:machine-extra-cycles
 
    ;; Decoder (#21)
    #:decode-instruction-at

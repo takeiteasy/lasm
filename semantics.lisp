@@ -12,7 +12,8 @@
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
-operators SET!, PUSH, POP, SET-FLAGS!, TRAP, and INTERRUPT-RETURN.
+operators SET!, PUSH, POP, SET-FLAGS!, TRAP, EXTRA-CYCLES, and
+INTERRUPT-RETURN.
 
 #108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
 device.lisp) is deliberately *not* bound here, the same way :MEMORY
@@ -176,6 +177,10 @@ clause declared" machine-name)))
                       ;; completion.
                       (idle ()
                         `(setf (machine-idle ,',machine-var) t))
+                      ;; #90: like IDLE, records state STEP-MACHINE reads once
+                      ;; the semantics body returns.
+                      (extra-cycles (n)
+                        `(incf (machine-extra-cycles ,',machine-var) ,n))
                       (interrupt-return ()
                         (when ',interrupt-error (error ',interrupt-error))
                         ',interrupt-form))
@@ -192,3 +197,7 @@ vocabulary from WITH-MACHINE-BINDINGS."
 (defun zero? (value) (zerop value))
 
 (defun bit-set? (value bit) (logbitp bit value))
+
+(defun page-crossed? (from to &optional (page-size 256))
+  "True when FROM and TO lie in different PAGE-SIZE-cell pages."
+  (/= (floor from page-size) (floor to page-size)))
