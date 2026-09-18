@@ -1,0 +1,21 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|Command-line assembler and emulator built on LASM (see docs/cli.md)
+exec ros -- $0 "$@"
+|#
+(ros:ensure-asdf)
+
+(progn
+  (let ((root (merge-pathnames "../" (make-pathname :name nil :type nil
+                                                    :defaults *load-truename*))))
+    (unless (asdf:find-system :lasm nil)
+      (asdf:load-asd (merge-pathnames "lasm.asd" root))))
+  (ql:quickload :lasm :silent t))
+
+(defpackage #:ros.script.lasm
+  (:use #:cl))
+(in-package #:ros.script.lasm)
+
+(defun main (&rest argv)
+  (uiop:quit (lasm:run-cli argv)))
+;;; vim: set ft=lisp lisp:
