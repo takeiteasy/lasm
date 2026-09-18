@@ -139,10 +139,15 @@ clause declared" machine-name)))
                                              ;; here through SETF's ordinary symbol-macro
                                              ;; expansion, a :FLAG place alone needs its popped
                                              ;; integer explicitly rebuilt into a boolean first.
-                                             (if (eq (storage-element-kind (gethash place (machine-descriptor-table descriptor)))
-                                                     :flag)
-                                                 `(setf ,place (plusp ,interrupt-pop-form))
-                                                 `(setf ,place ,interrupt-pop-form)))
+                                             (cond
+                                               ;; #163: one cell of a banked register.
+                                               ((consp place)
+                                                `(setf (regref ,machine-var ',(first place) ,(second place))
+                                                       ,interrupt-pop-form))
+                                               ((eq (storage-element-kind (gethash place (machine-descriptor-table descriptor)))
+                                                    :flag)
+                                                `(setf ,place (plusp ,interrupt-pop-form)))
+                                               (t `(setf ,place ,interrupt-pop-form))))
                                            (reverse (interrupt-descriptor-save interrupts)))))))
         `(symbol-macrolet ,(nreverse symbol-macros)
            (macrolet (,@(mapcar (lambda (name)
