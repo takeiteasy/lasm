@@ -33,6 +33,7 @@
                (:file "emulator")
                (:file "disassembler")
                (:file "listing")
+               (:file "output")
                (:file "debugger")))
 
 (asdf:defsystem #:lasm/test
@@ -62,4 +63,5 @@
                (:file "emulator")
                (:file "disassembler")
                (:file "listing")
+               (:file "output")
                (:file "debugger")))

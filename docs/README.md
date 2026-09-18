@@ -17,6 +17,7 @@
 - [Emulator](emulator.md) — `load-program`, `step-machine`, `run`
 - [Disassembler](disassembler.md) — decode cells back to source, round-trip fidelity
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`
+- [Binary output](binary-output.md) — raw binary and Intel HEX files from an `assembly`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
 - [Debugger](debugger.md) — breakpoints, step/continue, register/memory inspection, a reference REPL
 
