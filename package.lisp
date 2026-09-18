@@ -398,6 +398,9 @@
    #:hex-text
    #:write-intel-hex
 
+   ;; CLI (#80)
+   #:run-cli
+
    ;; Symbol table (#37)
    #:assembly-symbol
    #:assembly-symbols-list

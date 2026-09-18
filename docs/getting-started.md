@@ -36,6 +36,20 @@ Every `examples/*.lisp` script runs standalone via `sbcl --script` (no
 [`examples/counter.lisp`](../examples/counter.lisp) — rather than assuming
 `cffi`/`trivial-high-precision-timer` are reachable any other way.
 
+## Roswell
+
+The [`lasm` command line](cli.md) is a Roswell script. Roswell resolves
+systems from `~/.roswell/local-projects`, not `~/quicklisp/local-projects`, so
+link `lasm` and `trivial-high-precision-timer` into it:
+
+```sh
+ln -s ~/quicklisp/local-projects/lasm ~/.roswell/local-projects/lasm
+ln -s ~/quicklisp/local-projects/trivial-high-precision-timer ~/.roswell/local-projects/
+```
+
+Then `ros roswell/lasm.ros --help`, or `ros build roswell/lasm.ros` for a
+standalone `roswell/lasm`.
+
 ## Run the example
 
 ```sh
@@ -262,6 +276,13 @@ A machine declaring an `(interrupts ...)` clause — a device's own signal
 delivered through the auto-installed hook, a software `int`-style
 instruction raising one directly, masking via a flag, and `rfi`
 restoring exactly what delivery pushed. See [Interrupts](interrupts.md).
+
+```sh
+ros roswell/lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
+```
+
+The same counter-loop program assembled and run from the shell against a
+machine defined in `examples/cli/sixtyfoo.lasm` — see [Command line](cli.md).
 
 ## Run the tests
 

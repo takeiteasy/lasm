@@ -34,6 +34,7 @@
                (:file "disassembler")
                (:file "listing")
                (:file "output")
+               (:file "cli")
                (:file "debugger")))
 
 (asdf:defsystem #:lasm/test
@@ -64,4 +65,5 @@
                (:file "disassembler")
                (:file "listing")
                (:file "output")
+               (:file "cli")
                (:file "debugger")))
