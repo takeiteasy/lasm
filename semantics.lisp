@@ -35,9 +35,14 @@ a machine instance the emulator already owns rather than a fresh one.
 
 PUSH/POP's STACK-NAME argument is optional: when omitted, it resolves to the
 machine's sole :stack element, mirroring emulator.lisp's %RESOLVE-MEMORY
-convention for the sole :memory element -- a machine declaring more than one
-stack (or none) signals an error at macroexpansion time, since the descriptor
-is already known here.
+convention for the sole :memory element; only when the machine declares no
+:stack element does the sole (stack-pointer ...)-bound register (#166) become
+the default instead. A machine declaring more than one candidate of whichever
+kind applies (or none at all) signals an error at macroexpansion time, since
+the descriptor is already known here. STACK-NAME, given or defaulted, may
+name either kind -- PUSH/POP expand to STACK-PUSH/STACK-POP for a :stack
+element or SP-PUSH/SP-POP for a stack-pointer register, transparently to the
+caller.
 
 Storage elements with :count > 1 (banked registers, #13) are bound as a
 local macro instead of a symbol-macro -- symbol-macrolet can't express an
@@ -74,14 +79,32 @@ these for a run-time-computed index."
           ;; explicit address operand.
           ((:memory))))
       (setf stack-names (nreverse stack-names))
-      (let* ((sole-stack (when (= (length stack-names) 1) (first stack-names)))
+      ;; #166: PUSH/POP also accept a register bound by a (stack-pointer ...)
+      ;; clause -- POINTER-ALIST is (register memory grows), embedded as
+      ;; literal data below (ASSOC) so each call-site's macroexpansion can
+      ;; tell a :stack target from a :pointer one without a runtime lookup.
+      ;; A bare PUSH/POP's default target keeps the sole :stack element as
+      ;; the default whenever one is declared -- unchanged behavior for
+      ;; every existing machine -- and only falls back to the sole
+      ;; stack-pointer when the machine declares no :stack element at all.
+      (let* ((pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                                   collect (list (stack-pointer-descriptor-register sp)
+                                                 (stack-pointer-descriptor-memory sp)
+                                                 (stack-pointer-descriptor-grows sp))))
+             (pointer-names (mapcar #'first pointer-alist))
+             (sole-stack (cond
+                           ((= (length stack-names) 1) (first stack-names))
+                           ((and (null stack-names) (= (length pointer-names) 1)) (first pointer-names))))
              (stack-error (cond
-                            ((null stack-names)
-                             (format nil "PUSH/POP on machine ~S: no stack element declared"
-                                     machine-name))
+                            ((and (null stack-names) (null pointer-names))
+                             (format nil "PUSH/POP on machine ~S: no stack element or ~
+stack-pointer declared" machine-name))
                             ((> (length stack-names) 1)
                              (format nil "PUSH/POP on machine ~S: more than one stack element ~
-declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names))))
+declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names))
+                            ((and (null stack-names) (> (length pointer-names) 1))
+                             (format nil "PUSH/POP on machine ~S: more than one stack-pointer ~
+declared (~{~S~^ ~}) -- name one explicitly" machine-name pointer-names))))
              ;; #109: everything INTERRUPT-RETURN needs -- which places to
              ;; pop, in what order, off which stack -- is already resolved
              ;; on the descriptor (%FINISH-INTERRUPT-MODEL, machine.lisp),
@@ -93,6 +116,17 @@ declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names))))
              (interrupt-error (unless interrupts
                                  (format nil "INTERRUPT-RETURN on machine ~S: no (interrupts ...) ~
 clause declared" machine-name)))
+             ;; #166: a :POINTER interrupt stack pops through SP-POP instead
+             ;; of STACK-POP -- its memory/direction come from the bound
+             ;; register's own (stack-pointer ...) clause, resolved once here.
+             (interrupt-pop-form
+               (when interrupts
+                 (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
+                     (let ((sp (gethash (interrupt-descriptor-stack-name interrupts)
+                                         (machine-descriptor-stack-pointers descriptor))))
+                       `(sp-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)
+                                ',(stack-pointer-descriptor-memory sp) ',(stack-pointer-descriptor-grows sp)))
+                     `(stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)))))
              (interrupt-form (when interrupts
                                 `(progn ,@(mapcar
                                            (lambda (place)
@@ -106,12 +140,8 @@ clause declared" machine-name)))
                                              ;; integer explicitly rebuilt into a boolean first.
                                              (if (eq (storage-element-kind (gethash place (machine-descriptor-table descriptor)))
                                                      :flag)
-                                                 `(setf ,place
-                                                        (plusp (stack-pop ,machine-var
-                                                                           ',(interrupt-descriptor-stack-name interrupts))))
-                                                 `(setf ,place
-                                                        (stack-pop ,machine-var
-                                                                   ',(interrupt-descriptor-stack-name interrupts)))))
+                                                 `(setf ,place (plusp ,interrupt-pop-form))
+                                                 `(setf ,place ,interrupt-pop-form)))
                                            (reverse (interrupt-descriptor-save interrupts)))))))
         `(symbol-macrolet ,(nreverse symbol-macros)
            (macrolet (,@(mapcar (lambda (name)
@@ -120,13 +150,19 @@ clause declared" machine-name)))
                       (set! (place value)
                         `(setf ,place ,value))
                       (push (value &optional (stack-name nil supplied-p))
-                        (let ((target (if supplied-p stack-name ',sole-stack)))
+                        (let* ((target (if supplied-p stack-name ',sole-stack))
+                               (entry (assoc target ',pointer-alist)))
                           (unless target (error ',stack-error))
-                          `(stack-push ,',machine-var ',target ,value)))
+                          (if entry
+                              `(sp-push ,',machine-var ',target ',(second entry) ',(third entry) ,value)
+                              `(stack-push ,',machine-var ',target ,value))))
                       (pop (&optional (stack-name nil supplied-p))
-                        (let ((target (if supplied-p stack-name ',sole-stack)))
+                        (let* ((target (if supplied-p stack-name ',sole-stack))
+                               (entry (assoc target ',pointer-alist)))
                           (unless target (error ',stack-error))
-                          `(stack-pop ,',machine-var ',target)))
+                          (if entry
+                              `(sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
+                              `(stack-pop ,',machine-var ',target))))
                       (set-flags! (&rest assignments)
                         `(progn ,@(mapcar (lambda (a)
                                              `(setf (flag ,',machine-var ',(first a)) ,(second a)))

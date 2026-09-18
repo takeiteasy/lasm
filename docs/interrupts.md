@@ -36,7 +36,7 @@ known, so they may appear in any order relative to the elements they name.
 | `:vector` | Register holding the handler address. Written into `pc` on delivery. |
 | `:message` | Register a delivered signal's data is written into. |
 | `:save` | Registers/flags pushed, in order, before `:message`/`:vector` are written. `interrupt-return` (below) pops them in reverse. |
-| `:stack` | Which declared `stack` element `:save` pushes onto/pops from. Defaults to the machine's sole one — an error if it declares none or more than one, same as `push`/`pop` with no stack name (see [Semantics vocabulary](semantics.md)). |
+| `:stack` | Which `stack` element, or which `(stack-pointer ...)`-bound register (#166 — see [Machine model, `stack-pointer`](machine-model.md)), `:save` pushes onto/pops from. Defaults to the machine's sole `stack` element, or (with none declared) its sole stack-pointer — an error on zero or more than one candidate of whichever kind applies, same as `push`/`pop` with no stack name (see [Semantics vocabulary](semantics.md)). |
 | `:queue` | Max pending, undelivered signals. Default 256. |
 | `:on-overflow` | Policy when `signal-interrupt` would exceed `:queue` — see "Overflow" below. Default `:error`. |
 | `:mask-when` | Function designator `(machine) -> generalized boolean`. At most one of `:mask-when`/`:mask-flag`. |
@@ -116,6 +116,46 @@ handler's first instruction:
 This happens identically under `run`/`run-for-cycles`/`run-for-duration`
 and the debugger's single-instruction `debug-step` — every path into
 execution goes through `step-machine`.
+
+## Register-indexed stacks (#166)
+
+`:stack` may name a register bound by a `(stack-pointer ...)` clause instead
+of a `(stack ...)` element — the machine model this article covers throughout
+otherwise (`intfoo` above) uses a native `:stack` element, but a machine
+shaped like DCPU-16 or ANIMA-16, whose "stack" is a plain register holding an
+address into ordinary memory, declares one of these instead:
+
+```lisp
+(defmachine intfoo-pointer
+  (register pc :width 16)
+  (register ia :width 16)
+  (register a :width 16)
+  (register sp :width 16)
+  (flags iaq)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down)
+  (interrupts :vector ia :message a :save (pc) :mask-flag iaq))
+```
+
+Delivery and `interrupt-return` push/pop through this register exactly the
+same way `push`/`pop` do (`sp-push`/`sp-pop`, not `stack-push`/`stack-pop`) —
+every other step of "Delivery" above (order, `:message`, `:vector`, `:cycles`,
+masking, overflow) is unchanged. Two differences follow directly from there
+being no `(stack ...)` element:
+
+- **No overflow/underflow condition.** A register-indexed stack has no
+  declared depth; a wrapping register is the machine's own business, same as
+  the hardware it models.
+- **Every `:save` place must fit one memory cell.** A `:pointer`-kind stack
+  pushes each `:save` place into a single cell of the bound memory, un-split
+  — `defmachine` rejects a `:save` place wider than that memory's
+  `:cell-width` up front, rather than truncating it on first delivery.
+  Splitting a wide place across cells is unscoped follow-up work.
+
+This binding also works outside `(interrupts ...)` entirely — see [Semantics
+vocabulary, `push`/`pop`](semantics.md) — so a stack-pointer register can back
+ordinary call/return instructions (`jsr`/`ret`) as well as interrupt delivery,
+sharing one register the way real hardware does.
 
 A signal raised *during* a step — a device's own `:tick` calling
 `device-signal` mid-step (see [Devices, "Ticking"](devices.md#ticking)) —

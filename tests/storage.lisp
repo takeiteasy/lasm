@@ -48,6 +48,56 @@
   (let ((m (make-machine 'test-machine)))
     (fiveam:signals stack-underflow (stack-pop m 's))))
 
+;;; #166: SP-PUSH/SP-POP -- register-indexed push/pop for a (stack-pointer
+;;; ...) clause. SP is deliberately wider than RAM's :addr-width, to exercise
+;;; the addr-width masking SP-PUSH/SP-POP apply when indexing.
+
+(defmachine sp-storage-test-machine
+  (register sp :width 32)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram :grows :down))
+
+(fiveam:test sp-push-pop-down-pre-decrements-then-post-increments
+  (let ((m (make-machine 'sp-storage-test-machine)))
+    (setf (sref m 'sp) 10)
+    (sp-push m 'sp 'ram :down 1)
+    (fiveam:is (= 9 (sref m 'sp)))
+    (fiveam:is (= 1 (mref m 'ram 9)))
+    (sp-push m 'sp 'ram :down 2)
+    (fiveam:is (= 8 (sref m 'sp)))
+    (fiveam:is (= 2 (sp-pop m 'sp 'ram :down)))
+    (fiveam:is (= 9 (sref m 'sp)))
+    (fiveam:is (= 1 (sp-pop m 'sp 'ram :down)))
+    (fiveam:is (= 10 (sref m 'sp)))))
+
+(fiveam:test sp-push-pop-up-stores-then-post-increments
+  (let ((m (make-machine 'sp-storage-test-machine)))
+    (setf (sref m 'sp) 10)
+    (sp-push m 'sp 'ram :up 1)
+    (fiveam:is (= 11 (sref m 'sp)))
+    (fiveam:is (= 1 (mref m 'ram 10)))
+    (fiveam:is (= 1 (sp-pop m 'sp 'ram :up)))
+    (fiveam:is (= 10 (sref m 'sp)))))
+
+(fiveam:test sp-push-wraps-at-zero-when-growing-down
+  ;; SP itself is a plain 32-bit register, so decrementing past 0 wraps to
+  ;; its own width (SETF SREF's WRAP-VALUE), not to RAM's narrower
+  ;; :addr-width -- the write still lands correctly since the indexed
+  ;; address is separately masked to :addr-width by SP-PUSH.
+  (let ((m (make-machine 'sp-storage-test-machine)))
+    (setf (sref m 'sp) 0)
+    (sp-push m 'sp 'ram :down 7)
+    (fiveam:is (= #xffffffff (sref m 'sp)))
+    (fiveam:is (= 7 (mref m 'ram #xff)))))
+
+(fiveam:test sp-push-masks-the-indexed-address-to-addr-width
+  ;; SP (32-bit) holds 256 -- one past RAM's 8-bit address space (0-255) --
+  ;; so the write must land at RAM[0], not signal ADDRESS-OUT-OF-RANGE.
+  (let ((m (make-machine 'sp-storage-test-machine)))
+    (setf (sref m 'sp) 257)
+    (sp-push m 'sp 'ram :up 9)
+    (fiveam:is (= 9 (mref m 'ram 1)))))
+
 ;;; STACK-REF / (SETF STACK-REF) (#50) -- top-relative, unsigned indexed
 ;;; access: offset 0 is the top (what STACK-POP would return), 1 is one
 ;;; below that, and so on.

@@ -5,6 +5,11 @@
 ;;;; hook, a software INT-style instruction raising one directly, masking
 ;;;; via a flag, and RFI restoring exactly what delivery pushed.
 ;;;;
+;;;; #166: a second machine, INTFOO-PTR, repeats the same shape with a
+;;;; register-indexed stack instead of a lasm :stack element -- the
+;;;; convention real ANIMA-16 actually uses -- and shows the same SP backing
+;;;; an ordinary JSR/RET pair outside any interrupt path.
+;;;;
 ;;;; Run with:  sbcl --script examples/interrupts.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -96,3 +101,66 @@
   (assert (= 42 (sref m 'a)))
 
   (format t "~%All assertions passed.~%"))
+
+;;; #166: the same shape again, but with a register-indexed stack instead of
+;;; a lasm :stack element -- real ANIMA-16's SP is a plain register pushed/
+;;; popped by hand into RAM, not a hidden lasm-native stack. (stack-pointer
+;;; ...) binds SP that way; INTFOO-PTR's :interrupts :stack names it, and the
+;;; same SP backs an ordinary JSR/RET pair -- not an interrupt path at all --
+;;; showing the binding works independently of (interrupts ...).
+
+(defmachine intfoo-ptr
+  (register pc :width 16)
+  (register ia :width 16)
+  (register a :width 16)
+  (register b :width 16)
+  (register sp :width 16)
+  (flags iaq)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down)
+  (interrupts :vector ia :message a :save (pc b) :mask-flag iaq))
+
+(definstruction intfoo-ptr nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction intfoo-ptr rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+(definstruction intfoo-ptr int
+  (encoding (opcode #x02))
+  (semantics (signal-interrupt machine b)))
+;; JSR/RET: an ordinary call/return pair sharing INTFOO-PTR's interrupt SP --
+;; PUSH/POP resolve it the same way they'd resolve a (stack ...) element.
+(definstruction intfoo-ptr jsr
+  (encoding (opcode #x05))
+  (semantics (push pc sp)))
+(definstruction intfoo-ptr ret
+  (encoding (opcode #x06))
+  (semantics (set! pc (pop sp))))
+
+(let ((m (make-machine 'intfoo-ptr)))
+  (setf (sref m 'ia) #x0100 (sref m 'b) 7)
+  (load-program m (list #x02) :origin 0)           ; int -- signals b (7)
+  (load-program m (list #x01) :origin #x0100)       ; handler: rfi
+  (setf (sref m 'pc) 0)
+  (format t "~%Register-indexed stack: raising a software interrupt (int)...~%")
+  (step-machine m) ; runs int -- enqueues
+  (step-machine m) ; delivers: pushes pc=1, b=7 into descending RAM cells; a<-7; pc<-#x0100; then runs the rfi found there, popping both back off
+  (format t "RAM[FFFF]=~D (saved pc) RAM[FFFE]=~D (saved b) sp=~4,'0X~%"
+          (mref m 'ram #xffff) (mref m 'ram #xfffe) (sref m 'sp))
+  (assert (= 1 (mref m 'ram #xffff))) ; pc pushed first, at the higher address
+  (assert (= 7 (mref m 'ram #xfffe))) ; b pushed second
+  (assert (= 1 (sref m 'pc)))         ; rfi restored pc
+  (assert (zerop (sref m 'sp)))       ; rfi's pops undid delivery's pushes in the same step
+
+  ;; The same SP, used by JSR/RET -- no interrupt involved.
+  (reset m)
+  (load-program m (list #x05 #x00 #x06) :origin 0) ; jsr (pushes pc=1), nop, ret (pops back to 1)
+  (format t "~%Same SP, JSR/RET (no interrupt path)...~%")
+  (step-machine m) ; jsr
+  (format t "After jsr: sp=~4,'0X RAM[FFFF]=~D~%" (sref m 'sp) (mref m 'ram #xffff))
+  (assert (= #xffff (sref m 'sp)))
+  (assert (= 1 (mref m 'ram #xffff)))
+  (setf (sref m 'pc) 2) ; jump to ret as if the called routine returned control here
+  (step-machine m) ; ret
+  (format t "After ret: pc=~D sp=~4,'0X~%" (sref m 'pc) (sref m 'sp))
+  (assert (= 1 (sref m 'pc)))
+  (assert (zerop (sref m 'sp)))
+
+  (format t "~%All register-indexed-stack assertions passed.~%"))

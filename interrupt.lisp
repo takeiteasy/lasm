@@ -66,8 +66,17 @@ stays idle until unmasked, same as delivery itself."
       (let* ((entry (cl:pop (machine-interrupt-queue machine)))
              (data (cdr entry))
              (stack (interrupt-descriptor-stack-name interrupts)))
-        (dolist (place (interrupt-descriptor-save interrupts))
-          (stack-push machine stack (sref machine place)))
+        ;; #166: a :POINTER stack pushes through SP-PUSH instead of
+        ;; STACK-PUSH -- STACK names the bound register, and its
+        ;; STACK-POINTER-DESCRIPTOR (resolved at DEFMACHINE time) carries
+        ;; which memory and which growth direction to use.
+        (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
+            (let ((sp (gethash stack (machine-descriptor-stack-pointers (machine-descriptor machine)))))
+              (dolist (place (interrupt-descriptor-save interrupts))
+                (sp-push machine stack (stack-pointer-descriptor-memory sp)
+                         (stack-pointer-descriptor-grows sp) (sref machine place))))
+            (dolist (place (interrupt-descriptor-save interrupts))
+              (stack-push machine stack (sref machine place))))
         (setf (sref machine (interrupt-descriptor-message interrupts)) data)
         (setf (sref machine pc) (sref machine (interrupt-descriptor-vector interrupts)))
         (setf (machine-idle machine) nil)

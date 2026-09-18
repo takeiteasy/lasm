@@ -110,3 +110,48 @@
 (fiveam:test pop-with-no-stack-name-errors-on-no-stack
   (fiveam:signals error
     (eval '(with-machine (m no-stack-test-machine) (pop)))))
+
+;;; #166: PUSH/POP against a (stack-pointer ...)-bound register -- works with
+;;; no (interrupts ...) clause at all, unlike the interrupt-delivery-only
+;;; binding an earlier design considered (see #166's plan).
+
+(defmachine pointer-only-test-machine
+  (register sp :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down))
+
+(fiveam:test push-pop-on-a-stack-pointer-register-with-no-interrupts-clause
+  (with-machine (m pointer-only-test-machine)
+    (push 11 sp)
+    (push 22 sp)
+    (fiveam:is (= 22 (pop sp)))
+    (fiveam:is (= 11 (pop sp)))))
+
+;; No :stack element declared -- the sole stack-pointer becomes PUSH/POP's
+;; bare default, same as the sole :stack element does above.
+(fiveam:test push-pop-default-to-the-sole-stack-pointer-when-no-stack-element
+  (with-machine (m pointer-only-test-machine)
+    (push 5)
+    (fiveam:is (= 5 (pop)))))
+
+;; A machine declaring BOTH a :stack element and a stack-pointer -- the
+;; :stack element still wins the bare default, unchanged from before #166.
+(defmachine stack-and-pointer-test-machine
+  (register sp :width 8)
+  (stack s :width 8 :depth 4)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram))
+
+(fiveam:test bare-push-pop-still-defaults-to-the-stack-element-over-a-pointer
+  (with-machine (m stack-and-pointer-test-machine)
+    (push 9)                            ; no name -- must hit S, not SP
+    (fiveam:is (= 1 (stack-depth m 's)))
+    (fiveam:is (zerop (sref m 'sp)))
+    (fiveam:is (= 9 (pop)))))
+
+(fiveam:test push-pop-name-the-pointer-explicitly-on-a-mixed-machine
+  (with-machine (m stack-and-pointer-test-machine)
+    (push 9 sp)
+    (fiveam:is (zerop (stack-depth m 's)))
+    (fiveam:is (/= 0 (sref m 'sp)))
+    (fiveam:is (= 9 (pop sp)))))
