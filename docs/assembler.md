@@ -93,6 +93,17 @@ assembler"](machine-model.md#cell-width-and-the-assembler) for the shared
 resolution rule and [Directives, `.byte`/`.word`](directives.md) for how it
 governs directive data.
 
+## `assemble-file`
+
+```lisp
+(assemble-file PATH &key machine (lexer 'default) (origin 0) memory)
+```
+
+Reads the source file at `PATH` and `assemble`s its text; keys and conditions
+are `assemble`'s. `.asm` or `.s` is the conventional extension for target
+source (`.lasm` is reserved for machine definitions); it is not enforced. A
+missing or unreadable file signals the ordinary CL `file-error`.
+
 ## Macro expansion
 
 `assemble-statements` runs `expand-macros` ([Macros](macros.md)) before
