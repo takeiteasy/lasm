@@ -33,6 +33,12 @@
 ;;;; step -- a budget check happens *after* the step executes, so it may be
 ;;;; overshot by at most one instruction's own cost (its cost isn't known
 ;;;; until the instruction has already been decoded and run).
+;;;;
+;;;; #108: STEP-MACHINE also ticks every live device on the machine's bus
+;;;; (TICK-DEVICES, device.lisp) with each step's own cost, once per step,
+;;;; regardless of which of the five entry points into STEP-MACHINE ran it
+;;;; (RUN/RUN-FOR-CYCLES/RUN-FOR-DURATION via %RUN-LOOP, or the debugger's
+;;;; DEBUG-STEP calling STEP-MACHINE directly).
 
 (in-package #:lasm)
 
@@ -112,6 +118,13 @@ after -- so an instruction whose semantics signal LASM-TRAP still counts
 its own cost, the same way RUN still counts a trapping step (its semantics
 ran to completion before signalling).
 
+#108: TICK-DEVICES (device.lisp) runs for the same reason, in the same
+place -- before EXECUTE-INSTRUCTION, not after, so a trapping instruction's
+devices still tick instead of that step silently going missing from device
+time (EXECUTE-INSTRUCTION's LASM-TRAP unwinds straight past anything placed
+after it). Called with this step's own COST, not on the :DECODE-FAILURE
+early return below, where nothing executed and no time elapsed.
+
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
 (disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
@@ -132,6 +145,11 @@ decoded, not just the values."
           (let ((cost (%descriptor-cycle-cost descriptor)))
             (setf (sref machine pc) (+ address size))
             (incf (machine-cycles machine) cost)
+            ;; TODO: devices tick once per instruction, with that
+            ;; instruction's whole cost -- a device needing intra-
+            ;; instruction resolution can't express it; sub-instruction
+            ;; tick granularity is a follow-up (#108).
+            (tick-devices machine cost)
             (execute-instruction descriptor machine values choices)
             (values descriptor cost))))))
 

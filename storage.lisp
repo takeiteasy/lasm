@@ -67,6 +67,19 @@ memory ~S on machine ~S"
                      (register-index-out-of-range-index c)
                      (storage-error-name c) (storage-error-machine c)))))
 
+;; #108: signalled by DEVICE-AT's checked callers (DETACH-DEVICE, DEVICE-
+;; INFO, DEVICE-SEND) for a bus INDEX that is out of range or a detached
+;; hole (DETACH-DEVICE leaves one rather than compacting the bus, so a
+;; running program's cached indices stay valid -- see device.lisp). Not a
+;; STORAGE-ERROR: a device isn't a storage element, so there is no NAME to
+;; report, only the bus INDEX.
+(define-condition no-such-device (lasm-error)
+  ((machine :initarg :machine :reader no-such-device-machine)
+   (index :initarg :index :reader no-such-device-index))
+  (:report (lambda (c s)
+             (format s "No device at bus index ~S on machine ~S"
+                     (no-such-device-index c) (no-such-device-machine c)))))
+
 ;; Generalized trap primitive placeholder. M6 replaces this with a full
 ;; interrupt/exception model (deftrap/definterrupt, vectors, priority);
 ;; for now `trap` just signals this condition with a tag and optional data.
@@ -153,6 +166,32 @@ memory ~S on machine ~S"
   (on-write :ignore :type (member :ignore :error))     ; :rom only
   (read nil :type (or null symbol function))           ; :device only
   (write nil :type (or null symbol function)))         ; :device only
+
+;; #108: a machine's declared (device ...) clause (machine.lisp) -- identity
+;; (the ID/VERSION/MANUFACTURER triple an HWQ-style instruction reads back,
+;; #135's confirmed shape) plus four hooks, each a function *designator*
+;; (a bare symbol, not #'NAME) for the same quoting reason MEMORY-REGION's
+;; READ/WRITE are (see that struct's comment and DEFMACHINE's docstring,
+;; machine.lisp). INIT/TICK/RECEIVE/DETACH are all optional -- a device
+;; declaring none is inert but still enumerable.
+;;   INIT    (machine device) -> value, stored as the runtime DEVICE's own
+;;           STATE -- called once by %ATTACH-DEVICE-DESCRIPTOR, both at
+;;           MAKE-MACHINE and on every RESET (storage.lisp).
+;;   TICK    (machine device cycles) -- called once per STEP-MACHINE
+;;           (emulator.lisp) with that step's own cycle cost.
+;;   RECEIVE (machine device) -- an HWI-style message send (DEVICE-SEND,
+;;           device.lisp); a device with no RECEIVE ignores it.
+;;   DETACH  (machine device) -- called by DETACH-DEVICE just before the
+;;           bus slot is cleared to a hole.
+(defstruct device-descriptor
+  (name nil :type symbol)
+  (id 0 :type (integer 0))
+  (version 0 :type (integer 0))
+  (manufacturer 0 :type (integer 0))
+  (init nil :type (or null symbol function))
+  (tick nil :type (or null symbol function))
+  (receive nil :type (or null symbol function))
+  (detach nil :type (or null symbol function)))
 
 (defun %region-at (element address)
   "The MEMORY-REGION in ELEMENT containing ADDRESS, or NIL when ELEMENT
@@ -242,6 +281,11 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
   ;; MACHINE-CYCLES below need no clock speed at all.
   (clock-speed nil :type (or null (integer 1)))
+  ;; #108: DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
+  ;; order -- that order is a runtime MACHINE's initial bus index order (see
+  ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
+  ;; declaring none.
+  (devices nil :type list)
   ;; #72: alias name (upcased string) -> bank index, flattened across every
   ;; banked register's :names -- one machine-wide table, since an alias is
   ;; unique across the whole machine (BUILD-MACHINE-DESCRIPTOR's SEEN check),
@@ -282,6 +326,18 @@ machine's default layout -- callers hold no other kind (#64)."
   (or (gethash name *machines*)
       (error "No machine named ~S has been defined with DEFMACHINE" name)))
 
+;; #108: a live device on a MACHINE's bus -- DESCRIPTOR is the DEVICE-
+;; DESCRIPTOR it was attached from (a declared one, or one built inline by
+;; ATTACH-DEVICE, device.lisp); INDEX is its bus position, fixed for the
+;; device's lifetime (DETACH-DEVICE leaves a hole rather than renumbering
+;; later devices, so a running program's cached index never goes stale).
+;; STATE is whatever the descriptor's INIT hook returned -- opaque to
+;; everything here, read back only by the device's own TICK/RECEIVE/DETACH.
+(defstruct (device (:constructor %make-device (descriptor index)))
+  (descriptor nil :type device-descriptor)
+  (index nil :type (integer 0))
+  (state nil))
+
 ;;; Runtime machine state
 
 (defstruct (machine (:constructor %make-machine (descriptor)))
@@ -292,7 +348,19 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; whether the machine's descriptor declares a CLOCK-SPEED -- the count
   ;; itself is always meaningful, only the cycles-to-seconds conversion needs
   ;; one.
-  (cycles 0 :type unsigned-byte))
+  (cycles 0 :type unsigned-byte)
+  ;; #108: the device bus -- an adjustable, fill-pointered vector of DEVICE
+  ;; or NIL (a detached hole, see DEVICE struct above). Seeded from the
+  ;; descriptor's own DEVICES by MAKE-MACHINE/RESET below; ATTACH-DEVICE
+  ;; (device.lisp) extends it, DETACH-DEVICE clears a slot in place rather
+  ;; than shrinking it.
+  (devices (make-array 0 :adjustable t :fill-pointer 0))
+  ;; #108: NIL, or a function (machine device data) called by DEVICE-SIGNAL
+  ;; (device.lisp) -- the seam #109's interrupt queue installs itself into.
+  ;; A signal with no hook installed is simply dropped. Host wiring, not
+  ;; machine state -- RESET leaves it alone, the same way the debugger's own
+  ;; breakpoints (a DEBUG-SESSION, not the MACHINE) survive a RESET.
+  (interrupt-hook nil :type (or null function)))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -334,6 +402,20 @@ machine's default layout -- callers hold no other kind (#64)."
                    :element-type `(unsigned-byte ,cell-width)
                    :initial-element 0)))))
 
+;; #108: instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
+;; its INIT hook (if any). Shared by MAKE-MACHINE/RESET below (seeding the
+;; declared bus) and ATTACH-DEVICE (device.lisp, appending a runtime one) --
+;; the one place that "run INIT, wrap the result in a DEVICE" happens, so
+;; the two callers can't drift on it. Lives here rather than in device.lisp
+;; since LASM.ASD is :SERIAL T with device.lisp loading after this file, and
+;; MAKE-MACHINE/RESET both need it.
+(defun %instantiate-device (machine descriptor index)
+  (let ((device (%make-device descriptor index))
+        (init (device-descriptor-init descriptor)))
+    (when init
+      (setf (device-state device) (funcall init machine device)))
+    device))
+
 (defun make-machine (name)
   "Instantiate runtime state for the machine descriptor registered under NAME."
   (let ((descriptor (find-machine-descriptor name)))
@@ -341,13 +423,26 @@ machine's default layout -- callers hold no other kind (#64)."
       (dolist (element (machine-descriptor-elements descriptor))
         (setf (gethash (storage-element-name element) (machine-slots m))
               (make-storage-slot element)))
+      ;; #108: seed the bus from every declared (device ...) clause, in
+      ;; declaration order -- that order becomes each device's fixed index.
+      (dolist (device-descriptor (machine-descriptor-devices descriptor))
+        (vector-push-extend
+         (%instantiate-device m device-descriptor (fill-pointer (machine-devices m)))
+         (machine-devices m)))
       m)))
 
 (defun reset (machine)
   "Zero all storage on MACHINE, including the #75 cycle counter -- which
 lives on the MACHINE struct itself rather than as a storage element, so the
 loop below (driven off MACHINE-DESCRIPTOR-ELEMENTS) never sees it and must
-be told separately."
+be told separately.
+
+#108: also restores the device bus to its *declared* shape -- any runtime-
+attached device (ATTACH-DEVICE, device.lisp) is dropped, every hole is
+refilled, and every declared device's INIT hook runs again, exactly as if a
+fresh MAKE-MACHINE had built the bus. MACHINE-INTERRUPT-HOOK is untouched --
+it's host wiring (who the bus signals), not machine state, so it survives a
+RESET the same way a DEBUG-SESSION's breakpoints do."
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
@@ -355,6 +450,12 @@ be told separately."
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
   (setf (machine-cycles machine) 0)
+  (let ((devices (machine-devices machine)))
+    (setf (fill-pointer devices) 0)
+    (dolist (device-descriptor (machine-descriptor-devices (machine-descriptor machine)))
+      (vector-push-extend
+       (%instantiate-device machine device-descriptor (fill-pointer devices))
+       devices)))
   machine)
 
 ;;; Accessors

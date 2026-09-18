@@ -118,6 +118,9 @@ widths against a machine defined earlier in the same file.
   fields"](instructions.md#field-value-field-name-n--constant-discriminator-fields-136),
   and [`examples/chip8word.lisp`](../examples/chip8word.lisp) for a complete
   machine using both.
+- `(device NAME [:id n] [:version n] [:manufacturer n] [:init fn] [:tick fn]
+  [:receive fn] [:detach fn])` — a bus-addressed peripheral (#108),
+  independent of memory regions above — see [Devices](devices.md).
 - `(clock-speed n)` — the machine's nominal rate in Hz (#75). Optional; a
   machine with no such clause can still accumulate `machine-cycles` and use
   `run-for-cycles`, just not `run-for-duration` or `machine-elapsed-seconds`
@@ -156,8 +159,9 @@ A memory element's `region` forms declare sub-ranges of its address space
 with distinct access behavior — `mref`/`(setf mref)` route through whichever
 region an address falls in; an address in no declared region keeps the
 element's plain, uniform behavior. `start`/`end` are both inclusive; regions
-never overlap and every name (region, register alias, or storage element)
-shares one machine-wide namespace, checked at `defmachine` time.
+never overlap and every name (region, register alias, storage element, or
+[device](devices.md)) shares one machine-wide namespace, checked at
+`defmachine` time.
 
 ```lisp
 (defmachine gb
@@ -204,7 +208,9 @@ yet supported.
 ## Runtime state
 
 `(make-machine 'NAME)` instantiates a fresh runtime `machine` for a
-registered descriptor. `(reset machine)` zeroes every storage element.
+registered descriptor. `(reset machine)` zeroes every storage element and
+restores the [device bus](devices.md) to its declared shape; any installed
+interrupt hook is left alone — see "Interrupt seam" in that doc.
 
 ## Width and signedness
 

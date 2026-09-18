@@ -14,6 +14,12 @@
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
 operators SET!, PUSH, POP, SET-FLAGS!, and TRAP.
 
+#108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
+device.lisp) is deliberately *not* bound here, the same way :MEMORY
+elements aren't (see below) -- an HWN/HWQ/HWI-style instruction's semantics
+call them directly as e.g. (device-info machine index), MACHINE-VAR passed
+explicitly, rather than through a macrolet.
+
 Unlike WITH-MACHINE, this does not create a machine instance -- MACHINE-VAR
 must already be bound (by the caller) to a runtime MACHINE for descriptor
 MACHINE-NAME. This is the piece DEFINSTRUCTION's (semantics ...) clause

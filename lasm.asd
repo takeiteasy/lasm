@@ -18,6 +18,7 @@
                (:file "storage")
                (:file "diagnostic")
                (:file "machine")
+               (:file "device")
                (:file "semantics")
                (:file "lexer")
                (:file "parser")
@@ -41,6 +42,7 @@
   :serial t
   :components ((:file "suites")
                (:file "storage")
+               (:file "device")
                (:file "semantics")
                (:file "lexer")
                (:file "parser")

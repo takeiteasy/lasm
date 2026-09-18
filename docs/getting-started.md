@@ -238,6 +238,15 @@ protection), a CPU store into ROM is silently dropped, and `mpeek` confirms
 the device region never gets a backing cell of its own. See [Machine model,
 "Memory regions"](machine-model.md#memory-regions).
 
+```sh
+sbcl --script examples/devices.lisp
+```
+
+A machine with two declared devices, enumerated and messaged `HWN`/`HWQ`/
+`HWI`-style (a countdown clock, an output port) plus one host-attached at
+runtime — independent of any memory region entirely. See
+[Devices](devices.md).
+
 ## Run the tests
 
 ```sh
