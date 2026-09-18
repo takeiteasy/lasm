@@ -108,9 +108,12 @@
 ;; doesn't matter either, same reasoning as A-IND/A-MEM below.
 (defmode a-idx "[" expr "," expr "]")
 (defmode a-lit "#" expr)
+;; A second spelling of A-MEM's absolute load, "abs addr" -- see the :alias
+;; variant in LD below.
+(defmode a-abs "abs" expr)
 (defmode a-reg expr)
 
-(defmode ld-mode expr "," (one-of a-mem a-ind a-idx a-lit a-reg))
+(defmode ld-mode expr "," (one-of a-mem a-abs a-ind a-idx a-lit a-reg))
 
 ;; LD dst, src -- reg[dst] := SRC, where SRC means something different
 ;; depending on which of its five syntaxes was actually written: a bare
@@ -143,6 +146,7 @@
       (variant (choice a-ind) inline :range (0 7) :bias #x08)
       (variant (choice a-idx) inline :range (0 7) :bias #x10)
       (variant (choice a-mem) (extra-word :escape #x1e))
+      (variant (choice a-abs) (extra-word :escape #x1e :alias t))
       (variant (range -1 30) inline :bias 33)
       (variant :else (extra-word :escape #x1f)))
     ;; #120: the offset A-IDX's own alternative contributes beyond LD-MODE's
@@ -215,6 +219,8 @@ value-selected sharing one field (LD):~%")
   ;; trailing word is spent at all -- A-IDX's own trailing word (#120) is the
   ;; one row where that word is a *second operand hole*, not the value of
   ;; SRC itself.
+  ;; "abs 0" is an :alias of "(0)": same field code, same trailing word.
+  (assert (equalp mem-form (assembly-cells (assemble "ld 1, abs 0" :machine 'anima16foo))))
   (assert (not (equalp reg-form ind-form)))
   (assert (not (equalp reg-form idx-form)))
   (assert (not (equalp reg-form mem-form)))

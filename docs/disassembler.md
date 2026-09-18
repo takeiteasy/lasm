@@ -186,7 +186,9 @@ to the one `one-of` alternative no `choice`-selected variant there claims,
 so a hole on a mixed field still carries a real record either way, and
 renders its own actually-matched syntax same as a `choice`-selected one.
 Only a hole with no selector of any kind still has no record to fall back
-from. When the matched alternative has more holes than its `one-of`
+from. An `:alias` variant ([Instructions, "Aliased
+escapes"](instructions.md#aliased-escapes)) is never matched at decode, so
+its words render as the canonical spelling. When the matched alternative has more holes than its `one-of`
 element's other alternatives ([Addressing modes, "Varying hole counts
 across alternatives"](modes.md#varying-hole-counts-across-alternatives)),
 the render walk consumes exactly that many values and record entries for

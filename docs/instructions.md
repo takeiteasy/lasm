@@ -998,7 +998,7 @@ modes"](modes.md#per-operand-modes)) a hole actually matched:
 ```lisp
 (operand [NAME] :field FIELD-NAME
   [(variant (choice MODE) inline :range (LO HI) [:bias N])
-   (variant (choice MODE) (extra-word :escape N [:cells K]))]*)
+   (variant (choice MODE) (extra-word :escape N [:cells K] [:alias T]))]*)
 ```
 
 `MODE` must be one of the alternatives named by the `one-of` element that
@@ -1033,6 +1033,24 @@ to disambiguate once every other alternative is claimed. Every
 now that several variants of one kind can share a field — no two inline
 ranges may overlap and no two escapes may collide, checked the same way as
 the existing inline-vs-escape ambiguity check, all at `definstruction` time.
+
+#### Aliased escapes
+
+Two alternatives that are two spellings of one encoding may share an escape
+when the second declares `:alias t`:
+
+```lisp
+(variant (choice a-sprel) (extra-word :escape #x1a))
+(variant (choice a-pick)  (extra-word :escape #x1a :alias t))
+```
+
+Both spellings assemble to identical words. The variant without `:alias` is
+canonical: it is the only one decode matches, so it is the spelling the
+disassembler renders and the alternative `choice-case` sees. An alias must
+share its escape with exactly one canonical variant, and both must agree on
+`:cells` and on the alternatives' hole count, signedness, width and
+relativeness. Only `choice`-selected `extra-word` variants take `:alias`;
+inline ranges may never overlap. Unmarked duplicate escapes remain an error.
 
 ```lisp
 (defmode a-reg expr)

@@ -1528,7 +1528,10 @@ compiled code once per sibling."
   ;; longer NIL here by the time %EXPAND-WORD-COMBOS/%WORD-FIELD-CHOICE-FORM
   ;; (below) see it. A field with no CHOICE variant at all is left alone --
   ;; every variant there stays NIL, exactly as before #118.
-  (choice nil :type (or null symbol)))
+  (choice nil :type (or null symbol))
+  ;; #187: T on a CHOICE-selected :extra-word variant that is a second
+  ;; spelling of another variant's escape. Never matched at decode.
+  (alias nil :type boolean))
 
 (defstruct word-operand-spec
   (name nil)                  ; operand field name, or NIL for unnamed
@@ -1603,7 +1606,9 @@ compiled code once per sibling."
   ;; (decoder.lisp), and %WORD-FIELD-CHOICE-VALUES all reinterpret a signed
   ;; field's raw bits as two's-complement before comparing against its
   ;; (biased) RANGE.
-  (signedp nil :type boolean))
+  (signedp nil :type boolean)
+  ;; #187: mirrors WORD-VARIANT-ALIAS.
+  (alias nil :type boolean))
 
 (defun %word-choice-matches-p (raw-value choice)
   "T if RAW-VALUE -- a field's bits as actually fetched or, at
@@ -1624,7 +1629,8 @@ here. Lives here, not in decoder.lisp (which loads after this file), so
 REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
 (decoder.lisp) still uses it for its own, original purpose."
   (ecase (word-field-choice-kind choice)
-    (:extra-word (= raw-value (word-field-choice-escape choice)))
+    (:extra-word (and (not (word-field-choice-alias choice))
+                      (= raw-value (word-field-choice-escape choice))))
     ;; #120: a :TRAILING-WORD choice has no field bits of its own to test --
     ;; it always matches wherever it appears. Only reachable defensively;
     ;; decoder.lisp's %TRY-DECODE-WORD-CANDIDATE never calls this for a
@@ -1867,11 +1873,12 @@ INLINE, got ~S" field-name tail))
          (declare (ignore choice-kw))
          (cond
            ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
-            (destructuring-bind (extra-word-kw &key escape cells) (first tail)
+            (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
               (declare (ignore extra-word-kw))
               (unless escape
                 (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
-              (make-word-variant :kind :extra-word :escape escape :choice choice-name :extra-cells cells)))
+              (make-word-variant :kind :extra-word :escape escape :choice choice-name
+                                 :extra-cells cells :alias (and alias t))))
            ((eq (first tail) 'inline)
             (destructuring-bind (inline-sym &key range (bias 0)) tail
               (declare (ignore inline-sym))
@@ -2017,13 +2024,43 @@ genuine inline value" field-name e (car r) (cdr r) e))))
                  (error "DEFINSTRUCTION: field ~S: inline ranges overlap in raw field value ~D..~D -- ~
 an encoded field value in the overlap could never be told apart"
                         field-name (max (car r) (car r2)) (min (cdr r) (cdr r2))))))
-    ;; #104: reachable now that several CHOICE-selected :EXTRA-WORD variants
-    ;; can share one field -- unreachable before, when a field had at most
-    ;; one :ELSE.
-    (let ((dup (loop for (e . later) on escapes when (member e later) return e)))
-      (when dup
-        (error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant"
-               field-name dup)))))
+    ;; #104/#187: a shared escape is legal only as (extra-word ... :alias t)
+    ;; -- a second spelling of one canonical variant's encoding.
+    (let ((extras (remove-if-not (lambda (v) (eq (word-variant-kind v) :extra-word)) variants)))
+      (dolist (e (remove-duplicates (mapcar #'word-variant-escape extras)))
+        (let* ((group (remove e extras :key #'word-variant-escape :test #'/=))
+               (canonical (remove-if #'word-variant-alias group))
+               (aliases (remove-if-not #'word-variant-alias group)))
+          (cond
+            ((rest canonical)
+             (error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant ~
+-- mark a second spelling of the same encoding with (extra-word :escape ~D :alias t)"
+                    field-name e e))
+            ((and aliases (null canonical))
+             (error "DEFINSTRUCTION: field ~S: (extra-word :escape ~D :alias t) has no ~
+non-alias variant on that escape to be an alias of" field-name e))
+            (aliases
+             (dolist (a aliases)
+               (%check-alias-encodes-like-canonical! a (first canonical) field-name e)))))))))
+
+(defun %check-alias-encodes-like-canonical! (alias canonical field-name escape)
+  "Signal an error unless ALIAS (#187) -- an :ALIAS T :EXTRA-WORD variant --
+encodes exactly as CANONICAL, the non-alias variant on the same ESCAPE: same
+extra-cell width, and ONE-OF alternatives agreeing on hole count, signedness,
+width and relativeness."
+  (unless (and (word-variant-choice alias) (word-variant-choice canonical))
+    (error "DEFINSTRUCTION: field ~S: :alias t on escape ~D requires both variants to be ~
+(choice ...) selected" field-name escape))
+  (let ((am (find-mode-descriptor (word-variant-choice alias)))
+        (cm (find-mode-descriptor (word-variant-choice canonical))))
+    (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
+                 (= (%mode-hole-count am) (%mode-hole-count cm))
+                 (eq (mode-descriptor-signedp am) (mode-descriptor-signedp cm))
+                 (eql (mode-descriptor-width am) (mode-descriptor-width cm))
+                 (eq (mode-descriptor-relativep am) (mode-descriptor-relativep cm)))
+      (error "DEFINSTRUCTION: field ~S: alias ~S on escape ~D does not encode like ~S -- ~
+extra-word cells, hole count, signedness, width and relativeness must all agree"
+             field-name (word-variant-choice alias) escape (word-variant-choice canonical)))))
 
 (defun %check-word-variant-choices! (variants field-name hole-alternatives)
   "Signal an error if any of VARIANTS' non-NIL WORD-VARIANT-CHOICE (#104)
@@ -2384,6 +2421,7 @@ which value-selected variant a given combo happens to pick."
     :escape ,(word-variant-escape variant)
     :extra-cells ,(word-variant-extra-cells variant)
     :choice ',(word-variant-choice variant)
+    :alias ,(word-variant-alias variant)
     :signedp ,(if (word-variant-choice variant)
                   (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant)))
                   hole-signedp)))

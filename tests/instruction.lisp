@@ -1669,6 +1669,93 @@
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil)))))
 
+;;; Alias variants (#187) -- a second spelling of one canonical escape.
+
+(defmachine alias-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 2)
+    (field src 10)))
+
+(defmode wc-pick "pick" expr)
+(defmode wc-alias (one-of wc-pick wc-ind wc-reg))
+
+(definstruction alias-test-machine wcal
+  (modes wc-alias)
+  (encoding
+    (opcode 8)
+    (operand value :field src
+      (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+      (variant (choice wc-ind) (extra-word :escape #x3ff))
+      (variant (choice wc-pick) (extra-word :escape #x3ff :alias t))))
+  (semantics (set! a value)))
+
+(fiveam:test alias-variant-stamps-word-field-choice
+  (let ((flags (mapcar (lambda (d) (word-field-choice-alias (first (instruction-descriptor-word-fields d))))
+                       (find-instruction-variants 'alias-test-machine "WCAL"))))
+    (fiveam:is (= 3 (length flags)))
+    (fiveam:is (= 1 (count t flags)))))
+
+(fiveam:test alias-spellings-assemble-identically
+  (fiveam:is (equalp (assembly-cells (assemble "wcal [5]" :machine 'alias-test-machine))
+                     (assembly-cells (assemble "wcal pick 5" :machine 'alias-test-machine)))))
+
+(fiveam:test alias-word-decodes-to-canonical-spelling
+  (let ((lines (disassemble-assembly (assemble "wcal pick 5" :machine 'alias-test-machine)
+                                     :machine 'alias-test-machine :labels nil)))
+    (fiveam:is (string= "wcal [$5]" (disassembly-line-text (first lines))))))
+
+(fiveam:test alias-without-canonical-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes wc-alias)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7) :bias #x00)
+                         (variant (choice wc-pick) (extra-word :escape #x3ff :alias t))))
+             (semantics nil)))))
+
+(fiveam:test alias-disagreeing-on-cells-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) (extra-word :escape #x3ff))
+                         (variant (choice wc-ind) (extra-word :escape #x3ff :cells 3 :alias t))))
+             (semantics nil)))))
+
+(fiveam:test two-non-alias-escapes-still-signal-with-alias-present
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes wc-alias)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) (extra-word :escape #x3ff))
+                         (variant (choice wc-ind) (extra-word :escape #x3ff))
+                         (variant (choice wc-pick) (extra-word :escape #x3ff :alias t))))
+             (semantics nil)))))
+
+(fiveam:test alias-on-inline-or-else-variant-signals-error
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant (choice wc-reg) inline :range (0 7) :alias t)
+                         (variant (choice wc-ind) (extra-word :escape #x3ff))))
+             (semantics nil))))
+  (fiveam:signals error
+    (eval '(definstruction alias-test-machine bogus
+             (modes wc-two)
+             (encoding (opcode 5)
+                       (operand value :field src
+                         (variant :else (extra-word :escape #x3ff :alias t))))
+             (semantics nil)))))
+
 ;;; Varying hole counts across ONE-OF alternatives (#120) -- a ONE-OF hole
 ;;; whose alternatives disagree on hole count, on a word-encoded machine,
 ;;; gated on the governing field being wholly CHOICE-selected (or #118-mixed

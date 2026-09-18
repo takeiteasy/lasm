@@ -113,7 +113,8 @@ skipped. At runtime, `choice-case` dispatches on which alternative the hole
 was actually decoded (or assembled) as; with no `otherwise` clause, a hole
 matching none of the given keys — including one with no recorded
 alternative at all — signals `no-matching-choice` instead of silently
-falling through.
+falling through. An `:alias` alternative is never decoded, so a clause keyed
+on it never runs; the canonical alternative's clause covers both spellings.
 
 `name` may also be an extra operand a *sibling* alternative's own hole count
 contributes but this one's own mode use doesn't (see [Addressing modes,
