@@ -42,6 +42,7 @@
   :pathname "tests/"
   :serial t
   :components ((:file "suites")
+               (:file "package")
                (:file "storage")
                (:file "device")
                (:file "interrupt")

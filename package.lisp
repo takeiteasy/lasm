@@ -23,6 +23,7 @@
    #:stack-underflow
    #:stack-index-out-of-range
    #:stack-index-out-of-range-index
+   #:register-index-out-of-range
    #:no-such-device
    #:no-such-device-machine
    #:no-such-device-index
@@ -127,6 +128,7 @@
    ;; Storage accessors
    #:sref
    #:signed-value
+   #:regref
    #:mref
    #:mpeek
    #:stack-push
@@ -272,6 +274,7 @@
    #:no-matching-choice-instruction
    #:no-matching-choice-operand
    #:no-matching-choice-choice
+   #:opcode-conflict
    #:instruction-descriptor
    #:instruction-descriptor-p
    #:instruction-descriptor-name
@@ -348,6 +351,7 @@
    #:decode-instruction-at
    #:machine-cell-reader
    #:vector-cell-reader
+   #:machine-peek-reader
 
    ;; Disassembler (#21)
    #:disassemble-cells
