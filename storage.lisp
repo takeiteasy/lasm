@@ -235,17 +235,42 @@ memory ~S on machine ~S"
 ;;                but-nonzero-vector machine still queues normally; this
 ;;                knob exists because masking alone can't express "off"
 ;;                without risking a queue that fills and hits ON-OVERFLOW.
+;;   STACK-KIND   :STACK (STACK-NAME names a lasm :STACK element, pushed/
+;;                popped via STACK-PUSH/STACK-POP -- the original #109
+;;                behavior) or :POINTER (STACK-NAME names a register bound by
+;;                a (stack-pointer ...) clause, pushed/popped via SP-PUSH/
+;;                SP-POP against that clause's own memory/direction; #166).
 (defstruct interrupt-descriptor
   (vector nil :type symbol)
   (message nil :type symbol)
   (save nil :type list)
   (stack-name nil :type (or null symbol))
+  (stack-kind :stack :type (member :stack :pointer))
   (queue-depth 256 :type (integer 1))
   (on-overflow :error :type (member :error :trap :drop :drop-oldest))
   (mask-when nil :type (or null symbol function))
   (mask-flag nil :type (or null symbol))
   (cycles 0 :type (integer 0))
   (drop-on-zero-vector t :type boolean))
+
+;; #166: a (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
+;; binds an existing scalar :register element as an address pointer into a
+;; :memory element, for machines (DCPU-16, ANIMA-16) whose "stack" is a plain
+;; register indexed by push/pop convention rather than a lasm :stack element.
+;; Declares no new namespace name, same as INTERRUPT-DESCRIPTOR -- it only
+;; references existing REGISTER/MEMORY elements.
+;;   REGISTER   the bound scalar register's name.
+;;   MEMORY     the memory element pushed/popped into; resolved by
+;;              %FINISH-STACK-POINTERS (machine.lisp) to the sole declared
+;;              :memory element when the clause omits :memory.
+;;   GROWS      :DOWN (default) -- REGISTER points AT the top item: push
+;;              pre-decrements then stores, pop loads then post-increments.
+;;              :UP -- REGISTER points one PAST the top item: push stores
+;;              then post-increments, pop pre-decrements then loads.
+(defstruct stack-pointer-descriptor
+  (register nil :type symbol)
+  (memory nil :type (or null symbol))
+  (grows :down :type (member :down :up)))
 
 (defun %region-at (element address)
   "The MEMORY-REGION in ELEMENT containing ADDRESS, or NIL when ELEMENT
@@ -347,6 +372,13 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; single NULL test on a machine declaring no interrupt model, the same
   ;; way DEVICES being NIL keeps TICK-DEVICES a no-op loop.
   (interrupts nil :type (or null interrupt-descriptor))
+  ;; #166: register name -> STACK-POINTER-DESCRIPTOR, one entry per declared
+  ;; (stack-pointer ...) clause. Consulted by %RESOLVE-INTERRUPT-STACK
+  ;; (machine.lisp) when (interrupts ...)'s :stack names a register rather
+  ;; than a :stack element, and by WITH-MACHINE-BINDINGS's PUSH/POP
+  ;; (semantics.lisp) so a stack-pointer works with or without an
+  ;; (interrupts ...) clause. Empty (never NIL) on a machine declaring none.
+  (stack-pointers (make-hash-table :test 'eq))
   ;; #72: alias name (upcased string) -> bank index, flattened across every
   ;; banked register's :names -- one machine-wide table, since an alias is
   ;; unique across the whole machine (BUILD-MACHINE-DESCRIPTOR's SEEN check),
@@ -759,6 +791,36 @@ and the debugger: a ROM image is burned in, not stored by the CPU."
         (error 'stack-overflow :machine (machine-descriptor-name (machine-descriptor machine)) :name name))
       (setf (aref vec sp) (wrap-value value (storage-element-width element)))
       (setf (cdr slot) (1+ sp)))))
+
+;; #166: register-indexed push/pop for a (stack-pointer ...) clause -- REG
+;; holds an address into MEMORY rather than indexing a lasm :stack element.
+;; No overflow/underflow condition: a wrapping REG is the machine's own
+;; business, same as the hardware it models. The address is masked to
+;; MEMORY's :addr-width before indexing, so REG may be wider than the
+;; address space.
+(defun %sp-address (machine reg memory)
+  (let ((element (descriptor-element (machine-descriptor machine) memory)))
+    (wrap-value (sref machine reg) (storage-element-addr-width element))))
+
+(defun sp-push (machine reg memory grows value)
+  "Push VALUE onto MACHINE's REG/MEMORY-backed stack-pointer stack, per
+GROWS (:DOWN: pre-decrement REG then store; :UP: store then post-increment
+REG)."
+  (ecase grows
+    (:down (setf (sref machine reg) (1- (sref machine reg)))
+           (setf (mref machine memory (%sp-address machine reg memory)) value))
+    (:up (setf (mref machine memory (%sp-address machine reg memory)) value)
+         (setf (sref machine reg) (1+ (sref machine reg))))))
+
+(defun sp-pop (machine reg memory grows)
+  "Pop and return a value from MACHINE's REG/MEMORY-backed stack-pointer
+stack, per GROWS (:DOWN: load then post-increment REG; :UP: pre-decrement
+REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
+  (ecase grows
+    (:down (prog1 (mref machine memory (%sp-address machine reg memory))
+             (setf (sref machine reg) (1+ (sref machine reg)))))
+    (:up (setf (sref machine reg) (1- (sref machine reg)))
+         (mref machine memory (%sp-address machine reg memory)))))
 
 (defun stack-pop (machine name)
   (multiple-value-bind (slot element) (%slot machine name :stack)

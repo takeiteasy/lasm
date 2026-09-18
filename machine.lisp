@@ -52,6 +52,62 @@ lay a multi-cell value down in."
                            :width (%check-positive width ":width" name)
                            :depth (%check-positive depth ":depth" name))))
 
+;; #166: (stack-pointer REGISTER [:memory NAME] [:grows :down/:up]) -- binds
+;; an existing scalar :register element as an address pointer into a :memory
+;; element, for machines whose "stack" is a plain register indexed by
+;; push/pop convention rather than a lasm :stack element (DCPU-16, ANIMA-16).
+;; Like (interrupts ...), this clause introduces no new namespace name -- it
+;; only references existing ones -- so it's parsed shape-only here; whether
+;; REGISTER/MEMORY actually name the right kind of element can't be checked
+;; until every other clause is known (%FINISH-STACK-POINTERS, below).
+(defun parse-stack-pointer-clause (form)
+  (destructuring-bind (register &key memory (grows :down)) form
+    (unless (symbolp register)
+      (error "stack-pointer ~S must be a symbol" register))
+    (when (and memory (not (symbolp memory)))
+      (error "stack-pointer ~S :memory must be a symbol, got ~S" register memory))
+    (unless (member grows '(:down :up))
+      (error "stack-pointer ~S :grows must be :DOWN or :UP, got ~S" register grows))
+    (make-stack-pointer-descriptor :register register :memory memory :grows grows)))
+
+;; #166: resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
+;; DESCRIPTOR's own ELEMENTS, once they're fully known -- same two-pass split
+;; as %FINISH-INTERRUPT-MODEL. Populates MACHINE-DESCRIPTOR-STACK-POINTERS
+;; (register name -> STACK-POINTER-DESCRIPTOR, with MEMORY resolved), and
+;; mutates each descriptor's MEMORY slot in place when the clause omitted it.
+(defun %finish-stack-pointers (descriptor stack-pointers)
+  (let ((name (machine-descriptor-name descriptor)))
+    (dolist (sp stack-pointers)
+      (let* ((reg (stack-pointer-descriptor-register sp))
+             (element (gethash reg (machine-descriptor-table descriptor))))
+        (unless (and element (eq (storage-element-kind element) :register))
+          (error "stack-pointer on machine ~S: ~S is not a declared register element"
+                 name reg))
+        (when (> (storage-element-count element) 1)
+          (error "stack-pointer on machine ~S: ~S is a banked (:count > 1) register -- ~
+only a scalar register may be a stack pointer" name reg))
+        (when (gethash reg (machine-descriptor-stack-pointers descriptor))
+          (error "stack-pointer on machine ~S: more than one (stack-pointer ~S ...) clause"
+                 name reg))
+        (let ((given (stack-pointer-descriptor-memory sp)))
+          (if given
+              (let ((mem (gethash given (machine-descriptor-table descriptor))))
+                (unless (and mem (eq (storage-element-kind mem) :memory))
+                  (error "stack-pointer ~S on machine ~S: :memory ~S is not a declared ~
+memory element" reg name given)))
+              (let ((memories (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
+                                              (machine-descriptor-elements descriptor))))
+                (cond
+                  ((= (length memories) 1)
+                   (setf (stack-pointer-descriptor-memory sp) (storage-element-name (first memories))))
+                  ((null memories)
+                   (error "stack-pointer ~S on machine ~S: no memory element is declared -- ~
+name one explicitly with :memory" reg name))
+                  (t (error "stack-pointer ~S on machine ~S: more than one memory element ~
+declared (~{~S~^ ~}) -- name one explicitly with :memory"
+                            reg name (mapcar #'storage-element-name memories)))))))
+        (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
+
 ;; #107: (region NAME start end [:kind :ram/:rom/:device] [:on-write
 ;; :ignore/:error] [:read fn] [:write fn]) -- one sub-range of a memory
 ;; element with distinct access behavior. NAME is validated as a symbol
@@ -219,28 +275,46 @@ function), got ~S" mask-when))
                                 :mask-when mask-when :mask-flag mask-flag :cycles cycles
                                 :drop-on-zero-vector (and drop-on-zero-vector t))))
 
-;; #109: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or, absent
-;; one, the machine's sole declared stack element -- exactly the way
+;; #109/#166: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or,
+;; absent one, the machine's sole declared stack element -- exactly the way
 ;; WITH-MACHINE-BINDINGS's PUSH/POP macrolets do at macroexpansion time
 ;; (semantics.lisp), just resolved once here at DEFMACHINE time instead,
-;; since the whole machine descriptor is already in hand. Returns the
-;; resolved stack name, or signals if GIVEN doesn't name a real stack, or
-;; (with none given) the machine declares zero or more than one.
+;; since the whole machine descriptor is already in hand. Returns two
+;; values: the resolved stack name, and its kind (:STACK for a lasm :stack
+;; element, :POINTER for a register bound by a (stack-pointer ...) clause).
+;; Signals if GIVEN names neither, or (with none given) the machine declares
+;; zero or more than one candidate of whichever kind is in play -- a :stack
+;; element always wins the no-:stack-given default when one exists; the sole
+;; stack-pointer is only the default when the machine declares no :stack
+;; element at all.
 (defun %resolve-interrupt-stack (descriptor given)
   (let ((name (machine-descriptor-name descriptor)))
     (if given
         (let ((element (gethash given (machine-descriptor-table descriptor))))
-          (unless (and element (eq (storage-element-kind element) :stack))
-            (error "interrupts on machine ~S: :stack ~S is not a declared stack element"
-                   name given))
-          given)
+          (cond
+            ((and element (eq (storage-element-kind element) :stack))
+             (values given :stack))
+            ((gethash given (machine-descriptor-stack-pointers descriptor))
+             (values given :pointer))
+            ((and element (eq (storage-element-kind element) :register))
+             (error "interrupts on machine ~S: :stack ~S is a register with no ~
+(stack-pointer ~S ...) clause declared" name given given))
+            (t (error "interrupts on machine ~S: :stack ~S is not a declared stack ~
+element or a register bound by (stack-pointer ...)" name given))))
         (let ((stacks (remove-if-not (lambda (e) (eq (storage-element-kind e) :stack))
                                       (machine-descriptor-elements descriptor))))
           (cond
-            ((= (length stacks) 1) (storage-element-name (first stacks)))
+            ((= (length stacks) 1) (values (storage-element-name (first stacks)) :stack))
             ((null stacks)
-             (error "interrupts on machine ~S: :save needs a stack, but no stack element ~
-is declared -- name one explicitly with :stack" name))
+             (let ((pointers (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                                    collect (stack-pointer-descriptor-register sp))))
+               (cond
+                 ((= (length pointers) 1) (values (first pointers) :pointer))
+                 ((null pointers)
+                  (error "interrupts on machine ~S: :save needs a stack, but no stack ~
+element or stack-pointer is declared -- name one explicitly with :stack" name))
+                 (t (error "interrupts on machine ~S: more than one stack-pointer declared ~
+(~{~S~^ ~}) -- name one explicitly with :stack" name pointers)))))
             (t (error "interrupts on machine ~S: more than one stack element declared ~
 (~{~S~^ ~}) -- name one explicitly with :stack" name (mapcar #'storage-element-name stacks))))))))
 
@@ -282,8 +356,25 @@ only a scalar register may be named here" name what n)))))
         (require-kind n '(:register :flag) ":save"))
       (when (interrupt-descriptor-mask-flag interrupts)
         (require-kind (interrupt-descriptor-mask-flag interrupts) '(:flag) ":mask-flag")))
-    (setf (interrupt-descriptor-stack-name interrupts)
-          (%resolve-interrupt-stack descriptor (interrupt-descriptor-stack-name interrupts)))))
+    (multiple-value-bind (stack-name stack-kind)
+        (%resolve-interrupt-stack descriptor (interrupt-descriptor-stack-name interrupts))
+      (setf (interrupt-descriptor-stack-name interrupts) stack-name)
+      (setf (interrupt-descriptor-stack-kind interrupts) stack-kind)
+      ;; #166: a :POINTER stack pushes every :SAVE place, un-split, into one
+      ;; memory cell (SP-PUSH, storage.lisp) -- a place wider than the bound
+      ;; memory's cell width would silently truncate on delivery instead of
+      ;; failing loudly here. Splitting a wide place across cells is
+      ;; unscoped follow-up work (#166 follow-up).
+      (when (eq stack-kind :pointer)
+        (let* ((sp (gethash stack-name (machine-descriptor-stack-pointers descriptor)))
+               (memory (gethash (stack-pointer-descriptor-memory sp) (machine-descriptor-table descriptor)))
+               (cell-width (or (storage-element-cell-width memory) (storage-element-width memory))))
+          (dolist (n (interrupt-descriptor-save interrupts))
+            (let ((width (storage-element-width (gethash n (machine-descriptor-table descriptor)))))
+              (when (> width cell-width)
+                (error "interrupts on machine ~S: :save place ~S is ~D bits wide, too wide ~
+for stack-pointer ~S's memory ~S (~D-bit cells)"
+                       name n width stack-name (stack-pointer-descriptor-memory sp) cell-width)))))))))
 
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
@@ -569,7 +660,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed devices interrupts)
+  (let (elements instruction-word clock-speed devices interrupts stack-pointers)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -589,11 +680,13 @@ rationale as CELL-WIDTH-CACHE (#63)."
          (when interrupts
            (error "DEFMACHINE: more than one interrupts clause"))
          (setf interrupts (parse-interrupts-clause (rest clause))))
+        (stack-pointer (cl:push (parse-stack-pointer-clause (rest clause)) stack-pointers))
         (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
-    (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts)))
+    (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
+            (nreverse stack-pointers))))
 
 (defun build-machine-descriptor (name clauses)
-  (multiple-value-bind (elements instruction-word clock-speed devices interrupts)
+  (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
                                                 :clock-speed clock-speed :devices devices
@@ -645,6 +738,11 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (when instruction-word
         (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)
                                           (%descriptor-endian descriptor)))
+      ;; #166: STACK-POINTERS' REGISTER/MEMORY must resolve before
+      ;; %FINISH-INTERRUPT-MODEL, since an (interrupts ...) clause naming a
+      ;; register as its :stack looks that register up in
+      ;; MACHINE-DESCRIPTOR-STACK-POINTERS below.
+      (%finish-stack-pointers descriptor stack-pointers)
       ;; #109: INTERRUPTS' :VECTOR/:MESSAGE/:SAVE/:STACK/:MASK-FLAG can only
       ;; be resolved against real storage elements now that ELEMENTS is
       ;; known -- same deferred-finishing reason as INSTRUCTION-WORD above.
@@ -664,6 +762,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
      (clock-speed n)
      (device NAME [:id n] [:version n] [:manufacturer n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn])
+     (stack-pointer REGISTER [:memory name] [:grows :down/:up])
      (interrupts :vector reg :message reg :save (name...)
                  [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:cycles n]
@@ -739,13 +838,32 @@ DEVICE-INFO, DEVICE-SEND, DETACH-DEVICE) -- deliberately not bound inside
 WITH-MACHINE-BINDINGS, the same way :MEMORY elements aren't; an instruction's
 semantics call these directly with MACHINE, same as MREF.
 
+STACK-POINTER (#166) binds an existing scalar REGISTER as an address pointer
+into a :MEMORY element, for machines (DCPU-16, ANIMA-16) whose stack is a
+plain register indexed by push/pop convention rather than a lasm (stack ...)
+element. :MEMORY defaults to the machine's sole declared memory element (an
+error if it declares none or more than one). :GROWS (default :DOWN) picks
+the convention: :DOWN has REGISTER point AT the top item -- push
+pre-decrements then stores, pop loads then post-increments; :UP has it point
+one PAST the top item -- push stores then post-increments, pop
+pre-decrements then loads. PUSH/POP (semantics.lisp) and an (interrupts ...)
+clause's :STACK both accept a stack-pointer register wherever they accept a
+(stack ...) element's name; there is no overflow/underflow condition -- a
+wrapping register is the machine's own business, same as the hardware it
+models, and the indexed address is masked to :MEMORY's :ADDR-WIDTH so
+REGISTER may be wider than the address space.
+
 INTERRUPTS (#109) declares the machine's interrupt-delivery model:
 :VECTOR names the register holding the handler address, written to PC on
 delivery; :MESSAGE names the register a delivered signal's data is written
 to; :SAVE names the registers/flags pushed, in order, before MESSAGE/VECTOR
 are written -- INTERRUPT-RETURN (semantics.lisp) pops them in reverse.
-:STACK names which declared stack SAVE pushes onto, defaulting to the
-machine's sole one (an error if it declares none or more than one).
+:STACK names which declared stack SAVE pushes onto -- a (stack ...) element
+or a (stack-pointer ...)-bound register -- defaulting to the machine's sole
+:stack element, or (with none declared) its sole stack-pointer (an error on
+zero or more than one candidate of whichever kind applies). A :STACK naming
+a stack-pointer additionally requires every :SAVE place to fit the bound
+memory's cell width.
 :QUEUE (default 256) caps the number of pending, undelivered signals;
 :ON-OVERFLOW (default :ERROR) picks what SIGNAL-INTERRUPT (interrupt.lisp)
 does when a signal arrives past that cap -- :ERROR signals INTERRUPT-

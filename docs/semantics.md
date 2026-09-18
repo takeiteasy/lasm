@@ -46,11 +46,20 @@ follows the same convention for a software `int`-style instruction.
 - `(push value &optional stack-name)` — push `value` onto the named stack.
 - `(pop &optional stack-name)` — pop and return the top of the named stack.
 
+`stack-name`, given or defaulted, may name either a `(stack ...)` element or
+a register bound by a `(stack-pointer ...)` clause (#166 — see [Machine
+model, `stack-pointer`](machine-model.md)) — `push`/`pop` expand to
+`stack-push`/`stack-pop` or `sp-push`/`sp-pop` accordingly, transparently to
+the caller. This works whether or not the machine declares an
+`(interrupts ...)` clause.
+
 When `stack-name` is omitted, it resolves to the machine's sole `stack`
 element, mirroring `emulator.lisp`'s `%resolve-memory` convention for the
-sole `memory` element. A machine declaring no stack, or more than one,
-signals an error when the `push`/`pop` form is macroexpanded (not merely
-when it runs) if the name is left out — name one explicitly in that case.
+sole `memory` element; only when the machine declares no `stack` element does
+the sole stack-pointer become the default instead. A machine declaring more
+than one candidate of whichever kind applies (or none at all) signals an
+error when the `push`/`pop` form is macroexpanded (not merely when it runs)
+if the name is left out — name one explicitly in that case.
 - `(set-flags! (flag-name form)...)` — set each named flag to the result of
   evaluating `form`, e.g. `(set-flags! (c (> r 255)) (z (zero? a)))`.
 - `(trap tag &optional data)` — signal a `lasm-trap` condition carrying

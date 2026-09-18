@@ -74,6 +74,22 @@ widths against a machine defined earlier in the same file.
   validation case, a stack shared between ordinary data and an implicit
   call stack (`jsr`/`rts` pushing/popping `pc`), reaching an argument
   underneath its own return address via `stack-ref`.
+- `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up])` — binds an
+  existing scalar register as an address pointer into a `:memory` element
+  (#166), for machines whose stack is a plain register indexed by push/pop
+  convention rather than a `(stack ...)` element — DCPU-16 and ANIMA-16, for
+  instance. `:memory` defaults to the machine's sole declared memory element
+  (an error if it declares none or more than one). `:grows` (default `:down`)
+  picks the convention: `:down` has `REGISTER` point *at* the top item — push
+  pre-decrements then stores, pop loads then post-increments; `:up` has it
+  point one *past* the top item — push stores then post-increments, pop
+  pre-decrements then loads. `push`/`pop` (see [Semantics
+  vocabulary](semantics.md)) and an `(interrupts ...)` clause's `:stack`
+  (below) both accept a stack-pointer register wherever they accept a
+  `(stack ...)` element's name. There is no overflow/underflow condition — a
+  wrapping register is the machine's own business, same as the hardware it
+  models — and the indexed address is masked to `:memory`'s `:addr-width`,
+  so `REGISTER` may be wider than the address space.
 - `(memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
   [(region NAME start end [:kind :ram/:rom/:device] [:on-write :ignore/:error]
   [:read fn] [:write fn])...])` —
@@ -132,7 +148,8 @@ widths against a machine defined earlier in the same file.
   [:cycles n] [:drop-on-zero-vector t/nil])` — the interrupt-delivery model
   (#109): a vector register, what's saved/restored around delivery, a
   pending-signal queue, and optional masking — see
-  [Interrupts](interrupts.md).
+  [Interrupts](interrupts.md). `:stack` accepts either a `(stack ...)`
+  element or a `(stack-pointer ...)`-bound register (#166, above).
 
 Widths and depths must be positive integers; duplicate element names and
 unknown clause heads are compile-time errors. `instruction-word`'s field
@@ -235,11 +252,17 @@ signed/unsigned mode.
 | register (banked, `:count > 1`) | `(regref machine name index)` | `(setf (regref machine name index) v)` |
 | stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-ref machine name offset) v)` |
 | memory | `(mref machine name address)`, `(mpeek machine name address)` | `(setf (mref machine name address) v)` |
+| stack-pointer (#166) | `(sp-pop machine reg memory grows)` | `(sp-push machine reg memory grows v)` |
 
 `regref` also works on a scalar (`:count 1`) register, treating it as a
 one-element bank (`index` 0); `sref` is the reverse restriction, and signals
 `unknown-storage` on a banked element rather than aliasing every index to
 one cell.
+
+`sp-push`/`sp-pop` take `memory`/`grows` explicitly rather than resolving
+them from `reg` alone, since a `(stack-pointer ...)` clause's own resolved
+values are what `push`/`pop` and interrupt delivery already have in hand at
+the call site — see [Semantics vocabulary, `push`/`pop`](semantics.md).
 
 `mpeek` is `mref`'s inspection-only sibling — see "Memory regions" above for
 what it bypasses and why.

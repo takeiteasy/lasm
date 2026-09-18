@@ -116,6 +116,13 @@
    #:interrupt-descriptor-mask-flag
    #:interrupt-descriptor-cycles
    #:interrupt-descriptor-drop-on-zero-vector
+   #:interrupt-descriptor-stack-kind
+   #:machine-descriptor-stack-pointers
+   #:stack-pointer-descriptor
+   #:stack-pointer-descriptor-p
+   #:stack-pointer-descriptor-register
+   #:stack-pointer-descriptor-memory
+   #:stack-pointer-descriptor-grows
 
    ;; Storage accessors
    #:sref
@@ -126,6 +133,8 @@
    #:stack-pop
    #:stack-depth
    #:stack-ref
+   #:sp-push
+   #:sp-pop
    #:flag
    #:register-alias-at
    #:wrap-value

@@ -465,3 +465,223 @@
     (fiveam:is (= 77 (sref m 'b))) ; restored to what it was just before delivery
     (fiveam:is (= 1 (sref m 'pc))) ; restored to where int had left off
     (fiveam:is (zerop (stack-depth m 'sp)))))
+
+;;; #166: register-indexed (stack-pointer ...) stacks
+
+;; ANIMA-16-shaped: SP is a plain register indexed into RAM, not a lasm
+;; :stack element -- this fixture declares no (stack ...) at all, so it
+;; exercises %RESOLVE-INTERRUPT-STACK's :POINTER path exclusively.
+(defmachine interrupt-pointer-stack-test-machine
+  (register pc :width 16) (register ia :width 16)
+  (register a :width 16) (register b :width 16) (register sp :width 16)
+  (flags iaq)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down)
+  (interrupts :vector ia :message a :save (pc b) :mask-flag iaq))
+
+(definstruction interrupt-pointer-stack-test-machine nop
+  (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction interrupt-pointer-stack-test-machine rfi
+  (encoding (opcode #x01)) (semantics (interrupt-return)))
+(definstruction interrupt-pointer-stack-test-machine int
+  (encoding (opcode #x02))
+  (semantics (signal-interrupt machine (sref machine 'b))))
+(definstruction interrupt-pointer-stack-test-machine jsr
+  (encoding (opcode #x03))
+  (semantics (push (sref machine 'pc) sp)))
+(definstruction interrupt-pointer-stack-test-machine ret
+  (encoding (opcode #x04))
+  (semantics (setf (sref machine 'pc) (pop sp))))
+
+(fiveam:test delivery-on-a-pointer-stack-writes-descending-ram-cells-and-decrements-sp
+  (let ((m (make-machine 'interrupt-pointer-stack-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'pc) 10 (sref m 'b) 42 (sref m 'sp) 0)
+    (signal-interrupt m 99)
+    (step-machine m) ; delivers: pushes pc(10) then b(42) -- SP pre-decrements each time
+    (fiveam:is (= #xfffe (sref m 'sp))) ; two words pushed, :DOWN growth
+    (fiveam:is (= 10 (mref m 'ram #xffff))) ; pc pushed first, at the higher address
+    (fiveam:is (= 42 (mref m 'ram #xfffe))) ; b pushed second
+    (fiveam:is (= 99 (sref m 'a)))
+    ;; delivery sets pc to the vector, then this same step-machine call
+    ;; fetches/executes the implicit nop found there (zeroed ram, opcode 0)
+    (fiveam:is (= (1+ #x0010) (sref m 'pc)))))
+
+(fiveam:test interrupt-return-on-a-pointer-stack-restores-in-reverse-and-returns-sp
+  (let ((m (make-machine 'interrupt-pointer-stack-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'pc) 10 (sref m 'b) 42 (sref m 'sp) 0)
+    (signal-interrupt m 99)
+    (step-machine m) ; delivers
+    (load-program m (list #x01) :origin #x0010) ; rfi at the handler
+    (step-machine m)
+    (fiveam:is (= 0 (sref m 'sp))) ; back to its pre-delivery value
+    (fiveam:is (= 10 (sref m 'pc)))
+    (fiveam:is (= 42 (sref m 'b)))))
+
+;; :GROWS :UP mirrors :DOWN -- SP points one PAST the top item, so push
+;; stores then increments and the frame lands at ascending addresses.
+(defmachine interrupt-pointer-stack-up-test-machine
+  (register pc :width 16) (register ia :width 16)
+  (register a :width 16) (register b :width 16) (register sp :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :up)
+  (interrupts :vector ia :message a :save (pc b)))
+
+(definstruction interrupt-pointer-stack-up-test-machine rfi
+  (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(fiveam:test delivery-on-a-grows-up-pointer-stack-writes-ascending-ram-cells-and-increments-sp
+  (let ((m (make-machine 'interrupt-pointer-stack-up-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'pc) 10 (sref m 'b) 42 (sref m 'sp) 0)
+    (signal-interrupt m 99)
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'sp)))
+    (fiveam:is (= 10 (mref m 'ram 0))) ; pc pushed first, at the lower address
+    (fiveam:is (= 42 (mref m 'ram 1))) ; b pushed second
+    (load-program m (list #x01) :origin #x0010)
+    (step-machine m)
+    (fiveam:is (= 0 (sref m 'sp)))
+    (fiveam:is (= 10 (sref m 'pc)))
+    (fiveam:is (= 42 (sref m 'b)))))
+
+(fiveam:test pointer-stack-sp-wraps-at-zero-on-push-and-back-on-pop
+  (let ((m (make-machine 'interrupt-pointer-stack-test-machine)))
+    (setf (sref m 'sp) 0)
+    (with-machine-bindings (m interrupt-pointer-stack-test-machine)
+      (push 7 sp))
+    (fiveam:is (= #xffff (sref m 'sp))) ; :DOWN wraps to the top of the address space
+    (fiveam:is (= 7 (mref m 'ram #xffff)))
+    (let ((popped (with-machine-bindings (m interrupt-pointer-stack-test-machine) (pop sp))))
+      (fiveam:is (= 7 popped))
+      (fiveam:is (zerop (sref m 'sp)))))) ; back to 0
+
+;; A flag in :SAVE on a pointer stack -- the same #22 boolean-coercion guard
+;; INTERRUPT-RETURN-RESTORES-A-SAVED-FLAG-AS-A-BOOLEAN-NOT-THE-RAW-WORD above
+;; checks for a :stack element, exercised here through SP-POP instead.
+(defmachine interrupt-pointer-stack-flag-save-test-machine
+  (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
+  (flags z)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram)
+  (interrupts :vector ia :message a :save (z)))
+
+(definstruction interrupt-pointer-stack-flag-save-test-machine rfi
+  (encoding (opcode #x01)) (semantics (interrupt-return)))
+(definstruction interrupt-pointer-stack-flag-save-test-machine nop
+  (encoding (opcode #x00)) (semantics nil))
+
+(fiveam:test interrupt-return-restores-a-saved-flag-as-a-boolean-on-a-pointer-stack
+  (let ((m (make-machine 'interrupt-pointer-stack-flag-save-test-machine)))
+    (setf (sref m 'ia) #x10 (flag m 'z) nil (sref m 'sp) 0)
+    (signal-interrupt m 0)
+    (step-machine m) ; delivers: pushes z(=0)
+    (load-program m (list #x01) :origin #x10) ; rfi
+    (step-machine m)
+    (fiveam:is (zerop (flag m 'z))) ; restored false, not clobbered true
+    (fiveam:is (zerop (sref m 'sp)))))
+
+;; Masking, :CYCLES > 0 device-tick cost, and queue overflow all compose with
+;; a pointer stack the same as a native one -- one assertion each proving
+;; the shared delivery/overflow/masking machinery is untouched by #166.
+(fiveam:test masking-composes-with-a-pointer-stack
+  (let ((m (make-machine 'interrupt-pointer-stack-test-machine)))
+    (setf (sref m 'ia) #x0010 (flag m 'iaq) t (sref m 'sp) 0)
+    (signal-interrupt m 7)
+    (step-machine m) ; masked -- stays queued, sp untouched
+    (fiveam:is (= 1 (length (machine-interrupt-queue m))))
+    (fiveam:is (zerop (sref m 'sp)))
+    (setf (flag m 'iaq) nil)
+    (step-machine m) ; now delivers
+    (fiveam:is (/= 0 (sref m 'sp)))
+    (fiveam:is (= 7 (sref m 'a)))))
+
+(defvar *pointer-cost-log* nil)
+(defun %pointer-cost-logger-init (machine device) (declare (ignore machine device)) nil)
+(defun %pointer-cost-logger-tick (machine device cycles)
+  (declare (ignore machine device))
+  (cl:push cycles *pointer-cost-log*))
+
+(defmachine interrupt-pointer-stack-cycles-test-machine
+  (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram)
+  (device cost-logger :init %pointer-cost-logger-init :tick %pointer-cost-logger-tick)
+  (interrupts :vector ia :message a :save (pc) :cycles 5))
+
+(definstruction interrupt-pointer-stack-cycles-test-machine nop
+  (encoding (opcode #x00)) (semantics nil) (cycles 1))
+
+(fiveam:test delivery-cycles-cost-composes-with-a-pointer-stack
+  (let ((m (make-machine 'interrupt-pointer-stack-cycles-test-machine))
+        (*pointer-cost-log* nil))
+    (setf (sref m 'ia) 1)
+    (load-program m (list #x00) :origin 0) ; nop
+    (signal-interrupt m 9)
+    (step-machine m) ; delivers (cost 5), then executes the nop at the vector (cost 1)
+    (fiveam:is (equal '(1 5) *pointer-cost-log*))))
+
+(defmachine interrupt-pointer-stack-overflow-test-machine
+  (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram)
+  (interrupts :vector ia :message a :save (pc) :queue 1))
+
+(fiveam:test queue-overflow-composes-with-a-pointer-stack
+  (let ((m (make-machine 'interrupt-pointer-stack-overflow-test-machine)))
+    (setf (sref m 'ia) 1)
+    (signal-interrupt m 1)
+    (fiveam:signals interrupt-queue-full (signal-interrupt m 2))))
+
+;;; DEFMACHINE-time clause parsing / validation for (stack-pointer ...)
+
+(fiveam:test defmachine-accepts-a-well-formed-stack-pointer-clause
+  (fiveam:finishes (make-machine 'interrupt-pointer-stack-test-machine)))
+
+(fiveam:test defmachine-rejects-interrupts-stack-naming-a-register-with-no-stack-pointer-clause
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-no-clause-test
+             (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
+             (memory ram :width 8 :addr-width 8)
+             (interrupts :vector ia :message a :save (pc) :stack sp)))))
+
+(fiveam:test defmachine-rejects-a-banked-register-as-a-stack-pointer
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-banked-test
+             (register sp :width 8 :count 4)
+             (memory ram :width 8 :addr-width 8)
+             (stack-pointer sp :memory ram)))))
+
+(fiveam:test defmachine-rejects-a-stack-pointer-on-a-non-register-name
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-non-register-test
+             (memory ram :width 8 :addr-width 8)
+             (stack-pointer ram)))))
+
+(fiveam:test defmachine-rejects-stack-pointer-memory-naming-a-non-memory-element
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-bad-memory-test
+             (register sp :width 8) (register other :width 8)
+             (memory ram :width 8 :addr-width 8)
+             (stack-pointer sp :memory other)))))
+
+(fiveam:test defmachine-rejects-stack-pointer-with-no-memory-and-two-declared
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-ambiguous-memory-test
+             (register sp :width 8)
+             (memory ram1 :width 8 :addr-width 8) (memory ram2 :width 8 :addr-width 8)
+             (stack-pointer sp)))))
+
+(fiveam:test defmachine-rejects-two-stack-pointer-clauses-for-one-register
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-dup-test
+             (register sp :width 8)
+             (memory ram :width 8 :addr-width 8)
+             (stack-pointer sp :memory ram)
+             (stack-pointer sp :memory ram)))))
+
+(fiveam:test defmachine-rejects-a-save-place-wider-than-the-pointer-stacks-cell-width
+  (fiveam:signals error
+    (eval '(defmachine interrupt-sp-wide-save-test
+             (register pc :width 32) (register ia :width 16) (register a :width 16) (register sp :width 16)
+             (memory ram :width 16 :addr-width 16 :cell-width 16)
+             (stack-pointer sp :memory ram)
+             (interrupts :vector ia :message a :save (pc) :stack sp)))))
