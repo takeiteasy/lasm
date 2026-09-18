@@ -3,7 +3,8 @@
 Reference for every condition type `#:lasm` signals and its readers. A
 public condition type's slot readers are public too — catch a condition
 with `handler-case`/`handler-bind` and every slot below is readable without
-reaching into `lasm::`.
+reaching into `lasm::`. `tests/package.lisp` walks the condition hierarchy
+via the MOP and checks this table against the export list automatically.
 
 Each stage's own docs describe *when* and *why* a condition is signalled —
 [Machine model](machine-model.md#conditions) for storage, devices and
