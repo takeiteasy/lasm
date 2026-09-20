@@ -4669,3 +4669,18 @@ target: nop")
              (memory ram :width 16 :addr-width 16 :cell-width 16)
              (instruction-word :width 16 (field opcode 8) (field dst 8)
                (extra-word-order dst dst))))))
+
+(fiveam:test sibling-registration-does-not-repeat-conflict-checks
+  (let ((original (symbol-function '%check-opcode-decodable!))
+        (checks 0)
+        (variants (find-instruction-variants 'order-test-machine 'mv)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function '%check-opcode-decodable!)
+                 (lambda (&rest args)
+                   (incf checks)
+                   (apply original args)))
+           (register-instruction-variants! 'order-test-machine variants)
+           (fiveam:is (zerop checks))
+           (fiveam:is (= 4 (length (find-instruction-variants 'order-test-machine 'mv)))))
+      (setf (symbol-function '%check-opcode-decodable!) original))))

@@ -439,7 +439,8 @@ cell after the opcode is a sub-opcode or the first operand -- and so is a
 collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
-         (wordp (%word-machine-p machine-name)))
+         (wordp (%word-machine-p machine-name))
+         (word-groups (make-hash-table)))
     (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
             using (hash-value bucket)
           do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
@@ -454,9 +455,17 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
       (let* ((opcode (instruction-descriptor-opcode descriptor))
              (bucket (gethash opcode (machine-descriptor-opcodes md)))
              (sub (instruction-descriptor-sub-opcode descriptor)))
-        (dolist (other bucket)
+        (when wordp
+          (multiple-value-bind (groups presentp) (gethash opcode word-groups)
+            (unless presentp
+              (setf groups (remove-duplicates bucket :test #'%sibling-combos-p)))
+            (unless (find descriptor groups :test #'%sibling-combos-p)
+              (dolist (other groups)
+                (%check-opcode-decodable! machine-name name descriptor other))
+              (cl:push descriptor groups))
+            (setf (gethash opcode word-groups) groups)))
+        (dolist (other (unless wordp bucket))
           (cond
-            (wordp (%check-opcode-decodable! machine-name name descriptor other))
             ;; #125: both co-tenants declare a SUB-OPCODE -- fine as long as
             ;; they're pairwise distinct; a collision still can't be told
             ;; apart at decode time.
