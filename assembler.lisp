@@ -1435,7 +1435,8 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
     ;; check, for the whole of this assembly.
     (let* ((cell-width (%machine-cell-width machine memory))
            (endian (%machine-endian machine memory))
-           (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine))))
+            (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine)))
+            (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
       (multiple-value-bind (symbols sized final-address asm-origin info)
           (%layout (expand-macros statements) machine origin cell-width)
         (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)

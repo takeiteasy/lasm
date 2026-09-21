@@ -100,9 +100,9 @@ as a whole and a bare `defmode` has no `one-of` to name which hole is the
 offset. A `one-of` alternative may declare its own `:relative` independently
 of its siblings and of the pattern's other holes — see [Per-hole
 `:relative`](#per-hole-relative) below — which is how a multi-hole pattern
-gets a relative hole at all. A `one-of` element (below) contributes as many
-holes as any one of its alternatives — every alternative must share the same
-count, and, on a byte-encoded machine, may disagree on its own `:width` (see
+gets a relative hole at all. A `one-of` element (below) contributes the holes
+declared by the selected alternative. Alternatives may vary in count and, on
+a byte-encoded machine, may disagree on their own `:width` (see
 [Per-hole `:width`](#per-hole-width) below) or `:relative`.
 
 ## Per-operand modes
@@ -187,6 +187,20 @@ sub-opcode"](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode))
 reads it the same way to pick the sub-opcode cell's own value. A hole with
 neither kind of selector leaves `choices` purely informational.
 
+### Register-qualified holes
+
+Use `(expr :register NAME)` for a hole that must name an alias of the
+register bank `NAME`:
+
+```lisp
+(defmode indexed "[" (expr :register reg) "+" expr "]")
+```
+
+The assembler accepts only a direct register alias in the qualified hole.
+Numbers, labels, and compound expressions remain available to an ordinary
+`expr` hole, so register-plus-offset and absolute-plus-offset alternatives
+remain distinguishable.
+
 ### What `one-of` does and does not do
 
 Declaring a `one-of` only changes which *syntax* an operand hole accepts —
@@ -231,15 +245,13 @@ machine's hole-selected sub-opcode (above) gives `choice-case` the same
 thing to read back, the first time that is reachable there at all; a hole
 with neither a `(choice mode)` word field nor a hole-selected sub-opcode has
 no encoded discriminator, so `choice-case` signals there unless given an
-`otherwise` clause. `[register]` and `[register, offset]` can already mean
+`otherwise` clause. `[register]` and `[register + offset]` can already mean
 different things — [Varying hole counts across
 alternatives](#varying-hole-counts-across-alternatives) above is exactly
 this shape, one alternative's own extra hole holding the offset. Spelling
-that second hole `"+"`-separated rather than comma-separated, so it reads as
-`[register + offset]`, needs a parser change of its own (the expression
-grammar folds `reg + offset` into one expression before a mode's second hole
-ever gets a turn) — a separate, smaller gap than the hole-count one #120
-closed.
+that second hole `"+"`-separated, so it reads as `[register + offset]`.
+When a mode's next literal is `+`, matching retries expression boundaries at
+that operator; ordinary expression parsing remains greedy elsewhere.
 
 Disassembly mirrors this split: a byte-encoded machine's decoded word
 renders a `one-of`'s first alternative unless its descriptor declares a
@@ -252,7 +264,7 @@ alternative when it doesn't — see [Disassembler](disassembler.md).
 ### Varying hole counts across alternatives
 
 A `one-of`'s alternatives may declare *different* hole counts — `reg`
-(one hole) and `[reg,off]` (two holes) can sit in the same `one-of` — on a
+(one hole) and `[reg + off]` (two holes) can sit in the same `one-of` — on a
 **word-encoded** machine, when the governing hole is `(choice mode)`-selected
 on every alternative (or #118-mixed, with the one unclaimed alternative
 sharing the other alternatives' hole count). `definstruction` expands one

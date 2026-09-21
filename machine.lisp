@@ -736,8 +736,11 @@ rationale as CELL-WIDTH-CACHE (#63)."
               do (when (gethash alias seen)
                    (error "Duplicate storage element name ~S in machine ~S" alias name))
                  (setf (gethash alias seen) t)
-                 (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
-                       index))
+                  (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
+                        index)
+                  (setf (gethash (symbol-name alias)
+                                 (machine-descriptor-register-alias-elements descriptor))
+                        element))
         ;; #107: a memory element's region names share the same namespace too
         ;; -- SEEN also catches a region colliding with an element name, a
         ;; register alias, or another region, e.g. (region ram ...) inside

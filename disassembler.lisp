@@ -238,7 +238,7 @@ hole's own value gets this adjustment, mirroring %CHOOSE-VARIANT's and
               collect (if (eql i relative-index) (+ address size v) v))
         values)))
 
-(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements)
+(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements)
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -295,11 +295,19 @@ by construction (%CHECK-BYTE-SUB-VARIANTS!)."
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
-                     (:expr (cl:pop choices)
-                            (let* ((v (cl:pop vals))
-                                   (element (cl:pop elements))
-                                   (alias (and element (register-alias-at element v))))
-                              (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s)))
+                      (:expr (let ((register (second el)))
+                               (cl:pop choices)
+                             (let* ((v (cl:pop vals))
+                                    (element (cl:pop elements))
+                                    (alias (if register
+                                               (let ((owner (and alias-elements
+                                                                  (loop for candidate being the hash-values of alias-elements
+                                                                        when (string-equal (storage-element-name candidate)
+                                                                                          register)
+                                                                          return candidate))))
+                                                 (and owner (register-alias-at owner v)))
+                                               (and element (register-alias-at element v)))))
+                               (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s))))
                      (:one-of
                       (let ((alt-name (or (%matched-choice-name choices 0) (second el))))
                         (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
@@ -344,7 +352,9 @@ MODE-SUFFIX-SEPARATOR to write it with."
     (if mode
         (format nil "~A ~A" mnemonic
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
-                                       lexer reverse-symbols choices (%hole-elements descriptor)))
+                                       lexer reverse-symbols choices (%hole-elements descriptor)
+                                       (machine-descriptor-register-alias-elements
+                                        (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)

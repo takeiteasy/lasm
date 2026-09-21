@@ -16,7 +16,7 @@
 ;;;;
 ;;;;   0x00-0x07  register              reg
 ;;;;   0x08-0x0F  [register]            [reg]
-;;;;   0x10-0x17  [register + offset]   [reg,off]  -- two operand holes, one field
+;;;;   0x10-0x17  [register + offset]   [reg + off]  -- two operand holes, one field
 ;;;;   0x1E       [absolute address]    (addr)     -- always spends a trailing word
 ;;;;   0x20-0x3F  short literal         #lit       -- value-selected, packs inline
 ;;;;   0x1F       ""                    #lit       -- :else escape when #lit doesn't fit
@@ -45,13 +45,7 @@
 ;;;; examples/dcpu16.lisp's own header) -- real ANIMA-16 spells both as
 ;;;; "[...]" and tells them apart by whether the bracketed expression names a
 ;;;; register or an arbitrary address, which lasm cannot do yet either.
-;;;; `[register + offset]` is spelled `[reg,off]`, comma-separated rather than
-;;;; "+"-separated, for the same underlying reason #120's own design notes:
-;;;; PARSE-EXPRESSION (parser.lisp) folds "3 + 100" into one binary-expression
-;;;; AST before a mode's second `expr` hole ever gets a turn at it, so a
-;;;; comma -- something the expression grammar never absorbs -- is what
-;;;; actually separates the two holes here; a lexer/parser extension to
-;;;; recognize "+" as a hole separator inside brackets is its own follow-up.
+;;;; `[register + offset]` uses the ISA's plus-separated spelling.
 ;;;;
 ;;;; Run with:  sbcl --script examples/anima16.lisp
 
@@ -107,7 +101,7 @@
 ;; :trailing-word, named by LD's own (for-choice a-idx ...) subclause below).
 ;; Guarded by its own leading "[" like A-IND, so its order relative to A-REG
 ;; doesn't matter either, same reasoning as A-IND/A-MEM below.
-(defmode a-idx "[" expr "," expr "]")
+(defmode a-idx "[" expr "+" expr "]")
 (defmode a-lit "#" expr)
 ;; A second spelling of A-MEM's absolute load, "abs addr" -- see the :alias
 ;; variant in LD below.
@@ -119,7 +113,7 @@
 ;; LD dst, src -- reg[dst] := SRC, where SRC means something different
 ;; depending on which of its five syntaxes was actually written: a bare
 ;; register index reads that register's own value; "[reg]" dereferences it
-;; as a RAM address; "[reg,off]" dereferences reg's value plus a constant
+;; as a RAM address; "[reg + off]" dereferences reg's value plus a constant
 ;; offset; "(addr)" loads directly from an absolute RAM address; "#lit" loads
 ;; the literal itself. Field A's six variants pack into one field, #118's
 ;; whole point: (choice a-reg)/(choice a-ind)/(choice a-idx) into a disjoint
@@ -196,7 +190,7 @@
 value-selected sharing one field (LD):~%")
 (let ((reg-form (assembly-cells (assemble "ld 1, 0" :machine 'anima16foo)))
       (ind-form (assembly-cells (assemble "ld 1, [0]" :machine 'anima16foo)))
-      (idx-form (assembly-cells (assemble "ld 1, [0,4]" :machine 'anima16foo)))
+      (idx-form (assembly-cells (assemble "ld 1, [0 + 4]" :machine 'anima16foo)))
       (mem-form (assembly-cells (assemble "ld 1, (0)" :machine 'anima16foo)))
       (lit-form (assembly-cells (assemble "ld 1, #5" :machine 'anima16foo)))
       (lit-escape-form (assembly-cells (assemble "ld 1, #1000" :machine 'anima16foo))))
@@ -204,7 +198,7 @@ value-selected sharing one field (LD):~%")
           (coerce reg-form 'list) (length reg-form))
   (format t "  ld 1, [0]   -> ~{~4,'0X~^ ~}  (~D cell~:P)~%"
           (coerce ind-form 'list) (length ind-form))
-  (format t "  ld 1, [0,4] -> ~{~4,'0X~^ ~}  (~D cell~:P)~%"
+  (format t "  ld 1, [0 + 4] -> ~{~4,'0X~^ ~}  (~D cell~:P)~%"
           (coerce idx-form 'list) (length idx-form))
   (format t "  ld 1, (0)   -> ~{~4,'0X~^ ~}  (~D cell~:P)~%"
           (coerce mem-form 'list) (length mem-form))
@@ -241,7 +235,7 @@ ld 2, [0]      ; reg2 = mem[reg[0]]   = mem[100]   CHOICE a-ind -- dereferences 
 ld 3, (256)    ; reg3 = mem[256]                    CHOICE a-mem -- absolute load
 ld 4, #5       ; reg4 = 5, A-LIT value-selected inline
 ld 5, #1000    ; reg5 = 1000, A-LIT value-selected :else escape
-ld 6, [0,4]    ; reg6 = mem[reg[0]+4] = mem[104]   CHOICE a-idx -- indexed load (#120)
+ld 6, [0 + 4]    ; reg6 = mem[reg[0]+4] = mem[104]   CHOICE a-idx -- indexed load (#120)
 hlt")
 
 (format t "~&~%Source:~%~A~2%" *source*)
@@ -294,7 +288,7 @@ CHOICE-selected or value-selected):~%")
     (assert (string= "ld $3,($100)" (disassembly-line-text (fourth lines))))
     (assert (string= "ld $4,#$5" (disassembly-line-text (fifth lines))))
     (assert (string= "ld $5,#$3E8" (disassembly-line-text (sixth lines))))
-    (assert (string= "ld $6,[$0,$4]" (disassembly-line-text (seventh lines))))
+    (assert (string= "ld $6,[$0+$4]" (disassembly-line-text (seventh lines))))
     (format t "~%All six LD forms round-trip to their own real syntax, ~
 CHOICE-selected and value-selected rows alike -- A-IDX's own two-hole form ~
 (#120) included.~%")))
@@ -346,7 +340,7 @@ seta #-10" :machine 'anima16foo) :machine 'anima16foo :labels nil)))
         (a-reg (set! (reg dst) value))
         (a-idx (setf (mref machine 'ram (wrap-value (+ (reg dst) dst-off) 16)) value))))))
 
-(let* ((assembly (assemble "set [0, 5], [1, 6]" :machine 'anima16foo))
+(let* ((assembly (assemble "set [0 + 5], [1 + 6]" :machine 'anima16foo))
        (cells (assembly-cells assembly))
        (machine (make-machine 'anima16foo))
        (lines (disassemble-assembly assembly :machine 'anima16foo :labels nil)))

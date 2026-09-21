@@ -22,6 +22,8 @@
 
 (in-package #:lasm)
 
+(defvar *register-alias-elements* nil)
+
 ;;; Mode descriptor
 ;;;
 ;;; Wrapped in an EVAL-WHEN, like the DEFVAR below, so MAKE-MODE-DESCRIPTOR
@@ -147,6 +149,13 @@ those off first)."
               (cond
                 ((stringp el) (list :literal el))
                 ((and (symbolp el) (string-equal (symbol-name el) "EXPR")) (list :expr))
+                ((and (consp el) (symbolp (first el))
+                      (string-equal (symbol-name (first el)) "EXPR"))
+                 (destructuring-bind (expr &key register) el
+                   (declare (ignore expr))
+                   (unless (and register (symbolp register))
+                     (error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
+                   (list :expr register)))
                 ((%one-of-element-p el)
                  (unless (and (>= (length (rest el)) 2) (every #'symbolp (rest el)))
                    (error "Malformed DEFMODE pattern element ~S -- (ONE-OF ...) needs at ~
@@ -216,7 +225,7 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
     (loop for element in pattern
           append (ecase (first element)
                    (:literal nil)
-                   (:expr (list nil))
+                      (:expr (list nil))
                    (:one-of (let* ((alt-names (rest element))
                                     (holes (%pattern-one-of-min-hole-count alt-names seen)))
                               (make-list holes :initial-element alt-names))))))
@@ -510,24 +519,54 @@ with no separate undo step needed."
                          (format nil "Operand does not match addressing mode ~
 (expected ~S~@[, found ~S~])"
                                  (second element) (and tok (token-text tok)))))))
-          (:expr
-           (handler-case
-               (multiple-value-bind (ast next-i-hole) (parse-expression tokens :start i :end end)
-                 (multiple-value-bind (asts choices next-i okp failure-token message)
-                     (%match-mode-elements tokens rest-elements next-i-hole end)
-                   (if okp
-                       (values (cons ast asts) (cons nil choices) next-i t nil nil)
-                       (values nil nil nil nil failure-token message))))
-             ;; #74: keep the inner PARSE-FAILURE's own line/column instead of
-             ;; only its message -- %TOK below can't reconstruct a token from
-             ;; a bare string, so the failure token this returns is a
-             ;; synthetic one carrying just enough (line/column) for
-             ;; MATCH-OPERAND-MODE's %PARSE-ERROR to preserve position.
-             (parse-failure (c)
-               (values nil nil nil nil
-                       (make-token :line (lasm-syntax-error-line c)
-                                   :column (lasm-syntax-error-column c))
-                       (lasm-syntax-error-message c)))))
+           (:expr
+            (let ((register (second element))
+                  (last-failure-token nil)
+                  (last-message nil))
+              (labels ((valid-register-p (ast)
+                         (and register
+                              (expr-label-p ast)
+                              *register-alias-elements*
+                              (let ((owner (gethash (expr-label-name ast)
+                                                    *register-alias-elements*)))
+                                (and owner (string-equal (symbol-name (storage-element-name owner))
+                                                         (symbol-name register))))))
+                       (try (ast next-i-hole)
+                         (if (or (null register) (valid-register-p ast))
+                             (multiple-value-bind (asts choices next-i okp failure-token message)
+                                 (%match-mode-elements tokens rest-elements next-i-hole end)
+                               (if okp
+                                   (return-from %match-mode-elements
+                                     (values (cons ast asts) (cons nil choices) next-i t nil nil))
+                                   (setf last-failure-token failure-token
+                                         last-message message)))
+                             (setf last-failure-token (%tok tokens i end)
+                                   last-message (format nil "Expected an alias of register bank ~S"
+                                                        register)))))
+                (handler-case
+                    (multiple-value-bind (ast next-i-hole)
+                        (parse-expression tokens :start i :end end)
+                      (try ast next-i-hole)
+                      ;; The expression parser intentionally remains greedy. A literal
+                      ;; plus immediately following this hole is the one contextual
+                      ;; separator for which mode matching retries a shorter prefix.
+                      (when (and (first rest-elements)
+                                 (eq (first (first rest-elements)) :literal)
+                                 (string= (second (first rest-elements)) "+"))
+                        (loop for split from (1+ i) below next-i-hole
+                              when (eq (%punct-value (%tok tokens split end)) :plus)
+                              do (handler-case
+                                     (multiple-value-bind (short short-next)
+                                         (parse-expression tokens :start i :end split)
+                                       (when (= short-next split)
+                                         (try short short-next)))
+                                   (parse-failure () nil))))
+                      (values nil nil nil nil last-failure-token last-message))
+                  (parse-failure (c)
+                    (values nil nil nil nil
+                            (make-token :line (lasm-syntax-error-line c)
+                                        :column (lasm-syntax-error-column c))
+                            (lasm-syntax-error-message c)))))))
           (:one-of
            (let (last-failure-token last-message)
              (dolist (alt-name (rest element)
@@ -550,7 +589,7 @@ with no separate undo step needed."
                                        (append (make-list (length alt-asts) :initial-element alt) choices)
                                        next-i t nil nil))
                              (setf last-failure-token failure-token last-message message)))
-                       (setf last-failure-token alt-failure-token last-message alt-message)))))))))))
+                        (setf last-failure-token alt-failure-token last-message alt-message)))))))))))
 
 (defun %match-mode-pattern (tokens mode)
   "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.

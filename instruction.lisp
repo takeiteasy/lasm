@@ -329,6 +329,7 @@ than each caller assuming a byte opcode."
 ;; signature change to either call chain. NIL (the default) means no
 ;; aliases are in scope, e.g. outside of ASSEMBLE-STATEMENTS.
 (defvar *register-aliases* nil)
+(defvar *register-alias-elements* nil)
 
 (defun eval-expr (ast &key symbols pc)
   "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when

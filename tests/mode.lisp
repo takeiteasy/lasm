@@ -10,6 +10,9 @@
 (defmode test-indirect-y "(" expr ")" "," "Y")
 (defmode test-no-width expr)
 (defmode test-signed-imm "#" expr :width 1 :signed t)
+(defmode test-plus "[" expr "+" expr "]")
+(defmode test-bracket "[" expr "]")
+(defmode test-register "[" (expr :register bank) "]")
 
 (defun %tokens-for (string)
   "Tokenize STRING with the default lexer and return it as a SIMPLE-VECTOR
@@ -58,7 +61,28 @@ looks like."
 
 (fiveam:test defmode-malformed-pattern-element-signals-error
   (fiveam:signals error
-    (eval '(defmode bogus-mode 42 expr))))
+     (eval '(defmode bogus-mode 42 expr))))
+
+(fiveam:test plus-separates-expression-holes
+  (multiple-value-bind (asts okp)
+      (try-match-operand-mode (%tokens-for "[a + 4]") 'test-plus)
+    (fiveam:is-true okp)
+    (fiveam:is (= 2 (length asts)))
+    (fiveam:is (expr-label-p (first asts)))
+    (fiveam:is (= 4 (expr-number-value (second asts))))))
+
+(fiveam:test ordinary-plus-expression-remains-one-hole
+  (let ((ast (match-operand-mode (%tokens-for "[label + 2]") 'test-bracket)))
+    (fiveam:is (expr-binary-p ast))
+     (fiveam:is (eq :plus (expr-binary-op ast)))))
+
+(fiveam:test register-qualified-hole-requires-machine-alias
+  (let ((*register-alias-elements*
+          (machine-descriptor-register-alias-elements
+           (find-machine-descriptor 'test-machine))))
+    (fiveam:is (match-operand-mode (%tokens-for "[bank1]") 'test-register))
+    (fiveam:signals parse-failure
+      (match-operand-mode (%tokens-for "[label]") 'test-register))))
 
 (fiveam:test find-mode-descriptor-unknown-signals-error
   (fiveam:signals error

@@ -402,7 +402,10 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; case-insensitive, matching how mnemonics and mode literals already
   ;; compare (STRING-EQUAL). Empty (never NIL) on a machine with no aliased
   ;; register.
-  (register-aliases (make-hash-table :test 'equalp))
+   (register-aliases (make-hash-table :test 'equalp))
+   ;; Alias name -> owning register storage element, for alias-qualified mode
+   ;; holes and disassembly of per-alternative register forms.
+   (register-alias-elements (make-hash-table :test 'equalp))
   ;; #63: lazy memo for %DESCRIPTOR-CELL-WIDTH's no-MEMORY-NAME case
   ;; (machine.lisp) -- that path rebuilds ELEMENTS' memory sublist and calls
   ;; REMOVE-DUPLICATES on every call otherwise, and it's read once per

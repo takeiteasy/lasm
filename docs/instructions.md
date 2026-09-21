@@ -1143,7 +1143,7 @@ alternative's own syntax renders back for every one of the five forms,
 A `one-of` alternative may contribute more holes than its siblings (see
 [Addressing modes, "Varying hole counts across
 alternatives"](modes.md#varying-hole-counts-across-alternatives)) — `reg`
-(one hole) and `[reg,off]` (two holes) sharing one `one-of`, say. Its own
+(one hole) and `[reg + off]` (two holes) sharing one `one-of`, say. Its own
 extra holes, beyond the element's base (minimum) count, get their own
 `(operand ...)` subclauses via a `(for-choice (operand alt) (operand ...)...)`
 subclause alongside the mode's ordinary ones:
