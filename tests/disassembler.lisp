@@ -374,6 +374,14 @@ ldsr $2,S" :machine 'disasm-test-machine))
     (fiveam:is (string= "coo $5" (disassembly-line-text (first bare))))
     (fiveam:is (string= "coo [$5]" (disassembly-line-text (first indirect))))))
 
+(fiveam:test disassemble-nested-one-of-does-not-reuse-outer-choice
+  (let ((choice (make-word-field-choice :width 1 :shift 0 :kind :inline
+                                         :range '(0 . 1) :choice 'no-inner)))
+    (fiveam:is
+     (string= "$5"
+              (%render-operand-text (find-mode-descriptor 'no-outer) '(5) 'default
+                                    (make-hash-table) (list choice))))))
+
 (fiveam:test disassemble-one-of-renders-the-matched-alternative-on-a-mixed-field
   ;; #118: COOM mixes a CHOICE-selected row (DISASM-OO-REG) with a
   ;; value-selected one stamped DISASM-OO-IND -- both must render their own

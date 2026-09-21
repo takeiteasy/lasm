@@ -141,11 +141,11 @@ e.g. \"expr|[expr]\"."
           (mapcar (lambda (el)
                     (ecase (first el)
                       (:literal (second el))
-                      (:expr "expr")
-                      (:one-of (format nil "~{~A~^|~}"
-                                        (mapcar (lambda (name) (%mode-syntax-text (find-mode-descriptor name)))
-                                                (rest el))))))
-                  (mode-descriptor-pattern mode))))
+                       (:expr "expr")
+                       (:one-of (format nil "~{~A~^|~}"
+                                         (mapcar (lambda (name) (%mode-syntax-text (find-mode-descriptor name)))
+                                                (%one-of-alternatives el))))))
+                   (mode-descriptor-pattern mode))))
 
 (defun %accepted-modes-text (variants)
   "VARIANTS' (an instruction's list of INSTRUCTION-DESCRIPTOR) addressing
@@ -310,7 +310,7 @@ cells) combo a value actually fits."
                         (<= lo value hi)))))
          values (instruction-descriptor-word-fields descriptor)))
 
-(defun %choices-eligible-p (descriptor choices)
+(defun %choices-eligible-p (descriptor choices &optional selections)
   "T if DESCRIPTOR is eligible given CHOICES -- mode.lisp's hole-aligned
 per-hole list of the ONE-OF alternative each operand hole actually matched,
 NIL for a hole not governed by any ONE-OF (#104). Covers both encoding
@@ -349,7 +349,11 @@ own selector list is a prefix of the longer CHOICES) rather than rejecting
 it outright. Guarded first: a word-encoded DESCRIPTOR is eligible only when
 its own hole count actually matches CHOICES' length."
   (when (and (instruction-descriptor-word-layout descriptor)
-             (/= (length (instruction-descriptor-word-fields descriptor)) (length choices)))
+              (/= (length (instruction-descriptor-word-fields descriptor)) (length choices)))
+    (return-from %choices-eligible-p nil))
+  (unless (every (lambda (selection)
+                   (eq (cdr selection) (cdr (assoc (car selection) selections))))
+                 (instruction-descriptor-choice-selections descriptor))
     (return-from %choices-eligible-p nil))
   ;; WORD-FIELDS and SUB-CHOICES are mutually exclusive by construction (a
   ;; descriptor is word-encoded or byte-encoded, never both), so this OR
@@ -415,7 +419,7 @@ instead of discarded."
                           "~A: has no addressing-mode variant using .~A -- this instruction ~
 accepts ~A"
                           (statement-mnemonic statement) suffix (%accepted-modes-text variants)))
-      (multiple-value-bind (asts okp choices) (try-match-operand-mode operand-tokens mode)
+      (multiple-value-bind (asts okp choices selections) (try-match-operand-mode operand-tokens mode)
         (unless okp
           (%assembly-error-at anchor
                                "~A: operand ~S does not match the forced .~A ~
@@ -425,7 +429,7 @@ accepts ~A"
         (values (or (find-if (lambda (v) (and (instruction-descriptor-mode v)
                                                (eq (mode-descriptor-name (instruction-descriptor-mode v))
                                                    (mode-descriptor-name mode))
-                                               (%choices-eligible-p v choices)))
+                                                (%choices-eligible-p v choices selections)))
                               variants)
                     variant)
                 asts
@@ -534,22 +538,22 @@ alternative's :STRICT once a value exists to check it against."
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices) = (multiple-value-list
-                                            (if mode
-                                                (try-match-operand-mode tokens mode)
-                                                (values nil (zerop (length tokens)) nil)))
+                 for (asts okp choices selections) = (multiple-value-list
+                                                       (if mode
+                                                           (try-match-operand-mode tokens mode)
+                                                           (values nil (zerop (length tokens)) nil)))
                  when (and okp (>= (instruction-descriptor-size v) floor)
                            ;; #104/#126: drop a candidate whose CHOICE-
                            ;; selected word field(s) or hole-selected
                            ;; sub-opcode don't match what this operand's
                            ;; ONE-OF hole(s) actually chose -- vacuously T
                            ;; for a candidate with no such selector at all.
-                           (%choices-eligible-p v choices))
+                           (%choices-eligible-p v choices selections))
                    ;; #115: CHOICES rides along with each candidate (not just
                    ;; used to filter, above) so %CHECK-STRICT-OPERAND-RANGE!
                    ;; can read a hole's own matched ONE-OF alternative's
                    ;; :STRICT once ENCODE has a value to check it against.
-                   collect (list v asts choices))))
+                   collect (list v asts choices selections))))
     (when (null candidates)
       (%assembly-error-at anchor
                            "~A: operand ~S matches no addressing mode -- this instruction ~

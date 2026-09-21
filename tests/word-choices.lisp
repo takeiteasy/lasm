@@ -52,6 +52,158 @@
         (execute-instruction descriptor machine values selections)
         (fiveam:is (= 2 (sref machine 'a)))))))
 
+(defmode fixed-role-a "A")
+(defmode fixed-role-b "B")
+(defmode fixed-role-value expr)
+(defmode fixed-role-pair
+  (one-of (dst-slot fixed-role-a fixed-role-b fixed-role-value)) ","
+  (one-of (src-slot fixed-role-a fixed-role-b fixed-role-value)))
+
+(definstruction fixed-choice-machine fixedpair
+  (modes fixed-role-pair)
+  (encoding
+    (opcode 2)
+    (for-choice (dst-slot fixed-role-a) (field-value dst 1))
+    (for-choice (dst-slot fixed-role-b) (field-value dst 2))
+    (for-choice (dst-slot fixed-role-value)
+      (operand dst :field dst
+        (variant (choice fixed-role-value) inline :range (5 15))))
+    (for-choice (src-slot fixed-role-a) (field-value src 3))
+    (for-choice (src-slot fixed-role-b) (field-value src 4))
+    (for-choice (src-slot fixed-role-value)
+      (operand src :field src
+        (variant (choice fixed-role-value) inline :range (5 255)))))
+  (semantics
+    (set! a (+ (choice-case dst-slot
+                 (fixed-role-a 10)
+                 (fixed-role-b 20)
+                 (fixed-role-value dst))
+               (choice-case src-slot
+                  (fixed-role-a 1)
+                  (fixed-role-b 2)
+                  (fixed-role-value src))))))
+
+(fiveam:test independent-zero-hole-selections-encode-and-share-semantics
+  (let* ((cells (assembly-cells (assemble "fixedpair A, B" :machine 'fixed-choice-machine)))
+         (variants (find-instruction-variants 'fixed-choice-machine 'fixedpair))
+         (fixed (remove-if #'instruction-descriptor-operand-names variants)))
+    (fiveam:is (equalp #(#x04 #x21) cells))
+    (fiveam:is (= 9 (length variants)))
+    (fiveam:is (= 4 (length fixed)))
+    (fiveam:is (every (lambda (descriptor)
+                         (eq (instruction-descriptor-semantics-fn descriptor)
+                             (instruction-descriptor-semantics-fn (first fixed))))
+                       fixed))
+    (multiple-value-bind (descriptor values size choices selections)
+        (decode-instruction-at (vector-cell-reader cells) 0 'fixed-choice-machine)
+      (declare (ignore descriptor))
+      (fiveam:is (null values))
+      (fiveam:is (= 2 size))
+      (fiveam:is (null choices))
+      (fiveam:is (equal '((dst-slot . fixed-role-a) (src-slot . fixed-role-b)) selections)))))
+
+(fiveam:test fixed-and-value-selections-execute-end-to-end
+  (dolist (case '(("fixedpair A, A" 11)
+                  ("fixedpair A, B" 12)
+                  ("fixedpair B, A" 21)
+                  ("fixedpair B, B" 22)
+                  ("fixedpair 7, A" 8)
+                  ("fixedpair A, 9" 19)
+                  ("fixedpair 7, 9" 16)))
+    (destructuring-bind (source expected) case
+      (let* ((cells (assembly-cells (assemble source :machine 'fixed-choice-machine)))
+             (machine (make-machine 'fixed-choice-machine)))
+        (multiple-value-bind (descriptor values size choices)
+            (decode-instruction-at (vector-cell-reader cells) 0 'fixed-choice-machine)
+          (declare (ignore size))
+          (execute-instruction descriptor machine values choices)
+          (fiveam:is (= expected (sref machine 'a))))))))
+
+(fiveam:test named-slot-choice-case-rejects-another-slots-or-unknown-key
+  (dolist (key '(independent-reg missing-choice))
+    (fiveam:signals error
+      (eval `(definstruction fixed-choice-machine invalid-slot-choice
+               (modes fixed-role-pair)
+               (encoding
+                 (opcode 3)
+                 (for-choice (dst-slot fixed-role-a) (field-value dst 1))
+                 (for-choice (dst-slot fixed-role-b) (field-value dst 2))
+                 (for-choice (dst-slot fixed-role-value)
+                   (operand dst :field dst
+                     (variant (choice fixed-role-value) inline :range (5 15))))
+                 (for-choice (src-slot fixed-role-a) (field-value src 3))
+                 (for-choice (src-slot fixed-role-b) (field-value src 4))
+                 (for-choice (src-slot fixed-role-value)
+                   (operand src :field src
+                     (variant (choice fixed-role-value) inline :range (5 255)))))
+               (semantics (choice-case dst-slot (,key nil))))))))
+
+(fiveam:test fixed-selections-with-overlapping-constants-are-not-siblings
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction fixed-choice-machine overlapping-fixed
+             (modes fixed-role-pair)
+             (encoding
+               (opcode 3)
+               (for-choice (dst-slot fixed-role-a) (field-value dst 1))
+               (for-choice (dst-slot fixed-role-b) (field-value dst 1))
+               (for-choice (dst-slot fixed-role-value)
+                 (operand dst :field dst
+                   (variant (choice fixed-role-value) inline :range (5 15))))
+               (for-choice (src-slot fixed-role-a) (field-value src 3))
+               (for-choice (src-slot fixed-role-b) (field-value src 3))
+               (for-choice (src-slot fixed-role-value)
+                 (operand src :field src
+                   (variant (choice fixed-role-value) inline :range (5 255)))))
+             (semantics nil)))))
+
+(defmode unnamed-tail-fixed "F")
+(defmode unnamed-tail-value expr)
+(defmode unnamed-tail-mode
+  expr "," (one-of (tail-slot unnamed-tail-fixed unnamed-tail-value)))
+
+(definstruction fixed-choice-machine unnamedtail
+  (modes unnamed-tail-mode)
+  (encoding
+    (opcode 3)
+    (operand :field dst)
+    (for-choice (tail-slot unnamed-tail-fixed) (field-value src 0))
+    (for-choice (tail-slot unnamed-tail-value)
+      (operand :field src
+        (variant (choice unnamed-tail-value) inline :range (1 255)))))
+  (semantics (set! a operand)))
+
+(fiveam:test unnamed-operands-use-positional-semantics-mappings
+  (dolist (source '("unnamedtail 6, F" "unnamedtail 6, 99"))
+    (let* ((cells (assembly-cells (assemble source :machine 'fixed-choice-machine)))
+           (machine (make-machine 'fixed-choice-machine)))
+      (multiple-value-bind (descriptor values size choices)
+          (decode-instruction-at (vector-cell-reader cells) 0 'fixed-choice-machine)
+        (declare (ignore size))
+        (execute-instruction descriptor machine values choices)
+        (fiveam:is (= 6 (sref machine 'a)))))))
+
+(fiveam:test definstruction-macroexpansion-is-compact-across-cartesian-combos
+  (labels ((count-symbol (symbol tree)
+             (cond ((eq symbol tree) 1)
+                   ((consp tree) (+ (count-symbol symbol (car tree))
+                                    (count-symbol symbol (cdr tree))))
+                   (t 0))))
+    (let ((expansion
+            (macroexpand-1
+             '(definstruction order-test-machine compact-probe
+                (modes order-pair)
+                (encoding
+                  (opcode 2)
+                  (operand dst :field dst
+                    (variant (range 0 7) inline)
+                    (variant :else (extra-word :escape 63)))
+                  (operand src :field src
+                    (variant (range 0 7) inline)
+                    (variant :else (extra-word :escape 63))))
+                (semantics nil)))))
+      (fiveam:is (zerop (count-symbol 'make-instruction-descriptor expansion)))
+      (fiveam:is (= 1 (count-symbol '%make-word-instruction-descriptors expansion))))))
+
 (defmachine independent-choice-machine
   (register pc :width 16)
   (register r :width 16 :count 8)
@@ -355,5 +507,59 @@
                  (variant (choice independent-index) inline :range (0 7) :bias 16)
                  (variant (choice indexed-alias) inline :range (0 7) :bias 16 :alias t))
                (for-choice independent-index (operand off :trailing-word :cells 1))
-               (for-choice indexed-alias (operand off :trailing-word :cells 2)))
-             (semantics nil)))))
+                (for-choice indexed-alias (operand off :trailing-word :cells 2)))
+              (semantics nil)))))
+
+(defmode named-varying-bare expr)
+(defmode named-varying-immediate "#" expr)
+(defmode named-varying-index "[" expr "," expr "]")
+(defmode named-varying-mode
+  (one-of (varying-slot named-varying-bare named-varying-immediate named-varying-index)))
+
+(definstruction independent-choice-machine nvar
+  (modes named-varying-mode)
+  (encoding (opcode 6)
+    (operand value :field src
+      (variant (choice named-varying-bare) inline :range (0 7))
+      (variant (choice named-varying-immediate) inline :range (0 7) :bias 8)
+      (variant (choice named-varying-index) inline :range (0 7) :bias 16))
+    (for-choice (varying-slot named-varying-immediate) (field-value dst 31))
+    (for-choice (varying-slot named-varying-index) (operand off :trailing-word)))
+  (semantics
+    (choice-case varying-slot
+      (named-varying-bare (set! observed value))
+      (named-varying-immediate (set! observed (+ 100 value)))
+      (named-varying-index (set! observed (+ value off))))))
+
+(fiveam:test named-varying-slot-allows-each-minimum-arity-alternative
+  (let* ((cells (assembly-cells
+                 (assemble "nvar #3" :machine 'independent-choice-machine)))
+         (machine (make-machine 'independent-choice-machine)))
+    (fiveam:is (equalp (vector (logior 6 (ash 31 5) (ash 11 10))) cells))
+    (load-program machine cells)
+    (step-machine machine)
+    (fiveam:is (= 103 (sref machine 'observed)))))
+
+(defmode shared-offset-paren "(" expr "," expr ")")
+(defmode shared-offset-mode
+  (one-of independent-reg independent-index shared-offset-paren))
+
+(definstruction independent-choice-machine shoff
+  (modes shared-offset-mode)
+  (encoding (opcode 7)
+    (operand value :field src
+      (variant (choice independent-reg) inline :range (0 7))
+      (variant (choice independent-index) inline :range (0 7) :bias 16)
+      (variant (choice shared-offset-paren) inline :range (0 7) :bias 24))
+    (for-choice independent-index (operand off :trailing-word))
+    (for-choice shared-offset-paren (operand off :trailing-word)))
+  (semantics (set! observed (+ value (or off 0)))))
+
+(fiveam:test varying-alternatives-share-a-named-semantics-operand
+  (dolist (case '(("shoff [2, 10]" 12)
+                  ("shoff (3, 20)" 23)))
+    (let ((machine (make-machine 'independent-choice-machine)))
+      (load-program machine (assembly-cells (assemble (first case)
+                                                       :machine 'independent-choice-machine)))
+      (step-machine machine)
+      (fiveam:is (= (second case) (sref machine 'observed))))))

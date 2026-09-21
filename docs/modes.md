@@ -135,8 +135,9 @@ hole, or when a declaration has more than one independent choice set:
 Legacy `(one-of mode...)` remains hole-aligned exactly as before. Matching APIs
 return the existing hole-aligned `choices` value unchanged and add selection
 metadata such as `((fixed-kind . stack-pointer))` as an additional value for
-named slots. This metadata is the representation used by encoding extensions
-for zero-hole alternatives.
+named slots. Each named element is selected independently, including when two
+or more selected alternatives all have zero holes. This metadata is the
+representation used by encoding extensions for zero-hole alternatives.
 
 `ab` above matches `5, 10`, `[5], #10`, `#5, [10]`, and every other
 combination of its two holes' three alternatives — each hole's choice has no
@@ -680,11 +681,12 @@ program using `sta.w`/`lda.z` to force a mode.
   all-asts choices)` — `first-ast` alone is what every current single-hole
   mode needs; `choices` is one entry per hole, in hole order, `nil` for a
   hole not governed by any `one-of` (empty/all-`nil` for a mode with none at
-  all). Signals
+  all); `selections` is an alist of named slot to selected alternative.
+  Signals
   `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
   unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns
-  `(values asts t choices)` on a match or `(values nil nil nil)` on a
+  `(values asts t choices selections)` on a match or four `nil` values on a
   mismatch. This is what the assembler's mode-candidate filter uses to try
   several of a mnemonic's modes against one operand without a
   `handler-case` per candidate.

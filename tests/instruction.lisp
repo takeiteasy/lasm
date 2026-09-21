@@ -1802,17 +1802,14 @@
       (fiveam:is (= 0 (instruction-descriptor-extra-cells one-hole)))
       (fiveam:is (= 1 (instruction-descriptor-extra-cells two-hole))))))
 
-(fiveam:test varying-hole-tuples-do-not-share-across-tuples
-  ;; #150's sharing is per-tuple, not per-mode: ONE-HOLE and TWO-HOLE come
-  ;; from different alternative-tuples (%MODE-HOLE-TUPLES) with different
-  ;; OPERAND-NAMES, so %WORD-MODE-DESCRIPTOR-FORMS must build each tuple its
-  ;; own SEMANTICS-FN/WORD-ALTERNATIVES gensym rather than forcing every
-  ;; descriptor in the mode onto one shared binding.
+(fiveam:test varying-hole-tuples-share-one-normalized-semantics-fn
+  ;; Tuples retain separate decode menus, but normalize their varying operand
+  ;; lists before invoking the one semantics function for the instruction.
   (let* ((variants (find-instruction-variants 'varying-hole-test-machine 'ldv))
          (one-hole (find 2 variants :key (lambda (d) (length (instruction-descriptor-operand-names d)))))
          (two-hole (find 3 variants :key (lambda (d) (length (instruction-descriptor-operand-names d))))))
-    (fiveam:is (not (eq (instruction-descriptor-semantics-fn one-hole)
-                         (instruction-descriptor-semantics-fn two-hole))))
+    (fiveam:is (eq (instruction-descriptor-semantics-fn one-hole)
+                   (instruction-descriptor-semantics-fn two-hole)))
     (fiveam:is (not (eq (instruction-descriptor-word-alternatives one-hole)
                          (instruction-descriptor-word-alternatives two-hole))))))
 

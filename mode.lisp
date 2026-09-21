@@ -373,16 +373,24 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
                                         (:literal 0)
                                         (:expr 1)
                                         (:one-of (%pattern-one-of-min-hole-count alts seen))))
+                          (minimum (remove-if-not (lambda (n)
+                                                    (= (%mode-hole-count (find-mode-descriptor n) seen)
+                                                       base-count))
+                                                  alts))
                           (over (remove-if (lambda (n)
                                              (= (%mode-hole-count (find-mode-descriptor n) seen)
                                                 base-count))
-                                           alts)))
-                     (loop for alt in (cons nil over)
+                                           alts))
+                           (split-minimum-p (and (%one-of-slot element)
+                                                 (> (length minimum) 1))))
+                     (loop for alt in (if split-minimum-p
+                                           (append minimum over)
+                                           (cons nil over))
                            for count = (if alt
                                            (%mode-hole-count (find-mode-descriptor alt) seen)
                                            base-count)
                            append (walk (rest pattern) (+ base-start base-count) (+ start count)
-                                        (if over
+                                        (if (or over split-minimum-p)
                                             (cons (make-mode-hole-group
                                                    :base-start base-start :start start
                                                    :base-count base-count :count count

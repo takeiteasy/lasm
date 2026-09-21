@@ -104,10 +104,12 @@ modes"](modes.md#per-operand-modes)) an operand hole actually matched.
 
 `name` is an operand field name from the instruction's `(operand ...)`
 subclauses, or `operand` for the first field (mirroring the `operand`
-binding every semantics body already gets). Each clause's key is one
+binding every semantics body already gets). It may also be a named `one-of`
+slot, including a slot whose selected alternative contributes no operand
+hole. Each clause's key is one
 mode-name symbol or a list of them, exactly like `cl:case`; every key must
-be one of `name`'s hole's own `one-of` alternatives — checked at
-`definstruction` time — unless that hole isn't governed by a `one-of` at
+be one of `name`'s hole or named slot's own `one-of` alternatives — checked
+at `definstruction` time — unless that hole isn't governed by a `one-of` at
 all, in which case there is nothing to check a key against and the check is
 skipped. At runtime, `choice-case` dispatches on which alternative the hole
 was actually decoded (or assembled) as; with no `otherwise` clause, a hole
@@ -126,6 +128,11 @@ than left unbound) in a descriptor that has no such hole of its own; a
 `choice-case` clause reading it is reachable only from the sibling
 descriptor that actually has it, since that is the only descriptor whose
 own governing hole ever matches that clause's key.
+
+Varying tuples share one semantics function. Each concrete descriptor carries
+an explicit positional map into that function's operand layout, including
+unnamed holes and absent extra holes; execution never uses operand-name lookup
+to reorder values.
 
 This is the piece a word-encoded field's `(choice mode)` variant selector
 (see [Instructions, "CHOICE-selected word

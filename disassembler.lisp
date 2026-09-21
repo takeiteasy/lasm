@@ -312,9 +312,11 @@ by construction (%CHECK-BYTE-SUB-VARIANTS!)."
                                                (and element (register-alias-at element v)))))
                                (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s))))
                       (:one-of
-                       (let ((alt-name (or (%matched-choice-name choices 0)
-                                           (cdr (assoc (%one-of-slot el) choice-selections))
-                                           (first (%one-of-alternatives el)))))
+                       (let* ((alternatives (%one-of-alternatives el))
+                              (matched (%matched-choice-name choices 0))
+                              (alt-name (or (and (member matched alternatives) matched)
+                                            (cdr (assoc (%one-of-slot el) choice-selections))
+                                            (first alternatives))))
                          (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
 

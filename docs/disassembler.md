@@ -19,7 +19,8 @@ on both a byte-encoded and a word-encoded (DCPU-16-shaped) machine.
 
 ```lisp
 (decode-instruction-at read-cell address machine-name &key memory)
-;; => (values descriptor values size choices) | (values :decode-failure nil nil)
+;; => (values descriptor values size choices selections)
+;;  | (values :decode-failure nil nil)
 ```
 
 The pure fetch/decode step shared by [the emulator's `step-machine`](emulator.md#step-machine)
@@ -186,9 +187,13 @@ to the one `one-of` alternative no `choice`-selected variant there claims,
 so a hole on a mixed field still carries a real record either way, and
 renders its own actually-matched syntax same as a `choice`-selected one.
 Only a hole with no selector of any kind still has no record to fall back
-from. An `:alias` variant ([Instructions, "Aliased
+from. A named zero-hole selection is returned separately in `selections`;
+it chooses the literal-only alternative to render without adding an entry to
+`values` or the hole-aligned `choices` list. An `:alias` variant ([Instructions, "Aliased
 escapes"](instructions.md#aliased-escapes)) is never matched at decode, so
-its words render as the canonical spelling. When the matched alternative has more holes than its `one-of`
+its words render as the canonical spelling. A nested `one-of` only uses a
+decoded choice when that choice belongs to its own alternatives; otherwise it
+uses its first alternative as the canonical spelling. When the matched alternative has more holes than its `one-of`
 element's other alternatives ([Addressing modes, "Varying hole counts
 across alternatives"](modes.md#varying-hole-counts-across-alternatives)),
 the render walk consumes exactly that many values and record entries for

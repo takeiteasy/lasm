@@ -1188,7 +1188,11 @@ values instead of operand holes:
 ```
 
 The selector is `(slot alternative)`. Existing operand-based forms and the
-short form remain unchanged.
+short form remain unchanged. Every named zero-hole selection gets its own
+fixed-arity descriptor combination, so separate named elements select
+independently. Fixed field values must still make those combinations
+decode-distinguishable; equal or overlapping encodings are an
+`opcode-conflict`, not sibling variants that decode may choose arbitrarily.
 
 `(operand name :trailing-word [:cells k])` is the shape an extra hole
 typically takes: a fieldless hole with no bits of its own in the instruction
@@ -1209,6 +1213,12 @@ longer one's, or vice versa, at either assemble or decode time). A shared
 `nil` in a sibling descriptor that lacks it, read only inside the matching
 `choice-case` branch, which that sibling's own descriptor can never reach —
 see [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case).
+
+The macroexpansion contains one compact descriptor-family constructor per
+fixed-arity tuple rather than one constructor form per Cartesian field
+combination. Registration still produces the same concrete
+`instruction-descriptor` list in the same narrow-before-wide order, so the
+public descriptor lookup and accessor APIs are unchanged.
 
 Word-encoded machines only. Multiple `one-of` elements may vary
 independently, but their alternatives cannot themselves contain a varying

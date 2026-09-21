@@ -158,7 +158,7 @@
 
 (defmode diag-oo-reg expr)
 (defmode diag-oo-ind "[" expr "]")
-(defmode diag-oo (one-of diag-oo-reg diag-oo-ind))
+(defmode diag-oo (one-of (diag-slot diag-oo-reg diag-oo-ind)))
 
 (definstruction diag-test-machine moo
   (modes diag-oo)
