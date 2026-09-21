@@ -13,6 +13,10 @@
 (defmode test-plus "[" expr "+" expr "]")
 (defmode test-bracket "[" expr "]")
 (defmode test-register "[" (expr :register bank) "]")
+(defmode test-fixed-sp "SP")
+(defmode test-fixed-pc "PC")
+(defmode test-fixed-or-value
+  (one-of (fixed-slot test-fixed-sp test-fixed-pc test-no-width)))
 
 (defun %tokens-for (string)
   "Tokenize STRING with the default lexer and return it as a SIMPLE-VECTOR
@@ -55,9 +59,24 @@ looks like."
   (fiveam:signals error
     (eval '(defmode bogus-relative-unsigned expr :relative t :signed nil))))
 
-(fiveam:test defmode-no-expr-hole-signals-error
-  (fiveam:signals error
-    (eval '(defmode bogus-mode "#"))))
+(fiveam:test defmode-allows-literal-only-pattern
+  (let ((mode (find-mode-descriptor 'test-fixed-sp)))
+    (fiveam:is (equal '((:literal "SP")) (mode-descriptor-pattern mode)))
+    (fiveam:is (= 0 (%mode-hole-count mode)))))
+
+(fiveam:test named-one-of-records-zero-hole-selection
+  (multiple-value-bind (asts okp choices selections)
+      (try-match-operand-mode (%tokens-for "SP") 'test-fixed-or-value)
+    (fiveam:is-true okp)
+    (fiveam:is (null asts))
+    (fiveam:is (null choices))
+    (fiveam:is (equal '((fixed-slot . test-fixed-sp)) selections)))
+  (multiple-value-bind (asts okp choices selections)
+      (try-match-operand-mode (%tokens-for "7") 'test-fixed-or-value)
+     (fiveam:is-true okp)
+     (fiveam:is (= 1 (length asts)))
+     (fiveam:is (equal '(test-no-width) (mapcar #'mode-descriptor-name choices)))
+     (fiveam:is (equal '((fixed-slot . test-no-width)) selections))))
 
 (fiveam:test defmode-malformed-pattern-element-signals-error
   (fiveam:signals error

@@ -264,8 +264,12 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; (decoder.lisp) rejects the candidate outright unless every one of them
   ;; matches the fetched word's own bits. %CHECK-OPCODE-DECODABLE! treats a
   ;; pinned field exactly like a hole's raw bits for co-tenancy purposes --
-  ;; see %CONSTANTS-DISJOINT-P below.
-  (word-constants nil :type list))
+   ;; see %CONSTANTS-DISJOINT-P below.
+   (word-constants nil :type list)
+  ;; Named ONE-OF selections that do not have an operand hole, such as a
+  ;; literal-only alternative.  This is separate from the hole-aligned
+  ;; CHOICES value so existing callers keep their shape.
+   (choice-selections nil :type list))
 
 (defun instruction-descriptor-total-operand-width (descriptor)
   "Sum of DESCRIPTOR's OPERAND-WIDTHS -- the cell count its operand encoding
@@ -1118,7 +1122,7 @@ word-encoded-machine-only; byte-encoded support is #151)"
 ;;; own CHOICES, mode.lisp) -- CHOICE-CASE just gives a semantics body
 ;;; somewhere to read it.
 
-(defun %choice-case-operand-index (name operand-names &optional mode-operand-names)
+(defun %choice-case-operand-index (name operand-names &optional mode-operand-names choice-selections)
   "NAME is a CHOICE-CASE operand argument (unevaluated). Returns (VALUES
 index T) when NAME resolves against OPERAND-NAMES -- this specific
 descriptor's own hole-aligned operand names -- the symbol OPERAND always
@@ -1139,7 +1143,7 @@ can never match a clause key, rather than binding an unbound variable.
 
 Signals a DEFINSTRUCTION-time error when NAME names no operand anywhere on
 this mode at all."
-  (unless (or operand-names mode-operand-names)
+  (unless (or operand-names mode-operand-names choice-selections)
     (error "DEFINSTRUCTION: CHOICE-CASE ~S: this variant has no operand fields" name))
   (let ((index (position name operand-names)))
     (cond
@@ -1147,7 +1151,8 @@ this mode at all."
       ((and (eq name 'operand) operand-names) (values 0 t))
       ((or (member name mode-operand-names) (and (eq name 'operand) mode-operand-names))
        (values nil nil))
-      (t (error "DEFINSTRUCTION: CHOICE-CASE: no operand field named ~S -- ~
+       ((assoc name choice-selections) (values :selection t))
+       (t (error "DEFINSTRUCTION: CHOICE-CASE: no operand field named ~S -- ~
 declared fields are ~S" name (or (remove nil mode-operand-names) '(operand)))))))
 
 (defun %check-choice-case-keys! (name keys hole-alternatives)
@@ -1169,7 +1174,7 @@ exempted unconditionally, same rationale."
 ONE-OF alternatives ~S" name key hole-alternatives))))))
 
 (defun %choice-case-form (name clauses machine-name instruction-name operand-names hole-alternatives-list
-                           &optional mode-operand-names)
+                           &optional mode-operand-names choice-selections)
   "Expansion of one (CHOICE-CASE NAME CLAUSE...) form (see the DEFINSTRUCTION
 docstring) inside a (semantics ...) body -- a plain CL:CASE on
 %MATCHED-CHOICE-NAME's result, with a NO-MATCHING-CHOICE fallback spliced in
@@ -1183,14 +1188,16 @@ skipped too, since there is no HOLE-ALTERNATIVES entry to validate against),
 so this always falls to OTHERWISE/NO-MATCHING-CHOICE, unreachable in
 practice since the shared (semantics ...) body's own CHOICE-CASE on NAME's
 governing hole is what selects which descriptor ran in the first place."
-  (multiple-value-bind (index foundp) (%choice-case-operand-index name operand-names mode-operand-names)
-    (when foundp
+  (multiple-value-bind (index foundp) (%choice-case-operand-index name operand-names mode-operand-names choice-selections)
+    (when (and foundp (not (eq index :selection)))
       (let ((hole-alternatives (nth index hole-alternatives-list)))
         (dolist (clause clauses)
           (%check-choice-case-keys! name (first clause) hole-alternatives))))
     (let ((has-fallback (some (lambda (c) (member (first c) '(otherwise t))) clauses))
           (choice-var (gensym "CHOICE")))
-      `(let ((,choice-var ,(if foundp `(%matched-choice-name choices ,index) nil)))
+      `(let ((,choice-var ,(cond ((not foundp) nil)
+                                 ((eq index :selection) `(cdr (assoc ',name selections)))
+                                 (t `(%matched-choice-name choices ,index)))))
          (case ,choice-var
            ,@clauses
            ,@(unless has-fallback
@@ -1201,7 +1208,7 @@ governing hole is what selects which descriptor ran in the first place."
                                     :choice ,choice-var)))))))))
 
 (defun %validate-choice-case-forms! (form machine name operand-names hole-alternatives-list
-                                      &optional mode-operand-names)
+                                      &optional mode-operand-names choice-selections)
   "Walk FORM (one top-level element of a (semantics ...) body, or any
 sub-form of one) for every literal (CHOICE-CASE ...) sub-form, eagerly
 re-running its own validation (%CHOICE-CASE-FORM, discarding the expansion
@@ -1221,12 +1228,13 @@ CHOICE-CASE is not a use of the macro and has nothing to validate."
   (when (and (consp form) (not (eq (first form) 'quote)))
     (if (eq (first form) 'choice-case)
         (destructuring-bind (op-name &rest clauses) (rest form)
-          (%choice-case-form op-name clauses machine name operand-names hole-alternatives-list mode-operand-names))
+          (%choice-case-form op-name clauses machine name operand-names hole-alternatives-list mode-operand-names
+                             choice-selections))
         (progn
           (%validate-choice-case-forms! (car form) machine name operand-names hole-alternatives-list
-                                         mode-operand-names)
+                                          mode-operand-names choice-selections)
           (%validate-choice-case-forms! (cdr form) machine name operand-names hole-alternatives-list
-                                         mode-operand-names)))))
+                                          mode-operand-names choice-selections)))))
 
 ;; Both declarations are load-bearing for the build, not style: without them
 ;; SBCL narrows this function's return type and re-triggers the fatal
@@ -1244,7 +1252,7 @@ actually run for this descriptor."
   nil)
 
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list
-                            &optional mode-operand-names)
+                            &optional mode-operand-names choice-selections)
   "MODE-OPERAND-NAMES (#120), when given, is the union of every sibling
 alternative-tuple's own OPERAND-NAMES for this DEFINSTRUCTION mode -- wider
 than OPERAND-NAMES only when a varying ONE-OF element's over-count
@@ -1256,7 +1264,8 @@ which actually has it, unreachable for this descriptor (see
 %CHOICE-CASE-FORM). A name in neither list stays an unbound-variable
 compile error, preserving typo protection."
   (dolist (form semantics-forms)
-    (%validate-choice-case-forms! form machine name operand-names hole-alternatives-list mode-operand-names))
+    (%validate-choice-case-forms! form machine name operand-names hole-alternatives-list mode-operand-names
+                                  choice-selections))
   (let* ((own-names (remove nil operand-names))
          (absent-names (set-difference (remove nil mode-operand-names) own-names))
          (named-bindings (loop for op-name in operand-names
@@ -1264,8 +1273,8 @@ compile error, preserving typo protection."
                                 when op-name
                                   collect `(,op-name (nth ,i operands))))
          (absent-bindings (mapcar (lambda (n) `(,n (%absent-choice-operand))) absent-names)))
-    `(lambda (machine operands choices)
-       (declare (ignorable operands choices))
+     `(lambda (machine operands choices &optional selections)
+        (declare (ignorable operands choices selections))
        (with-machine-bindings (machine ,machine)
          (let ((operand (first operands))
                ,@named-bindings
@@ -1273,12 +1282,14 @@ compile error, preserving typo protection."
            (declare (ignorable operand ,@own-names ,@absent-names))
            (macrolet ((choice-case (choice-name &body clauses)
                         (%choice-case-form choice-name clauses ',machine ',name
-                                            ',operand-names ',hole-alternatives-list ',mode-operand-names)))
+                                             ',operand-names ',hole-alternatives-list ',mode-operand-names
+                                             ',choice-selections)))
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
-                          &optional sub-opcode sub-choices operand-signedness
-                            relative-hole-index word-layout-name word-constants-form operand-registers)
+                           &optional sub-opcode sub-choices operand-signedness
+                             relative-hole-index word-layout-name word-constants-form operand-registers
+                             choice-selections)
   "SEMANTICS-FN-FORM is an already-built %SEMANTICS-FN-FORM lambda form, or a
 gensym bound to one by the caller's own LET* (#150) -- built once and shared
 across every sibling descriptor whose SEMANTICS-FN-FORM inputs (SEMANTICS-
@@ -1306,8 +1317,9 @@ SUB-CHOICES or field-variant combo."
     :operand-registers ',operand-registers
     :operand-signedness ',operand-signedness
     :relative-hole-index ',relative-hole-index
-    :word-layout-name ',word-layout-name
-    :word-constants ,word-constants-form
+     :word-layout-name ',word-layout-name
+     :word-constants ,word-constants-form
+     :choice-selections ',choice-selections
     :cycles ,cycles
     :semantics-fn ,semantics-fn-form))
 
@@ -2478,7 +2490,8 @@ variant, not one per combo."
                     constants)))
 
 (defun %word-descriptor-form (machine name mode-form opcode alternatives-form combo cycles semantics-fn-form
-                               hole-signedp-list hole-relativep-list layout-name constants-form)
+                                hole-signedp-list hole-relativep-list layout-name constants-form
+                                &optional choice-selections)
   "One INSTRUCTION-DESCRIPTOR form for word-field COMBO (a list of (SPEC
 . VARIANT) pairs from %EXPAND-WORD-COMBOS, in hole order). RELATIVE-HOLE-
 INDEX (#62) is COMBO's own %WORD-RELATIVE-HOLE-INDEX -- computed per combo,
@@ -2524,8 +2537,9 @@ combo."
       :word-alternatives ,alternatives-form
       :extra-cells ,extra-cells
       :relative-hole-index ',relative-index
-      :word-layout-name ',layout-name
-      :word-constants ,constants-form
+       :word-layout-name ',layout-name
+       :word-constants ,constants-form
+       :choice-selections ',choice-selections
       :cycles ,cycles
       :semantics-fn ,semantics-fn-form)))
 
@@ -2544,8 +2558,9 @@ Qualified selectors use (operand alternative); short selectors must be unique."
                (matches (remove-if-not
                          (lambda (g)
                            (and (member alt (mode-hole-group-alternatives g))
-                                (or (not qualified)
-                                    (and position
+                (or (not qualified)
+                    (eq (mode-hole-group-slot g) (first selector))
+                    (and position
                                          (<= (mode-hole-group-base-start g) position)
                                          (< position (+ (mode-hole-group-base-start g)
                                                         (mode-hole-group-base-count g)))))))
@@ -2561,9 +2576,12 @@ Qualified selectors use (operand alternative); short selectors must be unique."
                             (mode-hole-group-base-count group))))
             (when (assoc key entries :test #'equal)
               (error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
-            (unless (and (plusp needed) (= (length extras) needed)
-                         (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
-              (error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~D extra OPERAND subclauses" selector needed))
+             (unless (if (plusp needed)
+                         (and (= (length extras) needed)
+                              (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
+                         (every (lambda (s) (and (consp s) (eq (first s) 'field-value))) extras))
+               (error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
+                      selector needed))
             (cl:push (cons key extras) entries)))))
     (dolist (group groups)
       (dolist (alt (mode-hole-group-alternatives group))
@@ -2579,9 +2597,10 @@ Qualified selectors use (operand alternative); short selectors must be unique."
     (dolist (group (mode-hole-tuple-groups tuple))
       (let ((end (+ (mode-hole-group-base-start group) (mode-hole-group-base-count group))))
         (setf result (append result (subseq operand-subclauses cursor end)
-                             (cdr (assoc (list (mode-hole-group-base-start group)
-                                               (mode-hole-group-alt-name group))
-                                         for-choice-alist :test #'equal)))
+                              (remove-if-not (lambda (s) (eq (first s) 'operand))
+                                             (cdr (assoc (list (mode-hole-group-base-start group)
+                                                               (mode-hole-group-alt-name group))
+                                                         for-choice-alist :test #'equal))))
               cursor end)))
     (append result (subseq operand-subclauses cursor))))
 
@@ -2672,7 +2691,21 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                    (error "DEFINSTRUCTION: extra operand ~S claims a different FOR-CHOICE alternative"
                           (word-operand-spec-name spec)))
                  (setf (word-variant-choice variant) (mode-hole-group-alt-name group))))))
-  specs)
+   specs)
+
+(defun %tuple-choice-selections (tuple)
+  "Return named ONE-OF selections represented by TUPLE.
+The minimum-arity tuple uses its sole minimum-arity alternative; an
+over-count tuple records its selected alternative directly."
+  (loop for group in (mode-hole-tuple-groups tuple)
+        for alternatives = (mode-hole-group-alternatives group)
+        for count = (mode-hole-group-base-count group)
+        for alt = (or (mode-hole-group-alt-name group)
+                      (first (remove-if-not (lambda (name)
+                                              (= (%mode-hole-count (find-mode-descriptor name)) count))
+                                            alternatives)))
+        when (and (mode-hole-group-slot group) alt)
+          collect (cons (mode-hole-group-slot group) alt)))
 
 (defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
                                      cycles semantics-forms &optional layout-name field-value-subclauses
@@ -2688,12 +2721,11 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                    layout-name))
          (for-choice-alist (%parse-for-choice-subclauses mode for-choice-subclauses
                                                         operand-subclauses))
-         (operand-field-names (%operand-subclause-field-names
-                                (append operand-subclauses (loop for entry in for-choice-alist append (cdr entry)))))
-         (constants (%parse-field-value-subclauses machine name mode-name layout layout-name
-                                                     field-value-subclauses operand-field-names))
+          (operand-field-names (%operand-subclause-field-names operand-subclauses))
+          (constants (%parse-field-value-subclauses machine name mode-name layout layout-name
+                                                      field-value-subclauses operand-field-names))
          (constants-form (%word-constants-form constants)))
-    (if (null operand-subclauses)
+     (if (and (null operand-subclauses) (null for-choice-subclauses))
         (values nil
                 (list `(make-instruction-descriptor
                         :name ,(string-upcase (symbol-name name))
@@ -2714,7 +2746,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
         ;; can be computed, and every tuple's %SEMANTICS-FN-FORM needs that
         ;; union to bind an absent sibling-tuple name to NIL rather than
         ;; leaving a shared (semantics ...) body's reference to it unbound.
-        (let* ((tuple-specs (mapcar
+         (let* ((tuple-specs (mapcar
                               (lambda (tuple)
                                 (let* ((tuple-hole-alternatives (mode-hole-tuple-hole-alternatives tuple))
                                        (tuple-subclauses (%tuple-operand-subclauses operand-subclauses tuple
@@ -2734,9 +2766,9 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                                      (mapcan (lambda (pair) (remove nil (mapcar #'word-operand-spec-name (cdr pair))))
                                              tuple-specs)
                                      :from-end t))
-               (constants-gensym (gensym "WORD-CONSTANTS"))
-               (bindings (list (list constants-gensym constants-form)))
-               (forms nil))
+                (constants-gensym (gensym "WORD-CONSTANTS"))
+                (bindings (list (list constants-gensym constants-form)))
+                (forms nil))
           (loop for (tuple . specs) in tuple-specs
                 for tuple-hole-alternatives = (mode-hole-tuple-hole-alternatives tuple)
                 for hole-signedp-list = (%word-hole-signedp-list mode tuple-hole-alternatives
@@ -2744,8 +2776,23 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                 for hole-relativep-list = (%word-hole-relativep-list mode tuple-hole-alternatives
                                                                       (length tuple-hole-alternatives))
                 for operand-names = (mapcar #'word-operand-spec-name specs)
-                do (%check-word-one-of-signed specs tuple-hole-alternatives machine name)
-                   (%check-word-one-of-width tuple-hole-alternatives machine name)
+                 do (let* ((tuple-selections (%tuple-choice-selections tuple))
+                           (tuple-field-values
+                             (loop for entry in for-choice-alist
+                                   when (member (second (car entry)) (mapcar #'cdr tuple-selections))
+                                     append (remove-if-not (lambda (s) (eq (first s) 'field-value))
+                                                           (cdr entry))))
+                           (tuple-constants
+                             (%parse-field-value-subclauses machine name mode-name layout layout-name
+                                                            (append field-value-subclauses tuple-field-values)
+                                                            (%operand-subclause-field-names
+                                                             (%tuple-operand-subclauses operand-subclauses tuple
+                                                                                         for-choice-alist))))
+                           (tuple-constants-gensym (gensym "WORD-CONSTANTS")))
+                    (setf bindings (nconc bindings (list (list tuple-constants-gensym
+                                                               (%word-constants-form tuple-constants)))))
+                    (%check-word-one-of-signed specs tuple-hole-alternatives machine name)
+                    (%check-word-one-of-width tuple-hole-alternatives machine name)
                    (let* ((alternatives-form (%word-alternatives-form specs hole-signedp-list))
                           (alternatives-gensym (gensym "WORD-ALTERNATIVES"))
                           (semantics-fn-gensym (gensym "SEMANTICS-FN"))
@@ -2755,17 +2802,17 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                      (setf bindings (nconc bindings
                                             (list (list alternatives-gensym alternatives-form)
                                                   (list semantics-fn-gensym
-                                                        (%semantics-fn-form semantics-forms machine name
-                                                                             operand-names tuple-hole-alternatives
-                                                                             mode-operand-names)))))
+                                                         (%semantics-fn-form semantics-forms machine name
+                                                                              operand-names tuple-hole-alternatives
+                                                                              mode-operand-names tuple-selections)))))
                      (setf forms (nconc forms
                                          (mapcar (lambda (combo)
                                                    (%word-descriptor-form machine name mode-form opcode
                                                                            alternatives-gensym combo cycles
                                                                            semantics-fn-gensym hole-signedp-list
                                                                            hole-relativep-list layout-name
-                                                                           constants-gensym))
-                                                 combos)))))
+                                                                            tuple-constants-gensym tuple-selections))
+                                                  combos))))))
           (values bindings forms)))))
 
 (defun %check-word-opcode (machine name opcode)
@@ -3519,9 +3566,13 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
            (unless opcode-subclause
              (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                     machine name))
-           (unless operand-subclauses
-             (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
-(encoding ...) has no (operand ...) subclause" machine name mode-sym))
+            (multiple-value-bind (minimum-holes maximum-holes) (%mode-hole-count-range mode)
+              (declare (ignore minimum-holes))
+              (unless (or (zerop maximum-holes) operand-subclauses
+                           (some (lambda (c) (some (lambda (s) (eq (first s) 'operand)) (cddr c)))
+                                 for-choice-subclauses))
+                (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
+(encoding ...) has no (operand ...) subclause" machine name mode-sym)))
            (when (and sub-opcode-subclause (%word-machine-p machine))
              (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) is a byte-machine-only mechanism ~
 (#128), not supported on word-encoded machine ~S" machine name machine))
@@ -3698,4 +3749,5 @@ anywhere in this descriptor -- #126, see %DECODE-CELL-INSTRUCTION,
 decoder.lisp) can omit it, in which case a (semantics ...) body's CHOICE-CASE
 (if it has one) sees every hole as unmatched, same as an operand not governed
 by any ONE-OF at all."
-  (funcall (instruction-descriptor-semantics-fn descriptor) machine values choices))
+  (funcall (instruction-descriptor-semantics-fn descriptor) machine values choices
+           (instruction-descriptor-choice-selections descriptor)))

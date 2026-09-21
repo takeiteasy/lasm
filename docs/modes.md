@@ -29,7 +29,9 @@ mode, built-in or user-declared, goes through the same `defmode`.
 ```
 
 `pattern-element` is a string literal, the symbol `expr`, or `(one-of
-mode...)` — see [Per-operand modes](#per-operand-modes) below.
+mode...)` — see [Per-operand modes](#per-operand-modes) below. A mode may be
+literal-only, such as `(defmode stack-pointer "SP")`; it then contributes zero
+operand holes.
 
 `NAME` is a symbol, registered globally (like a lexer — see below).
 `pattern-element` is either a string literal (matched against a token's
@@ -121,6 +123,20 @@ the same instruction:
 
 (defmode ab (one-of a-reg a-ind a-lit) "," (one-of a-reg a-ind a-lit))
 ```
+
+Use `(one-of (SLOT mode...))` to name a choice slot when an alternative has no
+hole, or when a declaration has more than one independent choice set:
+
+```lisp
+(defmode fixed-or-register
+  (one-of (fixed-kind stack-pointer program-counter) a-reg))
+```
+
+Legacy `(one-of mode...)` remains hole-aligned exactly as before. Matching APIs
+return the existing hole-aligned `choices` value unchanged and add selection
+metadata such as `((fixed-kind . stack-pointer))` as an additional value for
+named slots. This metadata is the representation used by encoding extensions
+for zero-hole alternatives.
 
 `ab` above matches `5, 10`, `[5], #10`, `#5, [10]`, and every other
 combination of its two holes' three alternatives — each hole's choice has no

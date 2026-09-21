@@ -84,7 +84,8 @@
   ;; %MATCHED-CHOICE-NAME, instruction.lisp, which normalizes either shape)
   ;; to render that alternative's own syntax instead of always a ONE-OF's
   ;; first one -- see #117/#126.
-  (choices nil :type list)
+   (choices nil :type list)
+  (choice-selections nil :type list)
   (label nil :type (or null string))                        ; a symbol bound to this address, or NIL
   (text nil :type (or null string)))                        ; rendered source line, sans label
 
@@ -131,7 +132,7 @@ address is known."
                (let ((region-start (and regions (car (first regions)))))
                  (if (and region-start (<= region-start address))
                      (if (data-line address) (incf address) (setf address end))
-                     (multiple-value-bind (descriptor values size choices)
+                         (multiple-value-bind (descriptor values size choices choice-selections)
                          (handler-case (decode-instruction-at read-cell address machine-name :memory memory)
                            (address-out-of-range () (values :decode-failure nil nil nil)))
                        (cond
@@ -144,7 +145,8 @@ address is known."
                          (t
                           (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
                             (cl:push (make-disassembly-line :address address :size size :cells cells
-                                                             :descriptor descriptor :values values :choices choices)
+                                                              :descriptor descriptor :values values :choices choices
+                                                              :choice-selections choice-selections)
                                      lines)
                             (incf address size))))))))
       (nreverse lines))))
@@ -238,7 +240,8 @@ hole's own value gets this adjustment, mirroring %CHOOSE-VARIANT's and
               collect (if (eql i relative-index) (+ address size v) v))
         values)))
 
-(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements)
+(defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements
+                               choice-selections)
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -308,9 +311,11 @@ by construction (%CHECK-BYTE-SUB-VARIANTS!)."
                                                  (and owner (register-alias-at owner v)))
                                                (and element (register-alias-at element v)))))
                                (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s))))
-                     (:one-of
-                      (let ((alt-name (or (%matched-choice-name choices 0) (second el))))
-                        (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
+                      (:one-of
+                       (let ((alt-name (or (%matched-choice-name choices 0)
+                                           (cdr (assoc (%one-of-slot el) choice-selections))
+                                           (first (%one-of-alternatives el)))))
+                         (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
 
 ;; TODO: this does a FIND-MACHINE-DESCRIPTOR/GETHASH pair per rendered line
@@ -346,15 +351,16 @@ MODE-SUFFIX-SEPARATOR to write it with."
         (format nil "~A~A~A" name (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer)) suffix)
         name)))
 
-(defun %render-line (descriptor values address size lexer suffixes reverse-symbols choices)
+(defun %render-line (descriptor values address size lexer suffixes reverse-symbols choices choice-selections)
   (let ((mnemonic (%render-mnemonic descriptor lexer suffixes))
         (mode (instruction-descriptor-mode descriptor)))
     (if mode
         (format nil "~A ~A" mnemonic
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
                                        lexer reverse-symbols choices (%hole-elements descriptor)
-                                       (machine-descriptor-register-alias-elements
-                                        (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+                                        (machine-descriptor-register-alias-elements
+                                         (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+                                        choice-selections))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)
@@ -377,7 +383,8 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
             (if (disassembly-line-descriptor l)
                 (%render-line (disassembly-line-descriptor l) (disassembly-line-values l)
                                (disassembly-line-address l) (disassembly-line-size l)
-                               lexer suffixes reverse-symbols (disassembly-line-choices l))
+                                lexer suffixes reverse-symbols (disassembly-line-choices l)
+                                (disassembly-line-choice-selections l))
                 (%data-line-text (first (disassembly-line-cells l)) lexer))))
     lines))
 

@@ -2,6 +2,56 @@
 
 (fiveam:in-suite instruction)
 
+(defmachine fixed-choice-machine
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 4)
+    (field src 8)))
+
+(defmode fixed-choice-mode
+  (one-of (fixed-slot test-fixed-sp word-imm)))
+
+(definstruction fixed-choice-machine fixedchoice
+  (modes fixed-choice-mode)
+  (encoding
+    (opcode 1)
+    (for-choice (fixed-slot test-fixed-sp) (field-value dst 3))
+    (for-choice (fixed-slot word-imm)
+      (operand value :field dst
+        (variant (choice word-imm) inline :range (0 2)))))
+  (semantics
+    (choice-case fixed-slot
+      (test-fixed-sp (set! a 1))
+      (word-imm (set! a value)))))
+
+(fiveam:test literal-only-one-of-assembles-decodes-and-disassembles
+  (let ((assembly (assemble "fixedchoice SP" :machine 'fixed-choice-machine)))
+    (fiveam:is (equalp #(0 #x13) (assembly-cells assembly)))
+    (multiple-value-bind (descriptor values size choices selections)
+        (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'fixed-choice-machine)
+      (fiveam:is (eq 'fixedchoice (intern (instruction-descriptor-name descriptor) :lasm)))
+      (fiveam:is (null values))
+      (fiveam:is (= 2 size))
+      (fiveam:is (null choices))
+      (fiveam:is (equal '((fixed-slot . test-fixed-sp)) selections)))
+    (fiveam:is (equal '("fixedchoice SP")
+                       (mapcar #'disassembly-line-text
+                               (disassemble-assembly assembly :machine 'fixed-choice-machine))))))
+
+(fiveam:test literal-only-one-of-selects-the-other-tuple
+  (let ((assembly (assemble "fixedchoice #2" :machine 'fixed-choice-machine)))
+    (fiveam:is (equalp #(0 #x12) (assembly-cells assembly)))
+    (multiple-value-bind (descriptor values size choices selections)
+        (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'fixed-choice-machine)
+      (declare (ignore size choices))
+      (fiveam:is (equal '(2) values))
+      (fiveam:is (equal '((fixed-slot . word-imm)) selections))
+      (let ((machine (make-machine 'fixed-choice-machine)))
+        (execute-instruction descriptor machine values selections)
+        (fiveam:is (= 2 (sref machine 'a)))))))
+
 (defmachine independent-choice-machine
   (register pc :width 16)
   (register r :width 16 :count 8)

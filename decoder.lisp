@@ -232,7 +232,9 @@ and a branch's own (set! pc (+ pc operand)) semantics at run time."
                 (multiple-value-bind (values offset matches okp)
                     (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
                   (when okp
-                    (return-from %decode-word-instruction (values descriptor values offset matches))))))
+                    (return-from %decode-word-instruction
+                      (values descriptor values offset matches
+                              (instruction-descriptor-choice-selections descriptor)))))))
           (unknown-instruction () (values :decode-failure nil nil)))))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width endian)
@@ -299,7 +301,8 @@ unconditionally before #126."
                 (setf values (mapcar (lambda (v w signedp) (if signedp (signed-value v (* cell-width w)) v))
                                       values widths signedness))
                 (values descriptor values (instruction-descriptor-size descriptor)
-                        (instruction-descriptor-sub-choices descriptor))))))))
+                         (instruction-descriptor-sub-choices descriptor)
+                         (instruction-descriptor-choice-selections descriptor))))))))
 
 (defun decode-instruction-at (read-cell address machine-name &key memory)
   "Decode one instruction at ADDRESS by reading cells through READ-CELL, a

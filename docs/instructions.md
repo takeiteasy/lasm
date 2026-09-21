@@ -1179,6 +1179,17 @@ exactly one varying element. Ambiguous, duplicate, missing or wrongly
 sized groups, unknown operand names and alternatives without extra holes
 are `definstruction` errors.
 
+Named zero-hole alternatives use the slot-qualified selector and fixed field
+values instead of operand holes:
+
+```lisp
+(for-choice (fixed-kind stack-pointer)
+  (field-value mode 27))
+```
+
+The selector is `(slot alternative)`. Existing operand-based forms and the
+short form remain unchanged.
+
 `(operand name :trailing-word [:cells k])` is the shape an extra hole
 typically takes: a fieldless hole with no bits of its own in the instruction
 word, packing an unconditional trailing word of its own — `:cells` defaults
