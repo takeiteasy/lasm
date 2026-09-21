@@ -132,10 +132,8 @@ name). At `defmode` time, every alternative:
 
 - may have a *different* hole count than its siblings — see [Varying hole
   counts across alternatives](#varying-hole-counts-across-alternatives)
-  below for what that needs at `definstruction` time; at most one `one-of`
-  element per pattern may vary, and none of its alternatives may itself be a
-  varying mode (a varying `one-of` nested inside another isn't supported
-  yet — #152);
+  below for the encoding declarations. Multiple elements may vary
+  independently; their alternatives cannot themselves be varying modes;
 - may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below),
   `:signed` (see [Per-hole `:signed`](#per-hole-signed) below), `:width`
   (see [Per-hole `:width`](#per-hole-width) below), or `:relative` (see
@@ -264,8 +262,12 @@ assuming every alternative shares one shape, so nothing downstream of
 sees a variable-arity descriptor.
 
 An alternative with more holes than its siblings names its own extra
-operand subclauses with a `(for-choice alt (operand ...)...)` subclause,
-alongside the mode's ordinary `(operand ...)` subclauses — see
+operand subclauses with a `(for-choice (operand alt) (operand ...)...)` subclause,
+alongside the mode's ordinary `(operand ...)` subclauses. The first name
+identifies a base operand in the owning `one-of`; the short form
+`(for-choice alt ...)` works when that alternative identifies exactly one
+varying element. Each element varies independently, producing the Cartesian
+product of their shapes. See
 [Instructions, "`for-choice` — extra holes for a varying
 alternative"](instructions.md#for-choice--extra-holes-for-a-varying-alternative)
 for the encoding-side mechanics and `(operand name :trailing-word)`, the

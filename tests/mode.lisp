@@ -270,15 +270,14 @@ looks like."
 
 (fiveam:test mode-hole-tuples-single-for-non-varying-mode
   (fiveam:is (= 1 (length (%mode-hole-tuples (find-mode-descriptor 'oo-two)))))
-  (fiveam:is (null (mode-hole-tuple-alt-name (first (%mode-hole-tuples (find-mode-descriptor 'oo-two))))))
+  (fiveam:is (null (mode-hole-tuple-groups (first (%mode-hole-tuples (find-mode-descriptor 'oo-two))))))
   (fiveam:is (equal (%mode-hole-alternatives (find-mode-descriptor 'oo-two))
                      (mode-hole-tuple-hole-alternatives (first (%mode-hole-tuples (find-mode-descriptor 'oo-two)))))))
 
 (fiveam:test mode-hole-tuples-varying-mode-shape
   (let ((tuples (%mode-hole-tuples (find-mode-descriptor 'oo-varying-holes))))
     (fiveam:is (= 2 (length tuples)))
-    (let ((base (find nil tuples :key #'mode-hole-tuple-alt-name))
-          (extra (find 'oo-two-hole tuples :key #'mode-hole-tuple-alt-name)))
+    (destructuring-bind (base extra) tuples
       (fiveam:is (= 1 (length (mode-hole-tuple-hole-alternatives base))))
       (fiveam:is (= 2 (length (mode-hole-tuple-hole-alternatives extra))))
       (fiveam:is (equal '(oo-reg oo-two-hole) (first (mode-hole-tuple-hole-alternatives base))))
@@ -294,9 +293,13 @@ looks like."
 
 (defmode oo-three-hole expr "," expr "," expr)
 
-(fiveam:test one-of-more-than-one-varying-element-signals-error
-  (fiveam:signals error
-    (eval '(defmode oo-two-varying (one-of oo-reg oo-two-hole) "|" (one-of oo-reg oo-three-hole)))))
+(defmode oo-two-varying (one-of oo-reg oo-two-hole) "|" (one-of oo-reg oo-three-hole))
+
+(fiveam:test multiple-varying-elements-expand-independently
+  (let ((tuples (%mode-hole-tuples (find-mode-descriptor 'oo-two-varying))))
+    (fiveam:is (= 4 (length tuples)))
+    (fiveam:is (equal '(2 4 3 5)
+                      (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple))) tuples)))))
 
 (fiveam:test one-of-nested-varying-alternative-signals-error
   (fiveam:signals error

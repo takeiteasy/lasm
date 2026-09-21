@@ -1509,7 +1509,7 @@ compiled code once per sibling."
 ;;; INSTRUCTION-DESCRIPTOR-SIZE (below) instead of assuming byte widths.
 
 (defstruct word-variant
-  ;; #120: :TRAILING-WORD is a fieldless hole's own single, always-matching
+  ;; :TRAILING-WORD is a fieldless hole's own single, always-matching
   ;; variant -- see WORD-OPERAND-SPEC below. Distinct from :EXTRA-WORD, whose
   ;; own field bits carry an escape marker that must match a fetched value
   ;; before its trailing word is read; a :TRAILING-WORD hole has no field bits
@@ -1518,28 +1518,27 @@ compiled code once per sibling."
   (bias 0 :type integer)                 ; :inline only
   (range nil :type (or null cons))       ; :inline only, pre-bias (lo . hi)
   (escape nil :type (or null integer))   ; :extra-word only
-  ;; #135: :extra-word only -- the trailing word's own width in cells. Parsed
+  ;; :extra-word only -- the trailing word's own width in cells. Parsed
   ;; raw (NIL when the (extra-word ...) form gave no :CELLS) and defaulted to
   ;; the layout's own WIDTH-CELLS once %PARSE-WORD-OPERAND-SUBCLAUSE has a
   ;; LAYOUT to default against, so every downstream reader (word-field-choice,
   ;; below) always sees a concrete positive integer. #120: :TRAILING-WORD's
   ;; own width in cells, same defaulting.
   (extra-cells nil :type (or null (integer 1)))
-  ;; #104: non-NIL for a (CHOICE M) selector -- the ONE-OF alternative
+  ;; Non-NIL for a (CHOICE M) selector -- the ONE-OF alternative
   ;; mode-name symbol M that must be this hole's matched alternative
   ;; (mode.lisp's hole-aligned CHOICES) for this variant to apply, rather
   ;; than the operand's own folded VALUE choosing between a (RANGE LO HI)
   ;; variant and an :ELSE one. #118: a field may mix CHOICE-selected
   ;; variants with value-selected (RANGE/:ELSE) ones -- when it does,
   ;; %CHECK-WORD-VARIANT-CHOICES! stamps this slot on every value-selected
-  ;; variant too, with the one ONE-OF alternative no (CHOICE ...) variant
+  ;; variant too, with the one ONE-OF alternative without a (CHOICE ...) variant
   ;; already claims, so a value-selected variant on a mixed field is no
   ;; longer NIL here by the time %EXPAND-WORD-COMBOS/%WORD-FIELD-CHOICE-FORM
   ;; (below) see it. A field with no CHOICE variant at all is left alone --
   ;; every variant there stays NIL, exactly as before #118.
   (choice nil :type (or null symbol))
-  ;; #187: T on a CHOICE-selected :extra-word variant that is a second
-  ;; spelling of another variant's escape. Never matched at decode.
+  ;; Alternate syntax for a canonical encoding; never matched at decode.
   (alias nil :type boolean))
 
 (defstruct word-operand-spec
@@ -1637,9 +1636,10 @@ following word is fetched (%TRY-DECODE-WORD-CANDIDATE, decoder.lisp), not
 here. Lives here, not in decoder.lisp (which loads after this file), so
 REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
 (decoder.lisp) still uses it for its own, original purpose."
+  (when (word-field-choice-alias choice)
+    (return-from %word-choice-matches-p nil))
   (ecase (word-field-choice-kind choice)
-    (:extra-word (and (not (word-field-choice-alias choice))
-                      (= raw-value (word-field-choice-escape choice))))
+    (:extra-word (= raw-value (word-field-choice-escape choice)))
     ;; #120: a :TRAILING-WORD choice has no field bits of its own to test --
     ;; it always matches wherever it appears. Only reachable defensively;
     ;; decoder.lisp's %TRY-DECODE-WORD-CANDIDATE never calls this for a
@@ -1712,6 +1712,8 @@ disjointness -- field widths in practice are small (a handful of bits), so
 enumerating is simpler than range algebra over RANGE/BIAS/ESCAPE together,
 and cheap: called only when two descriptors are about to share an opcode,
 not on any hot path."
+  (when (word-field-choice-alias choice)
+    (return-from %word-field-choice-values nil))
   (ecase (word-field-choice-kind choice)
     (:extra-word (list (word-field-choice-escape choice)))
     ;; #120: never actually called -- %WORD-BIT-CONSTRAINTS excludes every
@@ -1889,14 +1891,14 @@ INLINE, got ~S" field-name tail))
               (make-word-variant :kind :extra-word :escape escape :choice choice-name
                                  :extra-cells cells :alias (and alias t))))
            ((eq (first tail) 'inline)
-            (destructuring-bind (inline-sym &key range (bias 0)) tail
+            (destructuring-bind (inline-sym &key range (bias 0) alias) tail
               (declare (ignore inline-sym))
               (unless range
                 (error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
 own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range of its own"
                        field-name choice-name))
               (destructuring-bind (lo hi) range
-                (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name))))
+                (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name :alias (and alias t)))))
            (t (error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
 :range) or (extra-word :escape n), got ~S" field-name choice-name tail)))))
       (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
@@ -1988,6 +1990,19 @@ ungoverned by a disagreeing ONE-OF (%WORD-HOLE-SIGNEDP-LIST, which already
 folds in per-hole relativeness) -- passed through to
 %WORD-VARIANT-SIGNEDP-AT-PARSE so a signed or relative hole's value-selected
 variant is treated as signed here too."
+  (dolist (alias variants)
+    (when (and (word-variant-alias alias) (eq (word-variant-kind alias) :inline))
+      (let ((canonical (remove-if-not
+                        (lambda (v)
+                          (and (not (word-variant-alias v))
+                               (eq (word-variant-kind v) :inline)
+                               (equal (word-variant-range v) (word-variant-range alias))
+                               (= (word-variant-bias v) (word-variant-bias alias))))
+                        variants)))
+        (unless (= (length canonical) 1)
+          (error "DEFINSTRUCTION: field ~S: inline alias requires exactly one canonical variant with identical range and bias"
+                 field-name))
+        (%check-alias-encodes-like-canonical! alias (first canonical) field-name))))
   (let ((max (1- (ash 1 field-width))) inline-chunks escapes)
     (dolist (v variants)
       (ecase (word-variant-kind v)
@@ -1997,7 +2012,8 @@ variant is treated as signed here too."
                 (signedp (%word-variant-signedp-at-parse v hole-signedp)))
            (handler-case
                (dolist (chunk (%word-variant-raw-chunks lo hi signedp field-width))
-                 (cl:push chunk inline-chunks))
+                 (unless (word-variant-alias v)
+                   (cl:push chunk inline-chunks)))
              (signed-range-out-of-field (c)
                (error "DEFINSTRUCTION: field ~S: signed inline range ~D..~D does not fit its ~
 ~D-bit field (must be between ~D and ~D)"
@@ -2050,16 +2066,12 @@ an encoded field value in the overlap could never be told apart"
 non-alias variant on that escape to be an alias of" field-name e))
             (aliases
              (dolist (a aliases)
-               (%check-alias-encodes-like-canonical! a (first canonical) field-name e)))))))))
+               (%check-alias-encodes-like-canonical! a (first canonical) field-name)))))))))
 
-(defun %check-alias-encodes-like-canonical! (alias canonical field-name escape)
-  "Signal an error unless ALIAS (#187) -- an :ALIAS T :EXTRA-WORD variant --
-encodes exactly as CANONICAL, the non-alias variant on the same ESCAPE: same
-extra-cell width, and ONE-OF alternatives agreeing on hole count, signedness,
-width and relativeness."
+(defun %check-alias-encodes-like-canonical! (alias canonical field-name)
+  "Require identical value interpretation for alternate encoding spellings."
   (unless (and (word-variant-choice alias) (word-variant-choice canonical))
-    (error "DEFINSTRUCTION: field ~S: :alias t on escape ~D requires both variants to be ~
-(choice ...) selected" field-name escape))
+    (error "DEFINSTRUCTION: field ~S: aliases require both variants to be CHOICE-selected" field-name))
   (let ((am (find-mode-descriptor (word-variant-choice alias)))
         (cm (find-mode-descriptor (word-variant-choice canonical))))
     (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
@@ -2067,9 +2079,8 @@ width and relativeness."
                  (eq (mode-descriptor-signedp am) (mode-descriptor-signedp cm))
                  (eql (mode-descriptor-width am) (mode-descriptor-width cm))
                  (eq (mode-descriptor-relativep am) (mode-descriptor-relativep cm)))
-      (error "DEFINSTRUCTION: field ~S: alias ~S on escape ~D does not encode like ~S -- ~
-extra-word cells, hole count, signedness, width and relativeness must all agree"
-             field-name (word-variant-choice alias) escape (word-variant-choice canonical)))))
+      (error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, hole count, signedness, width and relativeness must agree"
+             field-name (word-variant-choice alias) (word-variant-choice canonical)))))
 
 (defun %check-word-variant-choices! (variants field-name hole-alternatives)
   "Signal an error if any of VARIANTS' non-NIL WORD-VARIANT-CHOICE (#104)
@@ -2517,74 +2528,61 @@ combo."
       :cycles ,cycles
       :semantics-fn ,semantics-fn-form)))
 
-(defun %parse-for-choice-subclause (subclause)
-  "SUBCLAUSE is one whole (for-choice ALT (operand ...)*) form (#120) -- the
-extra (operand ...) subclauses filling the holes ALT's own alternative
-contributes beyond its ONE-OF element's base (minimum) hole count. Returns
-(VALUES alt-name operand-subclauses)."
-  (destructuring-bind (for-choice-kw alt-name &rest operand-subclauses) subclause
-    (declare (ignore for-choice-kw))
-    (dolist (s operand-subclauses)
-      (unless (and (consp s) (eq (first s) 'operand))
-        (error "DEFINSTRUCTION: (for-choice ~S ...) may only contain (operand ...) subclauses, got ~S"
-               alt-name s)))
-    (values alt-name operand-subclauses)))
+(defun %parse-for-choice-subclauses (mode subclauses operand-subclauses)
+  "Resolve each group to (base-hole-index alternative), validating its extras.
+Qualified selectors use (operand alternative); short selectors must be unique."
+  (let ((groups (mode-hole-tuple-groups (first (%mode-hole-tuples mode))))
+        (names (mapcar #'%parse-operand-subclause operand-subclauses))
+        entries)
+    (dolist (subclause subclauses)
+      (destructuring-bind (head selector &rest extras) subclause
+        (declare (ignore head))
+        (let* ((qualified (consp selector))
+               (alt (if qualified (second selector) selector))
+               (position (and qualified (position (first selector) names)))
+               (matches (remove-if-not
+                         (lambda (g)
+                           (and (member alt (mode-hole-group-alternatives g))
+                                (or (not qualified)
+                                    (and position
+                                         (<= (mode-hole-group-base-start g) position)
+                                         (< position (+ (mode-hole-group-base-start g)
+                                                        (mode-hole-group-base-count g)))))))
+                         groups)))
+          (when (and qualified
+                     (or (/= (length selector) 2) (null (first selector))))
+            (error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative), got ~S" selector))
+          (unless (= (length matches) 1)
+            (error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate" selector))
+          (let* ((group (first matches))
+                 (key (list (mode-hole-group-base-start group) alt))
+                 (needed (- (%mode-hole-count (find-mode-descriptor alt))
+                            (mode-hole-group-base-count group))))
+            (when (assoc key entries :test #'equal)
+              (error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
+            (unless (and (plusp needed) (= (length extras) needed)
+                         (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
+              (error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~D extra OPERAND subclauses" selector needed))
+            (cl:push (cons key extras) entries)))))
+    (dolist (group groups)
+      (dolist (alt (mode-hole-group-alternatives group))
+        (when (> (%mode-hole-count (find-mode-descriptor alt)) (mode-hole-group-base-count group))
+          (unless (assoc (list (mode-hole-group-base-start group) alt) entries :test #'equal)
+            (error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D"
+                   alt (mode-hole-group-base-start group))))))
+    entries))
 
-(defun %check-for-choice-subclauses! (mode for-choice-alist machine name)
-  "Validate FOR-CHOICE-ALIST (an (ALT-NAME . OPERAND-SUBCLAUSES) alist,
-#120) against MODE's own varying ONE-OF element, if it has one: every
-ALT-NAME given must be one of that element's own alternatives whose hole
-count exceeds the element's base (minimum) count, every such over-count
-alternative must have exactly one (FOR-CHOICE ...) group, and each group
-must supply exactly as many (operand ...) subclauses as its own alternative
-needs extra holes."
-  (let* ((pattern (mode-descriptor-pattern mode))
-         (varying-element (%pattern-varying-one-of-element pattern)))
-    (unless varying-element
-      (when for-choice-alist
-        (error "DEFINSTRUCTION ~S ~S: (for-choice ...) given but addressing mode ~S has no ONE-OF ~
-with varying hole counts" machine name (mode-descriptor-name mode)))
-      (return-from %check-for-choice-subclauses!))
-    (let* ((alt-names (rest varying-element))
-           (base-count (%pattern-one-of-min-hole-count alt-names))
-           (over-alts (remove-if (lambda (n) (= (%mode-hole-count (find-mode-descriptor n)) base-count))
-                                  alt-names)))
-      (dolist (entry for-choice-alist)
-        (unless (member (car entry) alt-names)
-          (error "DEFINSTRUCTION ~S ~S: (for-choice ~S ...) does not name one of addressing mode ~
-~S's own ONE-OF alternatives ~S" machine name (car entry) (mode-descriptor-name mode) alt-names))
-        (unless (member (car entry) over-alts)
-          (error "DEFINSTRUCTION ~S ~S: (for-choice ~S ...) given, but ~S has the same hole count ~
-as this ONE-OF element's other alternatives -- nothing extra to fill"
-                 machine name (car entry) (car entry))))
-      (let ((given (mapcar #'car for-choice-alist)))
-        (dolist (alt over-alts)
-          (unless (member alt given)
-            (error "DEFINSTRUCTION ~S ~S: addressing mode ~S's ONE-OF alternative ~S has ~D extra ~
-hole~:P beyond its element's base hole count but no (for-choice ~S ...) subclause supplies them"
-                   machine name (mode-descriptor-name mode) alt
-                   (- (%mode-hole-count (find-mode-descriptor alt)) base-count) alt))))
-      (dolist (entry for-choice-alist)
-        (let* ((alt (car entry)) (subclauses (cdr entry))
-               (needed (- (%mode-hole-count (find-mode-descriptor alt)) base-count)))
-          (unless (= (length subclauses) needed)
-            (error "DEFINSTRUCTION ~S ~S: (for-choice ~S ...) supplies ~D (operand ...) ~
-subclause~:P but ~S needs ~D extra hole~:P beyond its element's base hole count"
-                   machine name alt (length subclauses) alt needed)))))))
-
-(defun %tuple-operand-subclauses (mode operand-subclauses tuple for-choice-alist)
-  "The (operand ...) subclause list for TUPLE (a MODE-HOLE-TUPLE, #120):
-OPERAND-SUBCLAUSES (the base, minimum-hole-count subclauses given at
-DEFINSTRUCTION) unchanged for the base tuple (TUPLE's own ALT-NAME NIL), or
-with FOR-CHOICE-ALIST's entry for TUPLE's own alternative spliced in right
-after the varying element's own base holes, for an over-count tuple."
-  (let ((alt-name (mode-hole-tuple-alt-name tuple)))
-    (if (null alt-name)
-        operand-subclauses
-        (multiple-value-bind (start base-count) (%varying-element-hole-range mode)
-          (let ((end (+ start base-count))
-                (extras (cdr (assoc alt-name for-choice-alist))))
-            (append (subseq operand-subclauses 0 end) extras (subseq operand-subclauses end)))))))
+(defun %tuple-operand-subclauses (operand-subclauses tuple for-choice-alist)
+  "Splice each element's extra operands after its own base operands."
+  (let ((cursor 0) result)
+    (dolist (group (mode-hole-tuple-groups tuple))
+      (let ((end (+ (mode-hole-group-base-start group) (mode-hole-group-base-count group))))
+        (setf result (append result (subseq operand-subclauses cursor end)
+                             (cdr (assoc (list (mode-hole-group-base-start group)
+                                               (mode-hole-group-alt-name group))
+                                         for-choice-alist :test #'equal)))
+              cursor end)))
+    (append result (subseq operand-subclauses cursor))))
 
 (defun %filter-spec-variants-for-tuple (spec own-alt-names)
   "A copy of SPEC (a WORD-OPERAND-SPEC) whose own VARIANTS are restricted to
@@ -2604,94 +2602,82 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                            :variants (remove-if-not (lambda (v) (member (word-variant-choice v) own-alt-names))
                                                      (word-operand-spec-variants spec))))
 
-(defun %filter-tuple-governing-specs (mode specs tuple machine name)
-  "SPECS (this TUPLE's own %PARSE-WORD-OPERAND-SUBCLAUSES result) with the
-varying element's own governing hole positions (#120,
-%VARYING-ELEMENT-HOLE-RANGE) filtered to TUPLE's own alternative(s) via
-%FILTER-SPEC-VARIANTS-FOR-TUPLE -- every other position (a mode with no
-varying element, or a hole outside the varying element's own range) is
-returned unchanged. Signals a DEFINSTRUCTION-time error if filtering leaves
-a governing spec with no variants at all -- TUPLE's own alternative has no
-(choice ...) variant claiming it on that field."
-  (multiple-value-bind (start base-count) (%varying-element-hole-range mode)
-    (if (null start)
-        specs
-        (let* ((element (%pattern-varying-one-of-element (mode-descriptor-pattern mode)))
-               (element-alt-names (rest element))
-               (alt-name (mode-hole-tuple-alt-name tuple))
-               (own-alt-names (if alt-name
-                                  (list alt-name)
-                                  (set-difference
-                                   element-alt-names
-                                   (remove-if (lambda (n) (= (%mode-hole-count (find-mode-descriptor n)) base-count))
-                                              element-alt-names)))))
-          (loop for spec in specs
-                for i from 0
-                collect (if (and (>= i start) (< i (+ start base-count)) (word-operand-spec-field spec))
-                            (let ((filtered (%filter-spec-variants-for-tuple spec own-alt-names)))
-                              (unless (word-operand-spec-variants filtered)
-                                (error "DEFINSTRUCTION ~S ~S: field ~S has no (choice ~S) variant to ~
-claim ~:[the base tuple's~;~:*~S's~] own ONE-OF alternative~P (~{~S~^, ~}) -- give it one on this field"
-                                       machine name (word-operand-spec-field spec) (first own-alt-names)
-                                       alt-name (length own-alt-names) own-alt-names))
-                              filtered)
-                            spec))))))
+(defun %filter-tuple-governing-specs (specs tuple machine name)
+  "Restrict each varying element's fields to its selected shape."
+  (dolist (group (mode-hole-tuple-groups tuple))
+    (let* ((start (mode-hole-group-start group))
+           (base-count (mode-hole-group-base-count group))
+           (alt (mode-hole-group-alt-name group))
+           (own-alts (if alt (list alt)
+                         (remove-if-not (lambda (n)
+                                          (= (%mode-hole-count (find-mode-descriptor n)) base-count))
+                                        (mode-hole-group-alternatives group)))))
+      (loop for i from start below (+ start base-count)
+            for spec = (nth i specs)
+            when (word-operand-spec-field spec)
+              do (let ((filtered (%filter-spec-variants-for-tuple spec own-alts)))
+                   (unless (word-operand-spec-variants filtered)
+                     (error "DEFINSTRUCTION ~S ~S: field ~S has no CHOICE variant for ~S"
+                            machine name (word-operand-spec-field spec) own-alts))
+                   (setf (nth i specs) filtered)))))
+  specs)
 
-(defun %stamp-tuple-trailing-choices! (mode specs tuple)
-  "Destructively stamp WORD-VARIANT-CHOICE on each :TRAILING-WORD spec's
-sole variant, within TUPLE's own extra hole positions (#120's
-%VARYING-ELEMENT-HOLE-RANGE), to TUPLE's own ALT-NAME -- there is no
-(choice m) syntax on a fieldless hole to carry this; the (for-choice ALT
-...) grouping that declared it already says which alternative it belongs
-to. A no-op for the base tuple (ALT-NAME NIL, no extra holes at all).
-Returns SPECS."
-  (let ((alt-name (mode-hole-tuple-alt-name tuple)))
-    (when alt-name
-      (multiple-value-bind (start base-count) (%varying-element-hole-range mode)
-        (loop for spec in specs
-              for i from 0
-              when (>= i (+ start base-count))
-                do (dolist (v (word-operand-spec-variants spec))
-                     (setf (word-variant-choice v) alt-name))))))
+(defun %check-for-choice-alias-extras! (specs tuple for-choice-alist layout layout-name machine-name)
+  "Aliased alternatives must also encode their extra holes identically."
+  (labels ((encoding (alt group)
+             (mapcar
+              (lambda (subclause)
+                (let ((spec (%parse-word-operand-subclause
+                             subclause layout layout-name machine-name (list alt)
+                             (mode-descriptor-signedp (find-mode-descriptor alt)))))
+                  (list (word-operand-spec-field spec)
+                        (mapcar (lambda (v)
+                                  (list (word-variant-kind v) (word-variant-range v)
+                                        (word-variant-bias v) (word-variant-escape v)
+                                        (word-variant-extra-cells v)))
+                                (word-operand-spec-variants spec)))))
+              (cdr (assoc (list (mode-hole-group-base-start group) alt)
+                          for-choice-alist :test #'equal)))))
+    (dolist (group (mode-hole-tuple-groups tuple))
+      (loop for i from (mode-hole-group-start group)
+            below (+ (mode-hole-group-start group) (mode-hole-group-base-count group))
+            for variants = (word-operand-spec-variants (nth i specs))
+            do (dolist (alias variants)
+                 (when (word-variant-alias alias)
+                   (let ((canonical
+                           (find-if (lambda (v)
+                                      (and (not (word-variant-alias v))
+                                           (eq (word-variant-kind v) (word-variant-kind alias))
+                                           (equal (word-variant-range v) (word-variant-range alias))
+                                           (= (word-variant-bias v) (word-variant-bias alias))
+                                           (eql (word-variant-escape v) (word-variant-escape alias))))
+                                    variants)))
+                     (unless (equal (encoding (word-variant-choice alias) group)
+                                    (encoding (word-variant-choice canonical) group))
+                       (error "DEFINSTRUCTION: aliases ~S and ~S have different extra-hole encodings"
+                              (word-variant-choice alias) (word-variant-choice canonical)))))))))
+  specs)
+
+(defun %stamp-tuple-extra-choices! (specs tuple)
+  "Associate each extra hole with its selected alternative."
+  (dolist (group (mode-hole-tuple-groups tuple))
+    (when (mode-hole-group-alt-name group)
+      (loop for i from (+ (mode-hole-group-start group) (mode-hole-group-base-count group))
+            below (+ (mode-hole-group-start group) (mode-hole-group-count group))
+            for spec = (nth i specs)
+            do (dolist (variant (word-operand-spec-variants spec))
+                 (when (and (word-variant-choice variant)
+                            (not (eq (word-variant-choice variant) (mode-hole-group-alt-name group))))
+                   (error "DEFINSTRUCTION: extra operand ~S claims a different FOR-CHOICE alternative"
+                          (word-operand-spec-name spec)))
+                 (setf (word-variant-choice variant) (mode-hole-group-alt-name group))))))
   specs)
 
 (defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
                                      cycles semantics-forms &optional layout-name field-value-subclauses
                                        for-choice-subclauses)
-  "Every INSTRUCTION-DESCRIPTOR form for one word-encoded addressing-mode
-use -- one per %EXPAND-WORD-COMBOS combo within one alternative-tuple
-(mode.lisp's %MODE-HOLE-TUPLES, #120), across every tuple MODE's pattern
-expands into, or a single no-operand descriptor if OPERAND-SUBCLAUSES is
-empty and MODE has no holes. A mode with no varying ONE-OF element has
-exactly one tuple, so this is byte-identical to the pre-#120 single-shape
-expansion in that (overwhelmingly common) case. Unlike the byte-encoded
-multi-mode form, a single-hole MODE may NOT omit (operand ...) here even
-though the mode itself has only one hole to fill -- there is no
-\"default field\" a word-encoded operand could fall back to the way a
-byte-encoded one falls back to %MODE-OPERAND-WIDTH, so silently accepting
-zero subclauses against a mode with holes would drop that hole's value on
-the floor instead of encoding it anywhere. LAYOUT-NAME (#64) is this
-instruction's own selected instruction-word layout (NIL for the machine's
-default) -- resolved by the caller's (layout NAME) subclause parsing.
-FIELD-VALUE-SUBCLAUSES (#136) is every (field-value FIELD-NAME n) subclause
-given alongside OPERAND-SUBCLAUSES -- resolved into WORD-CONSTANTs and
-stamped onto every combo of every tuple the same CONSTANTS-FORM, since a
-pinned field doesn't vary by which value-range combo the mode's own operand
-expanded into. FOR-CHOICE-SUBCLAUSES (#120) is every (for-choice ALT
-(operand ...)...) subclause given alongside OPERAND-SUBCLAUSES, supplying
-the extra holes an over-count alternative of MODE's varying ONE-OF element
-(if it has one) contributes beyond OPERAND-SUBCLAUSES' own base count.
-
-Returns (VALUES BINDINGS FORMS) (#150) -- BINDINGS is a LET* binding list
-the caller must wrap FORMS in. CONSTANTS-FORM doesn't vary across the whole
-mode (see above), so it is bound once, at mode scope, ahead of every
-tuple's own bindings; ALTERNATIVES-FORM and %SEMANTICS-FN-FORM's own
-expansion are each identical across every combo of one tuple (a combo
-varies only which VARIANT half of each SPEC pair is chosen, never the
-SPECS/OPERAND-NAMES/HOLE-ALTERNATIVES themselves), so each is built once
-per tuple and bound to its own gensym, referenced from every combo's
-descriptor instead of rebuilt -- and so re-emitted as compiled code -- once
-per combo."
+  "Expand every fixed-arity shape into its field-variant descriptors.
+Returns bindings and forms; menus and semantics are shared within a shape."
   (when (and (null operand-subclauses) (plusp (%mode-hole-count mode)))
     (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
 (operand ...) subclause was given -- a word-encoded operand has no default ~
@@ -2699,16 +2685,13 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
   (let* ((layout (instruction-word-layout-named
                    (machine-descriptor-instruction-word (find-machine-descriptor machine-name))
                    layout-name))
-         (for-choice-alist (mapcar (lambda (fc)
-                                      (multiple-value-bind (alt subs) (%parse-for-choice-subclause fc)
-                                        (cons alt subs)))
-                                    for-choice-subclauses))
+         (for-choice-alist (%parse-for-choice-subclauses mode for-choice-subclauses
+                                                        operand-subclauses))
          (operand-field-names (%operand-subclause-field-names
-                                (append operand-subclauses (mapcan #'cdr for-choice-alist))))
+                                (append operand-subclauses (loop for entry in for-choice-alist append (cdr entry)))))
          (constants (%parse-field-value-subclauses machine name mode-name layout layout-name
                                                      field-value-subclauses operand-field-names))
          (constants-form (%word-constants-form constants)))
-    (%check-for-choice-subclauses! mode for-choice-alist machine name)
     (if (null operand-subclauses)
         (values nil
                 (list `(make-instruction-descriptor
@@ -2733,16 +2716,16 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
         (let* ((tuple-specs (mapcar
                               (lambda (tuple)
                                 (let* ((tuple-hole-alternatives (mode-hole-tuple-hole-alternatives tuple))
-                                       (tuple-subclauses (%tuple-operand-subclauses mode operand-subclauses tuple
+                                       (tuple-subclauses (%tuple-operand-subclauses operand-subclauses tuple
                                                                                      for-choice-alist)))
                                   (cons tuple
                                         (%filter-tuple-governing-specs
-                                         mode
-                                         (%stamp-tuple-trailing-choices!
-                                          mode
-                                          (%parse-word-operand-subclauses mode tuple-subclauses machine name
-                                                                           mode-name machine-name layout layout-name
-                                                                           tuple-hole-alternatives)
+                                         (%stamp-tuple-extra-choices!
+                                          (%check-for-choice-alias-extras!
+                                           (%parse-word-operand-subclauses mode tuple-subclauses machine name
+                                                                          mode-name machine-name layout layout-name
+                                                                          tuple-hole-alternatives)
+                                           tuple for-choice-alist layout layout-name machine-name)
                                           tuple)
                                          tuple machine name))))
                               (%mode-hole-tuples mode)))
@@ -3597,28 +3580,28 @@ cell goes at which address."
         collect (wrap-value (ash value (* (- cell-width) shift)) cell-width)))
 
 (defun %word-emit-order (descriptor choices)
-  "Hole indices of CHOICES (one WORD-FIELD-CHOICE per operand hole) in the
-order their trailing words follow the instruction word (#191). Holes whose
-field is named by the machine's (extra-word-order ...) come first, in that
-order; every other hole, and every fieldless :TRAILING-WORD one, keeps hole
-order after them. A choice's field is found in DESCRIPTOR's own layout by its
-width and shift. Hole order outright when the machine declares no order."
+  "Hole indices in field order, with fieldless words following their owner."
   (let* ((indices (loop for i below (length choices) collect i))
          (machine (find-machine-descriptor (instruction-descriptor-machine descriptor)))
          (default (machine-descriptor-instruction-word machine))
          (order (and default (instruction-word-layout-extra-word-order default))))
     (if (null order)
         indices
-        (let ((layout (instruction-descriptor-word-layout descriptor)))
-          (flet ((rank (choice)
-                   (or (let ((field (and (word-field-choice-shift choice)
-                                         (find-if (lambda (f)
-                                                    (and (= (second f) (word-field-choice-width choice))
-                                                         (= (third f) (word-field-choice-shift choice))))
-                                                  (instruction-word-layout-fields layout)))))
-                         (and field (position (first field) order)))
-                       (length order))))
-            (stable-sort indices #'< :key (lambda (i) (rank (nth i choices)))))))))
+        (let* ((layout (instruction-descriptor-word-layout descriptor))
+               (rank (length order))
+               (ranks (coerce
+                       (loop for choice in choices
+                             when (word-field-choice-shift choice)
+                               do (let ((field (find-if
+                                                (lambda (f)
+                                                  (and (= (second f) (word-field-choice-width choice))
+                                                       (= (third f) (word-field-choice-shift choice))))
+                                                (instruction-word-layout-fields layout))))
+                                    (setf rank (or (and field (position (first field) order))
+                                                   (length order))))
+                             collect rank)
+                       'vector)))
+          (stable-sort indices #'< :key (lambda (i) (aref ranks i)))))))
 
 (defun %encode-word-instruction (descriptor layout values)
   "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode,

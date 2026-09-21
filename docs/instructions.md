@@ -998,7 +998,7 @@ modes"](modes.md#per-operand-modes)) a hole actually matched:
 
 ```lisp
 (operand [NAME] :field FIELD-NAME
-  [(variant (choice MODE) inline :range (LO HI) [:bias N])
+  [(variant (choice MODE) inline :range (LO HI) [:bias N] [:alias T])
    (variant (choice MODE) (extra-word :escape N [:cells K] [:alias T]))]*)
 ```
 
@@ -1031,9 +1031,9 @@ marks this in the `(variant ...)` form itself, since there is nothing left
 to disambiguate once every other alternative is claimed. Every
 `choice`-selected range and escape must fit
 `FIELD-NAME`'s bit width the same as a value-selected one, and — reachable
-now that several variants of one kind can share a field — no two inline
-ranges may overlap and no two escapes may collide, checked the same way as
-the existing inline-vs-escape ambiguity check, all at `definstruction` time.
+now that several variants of one kind can share a field — overlapping inline
+ranges and duplicate escapes require explicit aliases. Inline-vs-escape
+collisions are always rejected at `definstruction` time.
 
 #### Aliased escapes
 
@@ -1050,8 +1050,22 @@ canonical: it is the only one decode matches, so it is the spelling the
 disassembler renders and the alternative `choice-case` sees. An alias must
 share its escape with exactly one canonical variant, and both must agree on
 `:cells` and on the alternatives' hole count, signedness, width and
-relativeness. Only `choice`-selected `extra-word` variants take `:alias`;
-inline ranges may never overlap. Unmarked duplicate escapes remain an error.
+relativeness. Unmarked duplicate escapes remain an error.
+
+`choice`-selected inline variants also accept `:alias t`:
+
+```lisp
+(variant (choice a-reg) inline :range (0 7) :bias 8)
+(variant (choice a-alt) inline :range (0 7) :bias 8 :alias t)
+```
+
+Inline aliases require identical ranges and biases, plus matching hole
+count, signedness, width and relativeness. Exactly one matching variant
+must be canonical, regardless of declaration order. Alternatives with extra
+holes must give those holes identical encodings in their `for-choice`
+groups. Partial overlaps and
+unmarked overlapping inline ranges are errors. Value-selected variants
+(`range` or `:else`) do not accept `:alias`.
 
 ```lisp
 (defmode a-reg expr)
@@ -1131,7 +1145,7 @@ A `one-of` alternative may contribute more holes than its siblings (see
 alternatives"](modes.md#varying-hole-counts-across-alternatives)) — `reg`
 (one hole) and `[reg,off]` (two holes) sharing one `one-of`, say. Its own
 extra holes, beyond the element's base (minimum) count, get their own
-`(operand ...)` subclauses via a `(for-choice alt (operand ...)...)`
+`(operand ...)` subclauses via a `(for-choice (operand alt) (operand ...)...)`
 subclause alongside the mode's ordinary ones:
 
 ```lisp
@@ -1143,18 +1157,27 @@ subclause alongside the mode's ordinary ones:
     (operand src :field a
       (variant (choice a-reg) inline :range (0 7) :bias #x00)
       (variant (choice a-idx) inline :range (0 7) :bias #x10))
-    (for-choice a-idx (operand off :trailing-word)))
+    (for-choice (src a-idx) (operand off :trailing-word)))
   (semantics
     (choice-case src
       (a-reg (reg src))
       (a-idx (mref machine 'ram (+ (reg src) off))))))
 ```
 
-`alt` must be one of the governing `one-of` element's own alternatives whose
-hole count exceeds the element's base count, and its own subclauses must
-supply exactly that many extra holes, in pattern order — a missing
-`for-choice`, one naming an alternative that doesn't need it, or one with
-the wrong number of subclauses is a `definstruction`-time error.
+The selector's first name identifies an ordinary base operand in the
+owning `one-of`. `alt` names an alternative that contributes extra holes.
+The subclauses supply those holes in pattern order. Multiple operands may
+use the same alternative with separate names for their extras:
+
+```lisp
+(for-choice (dst a-idx) (operand dst-off :trailing-word))
+(for-choice (src a-idx) (operand src-off :trailing-word))
+```
+
+The short form `(for-choice alt ...)` is accepted when `alt` identifies
+exactly one varying element. Ambiguous, duplicate, missing or wrongly
+sized groups, unknown operand names and alternatives without extra holes
+are `definstruction` errors.
 
 `(operand name :trailing-word [:cells k])` is the shape an extra hole
 typically takes: a fieldless hole with no bits of its own in the instruction
@@ -1165,9 +1188,9 @@ the alternative genuinely has a second field's worth of bits to pack, but
 `:trailing-word` is the common case, since the whole reason a hole is
 "extra" is usually that it has nowhere else to go.
 
-`definstruction` expands one `instruction-descriptor` per alternative-tuple
-— one shape for every alternative sharing the base hole count, one more per
-over-count alternative — each with its own fixed operand count, its own
+`definstruction` expands fixed-arity descriptors for each alternative-tuple
+— the Cartesian product of each element's base shape and its longer
+alternatives — each with its own fixed operand count, its own
 `instruction-descriptor-size`, and its own filtered menu of the governing
 field's variants (so a shorter sibling's field code is never mistaken for a
 longer one's, or vice versa, at either assemble or decode time). A shared
@@ -1176,9 +1199,9 @@ longer one's, or vice versa, at either assemble or decode time). A shared
 `choice-case` branch, which that sibling's own descriptor can never reach —
 see [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case).
 
-Word-encoded machines only, and at most one varying `one-of` element per
-pattern, with none of its alternatives themselves varying — a byte-encoded
-machine, or a nested varying `one-of`, is rejected outright.
+Word-encoded machines only. Multiple `one-of` elements may vary
+independently, but their alternatives cannot themselves contain a varying
+`one-of`. Byte-encoded varying modes are rejected.
 
 #### `CHOICE`-selected fields and `:SIGNED`
 

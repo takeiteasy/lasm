@@ -73,7 +73,8 @@
   (instruction-word :width 16
     (field a 6)
     (field b 5)
-    (field opcode 5)))
+    (field opcode 5)
+    (extra-word-order a b)))
 
 ;; The three CHOICE-selected alternatives LD's `src` operand independently
 ;; picks between -- "(" an absolute address ")", "[" a register index "]",
@@ -322,5 +323,42 @@ seta #-10" :machine 'anima16foo) :machine 'anima16foo :labels nil)))
     (dolist (l lines) (format t "  ~A~%" (disassembly-line-text l)))
     (assert (string= "seta $14" (disassembly-line-text (first lines))))
     (assert (string= "seta #-10" (disassembly-line-text (second lines))))))
+
+(defmode set-mode (one-of a-idx a-reg) "," (one-of a-idx a-reg))
+
+(definstruction anima16foo set
+  (modes set-mode)
+  (encoding
+    (opcode 2)
+    (operand dst :field b
+      (variant (choice a-reg) inline :range (0 7))
+      (variant (choice a-idx) inline :range (0 7) :bias #x10))
+    (operand src :field a
+      (variant (choice a-reg) inline :range (0 7))
+      (variant (choice a-idx) inline :range (0 7) :bias #x10))
+    (for-choice (dst a-idx) (operand dst-off :trailing-word))
+    (for-choice (src a-idx) (operand src-off :trailing-word)))
+  (semantics
+    (let ((value (choice-case src
+                   (a-reg (reg src))
+                   (a-idx (mref machine 'ram (wrap-value (+ (reg src) src-off) 16))))))
+      (choice-case dst
+        (a-reg (set! (reg dst) value))
+        (a-idx (setf (mref machine 'ram (wrap-value (+ (reg dst) dst-off) 16)) value))))))
+
+(let* ((assembly (assemble "set [0, 5], [1, 6]" :machine 'anima16foo))
+       (cells (assembly-cells assembly))
+       (machine (make-machine 'anima16foo))
+       (lines (disassemble-assembly assembly :machine 'anima16foo :labels nil)))
+  (assert (equalp (vector (logior 2 (ash #x10 5) (ash #x11 10)) 6 5) cells))
+  (setf (regref machine 'reg 0) 100
+        (regref machine 'reg 1) 200
+        (mref machine 'ram 206) 1234)
+  (load-program machine cells)
+  (step-machine machine)
+  (assert (= 1234 (mref machine 'ram 105)))
+  (assert (equalp cells (assembly-cells
+                        (assemble (disassembly-text lines :origin 0) :machine 'anima16foo))))
+  (format t "~%Independent indexed operands: ~A~%" (disassembly-line-text (first lines))))
 
 (format t "~%All assertions passed.~%")

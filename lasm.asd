@@ -5,7 +5,7 @@
   :description "A Lisp library and DSL for building fantasy assemblers and CPU emulators"
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
-  :version "0.2.0"
+  :version "0.2.1"
   ;; #75: lasm's first dependency -- RUN-FOR-DURATION's :THROTTLE T path
   ;; (emulator.lisp) needs a monotonic clock finer than CL:GET-INTERNAL-
   ;; REAL-TIME's portable-but-coarse resolution to pace cycle-accurate
@@ -57,6 +57,7 @@
                (:file "parser")
                (:file "mode")
                (:file "instruction")
+               (:file "word-choices")
                (:file "directive")
                (:file "include")
                (:file "macro")

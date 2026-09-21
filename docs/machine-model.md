@@ -132,6 +132,8 @@ widths against a machine defined earlier in the same file.
   `(extra-word-order FIELD...)` inside the clause (#191) sets the order in
   which trailing words follow the instruction word: the named fields' words
   first, in the order listed, then any other operand's in hole order.
+  Fieldless `:trailing-word` operands follow their nearest preceding
+  field-bearing operand, keeping their local order.
   Without it trailing words follow operand hole order. It applies to every
   instruction on the machine, resolved through each instruction's own layout:
 
