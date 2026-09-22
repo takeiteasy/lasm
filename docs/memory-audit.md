@@ -59,15 +59,18 @@ execution is not measured here.
 
 ## Build memory
 
-The baseline forced STAR build allocates 3.34 GiB cumulatively, and build
-plus tests peaks at 940.3 MiB RSS. Full GC reduces the build's live heap
-from 737.2 MiB to 48.6 MiB. A 256 MiB build heap fails even though the
-precompiled runtime runs under a 128 MiB heap. Build-memory profiling is
-separate from execution optimization; these build figures describe the
-baseline revision, not a new measurement of the optimized compiler.
-Rebuilding STAR after LASM's full suite in the same default-heap process
-can exhaust the heap. STAR's build and suite pass in a fresh default-heap
-process; use separate processes when validating both projects.
+A forced STAR build allocates about 2,414 MiB cumulatively. Compiling
+`anima16/basic.lisp` accounts for about 2,129 MiB of that total; allocation
+sampling places most of its cost in SBCL compilation. LASM builds word
+alternatives and fixed fields from compact literal data, and caches decode
+constraints during each instruction registration.
+
+Fresh build plus 188 STAR checks peaks at a median 661.3 MiB RSS across
+three runs (660.7–661.6 MiB). The heap reaches about 567 MiB after the build
+and falls to about 49 MiB after full GC. LASM's full suite followed by a
+forced STAR build and its suite passes in one process with the default 1 GiB
+heap. A forced build still exhausts a 256 MiB heap. Build figures are
+separate from the precompiled runtime measurements above.
 
 ## Reproduce
 
@@ -84,11 +87,22 @@ The memory script reports post-GC heap and allocation counters; macOS
 `time` reports peak process RSS. Counters and compiler settings introduce
 small variation. Both examples require SBCL.
 
-For build measurements, load LASM, then evaluate
-`(asdf:load-system :star/anima16 :force t)` and run STAR's tests in a fresh
-process. Keep this separate from precompiled runtime loading.
+For build measurements, run:
 
-Validation covers 2,438 LASM checks and 188 STAR checks, exhaustive
+```sh
+/usr/bin/time -l sbcl --dynamic-space-size 2048 --script examples/build-memory-audit.lisp ../star/star.asd --star-tests
+sbcl --script examples/build-memory-audit.lisp ../star/star.asd --combined --star-tests
+```
+
+The script reports allocation and heap use per compiled STAR file and
+post-GC live heap. `--phases` reports inclusive allocation for selected LASM
+definition and registration functions. `--sprof` samples allocation during
+`basic.lisp` compilation. macOS `time -l` reports peak process RSS. Run
+fresh measurements in separate processes with compiled dependencies already
+cached and a 2 GiB build heap; `--combined` deliberately keeps the LASM test
+suite's heap history on the default heap.
+
+Validation covers 2,443 LASM checks and 188 STAR checks, exhaustive
 comparison with candidate scanning for two 16-bit LASM fixtures and all
 65,536 STAR instruction words, plus nested and simultaneous decoding,
 self-modifying code, definition replacement and memory-read ordering.

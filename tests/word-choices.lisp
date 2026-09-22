@@ -2,6 +2,19 @@
 
 (fiveam:in-suite instruction)
 
+(fiveam:test compact-word-data-builds-independent-descriptors
+  (let* ((menu-data '(((4 0 :inline 0 (0 . 3) nil nil nil nil nil))))
+         (constant-data '((tag 4 0 2)))
+         (first-menu (%build-word-alternatives menu-data))
+         (second-menu (%build-word-alternatives menu-data))
+         (first-constants (%build-word-constants constant-data))
+         (second-constants (%build-word-constants constant-data)))
+    (fiveam:is (not (eq (caar first-menu) (caar second-menu))))
+    (fiveam:is (not (eq (first first-constants) (first second-constants))))
+    (fiveam:is (= 4 (word-field-choice-width (caar first-menu))))
+    (fiveam:is (equal '(0 . 3) (word-field-choice-range (caar first-menu))))
+    (fiveam:is (= 2 (word-constant-value (first first-constants))))))
+
 (defmachine fixed-choice-machine
   (register a :width 16)
   (memory ram :width 8 :addr-width 16)

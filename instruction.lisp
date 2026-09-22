@@ -408,6 +408,8 @@ reference is not a label, so it's independent of \"no labels allowed here\"."
 ;;; operand actually uses is the assembler's job (assembler.lisp): it depends
 ;;; on operand syntax and, for a constant operand, its value.
 
+(defvar *word-bit-constraints-cache* nil)
+
 (defun register-instruction-variants! (machine-name descriptors)
   "Register DESCRIPTORS -- one or more INSTRUCTION-DESCRIPTORs sharing one
 mnemonic -- on machine MACHINE-NAME, replacing any previous registration
@@ -450,6 +452,7 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
          (wordp (%word-machine-p machine-name))
+         (*word-bit-constraints-cache* (when wordp (make-hash-table :test #'eq)))
          (additions (make-hash-table)))
     (dolist (descriptor descriptors)
       (cl:push descriptor (gethash (instruction-descriptor-opcode descriptor) additions)))
@@ -1785,19 +1788,14 @@ only to build %WORD-BIT-CONSTRAINTS below."
         (mapcan #'%word-field-choice-values choices)))
 
 (defun %word-bit-constraints (descriptor)
-  "Every bit-level constraint DESCRIPTOR's encoding imposes -- one
-(WIDTH SHIFT VALUES) per operand hole (WORD-ALTERNATIVES) plus one per
-(field-value ...) pin (WORD-CONSTANTS, #136, VALUES a singleton) -- as one
-uniform list. #140: a pin and a hole are the same kind of thing to
-%DESCRIPTORS-DISTINGUISHABLE-P below -- both simply constrain some range of
-the instruction word's bits to a set of raw values -- so co-tenancy no
-longer needs a separate hole-vs-hole and pin-vs-pin check. #120: a
-:TRAILING-WORD hole (a fieldless extra hole a varying ONE-OF alternative
-contributes) is excluded -- it has no bits of its own in the instruction
-word to constrain; the governing field it's paired with is what
-%CHECK-OPCODE-DECODABLE! actually needs disjoint, and per-tuple variant
-filtering (%WORD-MODE-DESCRIPTOR-FORMS) is what makes that field's own
-values disjoint across tuples."
+  "Return word-field bit constraints, caching them during registration."
+  (if *word-bit-constraints-cache*
+      (or (gethash descriptor *word-bit-constraints-cache*)
+          (setf (gethash descriptor *word-bit-constraints-cache*)
+                (%compute-word-bit-constraints descriptor)))
+      (%compute-word-bit-constraints descriptor)))
+
+(defun %compute-word-bit-constraints (descriptor)
   (append (mapcar #'%word-bit-constraint
                    (remove-if (lambda (choices) (eq (word-field-choice-kind (first choices)) :trailing-word))
                               (instruction-descriptor-word-alternatives descriptor)))
@@ -2467,61 +2465,55 @@ narrower extra word before one needing a wider one."
                                                                 (word-variant-extra-cells (cdr p))
                                                                 0)))))))
 
-(defun %word-field-choice-form (spec variant hole-signedp)
-  "#127/#62/#63: VARIANT's own SIGNEDP is stamped from its CHOICE
-alternative's MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL --
-MODE-DESCRIPTOR-SIGNEDP is itself (OR RELATIVEP SIGNEDP) (mode.lisp), so a
-CHOICE-selected :RELATIVE alternative is already signed here with no extra
-work. A value-selected variant (CHOICE NIL) has no ONE-OF alternative of
-its own to read :SIGNED off, so it falls back to HOLE-SIGNEDP -- this
-hole's own resolved signedness when ungoverned by a disagreeing ONE-OF
-(%WORD-HOLE-SIGNEDP-LIST, below, itself folding in per-hole relativeness)
--- rather than always NIL as it did before #62/#63: an ungoverned or
-agreeing-ONE-OF signed or :RELATIVE hole's value is signed regardless of
-which value-selected variant a given combo happens to pick."
-  `(make-word-field-choice
-    :width ,(word-operand-spec-width spec)
-    :shift ,(word-operand-spec-shift spec)
-    :kind ,(word-variant-kind variant)
-    :bias ,(word-variant-bias variant)
-    :range ',(word-variant-range variant)
-    :escape ,(word-variant-escape variant)
-    :extra-cells ,(word-variant-extra-cells variant)
-    :choice ',(word-variant-choice variant)
-    :alias ,(word-variant-alias variant)
-    :signedp ,(if (word-variant-choice variant)
-                  (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant)))
-                  hole-signedp)))
+(defun %word-field-choice-data (spec variant hole-signedp)
+  "Describe a word-field variant with its resolved signedness."
+  (list (word-operand-spec-width spec)
+        (word-operand-spec-shift spec)
+        (word-variant-kind variant)
+        (word-variant-bias variant)
+        (word-variant-range variant)
+        (word-variant-escape variant)
+        (word-variant-extra-cells variant)
+        (word-variant-choice variant)
+        (word-variant-alias variant)
+        (if (word-variant-choice variant)
+            (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice variant)))
+            hole-signedp)))
+
+(defun %build-word-alternatives (data)
+  (mapcar (lambda (menu)
+            (mapcar (lambda (entry)
+                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp)
+                          entry
+                        (make-word-field-choice
+                         :width width :shift shift :kind kind :bias bias :range range
+                         :escape escape :extra-cells extra-cells :choice choice
+                         :alias alias :signedp signedp)))
+                    menu))
+          data))
 
 (defun %word-alternatives-form (specs hole-signedp-list)
-  "One (quoted) form building SPECS' full per-operand variant menu -- shared
-by every sibling combo of one word-field operand list, since decode
-(decoder.lisp's %TRY-DECODE-WORD-CANDIDATE) needs every alternative, not
-just whichever combo happens to occupy the opcode table, to tell an inline
-value from an escaped extra-word marker apart by comparing against the
-actually fetched bits. HOLE-SIGNEDP-LIST (#62/#63, %WORD-HOLE-SIGNEDP-LIST)
-is hole-aligned with SPECS -- %TRY-DECODE-WORD-CANDIDATE reads SIGNEDP off
-*this* menu, not a chosen descriptor's own WORD-FIELDS, so a signed or
-relative hole's signedness must be stamped here too, identically to
-%WORD-DESCRIPTOR-FORM's own WORD-FIELDS below -- else encode would sign a
-value that decode then reads back unsigned."
-  `(list ,@(mapcar (lambda (spec hole-signedp)
-                      `(list ,@(mapcar (lambda (variant) (%word-field-choice-form spec variant hole-signedp))
-                                       (word-operand-spec-variants spec))))
-                    specs hole-signedp-list)))
+  "Emit a compact constructor form for each operand's word variants."
+  `(%build-word-alternatives
+    ',(mapcar (lambda (spec hole-signedp)
+                (mapcar (lambda (variant) (%word-field-choice-data spec variant hole-signedp))
+                        (word-operand-spec-variants spec)))
+              specs hole-signedp-list)))
+
+(defun %build-word-constants (data)
+  (mapcar (lambda (entry)
+            (destructuring-bind (name width shift value) entry
+              (make-word-constant :name name :width width :shift shift :value value)))
+          data))
 
 (defun %word-constants-form (constants)
-  "One (quoted) form building CONSTANTS (a list of WORD-CONSTANT, #136) --
-shared by every sibling combo of one word-encoded DEFINSTRUCTION variant,
-same as %WORD-ALTERNATIVES-FORM shares its own menu across siblings: a
-(field-value ...) pin doesn't vary by which value-range combo a mnemonic's
-operand happened to expand into, so there is exactly one CONSTANTS list per
-variant, not one per combo."
-  `(list ,@(mapcar (lambda (c) `(make-word-constant :name ',(word-constant-name c)
-                                                      :width ,(word-constant-width c)
-                                                      :shift ,(word-constant-shift c)
-                                                      :value ,(word-constant-value c)))
-                    constants)))
+  "Emit a compact constructor form for fixed instruction-word fields."
+  `(%build-word-constants
+    ',(mapcar (lambda (c) (list (word-constant-name c)
+                               (word-constant-width c)
+                               (word-constant-shift c)
+                               (word-constant-value c)))
+              constants)))
 
 (defun %expand-word-field-choice-combos (alternatives)
   "Return the ordered Cartesian product of concrete word-field choices."
