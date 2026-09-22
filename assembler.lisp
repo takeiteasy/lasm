@@ -1318,10 +1318,7 @@ an operand resolves against the address of the entry it's *in* -- for
 itself); for :EMIT (e.g. \".byte 1, *, 3\") each value gets *its own*
 element address, not the directive statement's address, so \".word *, *\"
 emits two different words. ENDIAN (#66) governs :EMIT's own
-%ENCODE-VALUE-CELLS call directly -- :INSTRUCTION instead calls
-ENCODE-INSTRUCTION, which resolves the machine's endian itself, so
-.BYTE/.WORD and code always lay cells down the same way without this
-function needing to pass ENDIAN twice."
+%ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding."
   (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
     (dolist (entry sized-entries)
       (ecase (first entry)
@@ -1347,7 +1344,7 @@ function needing to pass ENDIAN twice."
              ;; the two checks never double-report the same value.
              (%check-strict-operand-range! descriptor mode values line cell-width choices)
              (loop with i = (- address origin)
-                   for cell in (encode-instruction descriptor values)
+                   for cell in (%encode-instruction-resolved descriptor values cell-width endian)
                    do (setf (aref cells i) cell) (incf i)))))
         (:emit
          (destructuring-bind (kind address width asts line) entry

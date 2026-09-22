@@ -235,6 +235,11 @@ unconditionally before #126."
                          (instruction-descriptor-sub-choices descriptor)
                          (instruction-descriptor-choice-selections descriptor))))))))
 
+(defun %decode-instruction-at-resolved (read-cell address machine-name layout cell-width endian)
+  (if layout
+      (%decode-word-instruction read-cell address machine-name layout)
+      (%decode-cell-instruction read-cell address machine-name cell-width endian)))
+
 (defun decode-instruction-at (read-cell address machine-name &key memory)
   "Decode one instruction at ADDRESS by reading cells through READ-CELL, a
 closure of one argument (an address) returning that cell's unsigned integer
@@ -282,8 +287,6 @@ ENDIAN off LAYOUT's own slot, set once at DEFMACHINE time -- see
 %DECODE-WORD-INSTRUCTION."
   (let* ((memory (%resolve-memory machine-name memory))
          (layout (machine-descriptor-instruction-word (find-machine-descriptor machine-name))))
-    (if layout
-        (%decode-word-instruction read-cell address machine-name layout)
-        (%decode-cell-instruction read-cell address machine-name
-                                   (%machine-cell-width machine-name memory)
-                                   (%machine-endian machine-name memory)))))
+    (%decode-instruction-at-resolved read-cell address machine-name layout
+                                     (unless layout (%machine-cell-width machine-name memory))
+                                     (unless layout (%machine-endian machine-name memory)))))

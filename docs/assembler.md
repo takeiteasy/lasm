@@ -88,7 +88,8 @@ disagree, rather than silently misplacing every cell (see
 `:endian` (#66) the same way, alongside `cell-width` — there is no separate
 `endian` slot on `assembly` itself, since decode always resolves endianness
 from the machine descriptor at read time and an assembly is always produced
-against one; see [Machine model, "Cell width and the
+against one. Both properties are resolved once per assembly and used for
+instructions and directive data; see [Machine model, "Cell width and the
 assembler"](machine-model.md#cell-width-and-the-assembler) for the shared
 resolution rule and [Directives, `.byte`/`.word`](directives.md) for how it
 governs directive data.

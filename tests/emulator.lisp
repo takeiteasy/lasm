@@ -466,6 +466,38 @@ bne loop" :machine 'emu-test-machine)))
       (fiveam:is (eq :max-steps reason))
       (fiveam:is (= 4 steps)))))
 
+(fiveam:test run-resolves-cell-properties-once
+  (let* ((machine (make-machine 'emu-test-machine))
+         (program (assemble "loop: dex
+bne loop" :machine 'emu-test-machine))
+         (old-width (symbol-function '%machine-cell-width))
+         (old-endian (symbol-function '%machine-endian))
+         (width-calls 0)
+         (endian-calls 0))
+    (load-program machine program)
+    (unwind-protect
+         (progn
+           (setf (symbol-function '%machine-cell-width)
+                 (lambda (&rest args) (incf width-calls) (apply old-width args))
+                 (symbol-function '%machine-endian)
+                 (lambda (&rest args) (incf endian-calls) (apply old-endian args)))
+           (multiple-value-bind (reason steps) (run machine :max-steps 6)
+             (fiveam:is (eq :max-steps reason))
+             (fiveam:is (= 6 steps)))
+           (fiveam:is (= 1 width-calls))
+           (fiveam:is (= 1 endian-calls))
+           (step-machine machine)
+           (fiveam:is (= 2 width-calls))
+           (fiveam:is (= 2 endian-calls)))
+      (setf (symbol-function '%machine-cell-width) old-width
+            (symbol-function '%machine-endian) old-endian))))
+
+(fiveam:test zero-step-run-does-not-select-memory
+  (let ((machine (make-machine 'encoding-memory-test-machine)))
+    (multiple-value-bind (reason steps) (run machine :max-steps 0)
+      (fiveam:is (eq :max-steps reason))
+      (fiveam:is (zerop steps)))))
+
 ;;; idle (#110)
 
 (fiveam:test step-machine-idle-holds-pc-and-ticks-without-fetching

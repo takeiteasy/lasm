@@ -702,9 +702,9 @@ and turning it into bytes or an executed effect:
   `(eval-expr ast :symbols table)` is the general form the
   [Assembler](assembler.md) calls with its completed label table;
   `eval-expr-constant` is just `eval-expr` with `symbols` omitted.
-- `(encode-instruction descriptor values)` returns a list of
-  `(unsigned-byte cell-width)` cells (`cell-width` being `descriptor`'s
-  machine's own code cell width, #53 — 8 on every byte-addressed machine)
+- `(encode-instruction descriptor values &key memory)` returns a list of
+  `(unsigned-byte cell-width)` cells (`cell-width` being the selected
+  memory's cell width — 8 on every byte-addressed machine)
   for one use of instruction `descriptor` with operand field values `values`
   (a list, one per operand encoding field, or `nil` for a no-operand
   instruction): on an ordinary cell-encoded machine, the opcode followed by
@@ -712,7 +712,9 @@ and turning it into bytes or an executed effect:
   word-encoded one (#20), the instruction word (opcode and every field
   packed in by bit shift) followed by each `:extra-word` field's own value,
   in that same endian order, each at its own declared cell width (`:cells`,
-  below).
+  below). `memory` selects the target memory on a machine with differing
+  cell widths or endianness. For example, `(encode-instruction descriptor
+  '(#x1234) :memory 'rom)` uses `rom`'s cell width and cell order.
 - `(instruction-descriptor-size descriptor)` — total encoded cells for one
   use of `descriptor`, covering both encoding schemes: `1 +` operand cell
   widths on a cell-encoded machine, or the instruction-word's own cell

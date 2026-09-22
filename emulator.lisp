@@ -114,7 +114,7 @@ future listing annotation (a follow-up ticket) can't disagree on it."
 
 ;;; Step
 
-(defun step-machine (machine &key pc memory)
+(defun %step-machine-resolved (machine pc memory machine-name layout cell-width endian)
   "Fetch one instruction from MACHINE's MEMORY at its PC register, advance
 PC past it, then execute it against MACHINE. Returns (VALUES result cost):
 RESULT is the executed INSTRUCTION-DESCRIPTOR, or :DECODE-FAILURE (without
@@ -173,43 +173,52 @@ own delivery gets against an ordinary fetch. TODO: the idle cost is fixed
 at 1 cycle -- a declarable idle cost is a follow-up ticket (#164).
 
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
-is DECODE-INSTRUCTION-AT (decoder.lisp), shared with the disassembler
-(disassembler.lisp, #21); this function only resolves PC/MEMORY, advances
+is shared with the disassembler through the decoder. This function advances
 PC by the decoded SIZE, accounts cycles, and executes.
 
 DECODE-INSTRUCTION-AT's fourth value, CHOICES (#73) -- the matched ONE-OF
 alternative per operand hole -- is forwarded straight to EXECUTE-INSTRUCTION,
 so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
 decoded, not just the values."
-  (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
+  (deliver-pending-interrupt machine pc)
+  (when (machine-idle machine)
+    (incf (machine-cycles machine) 1)
+    (tick-devices machine 1)
+    (return-from %step-machine-resolved (values :idle 1)))
+  (let ((address (sref machine pc)))
+    (multiple-value-bind (descriptor values size choices)
+        (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
+                                         machine-name layout cell-width endian)
+      (if (eq descriptor :decode-failure)
+          (values :decode-failure 0)
+          (let ((cost (%descriptor-cycle-cost descriptor)))
+            (setf (sref machine pc) (+ address size))
+            (incf (machine-cycles machine) cost)
+            ;; TODO: devices tick once per instruction with its declared
+            ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
+            ;; device needing intra-instruction resolution can't express
+            ;; either; sub-instruction tick granularity is a follow-up
+            ;; (#108, #159).
+            (tick-devices machine cost)
+            (setf (machine-extra-cycles machine) 0)
+            (unwind-protect (execute-instruction descriptor machine values choices)
+              (incf (machine-cycles machine) (machine-extra-cycles machine)))
+            (let ((extra (machine-extra-cycles machine)))
+              (when (plusp extra)
+                (tick-devices machine extra))
+              (values descriptor (+ cost extra))))))))
+
+(defun step-machine (machine &key pc memory)
+  "Execute one instruction, returning its descriptor and cycle cost, or
+:DECODE-FAILURE and zero cost. MEMORY and PC select the fetch location."
+  (let* ((descriptor (machine-descriptor machine))
+         (machine-name (machine-descriptor-name descriptor))
          (pc (%resolve-pc machine-name pc))
-         (memory (%resolve-memory machine-name memory)))
-    (deliver-pending-interrupt machine pc)
-    (when (machine-idle machine)
-      (incf (machine-cycles machine) 1)
-      (tick-devices machine 1)
-      (return-from step-machine (values :idle 1)))
-    (let ((address (sref machine pc)))
-      (multiple-value-bind (descriptor values size choices)
-          (decode-instruction-at (machine-cell-reader machine memory) address machine-name :memory memory)
-        (if (eq descriptor :decode-failure)
-            (values :decode-failure 0)
-            (let ((cost (%descriptor-cycle-cost descriptor)))
-              (setf (sref machine pc) (+ address size))
-              (incf (machine-cycles machine) cost)
-              ;; TODO: devices tick once per instruction with its declared
-              ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
-              ;; device needing intra-instruction resolution can't express
-              ;; either; sub-instruction tick granularity is a follow-up
-              ;; (#108, #159).
-              (tick-devices machine cost)
-              (setf (machine-extra-cycles machine) 0)
-              (unwind-protect (execute-instruction descriptor machine values choices)
-                (incf (machine-cycles machine) (machine-extra-cycles machine)))
-              (let ((extra (machine-extra-cycles machine)))
-                (when (plusp extra)
-                  (tick-devices machine extra))
-                (values descriptor (+ cost extra)))))))))
+         (memory (%resolve-memory machine-name memory))
+         (layout (machine-descriptor-instruction-word descriptor)))
+    (%step-machine-resolved machine pc memory machine-name layout
+                            (unless layout (%machine-cell-width machine-name memory))
+                            (unless layout (%machine-endian machine-name memory)))))
 
 ;;; Run
 
@@ -251,9 +260,26 @@ spinning to :MAX-STEPS, the same way a decode failure short-circuits
 rather than running the budget dry. A host can SIGNAL-INTERRUPT
 (interrupt.lisp) or WAKE-MACHINE and call RUN/DEBUG-CONTINUE again,
 exactly as it already can after :TRAP."
-  (loop for steps from 0 below max-steps
-        do (handler-case
-               (multiple-value-bind (result cost) (step-machine machine :pc pc :memory memory)
+  (let* ((descriptor (machine-descriptor machine))
+         (machine-name (machine-descriptor-name descriptor))
+         (layout (machine-descriptor-instruction-word descriptor))
+         (selected-pc nil)
+         (selected-memory nil)
+         (cell-width nil)
+         (endian nil)
+         (resolved nil))
+    (loop for steps from 0 below max-steps
+          do (unless resolved
+               (setf selected-pc (%resolve-pc machine-name pc)
+                     selected-memory (%resolve-memory machine-name memory))
+               (unless layout
+                 (setf cell-width (%machine-cell-width machine-name selected-memory)
+                       endian (%machine-endian machine-name selected-memory)))
+               (setf resolved t))
+             (handler-case
+               (multiple-value-bind (result cost)
+                   (%step-machine-resolved machine selected-pc selected-memory machine-name
+                                           layout cell-width endian)
                  (when (eq result :decode-failure)
                    (return-from %run-loop (values :decode-failure steps)))
                  (when on-step (funcall on-step cost))
@@ -271,7 +297,7 @@ exactly as it already can after :TRAP."
                ;; counts as an executed step -- unlike a decode failure,
                ;; where nothing was executed this iteration.
                (return-from %run-loop (values :trap (1+ steps) c))))
-        finally (return (values :max-steps steps))))
+          finally (return (values :max-steps steps)))))
 
 (defun run (machine &key pc memory (max-steps 10000))
   "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :DECODE-FAILURE,

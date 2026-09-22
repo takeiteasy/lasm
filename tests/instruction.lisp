@@ -4706,6 +4706,70 @@ target: nop")
   (fiveam:is (eq :big (%machine-endian 'endian-ambiguous-machine 'rom)))
   (fiveam:is (eq :little (%machine-endian 'endian-ambiguous-machine 'ram))))
 
+(defmachine encoding-memory-test-machine
+  (register pc :width 8)
+  (register a :width 16)
+  (memory rom :width 8 :addr-width 8 :endian :big)
+  (memory ram :width 16 :addr-width 8 :cell-width 16 :endian :little))
+
+(defmode encoding-memory-test-mode expr)
+
+(definstruction encoding-memory-test-machine load2
+  (modes encoding-memory-test-mode)
+  (encoding (opcode 1) (operand :width 2))
+  (semantics (set! a operand)))
+
+(fiveam:test encoding-uses-selected-memory-properties
+  (let ((instruction (find-instruction 'encoding-memory-test-machine 'load2)))
+    (fiveam:is (equal '(1 #x12 #x34)
+                      (encode-instruction instruction '(#x1234) :memory 'rom)))
+    (fiveam:is (equal '(1 #x1234 0)
+                      (encode-instruction instruction '(#x1234) :memory 'ram)))
+    (fiveam:signals error (encode-instruction instruction '(#x1234)))
+    (dolist (case '((rom #(1 #x12 #x34) 8) (ram #(1 #x1234 0) 16)))
+      (destructuring-bind (memory expected width) case
+        (let* ((assembly (assemble "load2 4660" :machine 'encoding-memory-test-machine
+                                   :memory memory))
+               (machine (make-machine 'encoding-memory-test-machine)))
+          (fiveam:is (equalp expected (assembly-cells assembly)))
+          (fiveam:is (= width (assembly-cell-width assembly)))
+          (load-program machine assembly :memory memory)
+          (step-machine machine :memory memory)
+          (fiveam:is (= #x1234 (sref machine 'a))))))))
+
+(fiveam:test encoding-follows-machine-redefinition
+  (eval '(defmachine encoding-redefine-test-machine
+           (memory ram :width 8 :addr-width 8 :endian :little)))
+  (eval '(definstruction encoding-redefine-test-machine load2
+           (modes encoding-memory-test-mode)
+           (encoding (opcode 1) (operand :width 2))
+           (semantics nil)))
+  (let ((instruction (find-instruction 'encoding-redefine-test-machine 'load2)))
+    (fiveam:is (equal '(1 #x34 #x12) (encode-instruction instruction '(#x1234))))
+    (eval '(defmachine encoding-redefine-test-machine
+             (memory ram :width 8 :addr-width 8 :endian :big)))
+    (fiveam:is (equal '(1 #x12 #x34) (encode-instruction instruction '(#x1234))))))
+
+(fiveam:test assembly-resolves-cell-properties-once
+  (let ((old-width (symbol-function '%machine-cell-width))
+        (old-endian (symbol-function '%machine-endian))
+        (width-calls 0)
+        (endian-calls 0))
+    (unwind-protect
+         (progn
+           (setf (symbol-function '%machine-cell-width)
+                 (lambda (&rest args) (incf width-calls) (apply old-width args))
+                 (symbol-function '%machine-endian)
+                 (lambda (&rest args) (incf endian-calls) (apply old-endian args)))
+           (fiveam:is (equalp #(1 #x12 #x34 1 #x56 #x78)
+                              (assembly-cells
+                               (assemble "load2 4660
+load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
+           (fiveam:is (= 1 width-calls))
+           (fiveam:is (= 1 endian-calls)))
+      (setf (symbol-function '%machine-cell-width) old-width
+            (symbol-function '%machine-endian) old-endian))))
+
 ;;; extra-word-order (#191) -- trailing words follow the declared field
 ;;; order rather than operand hole order.
 

@@ -63,14 +63,12 @@ loaded into a word-addressed one with no other symptom.
 (step-machine MACHINE &key pc memory)
 ```
 
-The fetch/decode step itself — both paths described below — lives in
-`decode-instruction-at` (see [Disassembler](disassembler.md#decode-instruction-at)),
-a pure function taking a cell-reading closure rather than a live `machine`
-directly; `step-machine` resolves `pc`/`memory` as described here, calls it,
-advances `pc` by the decoded size, and executes. The disassembler
-(`disassemble-cells`/`disassemble-assembly`/`disassemble-memory`) calls the
-same function, so encoded cells decode identically whether they're about to
-be executed or merely read back as text.
+The fetch/decode logic — both paths described below — is shared with
+`decode-instruction-at` (see [Disassembler](disassembler.md#decode-instruction-at)).
+`step-machine` resolves the selected memory's cell width and endianness,
+decodes through that shared logic, advances `pc` by the decoded size, and
+executes. Looped runs resolve those properties once for the run. Direct
+`decode-instruction-at` calls resolve them for each call.
 
 Fetches the opcode cell at `pc`, decodes it (`find-instruction-by-opcode`),
 reads its declared `operand-widths` fields in the machine's own endian
