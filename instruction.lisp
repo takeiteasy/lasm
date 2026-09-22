@@ -1682,23 +1682,8 @@ compiled code once per sibling."
   (alias nil :type boolean))
 
 (defun %word-choice-matches-p (raw-value choice)
-  "T if RAW-VALUE -- a field's bits as actually fetched or, at
-DEFINSTRUCTION time (#105's %CHECK-OPCODE-DECODABLE!), enumerated -- is what
-CHOICE (a WORD-FIELD-CHOICE) would encode: its exact ESCAPE for an
-:EXTRA-WORD choice, or a value in its (biased) RANGE for an :INLINE one --
-reinterpreted as two's-complement over CHOICE's own WIDTH first when
-CHOICE-SIGNEDP (#127), the exact inverse of how a signed field's value is
-encoded (WRAP-VALUE of a biased, possibly negative value -- ENCODE-
-INSTRUCTION, below): without this, a negative-range signed field could never
-match its own encoding, since a wrapped negative value's raw bits, read
-unsigned, fall outside its biased RANGE entirely. Only the :INLINE branch
-reinterprets -- an :EXTRA-WORD choice's ESCAPE is a fixed marker bit pattern
-in the same small field, compared as unsigned regardless of SIGNEDP; the
-signed reinterpretation of the *value itself* on that path happens once the
-following word is fetched (%TRY-DECODE-WORD-CANDIDATE, decoder.lisp), not
-here. Lives here, not in decoder.lisp (which loads after this file), so
-REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
-(decoder.lisp) still uses it for its own, original purpose."
+  "T if RAW-VALUE matches CHOICE's field bits. Signed inline values are
+reinterpreted before comparison; extra-word escapes remain unsigned."
   (when (word-field-choice-alias choice)
     (return-from %word-choice-matches-p nil))
   (ecase (word-field-choice-kind choice)
@@ -1767,44 +1752,25 @@ as any other sibling pair."
        (equal (instruction-descriptor-choice-selections a)
               (instruction-descriptor-choice-selections b))))
 
-(defun %word-field-choice-values (choice)
-  "Every raw field value CHOICE (a WORD-FIELD-CHOICE) accepts: its ESCAPE
-alone for an :EXTRA-WORD choice, or the whole (biased) RANGE, inclusive, for
-an :INLINE one -- each already WRAP-VALUEd to CHOICE-SIGNEDP's own field
-width when SIGNEDP (#127), i.e. the actual raw bit pattern decode would fetch
-for that value, not the value itself; %WORD-CHOICE-MATCHES-P (the only
-caller of these, via %HOLE-DISJOINT-P below) expects raw values and does its
-own signed reinterpretation from there, so a mismatch here would silently
-compare the wrong value set. Used at DEFINSTRUCTION time by
-%CHECK-OPCODE-DECODABLE! to test two co-tenant descriptors' field menus for
-disjointness -- field widths in practice are small (a handful of bits), so
-enumerating is simpler than range algebra over RANGE/BIAS/ESCAPE together,
-and cheap: called only when two descriptors are about to share an opcode,
-not on any hot path."
+(defun %word-field-choice-intervals (choice)
+  "Return the inclusive raw-bit intervals accepted by CHOICE."
   (when (word-field-choice-alias choice)
-    (return-from %word-field-choice-values nil))
+    (return-from %word-field-choice-intervals nil))
   (ecase (word-field-choice-kind choice)
-    (:extra-word (list (word-field-choice-escape choice)))
-    ;; #120: never actually called -- %WORD-BIT-CONSTRAINTS excludes every
-    ;; :TRAILING-WORD hole before mapping this, since it has no bits of its
-    ;; own to constrain (the governing field it's paired with already
-    ;; disambiguates its descriptor). Kept for ECASE completeness only.
+    (:extra-word (list (cons (word-field-choice-escape choice)
+                             (word-field-choice-escape choice))))
     (:trailing-word nil)
     (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
-               (loop for v from (+ lo (word-field-choice-bias choice))
-                       to (+ hi (word-field-choice-bias choice))
-                     collect (if (word-field-choice-signedp choice)
-                                 (wrap-value v (word-field-choice-width choice))
-                                 v))))))
+               (%word-variant-raw-chunks (+ lo (word-field-choice-bias choice))
+                                         (+ hi (word-field-choice-bias choice))
+                                         (word-field-choice-signedp choice)
+                                         (word-field-choice-width choice))))))
 
 (defun %word-bit-constraint (choices)
-  "One hole's (WIDTH SHIFT VALUES) constraint -- CHOICES is a descriptor's
-single hole (a WORD-FIELD-CHOICE list, every entry sharing that hole's own
-WIDTH/SHIFT), VALUES the raw bit patterns any of its variants match. Used
-only to build %WORD-BIT-CONSTRAINTS below."
+  "One hole's width, shift, and inclusive raw-bit intervals."
   (list (word-field-choice-width (first choices))
         (word-field-choice-shift (first choices))
-        (mapcan #'%word-field-choice-values choices)))
+        (mapcan #'%word-field-choice-intervals choices)))
 
 (defun %word-bit-constraints (descriptor)
   "Return word-field bit constraints, caching them during registration."
@@ -1819,45 +1785,41 @@ only to build %WORD-BIT-CONSTRAINTS below."
                    (remove-if (lambda (choices) (eq (word-field-choice-kind (first choices)) :trailing-word))
                               (instruction-descriptor-word-alternatives descriptor)))
           (mapcar (lambda (c) (list (word-constant-width c) (word-constant-shift c)
-                                     (list (word-constant-value c))))
+                                     (list (cons (word-constant-value c)
+                                                 (word-constant-value c)))))
                   (instruction-descriptor-word-constants descriptor))))
 
+(defun %project-raw-interval (interval offset width)
+  "Project an inclusive raw interval onto WIDTH bits starting at OFFSET."
+  (let* ((modulus (ash 1 width))
+         (lo (ash (car interval) (- offset)))
+         (hi (ash (cdr interval) (- offset))))
+    (cond
+      ((>= (1+ (- hi lo)) modulus) (list (cons 0 (1- modulus))))
+      ((= (floor lo modulus) (floor hi modulus))
+       (list (cons (mod lo modulus) (mod hi modulus))))
+      (t (list (cons 0 (mod hi modulus))
+               (cons (mod lo modulus) (1- modulus)))))))
+
 (defun %bit-constraints-disjoint-p (constraint-a constraint-b)
-  "T if CONSTRAINT-A and CONSTRAINT-B (two %WORD-BIT-CONSTRAINTS entries, each
-a possibly *different* WIDTH/SHIFT) share some bits of the instruction word
-and, projected onto only that shared range, accept disjoint raw value sets --
-NIL if they don't overlap in bits at all, the same non-distinguishing
-treatment a field only one side mentions has always had (#137).
-
-#140: this projection is the generalization that lets two fields of
-*different* width/shift still tell their descriptors apart, not just an
-exact width/shift match (the only case #137's positional-pairing fix
-handled) -- e.g. a 4-bit field at shift 8 and two 2-bit fields at shifts 10
-and 8 share bits [10, 12), and are distinguishable exactly when their values,
-narrowed to those two bits, are disjoint. An exact-match pair (today's only
-case before this ticket) projects onto its own whole width on both sides,
-so this is a strict generalization of the old %HOLE-DISJOINT-P/
-%CONSTANT-DISTINGUISHES-P answer, not a different one.
-
-Each raw VALUE is already the field's own bit pattern, right-aligned at 0
-regardless of the field's SHIFT in the word (%WORD-FIELD-CHOICE-VALUES,
-WORD-CONSTANT-VALUE) -- LDB against (- OVERLAP-SHIFT SHIFT) re-aligns it to
-the shared range's own low bit before comparing.
-
-TODO: O(|VALUES-A|*|VALUES-B|) via MEMBER over two enumerated lists -- fine
-at the field widths every current machine uses (a handful of bits), same
-ceiling %WORD-FIELD-CHOICE-VALUES has always had (#105), but a wide field on
-a wide word would want range algebra over the projected intervals instead of
-enumeration."
-  (destructuring-bind (width-a shift-a values-a) constraint-a
-    (destructuring-bind (width-b shift-b values-b) constraint-b
+  "T when two constraints disagree on their shared instruction-word bits."
+  (destructuring-bind (width-a shift-a intervals-a) constraint-a
+    (destructuring-bind (width-b shift-b intervals-b) constraint-b
       (let ((lo (max shift-a shift-b))
             (hi (min (+ shift-a width-a) (+ shift-b width-b))))
         (and (< lo hi)
              (let ((width (- hi lo)))
-               (flet ((project (value shift) (ldb (byte width (- lo shift)) value)))
-                 (let ((projected-a (mapcar (lambda (v) (project v shift-a)) values-a)))
-                   (notany (lambda (v) (member (project v shift-b) projected-a)) values-b)))))))))
+               (let ((projected-a (mapcan (lambda (interval)
+                                            (%project-raw-interval interval (- lo shift-a) width))
+                                          intervals-a))
+                     (projected-b (mapcan (lambda (interval)
+                                            (%project-raw-interval interval (- lo shift-b) width))
+                                          intervals-b)))
+                 (notany (lambda (a)
+                           (some (lambda (b)
+                                   (<= (max (car a) (car b)) (min (cdr a) (cdr b))))
+                                 projected-b))
+                         projected-a))))))))
 
 (defun %descriptors-distinguishable-p (a b)
   "T if some bit-level constraint of A (%WORD-BIT-CONSTRAINTS, #140) and some
@@ -2214,9 +2176,8 @@ at decode" field-name unclaimed))
           ;; (%CHECK-WORD-VARIANTS, above, runs before this backfill and so
           ;; validates it as unsigned) -- raw field bits would then be
           ;; sign-extended on decode against an unsigned-declared range,
-          ;; and %WORD-FIELD-CHOICE-VALUES/%HOLE-DISJOINT-P would silently
-          ;; compare the wrong raw value set. Rejected here rather than
-          ;; left to skew encode/decode apart.
+          ;; and opcode conflict checks would compare the wrong raw ranges.
+          ;; Rejected here rather than left to skew encode/decode apart.
           ;;
           ;; #63: this rationale weakens once a HOLE's own signedness
           ;; (%WORD-HOLE-SIGNEDP-LIST, reading (FIRST HOLE-ALTERNATIVES),

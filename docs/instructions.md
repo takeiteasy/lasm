@@ -624,7 +624,9 @@ or one mnemonic's different modes, possibly naming different
 has verified are *decode-distinguishable*: some field either candidate
 occupies (an operand hole or a `field-value` pin alike) accepts disjoint raw
 values from the other's, once both are narrowed down to only the bits they
-actually share. Decode (`decode-instruction-at`) selects the first matching
+actually share. Registration compares inclusive bit-pattern ranges, including
+signed ranges that wrap across zero, without expanding each field value.
+Decode (`decode-instruction-at`) selects the first matching
 descriptor in registration order. Words up to 16 bits use a lazily built
 table shared by all instances of that machine type; wider words scan the
 opcode's candidates. Successful instruction registration invalidates the

@@ -1283,6 +1283,76 @@
     (fiveam:is (string= "PARTIALHI" (instruction-descriptor-name
                                       (decode-instruction-at (vector-cell-reader hi) 0 'word-layouts-test-machine))))))
 
+(fiveam:test raw-interval-projection-matches-small-value-sets
+  (loop for field-width from 1 to 5 do
+    (loop for offset below field-width do
+      (loop for width from 1 to (- field-width offset) do
+        (loop for lo from 0 below (ash 1 field-width) do
+          (loop for hi from lo below (ash 1 field-width) do
+            (let ((expected (remove-duplicates
+                             (loop for value from lo to hi
+                                   collect (ldb (byte width offset) value))))
+                  (actual (loop for (start . end) in (%project-raw-interval
+                                                      (cons lo hi) offset width)
+                                append (loop for value from start to end collect value))))
+              (fiveam:is (equal (sort expected #'<) (sort actual #'<))))))))))
+
+(fiveam:test bit-constraint-intervals-match-small-value-set-oracle
+  (flet ((raw-values (intervals)
+           (loop for (lo . hi) in intervals append (loop for value from lo to hi collect value)))
+         (project (value shift overlap-shift width)
+           (ldb (byte width (- overlap-shift shift)) value)))
+    (loop for shift-a from 0 to 2 do
+      (loop for shift-b from 0 to 2 do
+        (loop for lo-a from 0 to 7 do
+          (loop for hi-a from lo-a to 7 do
+            (loop for lo-b from 0 to 7 do
+              (loop for hi-b from lo-b to 7 do
+                (let* ((overlap-shift (max shift-a shift-b))
+                       (width (- (min (+ shift-a 3) (+ shift-b 3)) overlap-shift))
+                       (values-a (raw-values (list (cons lo-a hi-a))))
+                       (values-b (raw-values (list (cons lo-b hi-b))))
+                       (expected
+                         (notany (lambda (a)
+                                   (member (project a shift-a overlap-shift width)
+                                           values-b
+                                           :key (lambda (b)
+                                                  (project b shift-b overlap-shift width))))
+                                 values-a)))
+                  (fiveam:is (eq expected
+                                 (%bit-constraints-disjoint-p
+                                  (list 3 shift-a (list (cons lo-a hi-a)))
+                                  (list 3 shift-b (list (cons lo-b hi-b)))))))))))))))
+
+(defmachine wide-constraint-test-machine
+  (register pc :width 32)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 32 (field opcode 8) (field src 24)))
+
+(defmode wide-constraint-imm "#" expr)
+
+(definstruction wide-constraint-test-machine widelow
+  (modes wide-constraint-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range 0 #xfffffe) inline)))
+  (semantics nil))
+
+(definstruction wide-constraint-test-machine widehigh
+  (modes wide-constraint-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range #xffffff #xffffff) inline)))
+  (semantics nil))
+
+(fiveam:test wide-word-field-co-tenants-register-and-decode
+  (fiveam:is (= 2 (length (find-instruction-descriptors-by-opcode
+                           'wide-constraint-test-machine 1))))
+  (dolist (case '(("widelow #42" "WIDELOW")
+                  ("widehigh #16777215" "WIDEHIGH")))
+    (destructuring-bind (source expected-name) case
+      (let ((cells (assembly-cells (assemble source :machine 'wide-constraint-test-machine))))
+        (fiveam:is (string= expected-name
+                            (instruction-descriptor-name
+                             (decode-instruction-at (vector-cell-reader cells) 0
+                                                    'wide-constraint-test-machine))))))))
+
 ;;; #138: an (operand ... :field opcode) hole would OR its own bits into the
 ;;; already-placed opcode field at encode time (%ENCODE-WORD-INSTRUCTION) --
 ;;; rejected the same way (field-value opcode ...) already is (#136, above).
@@ -1453,7 +1523,7 @@
 ;; -- exactly %CHECK-WORD-VARIANTS' own overlap check already does for two
 ;; variants of *one* field (#127), now exercised across two *different*
 ;; mnemonics' fields sharing one opcode (%CHECK-OPCODE-DECODABLE!'s
-;; %HOLE-DISJOINT-P/%WORD-FIELD-CHOICE-VALUES). SD-NEG's signed range
+;; raw field intervals). SD-NEG's signed range
 ;; -5..5 splits into raw chunks (0..5) and (27..31) in a 5-bit field; SD-POS's
 ;; unsigned 6..26 sits entirely in the gap between them.
 
@@ -2565,8 +2635,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
              (semantics nil)))))
 
 ;; #105/#62: %CHECK-OPCODE-DECODABLE!'s co-tenant ambiguity analysis
-;; (%WORD-FIELD-CHOICE-VALUES enumerating raw field values) must enumerate a
-;; RELATIVE-stamped signed field's wrapped negative chunk the same way it
+;; must include a RELATIVE-stamped signed field's wrapped negative chunk as it
 ;; already does for an explicitly :SIGNED one (#127) -- WBRA's own inline
 ;; range (-256..255) wraps to raw 768..1023, so a co-tenant claiming any of
 ;; that range at opcode 1 is indistinguishable, while one claiming 256..511
@@ -3061,13 +3130,11 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
                (semantics (set! a v))))
     (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))))
 
-;; The mixed-kind case %HOLE-DISJOINT-P must also catch: one candidate's
+;; The mixed-kind case must also work: one candidate's
 ;; field is :EXTRA-WORD (a single escape value), the other's is :INLINE (a
 ;; whole biased range) -- disjointness must hold in the direction where the
 ;; *new* descriptor being registered is the :EXTRA-WORD one and the
-;; *already-registered* co-tenant is the :INLINE one (%CHECK-OPCODE-
-;; DECODABLE! enumerates the new descriptor's own field values and tests
-;; them against the existing one's WORD-FIELD-CHOICEs), the reverse of
+;; *already-registered* co-tenant is the :INLINE one, the reverse of
 ;; SHARED-OPCODE-INDISTINGUISHABLE-PAIR-SIGNALS-OPCODE-CONFLICT above (both
 ;; :INLINE) and the LD/WCZ tests elsewhere (both :EXTRA-WORD via :ELSE, or
 ;; neither). A dedicated tiny word machine, rather than reusing WORD-TEST-
