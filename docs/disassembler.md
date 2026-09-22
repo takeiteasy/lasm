@@ -49,10 +49,9 @@ for both cell sources.
 
 `size`, the third return value, is the instruction's width in cells,
 accumulated during decode rather than taken from
-`instruction-descriptor-size`: on a word-encoded machine, decode tries every
-descriptor registered under the fetched opcode in turn (see [Instructions,
-"Opcode to descriptor decode"](instructions.md#opcode-to-descriptor-decode))
-and returns the first whose fields the actually-fetched bits match — which
+`instruction-descriptor-size`: on a word-encoded machine, decode selects the
+first descriptor whose fields match the fetched word (see [Instructions,
+"Opcode to descriptor decode"](instructions.md#opcode-to-descriptor-decode)) — which
 candidate that is, and so how many extra words it spends, isn't knowable
 from the opcode alone, so trusting any one candidate's own
 `instruction-descriptor-size` up front would overstate (or understate) the

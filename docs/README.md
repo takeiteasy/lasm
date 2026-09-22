@@ -1,6 +1,7 @@
 # LASM documentation
 
 - [Getting started](getting-started.md) — install, load, run the example and tests
+- [Memory audit](memory-audit.md) — measured build, runtime and per-CPU costs
 - [Machine model](machine-model.md) — storage elements and `defmachine`
 - [Conditions](conditions.md) — every condition type and its readers
 - [Devices](devices.md) — the device bus, `(device ...)`, attach/detach, ticking

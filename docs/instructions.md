@@ -619,11 +619,15 @@ or one mnemonic's different modes, possibly naming different
 has verified are *decode-distinguishable*: some field either candidate
 occupies (an operand hole or a `field-value` pin alike) accepts disjoint raw
 values from the other's, once both are narrowed down to only the bits they
-actually share. Decode (`decode-instruction-at`) tries each candidate
-registered at an opcode in turn and returns the first whose fields the
-fetched bits actually match; since co-tenants are pairwise disjoint
-somewhere, at most one can ever match a given word, so this is never a race
-between overlapping candidates.
+actually share. Decode (`decode-instruction-at`) selects the first matching
+descriptor in registration order. Words up to 16 bits use a lazily built
+table shared by all instances of that machine type; wider words scan the
+opcode's candidates. Successful instruction registration invalidates the
+table. Table construction matches bits without reading program memory.
+
+The table holds descriptors, not decoded operands or memory addresses.
+Trailing words are fetched on every decode, including for self-modifying
+code. See [Emulator](emulator.md#word-encoded-machines-20) for runtime costs.
 
 Declaring two descriptors at one opcode that are *not* decode-distinguishable
 is a `definstruction`-time `opcode-conflict` error, not a silent

@@ -123,16 +123,23 @@ On a machine declaring an `instruction-word` clause ([Machine
 model](machine-model.md)), `step-machine` instead fetches one whole
 instruction word (in the layout's own endian order, #66,
 `instruction-word-layout-width-cells` cells at the machine's own
-`:cell-width`, #53), extracts its `opcode` field,
-and tries every `instruction-descriptor` registered under that opcode in
-turn (see [Instructions, "Opcode to descriptor
-decode"](instructions.md#opcode-to-descriptor-decode)) — one candidate on a
-mnemonic with no co-tenant, several when sibling combos of one operand-field
-variant share the opcode, or when `definstruction` has confirmed several
-genuinely distinct descriptors are decode-distinguishable there — decoding
-each operand field against a candidate's own `word-alternatives` (every
-variant its `definstruction` declared, not just one combo) and returning the
-first candidate whose fields the fetched bits actually match: a fetched
+`:cell-width`, #53), and selects a descriptor matching the fetched bits
+(see [Instructions, "Opcode to descriptor
+decode"](instructions.md#opcode-to-descriptor-decode)). Words up to 16 bits
+use a shared table with one descriptor reference per possible word, at most
+512 KiB of entries on a 64-bit host. The first decode builds the table;
+subsequent decodes use direct lookup. Wider words scan their opcode bucket.
+Define instructions and warm the decoder before a latency-sensitive loop.
+
+Operand emission order is precomputed when alternative field layouts agree.
+Decode results are local to each call, and generated semantics read through
+operand mappings without copying operand lists. Independent machines can
+decode concurrently; definition changes require callers to stop execution
+first. Machine redefinition creates a fresh descriptor and dispatch table.
+For measurements and a runnable benchmark, see [Memory audit](memory-audit.md).
+
+Each operand field is decoded against the selected descriptor's
+`word-alternatives`: a fetched
 field value equal to some alternative's `:escape` means the real value
 follows in its own word (fetched and consumed in turn); a value inside some
 alternative's biased inline range means the value *is* the field, debiased.

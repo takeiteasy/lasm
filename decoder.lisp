@@ -77,85 +77,67 @@ never run backward or past a rejected candidate's own bounds."
 ;; (REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE!) needs it too,
 ;; and decoder.lisp loads after instruction.lisp in the :SERIAL T system.
 
+(defun %word-field-match (alternatives word)
+  (let ((first (first alternatives)))
+    (if (eq (word-field-choice-kind first) :trailing-word)
+        first
+        (let ((raw (ldb (byte (word-field-choice-width first)
+                             (word-field-choice-shift first)) word)))
+          (find-if (lambda (choice) (%word-choice-matches-p raw choice)) alternatives)))))
+
+(defun %word-candidate-matches-p (descriptor word)
+  "Match only the instruction bits, without fetching trailing cells."
+  (and (every (lambda (constant)
+                (= (ldb (byte (word-constant-width constant)
+                              (word-constant-shift constant)) word)
+                   (word-constant-value constant)))
+              (instruction-descriptor-word-constants descriptor))
+       (every (lambda (alternatives) (%word-field-match alternatives word))
+              (instruction-descriptor-word-alternatives descriptor))))
+
+(defun %find-word-candidate (descriptor layout word)
+  (destructuring-bind (name width shift) (instruction-word-field layout 'opcode)
+    (declare (ignore name))
+    (find-if (lambda (candidate) (%word-candidate-matches-p candidate word))
+             (gethash (ldb (byte width shift) word)
+                      (machine-descriptor-opcodes descriptor)))))
+
+(defun %word-decode-table (descriptor layout)
+  "Publish a complete, read-only dispatch table for words up to 16 bits."
+  (when (<= (instruction-word-layout-width layout) 16)
+    (or (machine-descriptor-word-decode-table descriptor)
+        (let ((table (make-array (ash 1 (instruction-word-layout-width layout)))))
+          (dotimes (word (length table))
+            (setf (aref table word) (%find-word-candidate descriptor layout word)))
+          (setf (machine-descriptor-word-decode-table descriptor) table)))))
+
 (defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word endian)
-  "Try decoding WORD (already fetched at ADDRESS) against one candidate
-DESCRIPTOR sharing this opcode (#105) -- decode each operand field against
-DESCRIPTOR's WORD-ALTERNATIVES: a fetched raw field value matching some
-alternative's escape means the real value follows in its own word (fetched
-and consumed in turn); matching an inline alternative's biased range instead
-means the value *is* the field, debiased. Returns (VALUES values offset
-matches okp) on success (OKP T; VALUES is NIL, not a failure signal, for a
-legitimately no-operand DESCRIPTOR -- see OKP), or (VALUES NIL NIL NIL NIL)
-if some field's raw bits match none of this candidate's own alternatives --
-the caller (%DECODE-WORD-INSTRUCTION) tries the next candidate at this
-opcode rather than failing outright, since #105's %CHECK-OPCODE-DECODABLE!
-(instruction.lisp) only guarantees candidates are pairwise distinguishable,
-not that every raw bit pattern at the opcode names exactly one of them --
-this trial-and-reject is what actually does the telling-apart.
-
-Layout-agnostic by construction (#140): every WORD-FIELD-CHOICE and
-WORD-CONSTANT already carries its own absolute WIDTH/SHIFT, resolved
-against DESCRIPTOR's own instruction-word layout at DEFINSTRUCTION time
-(instruction.lisp), so this function never needs to know which layout
-DESCRIPTOR named -- co-tenant candidates at one opcode may name different
-layouts.
-
-#127: a MATCH whose own WORD-FIELD-CHOICE-SIGNEDP is T reinterprets its raw
-bits as two's-complement before debiasing (:INLINE, over its own field
-WIDTH) or the fetched extra word (:EXTRA-WORD, over the match's own
-EXTRA-CELLS*CELL-WIDTH bits, #135 -- not always WIDTH-CELLS*CELL-WIDTH,
-since an extra word may now be narrower or wider than the instruction word
-itself) -- the exact inverse of how ENCODE-INSTRUCTION's %ENCODE-WORD-
-INSTRUCTION writes a signed value (WRAP-VALUE of a possibly negative,
-already-biased quantity). SIGNEDP is only ever T on a CHOICE-selected MATCH
-(instruction.lisp's %WORD-FIELD-CHOICE-FORM), so an ungoverned or
-value-selected field is unaffected -- unlike the byte path
-(%DECODE-CELL-INSTRUCTION below), word decode was previously never signed at
-all; this is the first case where it is.
-
-#136: every one of DESCRIPTOR's own WORD-CONSTANTS (a (field-value ...)
-pin) must match WORD's already-fetched bits exactly, checked *before* the
-operand-hole loop below and before OFFSET is ever advanced past the
-instruction word itself. This ordering is load-bearing, not cosmetic:
-DECODE-INSTRUCTION-AT documents that a condition READ-CELL signals (e.g.
-ADDRESS-OUT-OF-RANGE past the end of a buffer) propagates rather than being
-caught here, so a rejected candidate that also has an :EXTRA-WORD operand
-hole could otherwise call %FETCH-CELLS past a buffer's end while still
-failing to match its own constants -- killing the disassembler on a
-would-be :DECODE-FAILURE instead of quietly trying the next candidate at
-this opcode. Checking constants first means a mismatched candidate is
-rejected before any extra word is ever fetched."
+  "Decode one candidate, returning values, size, choices and a success flag.
+Reject constants and operand fields before reading any trailing cells. Signed
+fields are sign-extended before debiasing; trailing cells follow the declared
+emission order. All operand lists belong to this call."
   (dolist (constant (instruction-descriptor-word-constants descriptor))
     (unless (= (ldb (byte (word-constant-width constant) (word-constant-shift constant)) word)
                (word-constant-value constant))
       (return-from %try-decode-word-candidate (values nil nil nil nil))))
   (let* ((matches (loop for alternatives in (instruction-descriptor-word-alternatives descriptor)
-                        for choice0 = (first alternatives)
-                        ;; #120: a :TRAILING-WORD hole has no field bits of its own --
-                        ;; ALTERNATIVES is always its own single, unconditionally-matching
-                        ;; entry, so it needs no %WORD-CHOICE-MATCHES-P call at all.
-                        for trailingp = (eq (word-field-choice-kind choice0) :trailing-word)
-                        for raw = (unless trailingp
-                                    (ldb (byte (word-field-choice-width choice0) (word-field-choice-shift choice0)) word))
-                        for match = (if trailingp choice0 (find-if (lambda (c) (%word-choice-matches-p raw c)) alternatives))
+                        for match = (%word-field-match alternatives word)
                         do (unless match (return-from %try-decode-word-candidate (values nil nil nil nil)))
-                        collect (cons match raw)))
-         (values (make-array (length matches)))
+                        collect match))
+         (values (make-list (length matches)))
+         (order (instruction-descriptor-word-decode-order descriptor))
          (offset width-cells))
-    ;; #191: every hole's match is resolved from WORD alone before any extra
-    ;; word is fetched (so a rejected candidate never reads past its bounds),
-    ;; then trailing words are fetched in %WORD-EMIT-ORDER, not hole order.
-    (dolist (index (%word-emit-order descriptor (mapcar #'car matches)))
-      (destructuring-bind (match . raw) (nth index matches)
-        (setf (aref values index)
+    ;; Resolve all matches before reading any trailing cells.
+    (dolist (index (if (eq order :dynamic) (%word-emit-order descriptor matches) order))
+      (let ((match (nth index matches)))
+        (setf (nth index values)
               (ecase (word-field-choice-kind match)
-                (:inline (- (if (word-field-choice-signedp match)
-                                (signed-value raw (word-field-choice-width match))
-                                raw)
-                            (word-field-choice-bias match)))
-                ;; #120: :TRAILING-WORD fetches exactly like :EXTRA-WORD -- an
-                ;; unconditional trailing value at OFFSET, of its own EXTRA-CELLS
-                ;; width -- it just never had field bits to escape-match first.
+                (:inline (let ((raw (ldb (byte (word-field-choice-width match)
+                                               (word-field-choice-shift match)) word)))
+                           (- (if (word-field-choice-signedp match)
+                                  (signed-value raw (word-field-choice-width match))
+                                  raw)
+                              (word-field-choice-bias match))))
                 ((:extra-word :trailing-word)
                  (let ((extra-cells (word-field-choice-extra-cells match)))
                    (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
@@ -163,79 +145,28 @@ rejected before any extra word is ever fetched."
                                 (signed-value v (* extra-cells cell-width))
                                 v))
                      (incf offset extra-cells))))))))
-    (values (coerce values 'list) offset (mapcar #'car matches) t)))
+    (values values offset matches t)))
 
 (defun %decode-word-instruction (read-cell address machine-name layout)
-  "DECODE-INSTRUCTION-AT's word-encoded (#20) path: fetch one
-INSTRUCTION-WORD-LAYOUT-WIDTH-CELLS-wide word at ADDRESS, extract its OPCODE
-field, and try each candidate DESCRIPTOR registered under that opcode in
-turn (#105: more than one only when several mode-distinguished variants of
-one or more mnemonics share the opcode) via %TRY-DECODE-WORD-CANDIDATE,
-returning the first that fully matches. A raw value matching no candidate's
-alternatives at all is :DECODE-FAILURE, same as an unregistered opcode -- an
-encoding no DEFINSTRUCTION on this machine ever declared.
-
-LAYOUT is always the machine's *default* instruction-word layout, never a
-candidate's own named one (#64) -- every WORD-FIELD/OPCODE field is fetched
-off it alone, sound for any candidate regardless of which layout it names
-because every layout is held (PARSE-INSTRUCTION-WORD-CLAUSE, machine.lisp)
-to the default's own :WIDTH and an identical OPCODE field. %TRY-DECODE-WORD-
-CANDIDATE itself never touches LAYOUT at all (#140) -- see its own
-docstring.
-
-Candidate order only matters for determinism, not correctness:
-%CHECK-OPCODE-DECODABLE! (instruction.lisp) requires every pair of
-co-tenant candidates to disagree at some field range they share bits with
-(#140: candidates may name different layouts and even different field
-names, as long as some shared bit range disagrees), so at most one
-candidate can ever match a given fetched word -- the first-match loop below
-never has to arbitrate a genuine tie, it just stops as soon as it finds the
-one candidate that was always going to match.
-
-SIZE (the third return value on success) is accumulated as cells are
-consumed, never read off INSTRUCTION-DESCRIPTOR-SIZE -- %EXPAND-WORD-COMBOS
-(instruction.lisp) sorts a mnemonic's sibling combos ascending by total
-extra-word cells (#135), so a mnemonic's own combo actually matched here
-need not be the one INSTRUCTION-DESCRIPTOR-SIZE would compute for whichever
-combo happens to sit first in the candidate list. INSTRUCTION-DESCRIPTOR-SIZE
-would overstate the size of any narrower encoding genuinely present in the
-stream; it is only trustworthy in the encode direction (assembler.lisp) and
-on the byte-encoded path below.
-
-CHOICES (the fourth return value on success, #104) is the matched
-WORD-FIELD-CHOICE per operand hole, in hole order -- exactly the alternative
-%WORD-CHOICE-MATCHES-P found for each field, kept (not just its debiased
-value) so a CHOICE-selected field's own WORD-FIELD-CHOICE-CHOICE (the ONE-OF
-alternative mode-name that was actually encoded, instruction.lisp) survives
-to the disassembler (disassembler.lisp, #117). NIL entries mix in freely for
-a value-selected field (WORD-FIELD-CHOICE-CHOICE NIL there).
-
-A word machine never needs a separate :RELATIVE sign-extension step the way
-the byte path below does -- a word-encoded RELATIVE hole's WORD-FIELD-CHOICE
-is already stamped SIGNEDP (#62, instruction.lisp's %WORD-FIELD-CHOICE-FORM,
-MODE-DESCRIPTOR-SIGNEDP folding in RELATIVEP), so %TRY-DECODE-WORD-CANDIDATE
-sign-extends it the same way it sign-extends any other per-hole :SIGNED
-field (#127), via WORD-FIELD-CHOICE-SIGNEDP -- see that function. The
-resulting signed offset is folded back to an absolute target the same way
-on both encodings: %OPERAND-RENDER-VALUES (disassembler.lisp) for display,
-and a branch's own (set! pc (+ pc operand)) semantics at run time."
+  "Fetch a word and select its first matching descriptor.
+Words up to 16 bits use a shared dispatch table; wider words scan their opcode
+bucket. Trailing cells are always fetched anew, and size follows the selected
+field choices rather than the descriptor's encoding-size variant."
   (let* ((width-cells (instruction-word-layout-width-cells layout))
          (cell-width (instruction-word-layout-cell-width layout))
          (endian (instruction-word-layout-endian layout))
          (word (%fetch-cells read-cell address width-cells cell-width endian))
-         (opcode-field (instruction-word-field layout 'opcode)))
-    (destructuring-bind (opcode-width opcode-shift) (rest opcode-field)
-      (let ((opcode (ldb (byte opcode-width opcode-shift) word)))
-        (handler-case
-            (let ((candidates (find-instruction-descriptors-by-opcode machine-name opcode)))
-              (dolist (descriptor candidates (values :decode-failure nil nil))
-                (multiple-value-bind (values offset matches okp)
-                    (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
-                  (when okp
-                    (return-from %decode-word-instruction
-                      (values descriptor values offset matches
-                              (instruction-descriptor-choice-selections descriptor)))))))
-          (unknown-instruction () (values :decode-failure nil nil)))))))
+         (machine (find-machine-descriptor machine-name))
+         (table (%word-decode-table machine layout))
+         (descriptor (if table (aref table (ldb (byte (instruction-word-layout-width layout) 0) word))
+                         (%find-word-candidate machine layout word))))
+    (if descriptor
+        (multiple-value-bind (values offset matches okp)
+            (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
+          (declare (ignore okp))
+          (values descriptor values offset matches
+                  (instruction-descriptor-choice-selections descriptor)))
+        (values :decode-failure nil nil))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width endian)
   "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- unchanged in shape

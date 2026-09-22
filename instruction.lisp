@@ -187,6 +187,7 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; the opcode table, to tell an inline value from an escaped extra-word
   ;; marker apart by comparing against the actually fetched bits.
   (word-alternatives nil :type list)
+  (word-decode-order :dynamic)
   ;; #135: total cells every :EXTRA-WORD field in WORD-FIELDS spills into --
   ;; the sum of each such field's own WORD-FIELD-CHOICE-EXTRA-CELLS, which
   ;; may now differ per field (formerly EXTRA-WORDS, a plain field count,
@@ -489,6 +490,11 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
                                                            :undecodable-byte-machine)))))
                    (cl:push descriptor checked)))))))
      additions)
+    (when wordp
+      (dolist (descriptor descriptors)
+        (setf (instruction-descriptor-word-decode-order descriptor)
+              (%compute-word-decode-order descriptor))))
+    (setf (machine-descriptor-word-decode-table md) nil)
     (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
             using (hash-value bucket)
           do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
@@ -1187,7 +1193,7 @@ exempted unconditionally, same rationale."
 ONE-OF alternatives ~S" name key hole-alternatives))))))
 
 (defun %choice-case-form (name clauses machine-name instruction-name operand-names hole-alternatives-list
-                            &optional mode-operand-names named-slot-alternatives)
+                            &optional mode-operand-names named-slot-alternatives operand-map-form)
   "Expansion of one (CHOICE-CASE NAME CLAUSE...) form (see the DEFINSTRUCTION
 docstring) inside a (semantics ...) body -- a plain CL:CASE on
 %MATCHED-CHOICE-NAME's result, with a NO-MATCHING-CHOICE fallback spliced in
@@ -1213,7 +1219,7 @@ governing hole is what selects which descriptor ran in the first place."
           (choice-var (gensym "CHOICE")))
       `(let ((,choice-var ,(cond ((not foundp) nil)
                                  ((eq index :selection) `(cdr (assoc ',name selections)))
-                                 (t `(%matched-choice-name choices ,index)))))
+                                 (t `(%matched-choice-name choices ,index ,operand-map-form)))))
          (case ,choice-var
            ,@clauses
            ,@(unless has-fallback
@@ -1267,6 +1273,11 @@ ASDF's COMPILE-FILE-ERROR treats as fatal, even though the branch can never
 actually run for this descriptor."
   nil)
 
+(declaim (inline %semantics-operand))
+(defun %semantics-operand (operands index mapping)
+  (let ((source (if mapping (nth index mapping) index)))
+    (and source (nth source operands))))
+
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list
                              &optional mode-operand-names named-slot-alternatives)
   "MODE-OPERAND-NAMES (#120), when given, is the union of every sibling
@@ -1282,24 +1293,25 @@ compile error, preserving typo protection."
   (dolist (form semantics-forms)
     (%validate-choice-case-forms! form machine name operand-names hole-alternatives-list mode-operand-names
                                   named-slot-alternatives))
-  (let* ((own-names (remove nil operand-names))
+  (let* ((mapping-name (gensym "OPERAND-MAP"))
+         (own-names (remove nil operand-names))
          (absent-names (set-difference (remove nil mode-operand-names) own-names))
          (named-bindings (loop for op-name in operand-names
                                 for i from 0
                                 when op-name
-                                  collect `(,op-name (nth ,i operands))))
+                                  collect `(,op-name (%semantics-operand operands ,i ,mapping-name))))
          (absent-bindings (mapcar (lambda (n) `(,n (%absent-choice-operand))) absent-names)))
-     `(lambda (machine operands choices &optional selections)
-        (declare (ignorable operands choices selections))
+     `(lambda (machine operands choices &optional selections ,mapping-name)
+        (declare (ignorable operands choices selections ,mapping-name))
        (with-machine-bindings (machine ,machine)
-         (let ((operand (first operands))
+         (let ((operand (%semantics-operand operands 0 ,mapping-name))
                ,@named-bindings
                ,@absent-bindings)
            (declare (ignorable operand ,@own-names ,@absent-names))
            (macrolet ((choice-case (choice-name &body clauses)
                         (%choice-case-form choice-name clauses ',machine ',name
                                              ',operand-names ',hole-alternatives-list ',mode-operand-names
-                                              ',named-slot-alternatives)))
+                                              ',named-slot-alternatives ',mapping-name)))
              ,@semantics-forms))))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
@@ -1680,7 +1692,7 @@ REGISTER-INSTRUCTION-VARIANTS! can call it too; DECODE-INSTRUCTION-AT
                (destructuring-bind (lo . hi) (word-field-choice-range choice)
                  (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice))))))))
 
-(defun %matched-choice-name (choices index)
+(defun %matched-choice-name (choices index &optional mapping)
   "The mode-name symbol INDEX's hole actually matched, from CHOICES (a
 positional, hole-aligned list) -- or NIL if CHOICES is too short, INDEX's
 entry is NIL, or it names a value-selected field (no CHOICE of its own).
@@ -1689,7 +1701,7 @@ Normalizes the two shapes CHOICES arrives in: a WORD-FIELD-CHOICE
 (MATCH-OPERAND-MODE, mode.lisp -- the same shape %WORD-CHOICES-ELIGIBLE-P
 already reads at assemble time, assembler.lisp); a bare symbol or NIL passes
 through unchanged, for a caller that already extracted a mode name itself."
-  (let ((entry (nth index choices)))
+  (let ((entry (%semantics-operand choices index mapping)))
     (etypecase entry
       (null nil)
       (symbol entry)
@@ -3712,6 +3724,20 @@ cell goes at which address."
                        'vector)))
           (stable-sort indices #'< :key (lambda (i) (aref ranks i)))))))
 
+(defun %compute-word-decode-order (descriptor)
+  "Precompute order when every alternative uses the same field geometry."
+  (let ((menus (instruction-descriptor-word-alternatives descriptor)))
+    (if (every (lambda (menu)
+                 (every (lambda (choice)
+                          (and (eql (word-field-choice-width choice)
+                                    (word-field-choice-width (first menu)))
+                               (eql (word-field-choice-shift choice)
+                                    (word-field-choice-shift (first menu)))))
+                        (rest menu)))
+               menus)
+        (%word-emit-order descriptor (mapcar #'first menus))
+        :dynamic)))
+
 (defun %encode-word-instruction (descriptor layout values)
   "ENCODE-INSTRUCTION's word-encoded path (#20): OR DESCRIPTOR's opcode,
 each of its (field-value ...) WORD-CONSTANTS (#136), and each operand's
@@ -3806,13 +3832,9 @@ anywhere in this descriptor -- #126, see %DECODE-CELL-INSTRUCTION,
 decoder.lisp) can omit it, in which case a (semantics ...) body's CHOICE-CASE
 (if it has one) sees every hole as unmatched, same as an operand not governed
 by any ONE-OF at all."
-  (let ((semantics-values values)
-        (semantics-choices choices))
-    (when (instruction-descriptor-semantics-operand-map descriptor)
-      (let ((mapping (instruction-descriptor-semantics-operand-map descriptor)))
-        (setf semantics-values
-              (mapcar (lambda (index) (and index (nth index values))) mapping)
-              semantics-choices
-              (mapcar (lambda (index) (and index (nth index choices))) mapping))))
-    (funcall (instruction-descriptor-semantics-fn descriptor) machine semantics-values semantics-choices
-            (instruction-descriptor-choice-selections descriptor))))
+  (let ((function (instruction-descriptor-semantics-fn descriptor))
+        (selections (instruction-descriptor-choice-selections descriptor))
+        (mapping (instruction-descriptor-semantics-operand-map descriptor)))
+    (if mapping
+        (funcall function machine values choices selections mapping)
+        (funcall function machine values choices selections))))

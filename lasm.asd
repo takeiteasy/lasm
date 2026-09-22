@@ -65,6 +65,7 @@
                (:file "diagnostic")
                (:file "emulator")
                (:file "disassembler")
+               (:file "decoder")
                (:file "listing")
                (:file "output")
                (:file "snapshot")

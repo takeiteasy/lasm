@@ -364,6 +364,7 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; REGISTER-INSTRUCTION-VARIANTS! rejects any second descriptor at an
   ;; opcode outright there, regardless of mnemonic or mode.
   (opcodes (make-hash-table :test 'eql))
+  (word-decode-table nil :type (or null simple-vector))
   ;; NIL for an ordinary byte-encoded machine (every machine before #20) --
   ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
   ;; vs. an INSTRUCTION-WORD-LAYOUT to pick between the two encoding schemes.
