@@ -1281,6 +1281,21 @@ actually run for this descriptor."
   (let ((source (if mapping (nth index mapping) index)))
     (and source (nth source operands))))
 
+(defun %lazy-instruction-semantics (form machine-name name)
+  "Compile on first use, then replace every sibling's shared proxy."
+  (let (compiled proxy)
+    (setf proxy
+          (lambda (machine operands choices &optional selections mapping)
+            (unless compiled
+              (setf compiled (compile nil form))
+              (dolist (descriptor (gethash (string-upcase (string name))
+                                           (machine-descriptor-instructions
+                                            (find-machine-descriptor machine-name))))
+                (when (eq (instruction-descriptor-semantics-fn descriptor) proxy)
+                  (setf (instruction-descriptor-semantics-fn descriptor) compiled))))
+            (funcall compiled machine operands choices selections mapping)))
+    proxy))
+
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list
                              &optional mode-operand-names named-slot-alternatives)
   "MODE-OPERAND-NAMES (#120), when given, is the union of every sibling
@@ -1304,18 +1319,22 @@ compile error, preserving typo protection."
                                 when op-name
                                   collect `(,op-name (%semantics-operand operands ,i ,mapping-name))))
          (absent-bindings (mapcar (lambda (n) `(,n (%absent-choice-operand))) absent-names)))
-     `(lambda (machine operands choices &optional selections ,mapping-name)
-        (declare (ignorable operands choices selections ,mapping-name))
-       (with-machine-bindings (machine ,machine)
-         (let ((operand (%semantics-operand operands 0 ,mapping-name))
-               ,@named-bindings
-               ,@absent-bindings)
-           (declare (ignorable operand ,@own-names ,@absent-names))
-           (macrolet ((choice-case (choice-name &body clauses)
-                        (%choice-case-form choice-name clauses ',machine ',name
-                                             ',operand-names ',hole-alternatives-list ',mode-operand-names
-                                              ',named-slot-alternatives ',mapping-name)))
-             ,@semantics-forms))))))
+     (let ((form `(lambda (machine operands choices &optional selections ,mapping-name)
+                    (declare (ignorable operands choices selections ,mapping-name))
+                    (with-machine-bindings (machine ,machine)
+                      (let ((operand (%semantics-operand operands 0 ,mapping-name))
+                            ,@named-bindings
+                            ,@absent-bindings)
+                        (declare (ignorable operand ,@own-names ,@absent-names))
+                        (macrolet ((choice-case (choice-name &body clauses)
+                                     (%choice-case-form choice-name clauses ',machine ',name
+                                                        ',operand-names ',hole-alternatives-list
+                                                        ',mode-operand-names ',named-slot-alternatives
+                                                        ',mapping-name)))
+                          ,@semantics-forms))))))
+       (if (%word-machine-p machine)
+           `(%lazy-instruction-semantics ',form ',machine ',name)
+           form))))
 
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
                            &optional sub-opcode sub-choices operand-signedness
@@ -3356,6 +3375,14 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                          (%mode-hole-alternatives mode) sub-spec mode mode-specified
                                          operand-registers)))))))))
 
+(defun %instruction-registration-form (machine name descriptors-form)
+  (let ((registration `(register-instruction-variants! ',machine ,descriptors-form)))
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       ,(if (%word-machine-p machine)
+            `(%evaluate-instruction-registration ',registration)
+            registration)
+       ',name)))
+
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
 one of:
@@ -3465,8 +3492,9 @@ matched, regardless of what value the hole folds to -- unlike :ELSE, which
 only triggers when no INLINE variant's range fits. Declaring a (choice M)
 variant for a hole that is not a ONE-OF, or naming a mode that is not one of
 that ONE-OF's own alternatives, is a DEFINSTRUCTION-time error
-(%CHECK-WORD-VARIANT-CHOICES!). A field's variants must be either all
-CHOICE-selected or all value-selected (RANGE/:ELSE) -- never a mix.
+(%CHECK-WORD-VARIANT-CHOICES!). A field may mix CHOICE-selected variants
+with value-selected (RANGE/:ELSE) variants when exactly one ONE-OF
+alternative remains unclaimed by the CHOICE-selected variants.
 
 Either way, declaring variants at all makes DEFINSTRUCTION register one
 INSTRUCTION-DESCRIPTOR per combination of variants across all of a mode's
@@ -3563,14 +3591,12 @@ layout has no effect" machine name))
                       (constants (%parse-field-value-subclauses machine name nil layout layout-name
                                                                   field-value-subclauses nil))
                       (constants-form (%word-constants-form constants)))
-                 `(eval-when (:compile-toplevel :load-toplevel :execute)
-                    (register-instruction-variants!
-                     ',machine
-                     (list ,(%descriptor-form machine name nil opcode nil nil
-                                               cycles-form
-                                               (%semantics-fn-form (rest semantics-clause) machine name nil nil)
-                                               sub nil nil nil layout-name constants-form)))
-                    ',name))))))
+                 (%instruction-registration-form
+                  machine name
+                  `(list ,(%descriptor-form machine name nil opcode nil nil
+                                            cycles-form
+                                            (%semantics-fn-form (rest semantics-clause) machine name nil nil)
+                                            sub nil nil nil layout-name constants-form))))))))
         ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
         ((consp (first mode-forms))
          (when encoding-clause
@@ -3593,11 +3619,9 @@ at least two modes -- use (modes MODE) with (encoding ...) for just one" machine
                                                     default-semantics-forms cycles-form)
                (setf all-bindings (nconc all-bindings bindings))
                (setf all-forms (nconc all-forms forms))))
-           `(eval-when (:compile-toplevel :load-toplevel :execute)
-               (register-instruction-variants!
-                ',machine
-                (let* (,@all-bindings) (%collect-instruction-descriptors ,@all-forms)))
-              ',name)))
+           (%instruction-registration-form
+            machine name
+            `(let* (,@all-bindings) (%collect-instruction-descriptors ,@all-forms)))))
         ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
         ;; all shared with the rest of the instruction -- the M1 shape.
         (t
@@ -3651,11 +3675,9 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                                    mode mode-sym machine
                                                    cycles-form (rest semantics-clause) layout-name
                                                    field-value-subclauses for-choice-subclauses)
-                   `(eval-when (:compile-toplevel :load-toplevel :execute)
-                       (register-instruction-variants!
-                        ',machine
-                        (let* (,@bindings) (%collect-instruction-descriptors ,@forms)))
-                      ',name))
+                   (%instruction-registration-form
+                    machine name
+                    `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
                  (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
                      (progn
                        (%check-no-varying-one-of! mode machine name)
@@ -3670,11 +3692,12 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                                 cycles-form (rest semantics-clause)
                                                 (%mode-hole-alternatives mode) sub-spec mode
                                                 mode-specified operand-registers)
-                     `(eval-when (:compile-toplevel :load-toplevel :execute)
-                        (register-instruction-variants!
-                         ',machine
-                         (let* (,@bindings) (list ,@forms)))
-                        ',name))))))))))))
+                     (%instruction-registration-form
+                      machine name
+                      `(let* (,@bindings) (list ,@forms))))))))))))))
+
+(defun %evaluate-instruction-registration (form)
+  (eval form))
 
 ;;; Encoding / execution
 

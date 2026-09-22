@@ -6,7 +6,7 @@ microbenchmarks, not full game workload budgets.
 
 ## Runtime memory
 
-STAR uses about 49 MiB of live dynamic heap after full GC. Each CPU owns
+STAR uses about 50 MiB of live dynamic heap after full GC. Each CPU owns
 128 KiB of packed 16-bit RAM plus registers and device state; construction
 allocates approximately 129 KiB per CPU. A thousand instances therefore
 add approximately 126 MiB of state, excluding game objects, debugger data
@@ -14,9 +14,11 @@ and execution headroom. Descriptors and compiled semantics are shared
 within a process; separate processes each carry a Lisp runtime.
 
 Words up to 16 bits use a shared descriptor dispatch table, at most
-512 KiB of entries per machine type on a 64-bit host. STAR's first decode
-builds its table in approximately 0.15 seconds. Warm the decoder before
-entering a latency-sensitive loop. Wider words retain candidate scanning.
+512 KiB of entries per machine type on a 64-bit host. STAR's first step
+builds its decode table and compiles the first instruction's semantics in
+approximately 0.19 seconds. Warm the decoder and instruction semantics
+before entering a latency-sensitive loop. Wider words retain candidate
+scanning.
 
 ## Execution measurements
 
@@ -27,6 +29,7 @@ One million alternating `ADD A, #1` and `SET PC, #loop` instructions:
 | Audit baseline, revision `3c58dfa` | 2.34 s | 816.2 MiB |
 | Indexed dispatch alone | 0.759 s | 739.5 MiB |
 | Dispatch and allocation cleanup | 0.615 s | 76.2 MiB |
+| Current word-semantics registration | 0.616 s | 75.6 MiB |
 
 The combined change reduces allocation by approximately 91% and takes
 about one quarter of the baseline execution time. Emission order is
@@ -34,7 +37,7 @@ precomputed where field geometry permits, decode builds only its result
 lists, and generated semantics read mapped operands without copying them.
 
 Cumulative allocation is memory churn, not simultaneously retained memory.
-Live heap after execution is approximately 49.4 MiB. The benchmark also
+Live heap after execution is approximately 50.4 MiB. The benchmark also
 runs under a 128 MiB heap. This short run does not establish long-running
 game behavior or guarantee a process RSS limit.
 
@@ -59,18 +62,18 @@ execution is not measured here.
 
 ## Build memory
 
-A forced STAR build allocates about 2,414 MiB cumulatively. Compiling
-`anima16/basic.lisp` accounts for about 2,129 MiB of that total; allocation
-sampling places most of its cost in SBCL compilation. LASM builds word
-alternatives and fixed fields from compact literal data, and caches decode
-constraints during each instruction registration.
+A forced STAR build allocates about 1,308 MiB cumulatively. Word-instruction
+registration uses compact quoted forms during compilation; semantics compile
+on first execution. Registration remains available at compile time and
+redefined instructions replace earlier definitions.
 
-Fresh build plus 188 STAR checks peaks at a median 661.3 MiB RSS across
-three runs (660.7–661.6 MiB). The heap reaches about 567 MiB after the build
-and falls to about 49 MiB after full GC. LASM's full suite followed by a
-forced STAR build and its suite passes in one process with the default 1 GiB
-heap. A forced build still exhausts a 256 MiB heap. Build figures are
-separate from the precompiled runtime measurements above.
+With a 256 MiB SBCL heap, a fresh forced build plus 188 STAR checks peaks at
+170 MB process RSS and retains 51.6 MiB of dynamic heap after full GC. The
+full LASM suite followed by a forced STAR build and STAR's suite also passes
+under the 256 MiB heap, peaking at 200 MB RSS and retaining 64.8 MiB after
+full GC. Peak RSS, cumulative allocation and post-GC live heap measure
+different kinds of memory use. Build figures are separate from the
+precompiled runtime measurements above.
 
 ## Reproduce
 
@@ -90,8 +93,8 @@ small variation. Both examples require SBCL.
 For build measurements, run:
 
 ```sh
-/usr/bin/time -l sbcl --dynamic-space-size 2048 --script examples/build-memory-audit.lisp ../star/star.asd --star-tests
-sbcl --script examples/build-memory-audit.lisp ../star/star.asd --combined --star-tests
+/usr/bin/time -l sbcl --dynamic-space-size 256 --script examples/build-memory-audit.lisp ../star/star.asd --star-tests
+/usr/bin/time -l sbcl --dynamic-space-size 256 --script examples/build-memory-audit.lisp ../star/star.asd --combined --star-tests
 ```
 
 The script reports allocation and heap use per compiled STAR file and
@@ -99,10 +102,9 @@ post-GC live heap. `--phases` reports inclusive allocation for selected LASM
 definition and registration functions. `--sprof` samples allocation during
 `basic.lisp` compilation. macOS `time -l` reports peak process RSS. Run
 fresh measurements in separate processes with compiled dependencies already
-cached and a 2 GiB build heap; `--combined` deliberately keeps the LASM test
-suite's heap history on the default heap.
+cached; `--combined` keeps the LASM test suite's heap history.
 
-Validation covers 2,443 LASM checks and 188 STAR checks, exhaustive
+Validation covers 2,451 LASM checks and 188 STAR checks, exhaustive
 comparison with candidate scanning for two 16-bit LASM fixtures and all
 65,536 STAR instruction words, plus nested and simultaneous decoding,
 self-modifying code, definition replacement and memory-read ordering.

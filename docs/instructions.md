@@ -67,6 +67,11 @@ itself resolves its own storage clauses — so `definstruction` can validate
 against them as soon as the form is compiled, not only after the file loads.
 Registration happens inside an `eval-when` for the same reason.
 
+For word-encoded machines, instruction registration still runs during
+compilation and loading. Semantics compile on first execution, then the
+compiled function is shared by that instruction's variants. The first
+execution can take longer; later executions use the compiled function.
+
 ### `(modes MODE)` — sugar for one mode
 
 Zero or one addressing mode, with `(encoding ...)` (below) giving its opcode

@@ -644,6 +644,45 @@
   (encoding (opcode 2))
   (semantics (trap :halt)))
 
+(defmachine lazy-semantics-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16 (field opcode 4) (field value 12)))
+
+(fiveam:test word-semantics-compile-on-first-use-and-redefinition
+  (eval '(definstruction lazy-semantics-test-machine lazyset
+           (modes word-imm)
+           (encoding (opcode 1)
+                     (operand value :field value
+                       (variant (range 0 7) inline)
+                       (variant :else (extra-word :escape #xfff))))
+           (semantics (set! a value))))
+  (let* ((variants (find-instruction-variants 'lazy-semantics-test-machine "LAZYSET"))
+         (proxy (instruction-descriptor-semantics-fn (first variants)))
+         (machine (make-machine 'lazy-semantics-test-machine)))
+    (fiveam:is (= 2 (length variants)))
+    (fiveam:is (eq proxy (instruction-descriptor-semantics-fn (second variants))))
+    (execute-instruction (first variants) machine (list 3))
+    (fiveam:is (= 3 (sref machine 'a)))
+    (fiveam:is (not (eq proxy (instruction-descriptor-semantics-fn (first variants)))))
+    (fiveam:is (eq (instruction-descriptor-semantics-fn (first variants))
+                   (instruction-descriptor-semantics-fn (second variants))))
+    (execute-instruction (second variants) machine (list 9))
+    (fiveam:is (= 9 (sref machine 'a)))
+    (eval '(definstruction lazy-semantics-test-machine lazyset
+             (modes word-imm)
+             (encoding (opcode 1)
+                       (operand value :field value
+                         (variant (range 0 7) inline)
+                         (variant :else (extra-word :escape #xfff))))
+             (semantics (set! a (+ value 1)))))
+    (let ((replacement (first (find-instruction-variants 'lazy-semantics-test-machine "LAZYSET"))))
+      (fiveam:is (not (eq (instruction-descriptor-semantics-fn replacement)
+                          (instruction-descriptor-semantics-fn (first variants)))))
+      (execute-instruction replacement machine (list 3))
+      (fiveam:is (= 4 (sref machine 'a))))))
+
 ;;; instruction-word layout parsing (machine.lisp)
 
 (fiveam:test instruction-word-clause-requires-width
