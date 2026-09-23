@@ -644,6 +644,128 @@ start: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5 0) (assembly-cells a)))))
 
+(fiveam:test set-captures-source-order-values-in-data-and-instructions
+  (let ((a (assemble ".set n, 3
+.byte n
+lda n
+.set n, n + 1
+.byte n
+lda n" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(3 #x11 3 4 #x11 4) (assembly-cells a)))
+    (fiveam:is (= 4 (gethash "n" (assembly-symbols a))))))
+
+(fiveam:test set-rebinds-equ-and-equ-captures-current-set-value
+  (let ((a (assemble ".equ n, 2
+.equ old, n
+.set n, 5
+.equ saved, n
+.set n, 7
+.byte old, saved, n" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(2 5 7) (assembly-cells a)))))
+
+(fiveam:test set-rejects-label-rebinding-and-later-equ-or-label-rebinding
+  (fiveam:signals assembly-error
+    (assemble "n: nop
+.set n, 2" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble ".set n, 2
+.equ n, 3" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble ".set n, 2
+n: nop" :machine 'instr-test-machine)))
+
+(fiveam:test set-rejects-a-forward-reference-and-an-unassigned-use
+  (fiveam:signals assembly-error
+    (assemble ".set n, later
+later: nop" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble ".byte n
+.set n, 2" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble "lda n
+.set n, 2" :machine 'instr-test-machine)))
+
+(fiveam:test set-preserves-ordinary-forward-label-references
+  (let ((a (assemble ".set n, 2
+.byte n, later
+later: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(2 2 #xEA) (assembly-cells a)))))
+
+(fiveam:test set-local-name-keeps-its-enclosing-label-scope
+  (let ((a (assemble "first: nop
+.set .n, 2
+.byte .n
+.set .n, 3
+.byte .n
+second: nop
+.set .n, 4
+.byte .n" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA 2 3 #xEA 4) (assembly-cells a)))
+    (fiveam:is (= 3 (gethash "first.n" (assembly-symbols a))))
+    (fiveam:is (= 4 (gethash "second.n" (assembly-symbols a))))))
+
+(fiveam:test set-value-changes-mode-choice-at-each-instruction
+  (let ((a (assemble ".set addr, $10
+lda addr
+.set addr, $1000
+lda addr" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 #x10 #x12 #x00 #x10) (assembly-cells a)))))
+
+(fiveam:test local-set-value-selects-an-instruction-mode
+  (let ((a (assemble "start: nop
+.set .addr, $1000
+lda .addr" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xEA #x12 #x00 #x10) (assembly-cells a)))))
+
+(fiveam:test set-captures-final-layout-address-after-mode-widening
+  (let ((a (assemble "lda target
+.set here, *
+.byte here
+.res 300
+target: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 3 (gethash "here" (assembly-symbols a))))
+    (fiveam:is (= 3 (aref (assembly-cells a) 3)))))
+
+(fiveam:test pure-set-values-feed-res-and-org-after-reassignment
+  (let ((a (assemble ".set n, 1
+.set n, n + 2
+.res n
+.set base, $8000
+.org base
+last: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 3 (gethash "n" (assembly-symbols a))))
+    (fiveam:is (= #x8000 (gethash "last" (assembly-symbols a))))))
+
+(fiveam:test address-dependent-set-is-not-a-layout-constant
+  (fiveam:signals assembly-error
+    (assemble "start: nop
+.set n, * - start
+.res n" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble ".set n, 2
+start: nop
+.set n, * - start
+.res n" :machine 'instr-test-machine)))
+
+(fiveam:test pure-equ-chain-feeds-a-layout-directive
+  (let ((a (assemble ".equ a, 2
+.equ b, a + 1
+.res b" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(0 0 0) (assembly-cells a)))))
+
+(fiveam:test set-rejects-register-alias-collision
+  (fiveam:signals assembly-error
+    (assemble ".set i, 5" :machine 'dcpu16-test-machine)))
+
+(fiveam:test set-final-binding-appears-in-symbol-info
+  (let* ((a (assemble ".set n, 1
+.set n, 2" :machine 'instr-test-machine))
+         (info (gethash "n" (assembly-symbol-info a))))
+    (fiveam:is (= 1 (hash-table-count (assembly-symbols a))))
+    (fiveam:is (eq :set (symbol-info-kind info)))
+    (fiveam:is (= 2 (symbol-info-value info)))
+    (fiveam:is (= 2 (symbol-info-line info)))))
+
 ;;; Scope-aware symbol metadata (#37) -- ASSEMBLY-SYMBOL-INFO tags every
 ;;; ASSEMBLY-SYMBOLS entry with its unqualified name, enclosing scope, and
 ;;; kind (:LABEL or :EQU), captured at bind time rather than recovered later

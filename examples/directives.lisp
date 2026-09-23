@@ -46,6 +46,7 @@
 (defparameter *source*
   "        .equ initial, 10   ; a named constant, no address of its own
         .equ padsize, 2    ; -- pure (no label, no *), so .res may use it
+        .set sample, 5
         .org $8000         ; place the whole program at $8000
 start:  lda #initial   ; A = 10 (an .equ works as an immediate operand)
         sta scratch    ; RAM[scratch] = 10
@@ -54,7 +55,9 @@ start:  lda #initial   ; A = 10 (an .equ works as an immediate operand)
         hlt
 scratch: .byte 0
 padding: .res padsize  ; two zero-filled scratch bytes, unread by this program
-table:   .byte 5, 10, 15")
+table:   .byte sample
+         .set sample, 10
+         .byte sample, 15")
 
 (format t "~&Source:~%~A~2%" *source*)
 

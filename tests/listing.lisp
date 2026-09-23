@@ -286,6 +286,16 @@ loop: nop
 .next: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 3 (length (assembly-symbols-list a))))))
 
+(fiveam:test set-symbol-list-and-text-show-the-final-binding
+  (let* ((a (assemble ".set n, 1
+.set n, 2" :machine 'instr-test-machine))
+         (sets (assembly-symbols-list a :kind :set))
+         (rendered (symbols-text a)))
+    (fiveam:is (= 1 (length sets)))
+    (fiveam:is (= 2 (symbol-info-value (first sets))))
+    (fiveam:is (search "set" rendered))
+    (fiveam:is (search "2" rendered))))
+
 (fiveam:test assembly-symbol-groups-buckets-locals-under-their-global
   (let* ((a (assemble ".equ bufsize, 16
 start: nop

@@ -50,15 +50,14 @@ latter directly. `file` names in-memory source in diagnostics and listings;
 - `origin` — the address the first cell was placed at: the `:origin` key
   below, unless a leading `.org` moved it first (see "`:origin`" below).
 - `symbols` — a hash table (name string → value) of every symbol bound while
-  assembling, forward or backward: a label's address, or an `.equ`'s folded
-  value (see "`.equ` / symbol assignment" below) — the two share one flat
-  table and one duplicate check, so a program can't bind the same name both
-  ways. This table's shape is deliberately kept flat and untagged (`eval-expr`
+  assembling: a label's address or an assignment's final folded value.
+  Labels and assignments share one flat table; `.set` can update an
+  assignment (see "`.set`" below). The table stays untagged (`eval-expr`
   reads it as a plain name → value map) — see `symbol-info` below for the
   scope/kind metadata this can't carry.
 - `symbol-info` — a hash table (qualified name string → `symbol-info`), built
   alongside `symbols` and keyed the same way, carrying what `symbols` alone
-  cannot: whether an entry is a label or an `.equ`, and its enclosing scope
+  cannot: whether an entry is a label, `.equ`, or `.set`, and its enclosing scope
   for a local name. See [Listing and source map](listing.md#symbol-table) for
   the query/render API built on it.
 - `listing` / `source` (#25) — the retained address↔statement mapping
@@ -162,7 +161,9 @@ reaches `assemble-statements` after parsing.
    against the symbol table, and encode (`encode-instruction`, or a
    directive's own byte-laying — [Directives](directives.md)). No re-parsing
    or re-matching happens here — layout already committed to a mode (or
-   directive) and its parsed operand ASTs.
+   directive) and its parsed operand ASTs. Layout captures `.set` values in
+   those ASTs at each statement's source position, while ordinary forward
+   labels still resolve against the completed table.
 
 ### Choosing a mode
 
@@ -581,17 +582,16 @@ An `.equ` (see [Directives, "`.equ`"](directives.md#equ)) binds a name to a
 computed value in `symbols` without occupying any address — distinct from a
 label, which always binds to the current address. Its value must fold
 *during the layout pass that reaches it*, against that pass's `symbols` table
-as built so far: an `.equ` can reference any label or `.equ` bound above it,
+as built so far: an `.equ` can reference any label or assignment bound above it,
 never one below (a forward reference signals `assembly-error`, the same
 "must fold now" rule `.org`/`.res`'s own operand already follows). Rebinding
 an already-bound name — a label redefined as an `.equ`, an `.equ` redefined
 as a label, or a second `.equ` of the same name — is the same duplicate-
 symbol `assembly-error` a repeated label signals.
 
-Because `.org`/`.res` must fold their own operand in pass 1, before any
-address is final, they may only reference a **pure** `.equ` — one whose value
-contains no label and no `"*"` (location counter), so it can't change as
-addresses move across relaxation passes:
+Because `.org`/`.res` must fold their own operand during layout, they may
+only reference **pure** assignments — values derived from numbers and other
+pure assignments, without a label or `*` (location counter):
 
 ```lisp
 .equ bufsize, 16
@@ -604,16 +604,27 @@ start: nop
 ```
 
 This restriction only affects `.org`/`.res`; an ordinary instruction operand
-or `.byte`/`.word` value may reference any `.equ`, pure or not, since those
-fold at encode time against the completed table like any label reference. A
-follow-up ticket (#41) tracks lifting the restriction with a purity check
-strong enough to still guarantee `%layout` converges.
+or `.byte`/`.word` value may reference any assignment, pure or not. Those
+operands fold during encoding, after layout has fixed their addresses.
 
-An `.equ`'s `symbol-info` entry (#37, above) is tagged kind `:equ`, distinct
+An `.equ`'s `symbol-info` entry is tagged kind `:equ`, distinct
 from a label's `:label` — the discriminator a plain `symbols` lookup can't
 give you (its value is just an integer either way), and what fixes the
 disassembler's own label/`.equ` ambiguity (see
 [Disassembler](disassembler.md)).
+
+## `.set`
+
+`.set name, value` binds a new assignment or replaces an earlier `.equ` or
+`.set` assignment. It does not replace a label. Its value folds against the
+symbols already bound when layout reaches it. Instruction and data operands
+capture the current value at their own source position; a reference before
+the first assignment is `assembly-error`. Pure `.set` values may feed later
+`.org` and `.res` directives, including through earlier pure assignments.
+
+`assembly-symbols` retains the final value. Its `symbol-info` entry has kind
+`:set` and the last assignment's source location. See [Directives](directives.md#set)
+for an example.
 
 ## `:origin`
 
@@ -635,9 +646,9 @@ at, `.org` can still move it further before the first byte).
 ## Conditions
 
 - `assembly-error` (a subtype of `lasm-syntax-error`) — a duplicate symbol (a
-  label or `.equ` name bound twice, in any combination), a label or `.equ`
-  name colliding (case-insensitively) with a register alias (#72, see
-  "Register aliases" above), a local label or `.equ` name with no enclosing
+  label or `.equ` name bound twice), a label or assignment
+  name colliding (case-insensitively) with a register alias (see
+  "Register aliases" above), a local label or assignment name with no enclosing
   global label (see "Local-label scoping" above), an operand whose syntax
   matches none of the mnemonic's declared
   addressing-mode variants (naming the accepted modes and the operand given —
@@ -646,7 +657,7 @@ at, `.org` can still move it further before the first byte).
   operand out of range (see "Choosing a mode" above and
   [Diagnostics](diagnostics.md#strict-operand-range)), or a malformed
   directive use (wrong operand count, a non-constant `.org`/`.res` operand,
-  an `.org`/`.res` operand referencing a non-pure `.equ`, an `.equ`'s value
+  an `.org`/`.res` operand referencing a non-pure assignment, an assignment value
   referencing a symbol not yet defined, or a backward-moving `.org` — see
   [Directives](directives.md)).
 - `include-error` — a malformed or unresolvable `.include` (see

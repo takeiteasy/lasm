@@ -18,7 +18,7 @@ version.
 
 - `assembly-listing` — a list of `listing-line`, ascending by address, one
   per address-occupying statement (an instruction, a `.byte`/`.word`, or a
-  `.res`; a `.org` or `.equ` occupies no address and contributes none).
+  `.res`; a `.org`, `.equ`, or `.set` occupies no address and contributes none).
 - `assembly-source` — the original source string `assemble` was given, or
   `nil` when the `assembly` came from `assemble-statements` called directly
   with no `:source`.
@@ -100,7 +100,7 @@ one row per source line when `assembly-source` is present:
 ```
 
 A source line with no `listing-line` at all — a comment, a label-only line,
-`.org`, `.equ` — still renders, with blank address/cells columns, so the
+`.org`, `.equ`, `.set` — still renders, with blank address/cells columns, so the
 listing is complete rather than silently skipping non-code lines. A macro
 invocation line renders once per emitted statement, each with its own address
 and cells. The source column shows the invocation as written.
@@ -136,11 +136,15 @@ bind time rather than recovered afterward:
   name            ; unqualified spelling, e.g. ".next"
   qualified-name  ; assembly-symbols key, e.g. "loop.next"
   scope           ; enclosing global label's name, or NIL
-  kind            ; :label | :equ
+  kind            ; :label | :equ | :set
   localp
   value           ; same value as assembly-symbols' entry
   line)           ; defining statement's source line
 ```
+
+A `.set` name appears once, with its final value, kind `:set`, and the last
+assignment's source line. Earlier uses retain their source-order values in
+the encoded cells.
 
 Query functions built on it:
 
@@ -153,8 +157,8 @@ Query functions built on it:
 `assembly-symbol` looks up a single name, qualifying it against `scope` the
 same way the assembler would (so `(assembly-symbol a ".next" :scope "loop")`
 finds what `loop: .next:` bound). `assembly-symbols-list` returns every
-symbol, optionally filtered to one `kind` (`:label`/`:equ`) and/or one
-`scope` (pass `nil` for top-level symbols — globals and top-level `.equ`s).
+symbol, optionally filtered to one `kind` (`:label`/`:equ`/`:set`) and/or one
+`scope` (pass `nil` for top-level symbols — globals and top-level assignments).
 `assembly-symbol-groups` is the grouped view a listing wants: a leading
 `(nil . symbols)` bucket for every top-level symbol, then one
 `(global-name . symbols)` entry per global that has at least one local, the
@@ -168,7 +172,7 @@ global's own `symbol-info` heading its list:
 ```
 
 Both `assembly-symbols-list` and `assembly-symbol-groups` order symbols by
-their `symbol-info-line`, then by binding order within a line. An `.equ`'s
+their `symbol-info-line`, then by binding order within a line. An assignment's
 value has no address meaning. Symbols defined by macros use the outermost
 invocation line; `symbol-info-definition-line` gives their body line.
 
@@ -185,7 +189,7 @@ other path that never populated it).
 
 A grouped dump, parallel to `listing-text`/`print-listing`: top-level symbols
 first, then each global with its locals indented underneath, each row naming
-the symbol, its value (hex for a label, decimal for an `.equ`), and its kind.
+the symbol, its value (hex for a label, decimal for an assignment), and its kind.
 See [`examples/pc-and-scopes.lisp`](../examples/pc-and-scopes.lisp) for a
 runnable version.
 

@@ -17,10 +17,14 @@
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".cell"))))
   (fiveam:is (eq :emit (directive-descriptor-action (find-directive-descriptor ".dat"))))
   (fiveam:is (eq :reserve (directive-descriptor-action (find-directive-descriptor ".res"))))
-  (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".equ")))))
+  (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".equ"))))
+  (fiveam:is (eq :reassign (directive-descriptor-action (find-directive-descriptor ".set")))))
 
 (fiveam:test equ-directive-has-fixed-arity-two
   (fiveam:is (equal '(:fixed 2) (directive-descriptor-arity (find-directive-descriptor ".equ")))))
+
+(fiveam:test set-directive-has-fixed-arity-two
+  (fiveam:is (equal '(:fixed 2) (directive-descriptor-arity (find-directive-descriptor ".set")))))
 
 (fiveam:test directive-lookup-is-case-insensitive
   (fiveam:is (eq (find-directive-descriptor ".org") (find-directive-descriptor ".ORG"))))

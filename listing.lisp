@@ -12,7 +12,7 @@
 ;;;; RENDERING -- when ASSEMBLY-SOURCE is present, LISTING-TEXT walks the
 ;;;; source line by line (1-based) rather than the entry list directly, so a
 ;;;; line with no LISTING-LINE at all (a comment, a label-only line, .ORG,
-;;;; .EQU -- none of which occupy address space) still appears, with blank
+;;;; .EQU, .SET -- none of which occupy address space) still appears, with blank
 ;;;; address/cells columns, giving a complete listing rather than one with
 ;;;; silent gaps. With no source (ASSEMBLY-SOURCE NIL -- e.g. an ASSEMBLY
 ;;;; built via ASSEMBLE-STATEMENTS with no :SOURCE), this degrades to an
@@ -256,7 +256,7 @@ directly."
 (defun assembly-symbols-list (assembly &key kind (scope :any scope-given-p))
   "Every SYMBOL-INFO in ASSEMBLY, in SYMBOL-INFO-LINE order (see this file's
 header comment on why line order, not address order). KIND, when given
-(:LABEL or :EQU), restricts to that kind. SCOPE, when given, restricts to
+  (:LABEL, :EQU, or :SET), restricts to that kind. SCOPE, when given, restricts to
 symbols whose SYMBOL-INFO-SCOPE is SCOPE -- pass SCOPE NIL for top-level
 symbols (globals and top-level .EQUs); omitting SCOPE entirely means no
 scope filter at all. Empty (not NIL-as-absent) when ASSEMBLY-SYMBOL-INFO is
@@ -322,7 +322,7 @@ are ordered by their global's own SYMBOL-INFO-LINE."
 
 (defun %symbol-value-text (info digits)
   "INFO's VALUE rendered DIGITS-wide hex for a :LABEL (an address, matching
-LISTING-TEXT's own address rendering), or plain decimal for an :EQU (not an
+LISTING-TEXT's own address rendering), or plain decimal for an assignment (not an
 address, so hex width has no natural meaning)."
   (if (eq (symbol-info-kind info) :label)
       (format nil "~V,'0X" digits (symbol-info-value info))
@@ -332,7 +332,7 @@ address, so hex width has no natural meaning)."
   "Render ASSEMBLY's symbol table (#37), grouped by scope
 (ASSEMBLY-SYMBOL-GROUPS): top-level symbols first, then each global label
 with its locals indented underneath, each row naming a symbol, its value
-(hex for a :LABEL, decimal for an :EQU), and its KIND. Returns the text as a
+(hex for a :LABEL, decimal for an assignment), and its KIND. Returns the text as a
 string when STREAM is NIL (default); otherwise writes to STREAM and returns
 NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))

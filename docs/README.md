@@ -11,7 +11,7 @@
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`
 - [Addressing modes](modes.md) — `defmode` and pattern matching
 - [Instructions](instructions.md) — `definstruction`, encoding, semantics
-- [Directives](directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
+- [Directives](directives.md) — `defdirective`, data, layout, `.equ` and `.set`
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Includes](includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes

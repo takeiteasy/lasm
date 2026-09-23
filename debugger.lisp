@@ -77,7 +77,7 @@ not on every command."
   "WHERE as an address: an integer as-is, or a label string resolved through
 ASSEMBLY-SYMBOL (listing.lisp, #37) against SESSION's attached ASSEMBLY.
 Signals a plain error when SESSION has no ASSEMBLY, when the name is
-unbound, or when it names an :EQU rather than a :LABEL -- an .EQU's value is
+unbound, or when it names an assignment rather than a :LABEL -- its value is
 not an address (the #81 ambiguity SYMBOL-INFO's KIND already resolves; a
 bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
   (etypecase where

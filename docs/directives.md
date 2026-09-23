@@ -1,9 +1,9 @@
 # Directives
 
 `defdirective` declares an assembler directive: a named-parameter list plus
-exactly one action form from a small fixed vocabulary. LASM ships seven
+exactly one action form from a small fixed vocabulary. LASM ships eight
 built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.cell`,
-`.dat`, `.res`, `.equ`. The assembler (see [Assembler](assembler.md))
+`.dat`, `.res`, `.equ`, `.set`. The assembler (see [Assembler](assembler.md))
 dispatches a statement to a directive by mnemonic, the same way it dispatches
 to an instruction's addressing-mode variants — a directive statement is
 otherwise an ordinary `statement` (see [Statement grammar & expression
@@ -18,6 +18,7 @@ the default lexer's `ident-chars`.
 (defdirective ".dat"  (&rest values) (emit 1 values))
 (defdirective ".res"  (count)        (reserve count))
 (defdirective ".equ"  (name value)   (assign name value))
+(defdirective ".set"  (name value)   (reassign name value))
 ```
 
 ## `defdirective`
@@ -45,6 +46,8 @@ including zero. `action-form` must be exactly one of:
 - `(assign name-name value-name)` — bind `name-name` (an identifier operand,
   not an expression) to `value-name` in the symbol table, without occupying
   any address (`.equ` below).
+- `(reassign name-name value-name)` — bind or replace an assignment name
+  without occupying an address (`.set` below).
 
 `action-form` must reference the directive's own parameter name — this
 (along with restricting the body to one recognized action, not arbitrary
@@ -193,11 +196,11 @@ so there is exactly one code path for both spellings.
 
 An `.equ`'s value folds during the layout pass that reaches it, against that
 pass's symbol table *as built so far* — so it can reference any label or
-`.equ` bound above it (`* - start` included, once `start:` precedes it), but
+assignment bound above it (`* - start` included, once `start:` precedes it), but
 never one below; a forward reference is `assembly-error`, the same
 "must-fold-now" rule `.org`/`.res`'s own operand already follows. Rebinding
-an already-bound name — a label redefined as an `.equ`, an `.equ` redefined
-as a label, or a repeated `.equ` — signals the same duplicate-symbol
+an already-bound name with `.equ` — a label redefined as an `.equ`, an `.equ`
+redefined as a label, or a repeated `.equ` — signals the same duplicate-symbol
 `assembly-error` a repeated label does; the symbol table is one flat
 name → value map regardless of which bound a given name.
 
@@ -220,10 +223,9 @@ A local name (the lexer's `local-label-prefix`, e.g. `.n`) is scoped to its
 nearest preceding global label exactly like a local label — see
 [Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16).
 
-Because `.org`/`.res` must fold their own operand in pass 1, before any
-address is final, they may reference an `.equ` only when it's **pure** — its
-value contains no label and no `"*"`, so it can't change across relaxation
-passes:
+Because `.org`/`.res` must fold their own operand during layout, they may
+reference only **pure** assignments — values derived from numbers and earlier
+pure assignments, without a label or `*`:
 
 ```lisp
 .equ bufsize, 16
@@ -237,8 +239,29 @@ start: nop
 An ordinary instruction operand or `.byte`/`.word` value has no such
 restriction, since those fold at encode time against the completed table
 like any label reference. See [Assembler, "`.equ` / symbol
-assignment"](assembler.md#equ--symbol-assignment) for why (#41 tracks
-lifting it).
+assignment"](assembler.md#equ--symbol-assignment).
+
+## `.set`
+
+```lisp
+.set count, 2
+.byte count       ; emits 2
+.set count, count + 1
+.byte count       ; emits 3
+```
+
+`.set` binds a new name or replaces an earlier `.set` or `.equ` assignment.
+It cannot replace a label or register alias. Its value must resolve when the
+statement is reached, using preceding definitions and the current `*` address.
+An instruction or data operand using the name keeps the value visible at its
+own source position; a use before the first assignment is `assembly-error`.
+Ordinary labels still support forward references. Local `.set` names follow
+the same scope rule as local `.equ` names.
+
+`.set` occupies no address. A pure value may feed a later `.org` or `.res`;
+purity carries through earlier pure assignments and is updated on every
+reassignment. A value depending on a label or `*` cannot feed either layout
+directive. `assembly-symbols` and symbol listings show the final `.set` value.
 
 `.include` is likewise not a directive; it is expanded before layout — see
 [Includes](includes.md).
@@ -264,11 +287,11 @@ restricted vocabulary actually requires.
 
 - `assembly-error` — wrong operand count for a directive's declared arity, a
   non-constant `.org`/`.res` operand (a label reference, or a non-pure
-  `.equ` reference, which must fold before layout can compute addresses at
+  assignment reference, which must fold before layout can compute addresses at
   all — see "`.equ`" above), a backward-moving `.org`, a negative `.res`
-  count, an `.equ`'s first operand not a bare identifier, an `.equ` value
-  referencing a symbol not yet bound (forward reference), or a duplicate
-  symbol (a label or `.equ` name bound twice, in any combination).
+  count, an assignment's first operand not a bare identifier, an assignment
+  value referencing a symbol not yet bound, a `.set` use before assignment,
+  or a duplicate symbol.
 - `unresolved-label` — a `.byte`/`.word`/`.cell`/`.dat` operand referencing a
   label never bound anywhere in the program (from `eval-expr` at encode time,
   same as an instruction operand).
@@ -278,9 +301,7 @@ restricted vocabulary actually requires.
 - `.ascii`/`.asciz` — needs a string node in the expression parser
   (`parse-expression`, [Statement grammar & expression parser](parser.md)),
   which has none today.
-- `.set` / redefinable assignment — a rebinding counterpart to `.equ`, which
-  signals `assembly-error` on any rebind (see "`.equ`" above).
-- Lifting `.org`/`.res`'s pure-`.equ`-only restriction (#41).
+- Allowing `.org`/`.res` to use address-dependent assignments.
 - The disassembler's undecodable-data lines always render as `.byte $XX`
   (`%data-line-text`, `disassembler.lisp`), even on a word-addressed machine
   — rendering `.cell`/`.dat` there needs the machine's cell width threaded

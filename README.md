@@ -16,7 +16,7 @@ architectures, not real silicon.
 - [Statement grammar & expression parser](docs/parser.md) — `parse`, `parse-expression`
 - [Addressing modes](docs/modes.md) — `defmode`, pattern matching
 - [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
-- [Directives](docs/directives.md) — `defdirective`, `.org`, `.byte`/`.word`, `.res`
+- [Directives](docs/directives.md) — `defdirective`, data, layout, `.equ` and `.set`
 - [Macros](docs/macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Includes](docs/includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes

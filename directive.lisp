@@ -1,15 +1,16 @@
 ;;;; directive.lisp
 ;;;; DEFDIRECTIVE: a declarative assembler-directive grammar (LASM-plan.md
 ;;;; sec. 3.6, #14). A directive is a named parameter list plus exactly one
-;;;; action form from a fixed vocabulary (SET-ORIGIN!, EMIT, RESERVE, ASSIGN)
+;;;; action form from a fixed vocabulary (SET-ORIGIN!, EMIT, RESERVE, ASSIGN,
+;;;; REASSIGN)
 ;;;; -- restricting the body to one action, rather than arbitrary Lisp, is
 ;;;; what lets the assembler (assembler.lisp) derive a directive statement's
 ;;;; layout size *statically*, the same way it already knows an instruction
 ;;;; statement's size from its chosen INSTRUCTION-DESCRIPTOR without running
 ;;;; any semantics. ASSIGN (#35's .EQU) is zero-size like SET-ORIGIN!, but
 ;;;; binds a name in the symbol table instead of moving the address counter
-;;;; -- see assembler.lisp's header for why that's a layout-time bind, not a
-;;;; label-like one.
+;;;; -- see assembler.lisp for the layout-time binding path. REASSIGN is the
+;;;; corresponding rebinding action used by .SET.
 ;;;;
 ;;;; Unlike DEFMODE (mode.lisp), this registers with a plain top-level SETF,
 ;;;; not an EVAL-WHEN: DEFMODE needs compile-time registration because
@@ -32,9 +33,9 @@
 (defstruct directive-descriptor
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | :variadic
-  action      ; :set-origin | :emit | :reserve | :assign
+  action      ; :set-origin | :emit | :reserve | :assign | :reassign
   width)      ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
-              ; NIL for :set-origin / :reserve / :assign
+              ; NIL for :set-origin / :reserve / :assign / :reassign
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
 ;; *LEXERS* (lexer.lisp), a plain runtime hash table with no EVAL-WHEN (see
@@ -100,14 +101,12 @@ one-argument shape -- handled separately. Returns (VALUES :emit width)."
     (values :emit width-form)))
 
 (defun %parse-assign-action (action-form param-names)
-  "ASSIGN (#35's .EQU) is the other two-argument action -- a name symbol and
-a value expression, both referencing the directive's own two parameters, in
-order. Returns :ASSIGN."
-  (unless (and (consp action-form) (eq (first action-form) 'assign)
+  "Validate ASSIGN or REASSIGN with the directive's two parameters, in order."
+  (unless (and (consp action-form) (member (first action-form) '(assign reassign))
                (equal (rest action-form) param-names))
-    (error "Malformed DEFDIRECTIVE action ~S -- expected (assign ~{~S~^ ~})"
+    (error "Malformed DEFDIRECTIVE action ~S -- expected an assignment with (~{~S~^ ~})"
            action-form param-names))
-  :assign)
+  (if (eq (first action-form) 'assign) :assign :reassign))
 
 (defun build-directive-descriptor (name params action-form)
   (multiple-value-bind (arity param-names) (%parse-directive-params params)
@@ -115,7 +114,7 @@ order. Returns :ASSIGN."
         (cond
           ((and (consp action-form) (eq (first action-form) 'emit))
            (%parse-emit-action action-form param-names))
-          ((and (consp action-form) (eq (first action-form) 'assign))
+          ((and (consp action-form) (member (first action-form) '(assign reassign)))
            (values (%parse-assign-action action-form param-names) nil))
           (t (%parse-directive-action action-form param-names)))
       (make-directive-descriptor :name (string-upcase name) :arity arity
@@ -144,11 +143,13 @@ referencing PARAMS' own parameter name(s), in order:
                               instruction operand).
   (assign name value)      -- bind NAME (an identifier operand, not an
                               expression) to VALUE in the symbol table,
-                              without occupying any address -- #35's .EQU.
+                              without occupying any address -- .EQU.
                               VALUE must fold at layout time, against labels
-                              and .EQUs already bound above it (a forward
+                              and assignments already bound above it (a forward
                               reference is an ASSEMBLY-ERROR); zero layout
                               size.
+  (reassign name value)    -- bind or replace an assignment name at layout
+                              time, with the same operands and zero size.
 
 E.g.:
   (defdirective \".org\"  (address)      (set-origin! address))
@@ -156,6 +157,7 @@ E.g.:
   (defdirective \".word\" (&rest values) (emit 2 values))
   (defdirective \".res\"  (count)        (reserve count))
   (defdirective \".equ\"  (name value)   (assign name value))
+  (defdirective \".set\"  (name value)   (reassign name value))
 
 Registers the resulting DIRECTIVE-DESCRIPTOR under NAME (upcased) in
 *DIRECTIVES*, retrievable with FIND-DIRECTIVE-DESCRIPTOR. Restricting BODY
@@ -185,6 +187,7 @@ anything -- see this file's header comment."
 ;; change at all.
 (defdirective ".res"  (count)        (reserve count))
 (defdirective ".equ"  (name value)   (assign name value))
+(defdirective ".set"  (name value)   (reassign name value))
 ;; .CELL/.DAT (#65): plain aliases for .BYTE -- same width-1 :EMIT action, so
 ;; a word-addressed machine's source can name "one of the machine's own
 ;; cells" without reading the byte-addressed-flavored ".byte". Both spellings
