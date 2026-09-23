@@ -74,7 +74,9 @@ on, so **declare narrower/cheaper modes before wider ones that also match
 their syntax**. Getting this backwards doesn't error — it just silently
 gives every operand the wider mode, since the assembler tries candidates in
 declaration order and a wider candidate placed first is found before a
-narrower one that would also have fit. A label-bearing operand starts at
+narrower one that would also have fit. The one exception is a candidate
+whose match used more [register-qualified
+holes](#register-qualified-holes), which is always tried first. A label-bearing operand starts at
 its narrowest candidate before any address is known (see
 [Assembler, "Convergence"](assembler.md#convergence)), but is subject to
 this same declaration-order tiebreak on every later pass, once a symbol
