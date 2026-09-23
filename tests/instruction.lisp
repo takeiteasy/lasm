@@ -2094,6 +2094,42 @@ second: nop" :machine 'instr-test-machine))))
       (fiveam:is (equal '(2 3 100) values))
       (fiveam:is (= 3 (length (instruction-descriptor-operand-names descriptor)))))))
 
+(defmode vh-ind "[" expr "]")
+(defmode vh-plus-idx "[" expr "+" expr "]")
+(defmode vh-overlap-mode expr "," (one-of vh-ind vh-plus-idx))
+
+(definstruction varying-hole-test-machine ldo
+  (modes vh-overlap-mode)
+  (encoding
+    (opcode 2)
+    (operand dst :field dst)
+    (operand src :field src
+      (variant (choice vh-ind) inline :range (0 7) :bias #x08)
+      (variant (choice vh-plus-idx) inline :range (0 7) :bias #x10))
+    (for-choice vh-plus-idx (operand off :trailing-word)))
+  (semantics
+    (choice-case src
+      (vh-ind (set! (a dst) (mref machine 'ram (a src))))
+      (vh-plus-idx (set! (a dst) (mref machine 'ram (+ (a src) off)))))))
+
+(fiveam:test indexed-syntax-spends-trailing-offset-when-indirect-is-first
+  (let ((indirect (assembly-cells (assemble "ldo 1, [0]" :machine 'varying-hole-test-machine)))
+        (indexed (assembly-cells (assemble "ldo 1, [0 + 4]" :machine 'varying-hole-test-machine))))
+    (fiveam:is (equalp (vector (logior 2 (ash 1 5) (ash #x08 10))) indirect))
+    (fiveam:is (equalp (vector (logior 2 (ash 1 5) (ash #x10 10)) 4) indexed))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (lambda (addr) (aref indexed addr)) 0 'varying-hole-test-machine)
+      (declare (ignore choices))
+      (fiveam:is (= 2 size))
+      (fiveam:is (equal '(1 0 4) values))
+      (fiveam:is (equal '(dst src off) (instruction-descriptor-operand-names descriptor))))
+    (let ((machine (make-machine 'varying-hole-test-machine)))
+      (setf (regref machine 'a 0) 100
+            (mref machine 'ram 104) 444)
+      (load-program machine indexed)
+      (step-machine machine)
+      (fiveam:is (= 444 (regref machine 'a 1))))))
+
 (fiveam:test varying-hole-counts-semantics-dispatch-reads-extra-hole
   (let ((m (make-machine 'varying-hole-test-machine)))
     (setf (regref m 'a 3) 3)

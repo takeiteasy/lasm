@@ -319,6 +319,53 @@ looks like."
     (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
     (fiveam:is (equal '(oo-bt-marked) (mapcar #'mode-descriptor-name choices)))))
 
+(defmode oo-overlap-ind "[" expr "]")
+(defmode oo-overlap-idx "[" expr "+" expr "]")
+(defmode oo-overlap-ind-first (one-of oo-overlap-ind oo-overlap-idx))
+(defmode oo-overlap-idx-first (one-of oo-overlap-idx oo-overlap-ind))
+
+(fiveam:test one-of-prefers-more-literals-in-either-order
+  (dolist (mode '(oo-overlap-ind-first oo-overlap-idx-first))
+    (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "[0 + 4]") mode)
+      (fiveam:is (eq t okp))
+      (fiveam:is (equal '(0 4) (mapcar #'expr-number-value asts)))
+      (fiveam:is (equal '(oo-overlap-idx oo-overlap-idx)
+                        (mapcar #'mode-descriptor-name choices))))
+    (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "[0]") mode)
+      (fiveam:is (eq t okp))
+      (fiveam:is (equal '(0) (mapcar #'expr-number-value asts)))
+      (fiveam:is (equal '(oo-overlap-ind) (mapcar #'mode-descriptor-name choices))))))
+
+(defmode oo-tie-left expr "X")
+(defmode oo-tie-right "X" expr)
+(defmode oo-tie (one-of oo-tie-left oo-tie-right))
+
+(fiveam:test one-of-equal-literal-count-keeps-declaration-order
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "X X") 'oo-tie)
+    (fiveam:is (eq t okp))
+    (fiveam:is (= 1 (length asts)))
+    (fiveam:is (equal '(oo-tie-left) (mapcar #'mode-descriptor-name choices)))))
+
+(defmode oo-nested-plain expr)
+(defmode oo-nested-marked "X" expr)
+(defmode oo-nested-specific (one-of oo-nested-plain oo-nested-marked))
+(defmode oo-nested-other "Y" expr)
+(defmode oo-nested-outer (one-of oo-nested-specific oo-nested-other))
+
+(fiveam:test nested-one-of-prefers-literals-and-reports-outer-choice
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "X 5") 'oo-nested-outer)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(oo-nested-specific) (mapcar #'mode-descriptor-name choices)))))
+
+(defmode oo-prefix (one-of oo-reg oo-bt-marked))
+
+(fiveam:test one-of-rejects-prefix-match-with-trailing-input
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for "5 X") 'oo-prefix)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '(oo-bt-marked) (mapcar #'mode-descriptor-name choices)))))
+
 ;;; ONE-OF validation errors
 
 (fiveam:test one-of-fewer-than-two-alternatives-signals-error

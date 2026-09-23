@@ -161,10 +161,10 @@ the same as writing that mode's pattern directly.
 
 ### Matching and backtracking
 
-At match time, an alternative is tried by matching *the rest of the
-pattern* after it too, not just its own tokens — an alternative that
-matches locally but leaves what follows unable to match is rejected in
-favor of a later alternative, rather than the match failing outright. Given
+At match time, each alternative is tried against the rest of the pattern
+and the complete input. Among successful matches, the path with the most
+literal tokens wins; declaration order breaks ties. An alternative that
+matches only a prefix cannot prevent a later complete match. Given
 
 ```lisp
 (defmode bt-plain expr)
@@ -174,10 +174,10 @@ favor of a later alternative, rather than the match failing outright. Given
 
 matching `bt` against `5 X, Y`: `bt-plain` (a bare `expr`) matches `5`
 locally and stops (`X` isn't part of an expression), but the pattern's
-trailing `,` `Y` then can't match starting at `X` — so `bt-marked` (`expr
-"X"`) is tried next, matching `5 X` and leaving `, Y` for the rest of the
-pattern, which succeeds. Alternatives are otherwise tried in declaration
-order, same as `(modes ...)` variants.
+trailing `,` `Y` cannot match starting at `X`. `bt-marked` (`expr "X"`)
+matches the full input. For overlapping complete matches such as `[0 + 4]`,
+`"[" expr "+" expr "]"` wins over `"[" expr "]"` because it matches an
+additional literal `+` instead of treating `0 + 4` as one expression.
 
 `try-match-operand-mode`/`match-operand-mode` (see
 [Matching](#matching) below) return which alternative each operand *hole*

@@ -510,10 +510,10 @@ checks ordinary operand ranges. See docs/modes.md."
 
 ;;; Pattern matching
 
-(defun %match-mode-elements (tokens elements i end)
+(defun %match-mode-elements (tokens elements i end &optional require-end)
   "Match ELEMENTS (a suffix of some mode's pattern) against TOKENS from
 position I (bounded by END). Returns (VALUES asts choices next-i okp
-failure-token message): on success ASTS is the list of EXPR-* ASTs parsed
+failure-token message selections score): on success ASTS is the list of EXPR-* ASTs parsed
 from each :EXPR hole and CHOICES the parallel, HOLE-ALIGNED list -- one entry
 per hole in ASTS, NIL for a hole not governed by any :ONE-OF, or the chosen
 MODE-DESCRIPTOR for a hole that came from one (#104) -- both in pattern
@@ -542,27 +542,22 @@ elsewhere: %MODE-HOLE-COUNT (#115) signals rather than recursing forever
 when a mode name reappears on its own recursion path. A plain file reload
 can't create a cycle, since it replays the same patterns in the same order.
 
-Recursive over ELEMENTS -- not a linear scan -- so a :ONE-OF element can
-backtrack (#103): each alternative is tried by recursively matching *the
-rest of the pattern* after it, not just the alternative's own tokens, so an
-alternative that matches locally but leaves the remaining elements unable to
-match is rejected in favor of a later alternative, rather than committing to
-the first token-level match. ASTS and CHOICES are built by consing each
-element's own contribution onto the *return value* of the recursive call for
-everything after it, never onto a shared accumulator -- an abandoned
-alternative's partial match is simply never included in what gets returned,
-with no separate undo step needed."
+Alternatives match with the remaining pattern and input. The successful path
+with the most literal tokens wins; declaration order breaks ties. The eighth
+return value is that path's literal count."
   (if (null elements)
-       (values nil nil i t nil nil nil)
+       (if (and require-end (< i end))
+           (values nil nil nil nil (%tok tokens i end) "Unexpected trailing token in operand")
+           (values nil nil i t nil nil nil 0))
       (let ((element (first elements)) (rest-elements (rest elements)))
         (ecase (first element)
           (:literal
            (let ((tok (%tok tokens i end)))
              (if (and tok (string-equal (token-text tok) (second element)))
-            (multiple-value-bind (asts choices next-i okp failure-token message selections)
-                (%match-mode-elements tokens rest-elements (1+ i) end)
+            (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+                (%match-mode-elements tokens rest-elements (1+ i) end require-end)
                 (if okp
-                        (values asts choices next-i t nil nil selections)
+                        (values asts choices next-i t nil nil selections (1+ score))
                         (values nil nil nil nil failure-token message)))
                  (values nil nil nil nil tok
                          (format nil "Operand does not match addressing mode ~
@@ -571,7 +566,9 @@ with no separate undo step needed."
            (:expr
             (let ((register (second element))
                   (last-failure-token nil)
-                  (last-message nil))
+                  (last-message nil)
+                  (best nil)
+                  (best-score -1))
               (labels ((valid-register-p (ast)
                          (and register
                               (expr-label-p ast)
@@ -582,11 +579,13 @@ with no separate undo step needed."
                                                          (symbol-name register))))))
                        (try (ast next-i-hole)
                          (if (or (null register) (valid-register-p ast))
-                              (multiple-value-bind (asts choices next-i okp failure-token message selections)
-                                  (%match-mode-elements tokens rest-elements next-i-hole end)
+                              (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+                                  (%match-mode-elements tokens rest-elements next-i-hole end require-end)
                                 (if okp
-                                    (return-from %match-mode-elements
-                                      (values (cons ast asts) (cons nil choices) next-i t nil nil selections))
+                                    (when (> score best-score)
+                                      (setf best (list (cons ast asts) (cons nil choices) next-i
+                                                       t nil nil selections score)
+                                            best-score score))
                                    (setf last-failure-token failure-token
                                          last-message message)))
                              (setf last-failure-token (%tok tokens i end)
@@ -610,45 +609,42 @@ with no separate undo step needed."
                                        (when (= short-next split)
                                          (try short short-next)))
                                    (parse-failure () nil))))
-                      (values nil nil nil nil last-failure-token last-message))
+                      (if best
+                          (values-list best)
+                          (values nil nil nil nil last-failure-token last-message)))
                   (parse-failure (c)
                     (values nil nil nil nil
                             (make-token :line (lasm-syntax-error-line c)
                                         :column (lasm-syntax-error-column c))
                             (lasm-syntax-error-message c)))))))
           (:one-of
-           (let (last-failure-token last-message)
-              (dolist (alt-name (%one-of-alternatives element)
-                      (values nil nil nil nil last-failure-token last-message))
+           (let (last-failure-token last-message best (best-score -1))
+             (dolist (alt-name (%one-of-alternatives element))
                (let ((alt (find-mode-descriptor alt-name)))
-                  (multiple-value-bind (alt-asts alt-choices alt-next-i alt-okp alt-failure-token alt-message
-                                        alt-selections)
-                      (%match-mode-elements tokens (mode-descriptor-pattern alt) i end)
-                    (declare (ignore alt-choices))
-                   (if alt-okp
-                        (multiple-value-bind (asts choices next-i okp failure-token message selections)
-                            (%match-mode-elements tokens rest-elements alt-next-i end)
-                          (if okp
-                             ;; #104: every hole ALT-ASTS contributes gets ALT
-                             ;; itself as its CHOICES entry -- not ALT-CHOICES
-                             ;; (the nested match's own, discarded above) --
-                             ;; so the outermost :ONE-OF a hole belongs to
-                             ;; always wins that hole's entry.
-                              (return-from %match-mode-elements
-                                (let* ((slot (%one-of-slot element))
-                                       (selection (and slot
-                                                        (cons slot (mode-descriptor-name alt))))
-                                       (selections (append
-                                                    (if slot
-                                                        (cons selection
-                                                              (remove slot alt-selections :key #'car :test #'eq))
-                                                        alt-selections)
-                                                    (remove slot selections :key #'car :test #'eq))))
-                                  (values (append alt-asts asts)
-                                          (append (make-list (length alt-asts) :initial-element alt) choices)
-                                          next-i t nil nil selections)))
-                             (setf last-failure-token failure-token last-message message)))
-                         (setf last-failure-token alt-failure-token last-message alt-message)))))))))))
+                  (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+                      (%match-mode-elements tokens
+                                            (append (mode-descriptor-pattern alt) rest-elements)
+                                            i end require-end)
+                    (if okp
+                        (when (> score best-score)
+                          (let* ((slot (%one-of-slot element))
+                                 (count (%mode-hole-count alt))
+                                 (selection (and slot (cons slot (mode-descriptor-name alt)))))
+                            (setf best-score score
+                                  best
+                                  (list asts
+                                        (append (make-list count :initial-element alt)
+                                                (nthcdr count choices))
+                                        next-i t nil nil
+                                        (if slot
+                                            (cons selection
+                                                  (remove slot selections :key #'car :test #'eq))
+                                            selections)
+                                        score))))
+                        (setf last-failure-token failure-token last-message message)))))
+             (if best
+                 (values-list best)
+                 (values nil nil nil nil last-failure-token last-message))))))))
 
 (defun %match-mode-pattern (tokens mode)
   "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.
@@ -664,10 +660,10 @@ MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
 that only bind the first four are unaffected by."
   (let ((end (length tokens)))
     (multiple-value-bind (asts choices next-i okp failure-token message selections)
-        (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end)
+        (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
+      (declare (ignore next-i))
       (cond
          ((not okp) (values nil nil failure-token message nil nil))
-         ((< next-i end) (values nil nil (%tok tokens next-i end) "Unexpected trailing token in operand" nil nil))
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.

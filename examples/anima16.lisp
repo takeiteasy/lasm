@@ -81,19 +81,9 @@
 ;; ONE-OF alternative none of A-REG/A-IND/A-MEM's own (choice ...) variants
 ;; claims.
 ;;
-;; Declaration order matters here, unlike ORTHOGONAL-FOO's OO-TWO
-;; (examples/orthogonal.lisp): the parser's own expression grammar treats a
-;; leading "(" as grouping (PARSE-EXPRESSION, parser.lisp), so A-REG's bare
-;; `expr` hole would happily parse a whole "(256)" as the grouped expression
-;; 256 and never let A-MEM's own "(" ... ")" literal pattern get a turn --
-;; ONE-OF tries alternatives in declaration order and only backtracks when
-;; the *rest* of the pattern fails to match (mode.lisp's own docstring), and
-;; here A-SRC's ONE-OF is the last element of LD-MODE's pattern, so a fully
-;; matched A-REG would have nothing left to fail on. A bare `expr`
-;; alternative sharing a ONE-OF with a literal-guarded one must always be
-;; declared last for exactly this reason -- A-MEM, A-IND, and A-LIT are all
-;; guarded by their own leading literal ("(", "[", "#"), so only their order
-;; relative to A-REG matters, not to each other.
+;; The more explicit patterns win when their syntax overlaps: A-IDX's "+"
+;; separates its offset from A-IND's single expression, while A-MEM's
+;; parentheses distinguish it from A-REG's grouped expression.
 (defmode a-mem "(" expr ")")
 (defmode a-ind "[" expr "]")
 ;; #120: two operand holes -- the register index (shares field A's 0x10-0x17
