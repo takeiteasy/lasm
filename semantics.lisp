@@ -1,5 +1,5 @@
 ;;;; semantics.lisp
-;;;; The minimal semantics vocabulary: WITH-MACHINE, SET!, PUSH, POP,
+;;;; The minimal semantics vocabulary: WITH-MACHINE, SET!, MREF, PUSH, POP,
 ;;;; SET-FLAGS!, TRAP, and the small predicate helpers the mockups use.
 ;;;;
 ;;;; WITH-MACHINE is the single semantics entry point: M1's DEFINSTRUCTION
@@ -9,16 +9,23 @@
 
 (in-package #:lasm)
 
+(declaim (inline %semantics-mref (setf %semantics-mref)))
+
+(defun %semantics-mref (machine name address)
+  (mref machine name address))
+
+(defun (setf %semantics-mref) (value machine name address)
+  (setf (mref machine name address) value))
+
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
-operators SET!, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
+operators SET!, MREF, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
 SET-FLAGS!, TRAP, EXTRA-CYCLES, and
 INTERRUPT-RETURN.
 
 #108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
-device.lisp) is deliberately *not* bound here, the same way :MEMORY
-elements aren't (see below) -- an HWN/HWQ/HWI-style instruction's semantics
+device.lisp) is deliberately *not* bound here -- an HWN/HWQ/HWI-style instruction's semantics
 call them directly as e.g. (device-info machine index), MACHINE-VAR passed
 explicitly, rather than through a macrolet. #109's SIGNAL-INTERRUPT
 (interrupt.lisp) follows the same convention -- an INT-style instruction's
@@ -64,7 +71,7 @@ I becomes (REGREF MACHINE-VAR 'REG 6), no run-time index needed, so
 register's symbol-macro. The (V idx) macrolet stays available alongside
 these for a run-time-computed index."
   (let ((descriptor (find-machine-descriptor machine-name)))
-    (let (symbol-macros stack-names banked-names)
+    (let (symbol-macros stack-names memory-names banked-names)
       (dolist (element (machine-descriptor-elements descriptor))
         (case (storage-element-kind element)
           (:register
@@ -80,10 +87,7 @@ these for a run-time-computed index."
            (let ((name (storage-element-name element)))
              (cl:push `(,name (flag ,machine-var ',name)) symbol-macros)))
           (:stack (cl:push (storage-element-name element) stack-names))
-          ;; :memory elements are accessed through MREF directly by name (as
-          ;; a quoted symbol), not bound as a symbol-macro, since it takes an
-          ;; explicit address operand.
-          ((:memory))))
+          (:memory (cl:push (storage-element-name element) memory-names))))
       (setf stack-names (nreverse stack-names))
       ;; #166: PUSH/POP also accept a register bound by a (stack-pointer ...)
       ;; clause -- POINTER-ALIST is (register memory grows), embedded as
@@ -93,7 +97,13 @@ these for a run-time-computed index."
       ;; the default whenever one is declared -- unchanged behavior for
       ;; every existing machine -- and only falls back to the sole
       ;; stack-pointer when the machine declares no :stack element at all.
-      (let* ((pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
+      (let* ((sole-memory (and (= (length memory-names) 1) (first memory-names)))
+             (memory-error (if memory-names
+                               (format nil "MREF on machine ~S: more than one memory element declared -- name one explicitly"
+                                       machine-name)
+                               (format nil "MREF on machine ~S: no memory element declared"
+                                       machine-name)))
+             (pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
                                    collect (list (stack-pointer-descriptor-register sp)
                                                  (stack-pointer-descriptor-memory sp)
                                                  (stack-pointer-descriptor-grows sp))))
@@ -153,6 +163,12 @@ clause declared" machine-name)))
                                  (nreverse banked-names))
                       (set! (place value)
                         `(setf ,place ,value))
+                      (mref (machine name-or-address &optional (address nil supplied-p))
+                        (if supplied-p
+                            `(%semantics-mref ,machine ,name-or-address ,address)
+                            (let ((target ',sole-memory))
+                              (unless target (error ',memory-error))
+                              `(%semantics-mref ,machine ',target ,name-or-address))))
                       (push (value &optional (stack-name nil supplied-p))
                         (let* ((target (if supplied-p stack-name ',sole-stack))
                                (entry (assoc target ',pointer-alist)))

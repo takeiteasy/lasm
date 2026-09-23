@@ -24,6 +24,41 @@
     (fiveam:is (= 1 (flag m 'z)))
     (fiveam:is (= 0 (flag m 'n)))))
 
+(defmachine sole-memory-semantics-test-machine
+  (memory ram :width 8 :addr-width 8))
+
+(defmachine pointer-only-test-machine
+  (register sp :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (stack-pointer sp :memory ram :grows :down))
+
+(fiveam:test mref-defaults-to-sole-memory
+  (with-machine (m sole-memory-semantics-test-machine)
+    (setf (mref m 3) 257)
+    (fiveam:is (= 1 (mref m 3)))
+    (fiveam:is (= 1 (mref m 'ram 3)))
+    (set! (mref m 4) 9)
+    (fiveam:is (= 9 (mref m 'ram 4)))
+    (setf (mref m 'ram 5) 11)
+    (fiveam:is (= 11 (mref m 5)))
+    (let ((address 0))
+      (setf (mref m (incf address)) 7)
+      (fiveam:is (= 1 address))
+      (fiveam:is (= 7 (mref m 1))))))
+
+(fiveam:test mref-omitted-name-needs-sole-memory
+  (dolist (machine '(test-machine no-stack-test-machine))
+    (dolist (form '((mref m 0) (setf (mref m 0) 1) (set! (mref m 0) 1)))
+      (fiveam:signals error
+        (eval `(with-machine (m ,machine) ,form))))))
+
+(fiveam:test mref-explicit-name-on-multiple-memory-machine
+  (with-machine (m test-machine)
+    (setf (mref m 'ram 3) 12)
+    (set! (mref m 'wram 3) 300)
+    (fiveam:is (= 12 (mref m 'ram 3)))
+    (fiveam:is (= 300 (mref m 'wram 3)))))
+
 (fiveam:test trap-signals-lasm-trap
   (with-machine (m test-machine)
     (fiveam:is (eq 'test-machine (machine-descriptor-name (machine-descriptor m))))
@@ -158,11 +193,6 @@
 ;;; #166: PUSH/POP against a (stack-pointer ...)-bound register -- works with
 ;;; no (interrupts ...) clause at all, unlike the interrupt-delivery-only
 ;;; binding an earlier design considered (see #166's plan).
-
-(defmachine pointer-only-test-machine
-  (register sp :width 16)
-  (memory ram :width 16 :addr-width 16 :cell-width 16)
-  (stack-pointer sp :memory ram :grows :down))
 
 (fiveam:test push-pop-on-a-stack-pointer-register-with-no-interrupts-clause
   (with-machine (m pointer-only-test-machine)

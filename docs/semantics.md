@@ -8,7 +8,7 @@ against a `defmachine`-declared machine:
   (set! a 42)
   (push a s)
   (set-flags! (z (zero? a)) (n (bit-set? a 7)))
-  (setf (mref m 'ram #x1000) 1))
+  (setf (mref m #x1000) 1))
 ```
 
 `(with-machine (machine-var machine-name) &body body)` instantiates a fresh
@@ -28,20 +28,26 @@ evaluates `body` with:
   same as a scalar register's own symbol, alongside the indexed `(reg idx)`
   form for a run-time-computed index.
 - the operators below, available as local macros for the extent of `body`.
-- memory accessed by name through the `mref` accessor, since it takes an
-  explicit address operand. Fixed-stack accessors and `push`/`pop` accept
-  bare stack names and can omit the name when a default exists.
+- memory accessed through `mref` with an address. Its name defaults to the
+  sole memory element. Fixed-stack accessors and `push`/`pop` accept bare
+  stack names and can omit the name when a default exists.
 
 The [device](devices.md) bus API (`device-count`, `device-info`,
-`device-send`, ...) is likewise **not** bound here — an `hwn`/`hwq`/`hwi`-
-style instruction calls it directly, `machine` passed explicitly, the same
-way `mref` is. `signal-interrupt` (see [Interrupts](interrupts.md))
-follows the same convention for a software `int`-style instruction.
+`device-send`, ...) is **not** bound here — an `hwn`/`hwq`/`hwi`-
+style instruction calls it directly, `machine` passed explicitly.
+`signal-interrupt` (see [Interrupts](interrupts.md)) follows the same
+convention for a software `int`-style instruction.
 
 ## Operators
 
 - `(set! place value)` — `(setf place value)`. Works on any bound register/
-  flag symbol, or any other `setf`-able place (e.g. `(mref m 'ram addr)`).
+  flag symbol, or any other `setf`-able place (e.g. `(mref m addr)`).
+- `(mref machine [memory-name] address)` — read or write a memory cell. In
+  `with-machine` and instruction semantics, omit `memory-name` when the
+  machine declares exactly one memory element. With zero or multiple memory
+  elements, an omitted name signals at macroexpansion time; pass a quoted
+  name such as `(mref machine 'ram address)`. Host code always supplies the
+  name: `(mref machine 'ram address)`.
 - `(push value &optional stack-name)` — push `value` onto the named stack.
 - `(pop &optional stack-name)` — pop and return the top of the named stack.
 - `(stack-depth &optional stack-name)` — read the fixed stack's live depth.

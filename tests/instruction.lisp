@@ -7,6 +7,18 @@
 (fiveam:def-suite instruction :in lasm)
 (fiveam:in-suite instruction)
 
+(definstruction sole-memory-semantics-test-machine inc-memory-cell
+  (encoding (opcode #x01))
+  (semantics (setf (mref machine 3) (1+ (mref machine 3)))))
+
+(fiveam:test mref-shorthand-in-instruction-semantics
+  (let ((machine (make-machine 'sole-memory-semantics-test-machine)))
+    (setf (mref machine 'ram 3) 41)
+    (execute-instruction
+     (find-instruction 'sole-memory-semantics-test-machine 'inc-memory-cell)
+     machine nil)
+    (fiveam:is (= 42 (mref machine 'ram 3)))))
+
 ;; A dedicated fixture (rather than reusing TEST-MACHINE from suites.lisp):
 ;; one memory element, so %DEFAULT-ADDRESS-WIDTH can resolve without
 ;; ambiguity, and a PC register per the "PC is a plain register" convention.

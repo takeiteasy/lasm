@@ -35,12 +35,12 @@
   ;; Stack
   (push a s)
   (push x s)
-  (format t "Stack depth after two pushes: ~D~%" (stack-depth m 's))
+  (format t "Stack depth after two pushes: ~D~%" (stack-depth s))
   (let ((top (pop s)))
-    (format t "Popped ~D, stack depth now ~D~%" top (stack-depth m 's)))
+    (format t "Popped ~D, stack depth now ~D~%" top (stack-depth s)))
 
   ;; Memory
-  (setf (mref m 'ram #x1000) 42)
-  (format t "RAM[#x1000] = ~D~%" (mref m 'ram #x1000))
+  (setf (mref m #x1000) 42)
+  (format t "RAM[#x1000] = ~D~%" (mref m #x1000))
 
   (format t "Final state: A=~D X=~D~%" a x))
