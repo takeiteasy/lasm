@@ -51,16 +51,16 @@ loadhalt 10")
   (format t "Listing:~%")
   (print-listing assembly)
 
-  ;; Note the printed source text for line 2 is the macro body as written --
-  ;; "ldx #val" -- not "ldx #10"; only the encoded bytes (A2 0A) reflect the
-  ;; actual invocation's argument. LOADHALT's body (LDX/HLT, lines 2-3 of
-  ;; *BYTE-SOURCE*) is only invoked once here, so each body line owns
-  ;; exactly one entry -- see docs/listing.md for what happens with a
-  ;; second invocation.
-  (let ((ldx-entries (listing-lines-for-source-line assembly 2)))
-    (assert (= 1 (length ldx-entries)))
-    (format t "~%LDX (source line 2) assembled at address ~D.~%"
-            (listing-line-address (first ldx-entries))))
+  ;; Expanded statements map to the invocation's line (6), so both LDX and
+  ;; HLT come back for it; the listing shows "loadhalt 10", and
+  ;; LISTING-LINE-DEFINITION-LINE gives the macro body line that emitted each
+  ;; entry (2 for LDX). Only the encoded bytes (A2 0A) reflect the argument.
+  (let* ((entries (listing-lines-for-source-line assembly 6))
+         (ldx (find 2 entries :key #'listing-line-definition-line)))
+    (assert (= 2 (length entries)))
+    (assert ldx)
+    (format t "~%LDX (macro body line 2) assembled at address ~D.~%"
+            (listing-line-address ldx)))
 
   ;; Look a mid-instruction address back up to its owning entry.
   (let ((entry (listing-line-at assembly 1)))
