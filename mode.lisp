@@ -695,15 +695,16 @@ that only bind the first four are unaffected by."
   (let ((end (length tokens)))
     (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
         (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
-      (declare (ignore next-i score))
+      (declare (ignore next-i))
       (cond
-         ((not okp) (values nil nil failure-token message nil nil nil nil))
+         ((not okp) (values nil nil failure-token message nil nil nil nil 0))
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.
           (t (values asts t nil nil choices selections suffixes
                      (loop for (holes-from-end . rest) in ties
-                           collect (cons (- (length asts) holes-from-end) rest))))))))
+                           collect (cons (- (length asts) holes-from-end) rest))
+                     (cdr score)))))))
 
 (defun try-match-operand-mode (tokens mode)
   "Like MATCH-OPERAND-MODE, but returns (VALUES asts T choices) on a match or
@@ -715,11 +716,15 @@ MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
 see %MATCH-MODE-ELEMENTS. The fifth value is the hole-aligned list of
 forcing-prefix names written before each hole (a string, or NIL). The sixth
 lists (HOLE SLOT CHOSEN . RUNNERS-UP) for each ONE-OF pick decided by
-declaration order alone, HOLE being the element's first hole index."
+declaration order alone, HOLE being the element's first hole index. The
+seventh is the number of register-qualified holes the match used."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp failure-token message choices selections suffixes ties) (%match-mode-pattern tokens mode)
+    (multiple-value-bind (asts okp failure-token message choices selections suffixes ties registers)
+        (%match-mode-pattern tokens mode)
       (declare (ignore failure-token message))
-       (if okp (values asts t choices selections suffixes ties) (values nil nil nil nil nil nil)))))
+       (if okp
+           (values asts t choices selections suffixes ties registers)
+           (values nil nil nil nil nil nil 0)))))
 
 (defun match-operand-mode (tokens mode)
   "Match TOKENS (a SIMPLE-VECTOR of raw tokens, e.g. an OPERAND's TOKENS or a

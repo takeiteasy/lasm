@@ -208,6 +208,12 @@ declared in `(modes ...)`:
      opposite situation from `zero-page`/`absolute`, which share *identical*
      syntax and are told apart only by whether a value fits — exactly where
      relaxation is meaningful.
+   - **Specificity.** Candidates whose match used more
+     [register-qualified holes](modes.md#register-qualified-holes) move
+     ahead of the rest; otherwise declaration order is kept. `[r1]` against
+     `"[" expr "]"` and `"[" (expr :register r) "]"` variants picks the
+     register variant even when the plain one is declared first or is
+     wider, since a register alias is also a valid plain `expr` value.
 2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
    than this statement's current floor — the size it committed to on an
    earlier pass (0 on the first pass, when nothing has committed to anything
@@ -223,7 +229,7 @@ declared in `(modes ...)`:
      field's width (`%fits-width-p`, checked value-by-value against the
      candidate's own `operand-widths`; it accepts both the unsigned and the
      two's-complement signed range, e.g. both `255` and `-1` fit one byte),
-     the candidate is a **fit**. The **first** fit in declaration order is
+     the candidate is a **fit**. The **first** fit in that order is
      kept — which is why [Addressing
      modes](modes.md#declare-narrower-modes-before-wider-ones) says to
      declare narrower/cheaper modes before wider ones that also match their
@@ -278,13 +284,13 @@ declared in `(modes ...)`:
      **narrowest** eligible candidate instead of the widest, so an operand
      whose value isn't known yet gets a chance to fit once a later pass
      knows it, rather than committing to the widest mode immediately.
-   - Both fallback cases keep declaration order on a tie (equal total
-     width).
+   - Both fallback cases keep that order on a tie (equal total width).
 
 Once relaxation has converged (the final pass, not a mid-relaxation trial —
 see "Convergence" below), `%choose-variant` also checks for **ambiguity**:
-if the chosen candidate ties on total operand width with another
-syntax-matching candidate of a different mode, it `warn`s with an
+if the chosen candidate ties on total operand width and register-qualified
+hole count with another syntax-matching candidate of a different mode, it
+`warn`s with an
 `ambiguous-mode` condition naming both, since nothing but declaration order
 distinguished between them. This is *not* the `zero-page`/`absolute` case
 above — those differ in width, so relaxation resolves the choice on its own

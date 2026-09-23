@@ -410,8 +410,9 @@ real value and take part in the value filter below. FLOOR is the narrowest
 total operand width this statement is still allowed to choose -- relaxation
 only ever widens a statement across layout passes (see %LAYOUT), so a
 candidate narrower than FLOOR is dropped before the value filter even runs.
-Filters, applied in VARIANTS' declaration order -- so an author should
-declare narrower/more specific modes before wider ones that also match their
+Filters, applied in VARIANTS' declaration order, except that a candidate
+whose match used more register-qualified holes comes first -- so an author
+should declare narrower modes before wider ones that also match their
 syntax (e.g. zero-page before absolute):
 
 1. Syntax -- keep variants whose mode's pattern matches the operand tokens
@@ -478,7 +479,8 @@ both keep the choice constant across passes, trivially monotone.
 
 FINALP (#74), like %LAYOUT-PASS's own, defers a check that only makes sense
 once relaxation has converged: when two or more syntax-matching candidates
-tie on total operand width, declaration order alone decides between them --
+tie on total operand width and register-qualified hole count, declaration
+order alone decides between them --
 genuinely ambiguous mode selection, unlike e.g. ZERO-PAGE/ABSOLUTE sharing
 syntax at *different* widths, which relaxation resolves on its own and never
 warns about. %MAYBE-WARN-AMBIGUOUS-MODE below only runs when FINALP is T, so
@@ -501,10 +503,11 @@ alternative's :STRICT once a value exists to check it against."
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices selections hole-prefixes ties) = (multiple-value-list
-                                                       (if mode
-                                                           (try-match-operand-mode tokens mode)
-                                                           (values nil (zerop (length tokens)) nil)))
+                 for (asts okp choices selections hole-prefixes ties registers)
+                   = (multiple-value-list
+                      (if mode
+                          (try-match-operand-mode tokens mode)
+                          (values nil (zerop (length tokens)) nil nil nil nil 0)))
                  when (and okp (>= (instruction-descriptor-size v) floor)
                            ;; #104/#126: drop a candidate whose CHOICE-
                            ;; selected word field(s) or hole-selected
@@ -518,7 +521,7 @@ alternative's :STRICT once a value exists to check it against."
                    ;; can read a hole's own matched ONE-OF alternative's
                    ;; :STRICT once ENCODE has a value to check it against.
                    collect (list v (%qualify-locals-in-asts! asts scope (statement-line statement))
-                                 choices selections hole-prefixes ties))))
+                                 choices selections hole-prefixes ties registers))))
     (when (null candidates)
       (let ((prefixes (loop for v in variants
                             for mode = (instruction-descriptor-mode v)
@@ -537,8 +540,8 @@ alternative's :STRICT once a value exists to check it against."
 accepts ~A"
                            (statement-mnemonic statement) (%operand-text tokens)
                            (%accepted-modes-text variants)))
-    ;; STABLE-SORT, not SORT: ties (equal total size) must keep declaration
-    ;; order.
+    ;; STABLE-SORT, not SORT: ties must keep declaration order.
+    (setf candidates (stable-sort candidates #'> :key #'seventh))
     (let* ((width-key (lambda (c) (instruction-descriptor-size (first c))))
            ;; STABLE-SORT twice, not once-and-REVERSE: reversing a stable
            ;; descending sort breaks ties in the *wrong* order (last
@@ -654,8 +657,9 @@ this far from parsing to point at just the offending hole."
   "WARN with an AMBIGUOUS-MODE condition (#74) if CANDIDATES (the full
 syntax-and-floor-matching list %CHOOSE-VARIANT built, one (descriptor asts)
 pair per entry) has another candidate tied with CHOSEN on total operand
-width but naming a different mode -- the one case width-based relaxation
-cannot break, so declaration order alone decided. No-op when CHOSEN's own
+width and register-qualified hole count but naming a different mode -- the
+one case neither relaxation nor specificity can break, so declaration order
+alone decided. No-op when CHOSEN's own
 mode is NIL (a no-operand variant, which nothing can tie against)."
   (let ((chosen-mode (instruction-descriptor-mode (first chosen))))
     (when chosen-mode
@@ -665,7 +669,8 @@ mode is NIL (a no-operand variant, which nothing can tie against)."
                           for mode = (instruction-descriptor-mode (first c))
                           when (and mode
                                     (not (eq (mode-descriptor-name mode) (mode-descriptor-name chosen-mode)))
-                                    (= (instruction-descriptor-size (first c)) chosen-width))
+                                    (= (instruction-descriptor-size (first c)) chosen-width)
+                                    (= (seventh c) (seventh chosen)))
                             collect mode)
                     :key #'mode-descriptor-name)))
         (when ties

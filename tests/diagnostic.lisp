@@ -325,6 +325,30 @@ ambi $30" :machine 'diag-test-machine))
   (encoding (opcode #x04) (operand :width 1))
   (semantics nil))
 
+(defmode diag-ind-1 "[" expr "]" :width 1)
+(defmode diag-ind-2 "[" expr "]" :width 2)
+(defmode diag-regind-1 "[" (expr :register r) "]" :width 1)
+(defmode diag-regind-1b "[" (expr :register r) "]" :width 1)
+
+(definstruction diag-reg-machine lvp
+  (modes (diag-ind-1 (opcode #x05) (semantics nil))
+         (diag-regind-1 (opcode #x06) (semantics nil))))
+
+(definstruction diag-reg-machine lvw
+  (modes (diag-ind-2 (opcode #x07) (semantics nil))
+         (diag-regind-1 (opcode #x08) (semantics nil))))
+
+(definstruction diag-reg-machine lvt
+  (modes (diag-regind-1 (opcode #x09) (semantics nil))
+         (diag-regind-1b (opcode #x0A) (semantics nil))))
+
+(defun %mode-warnings (source machine)
+  "The cells and every AMBIGUOUS-MODE assembling SOURCE signals, muffled."
+  (let (warnings)
+    (handler-bind ((ambiguous-mode (lambda (c) (cl:push c warnings) (muffle-warning c))))
+      (values (assembly-cells (assemble source :machine machine))
+              (nreverse warnings)))))
+
 (defun %alternative-warnings (source machine)
   "Every AMBIGUOUS-ALTERNATIVE assembling SOURCE signals, muffled."
   (let (warnings)
@@ -371,6 +395,22 @@ alts 3" 'diag-test-machine)))))
 (fiveam:test nested-register-qualified-alternative-outranks-plain-expr
   (fiveam:is (null (%alternative-warnings "ldn [r0]" 'diag-reg-machine)))
   (fiveam:is (null (%alternative-warnings "ldn [5]" 'diag-reg-machine))))
+
+(fiveam:test register-qualified-variant-outranks-plain-expr
+  (flet ((check (source cells)
+           (multiple-value-bind (actual warnings) (%mode-warnings source 'diag-reg-machine)
+             (fiveam:is (equalp cells actual))
+             (fiveam:is (null warnings)))))
+    (check "lvp [r1]" #(#x06 1))
+    (check "lvp [5]" #(#x05 5))
+    (check "lvw [r1]" #(#x08 1))
+    (check "lvw [5]" #(#x07 5 0))))
+
+(fiveam:test equally-register-qualified-variants-warn
+  (let ((c (first (nth-value 1 (%mode-warnings "lvt [r1]" 'diag-reg-machine)))))
+    (fiveam:is (eq 'diag-regind-1 (mode-descriptor-name (ambiguous-mode-chosen c))))
+    (fiveam:is (equal '(diag-regind-1b)
+                      (mapcar #'mode-descriptor-name (ambiguous-mode-alternatives c))))))
 
 (fiveam:test equally-register-qualified-alternatives-warn
   (let ((c (first (%alternative-warnings "ldt [r1]" 'diag-reg-machine))))

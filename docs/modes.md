@@ -218,6 +218,8 @@ remain distinguishable. In a `one-of`, a register alternative outranks a
 plain `expr` alternative with the same literals, whatever the declaration
 order: `(one-of addr-ind reg-ind)` over `"[" expr "]"` and `"[" (expr
 :register reg) "]"` picks `reg-ind` for `[r0]` and `addr-ind` for `[5]`.
+The same holds between an instruction's variants, ahead of width (see
+[Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)).
 
 ### What `one-of` does and does not do
 
@@ -694,10 +696,12 @@ under `:suffixes t`, so the text re-assembles to the same cells.
   `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
   unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns
-  `(values asts t choices selections prefixes ties)` on a match or six `nil`
-  values on a mismatch. `ties` lists `(hole slot chosen . runners-up)` for
-  each `one-of` pick that declaration order alone decided (see
-  [Diagnostics, "Alternative ambiguity"](diagnostics.md#alternative-ambiguity)).
+  `(values asts t choices selections prefixes ties registers)` on a match,
+  or `nil`s and a `registers` of 0 on a mismatch. `ties` lists `(hole slot
+  chosen . runners-up)` for each `one-of` pick that declaration order alone
+  decided (see [Diagnostics, "Alternative
+  ambiguity"](diagnostics.md#alternative-ambiguity)); `registers` counts the
+  register-qualified holes the match used.
   This is what the assembler's mode-candidate filter uses to try
   several of a mnemonic's modes against one operand without a
   `handler-case` per candidate.

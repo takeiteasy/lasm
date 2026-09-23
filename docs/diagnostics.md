@@ -115,9 +115,10 @@ Two modes sharing identical operand syntax (`zero-page`/`absolute`, a bare
 modes before wider ones"](modes.md#declare-narrower-modes-before-wider-ones)
 — and relaxation resolves it on width alone, without any warning, as long
 as the two differ in size. The case that's genuinely ambiguous is two
-syntax-matching candidates that **also tie on total operand width**: width
-can't break the tie either, so declaration order alone decides, silently,
-which mode a value gets.
+syntax-matching candidates that **also tie on total operand width** and on
+matched [register-qualified holes](modes.md#register-qualified-holes):
+neither can break the tie, so declaration order alone decides which mode a
+value gets.
 
 ```lisp
 (defmode mode-a expr :width 1)
