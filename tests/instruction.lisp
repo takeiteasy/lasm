@@ -1618,6 +1618,44 @@ second: nop" :machine 'instr-test-machine))))
     (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
     (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
 
+(defmachine wide-joint-test-machine
+  (register pc :width 32)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 32
+    (field opcode 8) (field src 24)
+    (layout split (field opcode 8) (field hi 12) (field lo 12))))
+
+(defmode wide-joint-imm "#" expr)
+
+(definstruction wide-joint-test-machine widejointa
+  (encoding (opcode 1) (layout split) (field-value hi #x123) (field-value lo #x456))
+  (semantics nil))
+
+(definstruction wide-joint-test-machine widejointb
+  (modes wide-joint-imm)
+  (encoding (opcode 1) (operand v :field src (variant (range 0 #x123455) inline)))
+  (semantics nil))
+
+(fiveam:test wide-co-tenants-distinguished-only-jointly-are-accepted
+  ;; WIDEJOINTA pins both halves of the 24-bit value #x123456. Each pin alone
+  ;; overlaps WIDEJOINTB's range, but the combined value lies just above it.
+  (flet ((decoded (source)
+           (instruction-descriptor-name
+            (decode-instruction-at
+             (vector-cell-reader (assembly-cells (assemble source :machine 'wide-joint-test-machine)))
+             0 'wide-joint-test-machine))))
+    (fiveam:is (string= "WIDEJOINTA" (decoded "widejointa")))
+    (fiveam:is (string= "WIDEJOINTB" (decoded "widejointb #5")))))
+
+(fiveam:test wide-co-tenants-overlapping-jointly-are-rejected
+  (handler-case
+      (eval '(definstruction wide-joint-test-machine widejointbad
+               (modes wide-joint-imm)
+               (encoding (opcode 1) (operand v :field src (variant (range 0 #x123456) inline)))
+               (semantics nil)))
+    (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
 ;;; #138: an (operand ... :field opcode) hole would OR its own bits into the
 ;;; already-placed opcode field at encode time (%ENCODE-WORD-INSTRUCTION) --
 ;;; rejected the same way (field-value opcode ...) already is (#136, above).
