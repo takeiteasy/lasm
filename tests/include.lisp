@@ -71,3 +71,44 @@
 
 (fiveam:test include-is-not-a-registered-directive
   (fiveam:is (null (find-directive-descriptor ".include"))))
+
+(fiveam:test included-instruction-error-has-own-file-and-excerpt
+  (handler-case (%assemble-include-fixture "undefined.asm")
+    (unresolved-label (c)
+      (fiveam:is (search "undefined.asm" (lasm-syntax-error-file c)))
+      (fiveam:is (= 2 (lasm-syntax-error-line c)))
+      (fiveam:is (= 5 (lasm-syntax-error-column c)))
+      (fiveam:is (search "bne missing" (diagnostic-text c))))))
+
+(fiveam:test nested-included-data-error-has-own-file-and-excerpt
+  (handler-case (%assemble-include-fixture "nested-undefined.asm")
+    (unresolved-label (c)
+      (fiveam:is (search "sub/undefined.asm" (lasm-syntax-error-file c)))
+      (fiveam:is (= 2 (lasm-syntax-error-line c)))
+      (fiveam:is (search ".byte missing + 1" (diagnostic-text c))))))
+
+(fiveam:test included-directive-error-has-file
+  (handler-case (%assemble-include-fixture "bad-operand.asm")
+    (include-error (c)
+      (fiveam:is (search "bad-operand.asm" (lasm-syntax-error-file c))))))
+
+(fiveam:test parse-error-in-included-file-has-own-file
+  (handler-case (%assemble-include-fixture "load-bad-syntax.asm")
+    (parse-failure (c)
+      (fiveam:is (search "bad-syntax.asm" (lasm-syntax-error-file c)))
+      (fiveam:is (search "ldx 1,,2" (diagnostic-text c))))))
+
+(fiveam:test missing-include-reports-containing-file
+  (handler-case (%assemble-include-fixture "missing.asm")
+    (include-error (c)
+      (fiveam:is (search "missing.asm" (lasm-syntax-error-file c)))
+      (fiveam:is (search ".include \"nope.asm\"" (diagnostic-text c))))))
+
+(fiveam:test macro-defined-in-include-reports-call-and-body-files
+  (handler-case (%assemble-include-fixture "macro-call.asm")
+    (unresolved-label (c)
+      (fiveam:is (search "macro-call.asm" (lasm-syntax-error-file c)))
+      (fiveam:is (search "macro-def.asm" (lasm-syntax-error-definition-file c)))
+      (fiveam:is (= 2 (lasm-syntax-error-line c)))
+      (fiveam:is (= 2 (lasm-syntax-error-definition-line c)))
+      (fiveam:is (search "ldx #missing" (diagnostic-text c))))))

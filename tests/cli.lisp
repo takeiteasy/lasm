@@ -110,6 +110,14 @@
     (fiveam:is (string= "" out))
     (fiveam:is (search "frobnicate" err))))
 
+(fiveam:test cli-undefined-label-names-source-file
+  (multiple-value-bind (status out err)
+      (%run-cli (%cli-args "assemble" "tests/fixtures/cli/undefined.asm"))
+    (fiveam:is (= 1 status))
+    (fiveam:is (string= "" out))
+    (fiveam:is (search "undefined.asm:1:5" err))
+    (fiveam:is (search "bne missing" err))))
+
 (fiveam:test cli-missing-input-exits-one
   (multiple-value-bind (status out err) (%run-cli (%cli-args "assemble" "tests/fixtures/cli/missing.asm"))
     (fiveam:is (= 1 status))

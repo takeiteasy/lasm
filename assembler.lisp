@@ -173,6 +173,8 @@ ever non-NIL for :INSTRUCTION."
   (address 0 :type (integer 0))
   (size 0 :type (integer 0))
   (line 0 :type (integer 0))
+  (file nil :type (or null string))
+  source-unit
   (definition-line nil :type (or null (integer 0)))
   (kind :instruction :type keyword)
   (descriptor nil :type (or null instruction-descriptor)))
@@ -208,6 +210,8 @@ expanded symbol. ORDER records binding order within a source line."
 
 (defvar *current-definition-line* nil)
 (defvar *current-invocation-line* nil)
+(defvar *current-source-unit* nil)
+(defvar *current-definition-unit* nil)
 
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
@@ -231,6 +235,7 @@ expanded symbol. ORDER records binding order within a source line."
                                                  ; and keyed the same way
   (listing nil :type list)            ; LISTING-LINE list, ascending by
                                        ; address (#25) -- see listing.lisp
+  source-unit
   (source nil :type (or null string)))  ; the original source text, or NIL
                                          ; when ASSEMBLE-STATEMENTS was
                                          ; called directly with no :SOURCE
@@ -950,9 +955,9 @@ SYMBOLS itself cannot -- returned last so existing positional callers of the
 other five values are unaffected. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
-  (:instruction address descriptor asts line choices definition-line)
-  (:emit        address width asts line definition-line)
-  (:reserve     address count line definition-line)
+  (:instruction address descriptor asts line choices definition-line unit definition-unit)
+  (:emit        address width asts line definition-line unit definition-unit)
+  (:reserve     address count line definition-line unit definition-unit)
 CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
 hole-aligned matched-alternative list for the chosen descriptor, threaded
 through so %ENCODE can read a hole's own matched ONE-OF alternative's
@@ -1010,7 +1015,9 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                      (directive (and mnemonic (find-directive-descriptor mnemonic)))
                      (line (statement-line statement))
                      (*current-invocation-line* (and (statement-definition-line statement) line))
-                     (*current-definition-line* (statement-definition-line statement)))
+                     (*current-definition-line* (statement-definition-line statement))
+                     (*current-source-unit* (statement-source-unit statement))
+                     (*current-definition-unit* (statement-definition-unit statement)))
                ;; A forced addressing-mode suffix (#40) names an addressing
                ;; mode, which only means something for an instruction
                ;; statement -- a directive has no addressing mode to force.
@@ -1049,14 +1056,16 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                             (when (minusp count)
                               (%assembly-error (statement-line statement)
                                                "~A: count must not be negative" mnemonic))
-                            (cl:push (list :reserve address count line *current-definition-line*) sized)
+                            (cl:push (list :reserve address count line *current-definition-line*
+                                           *current-source-unit* *current-definition-unit*) sized)
                             (incf address count)
                             (setf emitted-p t)))
                          (:emit
                           (let* ((asts (%qualify-locals-in-asts!
                                         (%directive-args statement directive) scope line))
                                  (width (directive-descriptor-width directive)))
-                            (cl:push (list :emit address width asts line *current-definition-line*) sized)
+                            (cl:push (list :emit address width asts line *current-definition-line*
+                                           *current-source-unit* *current-definition-unit*) sized)
                             (incf address (* width (length asts)))
                             (setf emitted-p t)))))
                       (t
@@ -1074,7 +1083,8 @@ EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                            ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
                            ;; RANGE!) once a value exists to check it against.
                            (cl:push (list :instruction address descriptor asts
-                                          line choices *current-definition-line*)
+                                          line choices *current-definition-line*
+                                          *current-source-unit* *current-definition-unit*)
                                     sized)
                            (let ((size (instruction-descriptor-size descriptor)))
                              (setf (aref new-floors i) size)
@@ -1232,16 +1242,18 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
 %ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding."
   (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
     (dolist (entry sized-entries)
-      (let ((*current-definition-line* (car (last entry)))
-            (*current-invocation-line* (and (car (last entry))
+      (let ((*current-definition-line* (nth (- (length entry) 3) entry))
+            (*current-source-unit* (nth (- (length entry) 2) entry))
+            (*current-definition-unit* (car (last entry)))
+            (*current-invocation-line* (and (nth (- (length entry) 3) entry)
                                             (ecase (first entry)
                                               (:instruction (fifth entry))
                                               (:emit (fifth entry))
                                               (:reserve (fourth entry))))))
        (ecase (first entry)
         (:instruction
-         (destructuring-bind (kind address descriptor asts line choices definition-line) entry
-           (declare (ignore kind definition-line))
+         (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
+           (declare (ignore kind definition-line unit definition-unit))
            (let* ((mode (instruction-descriptor-mode descriptor))
                   (relative-holes (instruction-descriptor-relative-holes descriptor))
                   (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
@@ -1256,8 +1268,8 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
                    for cell in (%encode-instruction-resolved descriptor values cell-width endian)
                    do (setf (aref cells i) cell) (incf i)))))
         (:emit
-         (destructuring-bind (kind address width asts line definition-line) entry
-           (declare (ignore kind line definition-line))
+         (destructuring-bind (kind address width asts line definition-line unit definition-unit) entry
+           (declare (ignore kind line definition-line unit definition-unit))
            (loop with i = (- address origin)
                  for ast in asts
                  do (dolist (cell (%encode-value-cells
@@ -1269,8 +1281,8 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
          ;; beyond making sure the run is covered (relevant when a .RESERVE
          ;; is the very last statement, so no later write grows the vector
          ;; past it).
-         (destructuring-bind (kind address count line definition-line) entry
-           (declare (ignore kind line definition-line))
+         (destructuring-bind (kind address count line definition-line unit definition-unit) entry
+           (declare (ignore kind line definition-line unit definition-unit))
            (%ensure-cells-length cells (- (+ address count) origin)))))))
     (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)))
 
@@ -1285,19 +1297,24 @@ separate from it (rather than folded into the same walk) since %ENCODE
 needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
   (ecase (first entry)
     (:instruction
-     (destructuring-bind (kind address descriptor asts line choices definition-line) entry
-       (declare (ignore asts choices))
+     (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
+       (declare (ignore asts choices definition-unit))
        (make-listing-line :address address :size (instruction-descriptor-size descriptor)
                             :line line :definition-line definition-line
+                            :source-unit unit :file (and unit (source-unit-file unit))
                             :kind kind :descriptor descriptor)))
     (:emit
-     (destructuring-bind (kind address width asts line definition-line) entry
+     (destructuring-bind (kind address width asts line definition-line unit definition-unit) entry
+       (declare (ignore definition-unit))
        (make-listing-line :address address :size (* width (length asts))
-                          :line line :definition-line definition-line :kind kind)))
+                          :line line :definition-line definition-line
+                          :source-unit unit :file (and unit (source-unit-file unit)) :kind kind)))
     (:reserve
-     (destructuring-bind (kind address count line definition-line) entry
+     (destructuring-bind (kind address count line definition-line unit definition-unit) entry
+       (declare (ignore definition-unit))
        (make-listing-line :address address :size count :line line
-                          :definition-line definition-line :kind kind)))))
+                          :definition-line definition-line :source-unit unit
+                          :file (and unit (source-unit-file unit)) :kind kind)))))
 
 (defun %build-listing (sized-entries)
   "SIZED-ENTRIES in address order in, LISTING-LINE list in address order out
@@ -1306,7 +1323,7 @@ needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
 
 ;;; Entry points
 
-(defun assemble-statements (statements &key machine (origin 0) memory source)
+(defun assemble-statements (statements &key machine (origin 0) memory source source-unit)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
 ASSEMBLY. Runs EXPAND-MACROS (macro.lisp) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
@@ -1352,29 +1369,44 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
             (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
       (handler-bind ((lasm-syntax-error
                        (lambda (condition)
+                         (when *current-source-unit*
+                           (unless (lasm-syntax-error-source condition)
+                             (setf (lasm-syntax-error-source condition)
+                                   (source-unit-text *current-source-unit*)))
+                           (unless (lasm-syntax-error-file condition)
+                             (setf (lasm-syntax-error-file condition)
+                                   (source-unit-file *current-source-unit*))))
                          (when *current-invocation-line*
                            (setf (lasm-syntax-error-line condition)
                                  *current-invocation-line*
                                  (lasm-syntax-error-column condition) nil
                                  (lasm-syntax-error-definition-line condition)
-                                 *current-definition-line*)))))
+                                 *current-definition-line*)
+                           (when *current-definition-unit*
+                             (setf (lasm-syntax-error-definition-file condition)
+                                   (source-unit-file *current-definition-unit*)
+                                   (lasm-syntax-error-definition-source condition)
+                                   (source-unit-text *current-definition-unit*)))))))
         (multiple-value-bind (symbols sized final-address asm-origin info)
             (%layout (expand-macros statements machine) machine origin cell-width)
           (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
                          :cell-width cell-width
                          :origin asm-origin :symbols symbols :symbol-info info
-                         :listing (%build-listing sized) :source source))))))
+                         :listing (%build-listing sized) :source source
+                         :source-unit source-unit))))))
 
-(defun assemble (source &key machine (lexer 'default) (origin 0) memory)
+(defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
 EXPAND-INCLUDES (include.lisp) and ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
-front end, for what MEMORY selects, and for how SOURCE (passed through
-automatically here) is retained as ASSEMBLY-SOURCE (#25) and, via WITH-
-SOURCE-CONTEXT (#74), on any LASM-SYNTAX-ERROR either stage signals."
-  (with-source-context source
-    (assemble-statements (expand-includes (parse source :lexer lexer) :lexer lexer)
-                         :machine machine :origin origin :memory memory :source source)))
+front end, for what MEMORY selects, and for how SOURCE is retained as
+ASSEMBLY-SOURCE and on positioned conditions. FILE names SOURCE in
+diagnostics and listings when supplied."
+  (multiple-value-bind (statements unit) (parse source :lexer lexer :file file)
+    (with-source-unit unit
+      (assemble-statements (expand-includes statements :lexer lexer)
+                           :machine machine :origin origin :memory memory
+                           :source source :source-unit unit))))
 
 (defun assemble-file (path &key machine (lexer 'default) (origin 0) memory)
   "Read the source file at PATH (conventionally .asm or .s) and ASSEMBLE its
@@ -1384,4 +1416,5 @@ signals the ordinary CL FILE-ERROR."
          (file (truename path))
          (*include-directory* (%file-directory file))
          (*include-chain* (list file)))
-    (assemble text :machine machine :lexer lexer :origin origin :memory memory)))
+    (assemble text :machine machine :lexer lexer :origin origin :memory memory
+                   :file path)))

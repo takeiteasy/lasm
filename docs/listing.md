@@ -14,7 +14,7 @@ version.
 
 ## The retained mapping: `assembly-listing` / `assembly-source`
 
-`ASSEMBLY` has two listing-related slots:
+`ASSEMBLY` retains:
 
 - `assembly-listing` — a list of `listing-line`, ascending by address, one
   per address-occupying statement (an instruction, a `.byte`/`.word`, or a
@@ -23,11 +23,15 @@ version.
   `nil` when the `assembly` came from `assemble-statements` called directly
   with no `:source`.
 
+Each listing entry also has `listing-line-file`, the source path for
+file-backed input, or `nil` for in-memory source.
+
 ```lisp
 (defstruct listing-line
   address    ; where this statement starts
   size       ; cells occupied
   line       ; 1-based invocation/source line
+  file       ; source path, or nil
   definition-line ; macro body line, or nil
   kind       ; :instruction | :emit | :reserve
   descriptor)  ; the chosen INSTRUCTION-DESCRIPTOR, :instruction only
@@ -46,7 +50,7 @@ source lines attached.
 
 ```lisp
 (listing-line-at assembly address)             ; => listing-line, or NIL
-(listing-lines-for-source-line assembly line)   ; => list of listing-line
+(listing-lines-for-source-line assembly line &key file) ; => list of listing-line
 ```
 
 `listing-line-at` is the address→line direction and always returns at most
@@ -59,7 +63,9 @@ and returns `nil`.
 statements use the outermost invocation's line; repeated calls therefore
 have distinct lookups. `listing-line-definition-line` gives the body line
 that emitted each entry, or `nil` for ordinary statements. Macro definition
-lines have no listing entries of their own.
+lines have no listing entries of their own. With no `:file`, lookup selects
+the top-level source. Pass a path to `:file` to select an included file;
+repeated includes return all entries from that file and line.
 
 `listing-line-at` is a linear scan over `assembly-listing` — fine at the
 program sizes LASM currently targets; an address-indexed structure is a
@@ -99,6 +105,9 @@ listing is complete rather than silently skipping non-code lines. A macro
 invocation line renders once per emitted statement, each with its own address
 and cells. The source column shows the invocation as written.
 Macro definition lines render with blank address and cells columns.
+For file-backed input, the source column carries `path:line | text`.
+Included files appear immediately after their `.include` line, recursively,
+and each occurrence is rendered separately.
 
 With `assembly-source` absent (`assemble-statements` called with no
 `:source`), `listing-text` degrades to an entry-ordered listing with no

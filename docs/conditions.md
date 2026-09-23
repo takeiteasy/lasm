@@ -32,11 +32,11 @@ just the reader table.
 | `snapshot-machine-mismatch` | `snapshot-error` | — |
 | `snapshot-malformed` | `snapshot-error` | — |
 | `snapshot-device-unknown` | `snapshot-error` | — |
-| `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-definition-line`, `lasm-syntax-error-source` (writable — see [Diagnostics](diagnostics.md)) |
+| `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-file`, `lasm-syntax-error-source`, `lasm-syntax-error-definition-line`, `lasm-syntax-error-definition-file`, `lasm-syntax-error-definition-source` |
 | `lex-error` | `lasm-syntax-error` | — |
 | `parse-failure` | `lasm-syntax-error` | — |
 | `unresolved-location` | `lasm-error` | — |
-| `unresolved-label` | `lasm-error` | `unresolved-label-name` |
+| `unresolved-label` | `lasm-syntax-error` | `unresolved-label-name` |
 | `unknown-instruction` | `lasm-error` | `unknown-instruction-machine`, `unknown-instruction-mnemonic`, `unknown-instruction-opcode` |
 | `no-matching-choice` | `lasm-error` | `no-matching-choice-machine`, `no-matching-choice-instruction`, `no-matching-choice-operand`, `no-matching-choice-choice` |
 | `opcode-conflict` | `lasm-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |

@@ -95,9 +95,10 @@ name collision, invocation, or non-converging expansion."))
 Reject malformed definitions and names reserved by MACHINE or directives."
   (let ((macros (make-hash-table :test 'equal))
         remaining
-        in-macro-p header-name header-key header-params header-defaults header-line body)
+        in-macro-p header-name header-key header-params header-defaults header-line header-unit body)
     (dolist (statement statements)
-      (let ((mnemonic (statement-mnemonic statement)))
+      (with-source-unit (statement-source-unit statement)
+       (let ((mnemonic (statement-mnemonic statement)))
         (cond
           ((%macro-directive-p mnemonic)
            (when in-macro-p
@@ -119,7 +120,8 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                "Macro name ~S collides with an instruction" name))
                (setf in-macro-p t header-name name header-key key header-params params
                      header-defaults defaults
-                     header-line (statement-line statement) body nil))))
+                     header-line (statement-line statement)
+                     header-unit (statement-source-unit statement) body nil))))
           ((%endm-directive-p mnemonic)
            (unless in-macro-p
              (%macro-error (statement-line statement) ".endm without a matching .macro"))
@@ -138,9 +140,10 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                          :body (nreverse body) :line header-line))
            (setf in-macro-p nil header-key nil))
           (in-macro-p (cl:push statement body))
-          (t (cl:push statement remaining)))))
+          (t (cl:push statement remaining))))))
     (when in-macro-p
-      (%macro-error header-line ".macro ~A has no matching .endm" header-name))
+      (with-source-unit header-unit
+        (%macro-error header-line ".macro ~A has no matching .endm" header-name)))
     (values macros (nreverse remaining))))
 
 ;;; Phase 2: expand invocations against the collected macro table
@@ -165,7 +168,7 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                   copy)
         else collect tok))
 
-(defun %substitute-statement (statement bindings names call-line)
+(defun %substitute-statement (statement bindings names call-line call-unit)
   (let* ((substituted (%substitute-tokens (coerce (statement-operand-tokens statement) 'list)
                                            bindings names))
          (operand-tokens (coerce substituted 'simple-vector))
@@ -191,8 +194,11 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                        groups)
      :mode-suffix (statement-mode-suffix statement)
      :line call-line
+     :source-unit call-unit
      :definition-line (or (statement-definition-line statement)
-                          (statement-line statement)))))
+                          (statement-line statement))
+     :definition-unit (or (statement-definition-unit statement)
+                          (statement-source-unit statement)))))
 
 (defun %macro-invocation-p (statement macros)
   "Return the descriptor invoked by STATEMENT, or NIL."
@@ -228,10 +234,13 @@ Reject malformed definitions and names reserved by MACHINE or directives."
               (make-statement :label (statement-label statement)
                                :label-localp (statement-label-localp statement)
                                :line line
-                               :definition-line (statement-definition-line statement)))))
+                               :source-unit (statement-source-unit statement)
+                               :definition-line (statement-definition-line statement)
+                               :definition-unit (statement-definition-unit statement)))))
       (append (and label-statement (list label-statement))
               (mapcar (lambda (body-statement)
-                        (%substitute-statement body-statement bindings names line))
+                        (%substitute-statement body-statement bindings names line
+                                               (statement-source-unit statement)))
                       (macro-descriptor-body descriptor))))))
 
 (defun expand-macros (statements machine)
@@ -256,7 +265,8 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                       (loop for statement in result
                             for descriptor = (%macro-invocation-p statement macros)
                             if descriptor
-                              append (%expand-invocation
+                              append (with-source-unit (statement-source-unit statement)
+                               (%expand-invocation
                                       statement descriptor
                                       (lambda (name)
                                         (loop for candidate = (format nil "~A__LASM_~D" name
@@ -266,7 +276,7 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                                               (gethash (string-upcase candidate)
                                                                        aliases)))
                                                 do (setf (gethash candidate used) t)
-                                                   (return candidate))))
+                                                   (return candidate)))))
                             else collect statement))
                 (return-from expand-macros result)))
           (%macro-error nil "macro expansion did not converge after ~D rounds ~

@@ -24,11 +24,9 @@
 
 ;;; Conditions
 
-(define-condition unresolved-label (lasm-error)
+(define-condition unresolved-label (lasm-syntax-error)
   ((name :initarg :name :reader unresolved-label-name))
-  (:report (lambda (c s)
-             (format s "Cannot fold constant expression: unresolved label ~S"
-                     (unresolved-label-name c)))))
+  (:report (lambda (c s) (write-string (diagnostic-text c) s))))
 
 (define-condition unresolved-location (lasm-error) ()
   (:documentation "Signalled by EVAL-EXPR on an EXPR-LOCATION node (the \"*\"
@@ -331,7 +329,11 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
        (unless foundp
          (multiple-value-setq (value foundp)
            (and *register-aliases* (gethash (expr-label-name ast) *register-aliases*))))
-       (unless foundp (error 'unresolved-label :name (expr-label-name ast)))
+       (unless foundp
+         (error 'unresolved-label :name (expr-label-name ast)
+                :message (format nil "Cannot fold constant expression: unresolved label ~S"
+                                 (expr-label-name ast))
+                :line (expr-label-line ast) :column (expr-label-column ast)))
        value))
     (expr-location
      (unless pc (error 'unresolved-location))

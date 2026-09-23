@@ -72,14 +72,18 @@ signals the ordinary CL FILE-ERROR."
             (when (statement-label statement)
               (make-statement :label (statement-label statement)
                               :label-localp (statement-label-localp statement)
-                              :line line)))
-          ;; TODO: included statements keep their own file's line numbers, so
-          ;; assembly diagnostics and listings render them against the
-          ;; top-level source text; see #95 (source file name in diagnostics).
+                              :line line
+                              :source-unit (statement-source-unit statement))))
           (body (let ((*include-directory* (%file-directory file))
                       (*include-chain* (cons file *include-chain*)))
-                  (expand-includes (parse (%read-source-file file) :lexer lexer)
-                                   :lexer lexer))))
+                  (multiple-value-bind (statements unit)
+                      (parse (%read-source-file file) :lexer lexer :file file)
+                    (let ((parent (statement-source-unit statement)))
+                      (when parent
+                        (setf (gethash line (source-unit-children parent))
+                              (append (gethash line (source-unit-children parent))
+                                      (list unit)))))
+                    (expand-includes statements :lexer lexer)))))
       (append (and label-statement (list label-statement)) body))))
 
 (defun expand-includes (statements &key (lexer 'default))
@@ -90,5 +94,6 @@ Signals INCLUDE-ERROR on a malformed .include, a missing target, or a
 circular include; a missing top-level file is the ordinary CL FILE-ERROR."
   (loop for statement in statements
         if (%include-statement-p statement)
-          append (%expand-include statement lexer)
+          append (with-source-unit (statement-source-unit statement)
+                   (%expand-include statement lexer))
         else collect statement))

@@ -1,12 +1,8 @@
 # Diagnostics
 
-Every LASM pipeline stage that can reject a malformed program — the lexer,
-the parser, and the assembler — already carried a line and column on its
-condition (`lasm-syntax-error`). What was missing was rendering that
-position against the actual source line, naming what mode selection
-actually found when it failed, and a way to opt into an error instead of a
-silent wraparound for an out-of-range operand. `diagnostic.lisp` (loaded
-right after `storage.lisp`) is the shared mechanism this document covers;
+LASM's lexer, parser, and assembler report positioned program errors through
+`lasm-syntax-error`. `diagnostic.lisp` renders those positions against source
+text and supports the mode-selection warning and strict operand range check;
 [Lexer](lexer.md), [Statement grammar & expression parser](parser.md), and
 [Assembler](assembler.md) each still document their own conditions in full —
 this page is about the rendering and the two opt-in behaviors (the
@@ -20,7 +16,7 @@ see [Conditions](conditions.md) for every condition type and its readers.
 ```
 
 Renders a `lasm-syntax-error` (or any subtype — `lex-error`, `parse-
-failure`, `assembly-error`, `macro-error`) as a report: its position and
+failure`, `assembly-error`, `macro-error`, `unresolved-label`) as a report: its position and
 message, followed — when source text is available at the condition's own
 line — by that source line and a caret under the offending column:
 
@@ -31,13 +27,16 @@ instruction accepts immediate (#expr)
   |     ^
 ```
 
-`source`, when given, overrides the condition's own `lasm-syntax-error-
-source` slot — useful for re-rendering a condition against different or
-additional text. Degrades gracefully: a condition with no line at all
-renders as a bare message; one with a line but no source (or no source at
-that line) renders as the older one-line `message (line N, column C)`
-form; one with a line and column but no caret-worthy source omits the caret
-row but keeps the source line.
+File-backed input uses `path:line:column: message`, with the source excerpt
+from that file. In-memory input uses `line N, column C: message`.
+`source`, when given, overrides the condition's stored source text. A
+condition without a line renders its message alone; one without available
+source text omits the excerpt and caret.
+
+`unresolved-label` retains `unresolved-label-name` and points to the label
+token, including when it appears inside a larger expression. A standalone
+`eval-expr` call has a position when its AST came from tokens, but no source
+excerpt unless the caller supplies source context.
 
 `lasm-syntax-error`'s own `:report` calls `diagnostic-text`, so printing
 any of these conditions the ordinary way (an uncaught error at the REPL,
@@ -46,12 +45,10 @@ extra to call at the point a condition is handled.
 
 ## Source propagation: `with-source-context`
 
-A condition's `source` slot isn't filled at the point it's signalled — the
-lexer only has the string it's tokenizing, the parser only the token
-stream, and neither necessarily has the *original* source text a caller
-started from (e.g. after `.include` composes several files, where an assembly error
-renders against the top-level source text). Instead, `tokenize`,
-`parse`, and `assemble` each wrap their own body in:
+A condition's `source` slot is filled by a surrounding source context.
+Parsed statements retain their source text and file, so errors during include
+expansion, macro expansion, layout, and encoding use the containing file.
+For in-memory source, entry points use:
 
 ```lisp
 (with-source-context source
@@ -77,6 +74,11 @@ by a caller several stack frames up — still render with a source excerpt:
 A condition that already carries a `source` (e.g. one that escaped a nested
 `assemble-statements` call with its own `:source`) keeps that one — an
 outer `with-source-context` never overwrites it.
+
+File-backed conditions also expose `lasm-syntax-error-file`. A macro error
+uses the invocation file and line as its main position; its body file and
+line are available through `lasm-syntax-error-definition-file` and
+`lasm-syntax-error-definition-line`.
 
 ## Mode-mismatch diagnostics
 
@@ -257,16 +259,5 @@ An assembly diagnostic from a macro expansion reports the outermost
 invocation line and includes the emitted statement's body line as a secondary
 location.
 
-## Follow-ups not covered here
-
-- **Source file name.** `diagnostic-text` renders `line N` with no file
-  name, and a diagnostic spanning `.include`d files does not say which file a
-  line belongs to (see [Includes](includes.md)).
-- **`unresolved-label`.** The most common real assembly error — an
-  undefined label — doesn't subtype `lasm-syntax-error` and carries no
-  position at all; it prints as a bare message while everything documented
-  above renders with a caret.
-- **DSL-author diagnostics.** A malformed `definstruction`/`defmode`/
-  `defmachine`/`defdirective` form signals a plain Lisp `error`, not a
-  structured LASM condition — this page is about diagnosing a *program's*
-  source, not a machine definition's.
+Machine-definition forms signal ordinary Lisp errors; this page covers
+program-source diagnostics.

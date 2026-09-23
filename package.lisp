@@ -41,6 +41,9 @@
    #:lasm-syntax-error-line
    #:lasm-syntax-error-column
    #:lasm-syntax-error-source
+   #:lasm-syntax-error-file
+   #:lasm-syntax-error-definition-file
+   #:lasm-syntax-error-definition-source
    #:lex-error
    #:parse-failure
    #:unresolved-location
@@ -221,6 +224,7 @@
    #:statement-mode-suffix
    #:statement-line
    #:statement-definition-line
+   #:statement-source-unit
    #:operand
    #:operand-p
    #:operand-tokens
@@ -359,6 +363,7 @@
    #:listing-line-definition-line
    #:listing-line-kind
    #:listing-line-descriptor
+   #:listing-line-file
    #:symbol-info
    #:symbol-info-p
    #:symbol-info-name

@@ -45,14 +45,18 @@ follow-up ticket tracks an address-indexed structure if that ever matters."
                             (1- (+ (listing-line-address l) (listing-line-size l)))))
             (assembly-listing assembly)))
 
-(defun listing-lines-for-source-line (assembly line)
-  "Every LISTING-LINE in ASSEMBLY-LISTING whose LINE slot is LINE, in
-address order -- a list, not a single entry, since a macro invocation's
-expanded statements all carry the invocation's own source line (see this
-file's header comment). Empty (not NIL-as-absent -- just an empty list) when
-LINE occupies no address space (a comment, a label-only line, .ORG, .EQU) or
-names no line in this ASSEMBLY at all."
-  (remove-if-not (lambda (l) (= line (listing-line-line l))) (assembly-listing assembly)))
+(defun listing-lines-for-source-line (assembly line &key file)
+  "Entries emitted by LINE, in address order. Without FILE, select the
+top-level source. With FILE, select that included path; repeated includes
+contribute entries from each occurrence."
+  (remove-if-not (lambda (l)
+                   (and (= line (listing-line-line l))
+                        (if file
+                            (equal (listing-line-file l) (namestring (pathname file)))
+                            (or (null (assembly-source-unit assembly))
+                                (eq (listing-line-source-unit l)
+                                    (assembly-source-unit assembly))))))
+                 (assembly-listing assembly)))
 
 ;;; Data regions (#82)
 
@@ -153,6 +157,36 @@ with the source column omitted entirely."
     (%listing-row stream (format nil "~4,'0X" (listing-line-address l))
                   (%listing-cells-text assembly l digits) nil)))
 
+(defun %listing-entry-index (assembly)
+  (let ((index (make-hash-table :test 'eq)))
+    (dolist (entry (assembly-listing assembly))
+      (let* ((unit (listing-line-source-unit entry))
+             (by-line (or (gethash unit index)
+                          (setf (gethash unit index) (make-hash-table)))))
+        (cl:push entry (gethash (listing-line-line entry) by-line))))
+    index))
+
+(defun %listing-text-from-unit (assembly stream digits unit index &optional labels)
+  (let* ((lines (%split-source-lines (source-unit-text unit)))
+         (by-line (gethash unit index)))
+    (loop for text in lines
+          for line from 1
+          for entries = (nreverse (gethash line by-line))
+          for marked = (if labels
+                           (format nil "~A~D | ~A"
+                                   (if (source-unit-file unit)
+                                       (format nil "~A:" (source-unit-file unit))
+                                       "line ")
+                                   line text)
+                           text)
+          do (if entries
+                 (dolist (entry entries)
+                   (%listing-row stream (format nil "~4,'0X" (listing-line-address entry))
+                                 (%listing-cells-text assembly entry digits) marked))
+                 (%listing-row stream "" "" marked))
+             (dolist (child (gethash line (source-unit-children unit)))
+               (%listing-text-from-unit assembly stream digits child index t)))))
+
 (defun listing-text (assembly &key stream)
   "Render ASSEMBLY's LISTING (assembler.lisp, #25) as a conventional
 assembler listing: address, encoded cells, and (when ASSEMBLY-SOURCE is
@@ -166,7 +200,15 @@ ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
          (body (with-output-to-string (s)
                  (if (assembly-source assembly)
-                     (%listing-text-from-source assembly s digits)
+                     (if (assembly-source-unit assembly)
+                         (%listing-text-from-unit assembly s digits
+                                                  (assembly-source-unit assembly)
+                                                  (%listing-entry-index assembly)
+                                                  (or (source-unit-file (assembly-source-unit assembly))
+                                                      (plusp (hash-table-count
+                                                              (source-unit-children
+                                                               (assembly-source-unit assembly))))))
+                         (%listing-text-from-source assembly s digits))
                      (%listing-text-entries-only assembly s digits)))))
     (if stream (progn (write-string body stream) nil) body)))
 

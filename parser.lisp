@@ -72,7 +72,11 @@
                    ; disables mode-suffix syntax entirely (its
                    ; MODE-SUFFIX-SEPARATOR is NIL).
   line            ; source line number, for diagnostics
-  definition-line) ; macro body line, or NIL outside an expansion
+  source-unit
+  definition-line ; macro body line, or NIL outside an expansion
+  definition-unit)
+
+(defstruct source-unit file text (children (make-hash-table)))
 
 (defstruct operand
   tokens)     ; simple-vector of raw tokens for this operand -- MATCH-OPERAND-MODE
@@ -80,7 +84,7 @@
               ; this and calls PARSE-EXPRESSION on the pattern's `expr` hole(s)
 
 (defstruct expr-number value)
-(defstruct expr-label name localp)          ; NAME unresolved; LOCALP set from
+(defstruct expr-label name localp line column) ; NAME unresolved; LOCALP set from
                                              ; the lexer's LOCAL-LABEL-PREFIX
                                              ; (lexer.lisp's TOKEN-LOCALP) --
                                              ; scoping the reference to its
@@ -128,7 +132,8 @@
       ((eq (token-type tok) :number)
        (values (make-expr-number :value (token-value tok)) (1+ i)))
       ((eq (token-type tok) :identifier)
-       (values (make-expr-label :name (token-value tok) :localp (token-localp tok))
+       (values (make-expr-label :name (token-value tok) :localp (token-localp tok)
+                                :line (token-line tok) :column (token-column tok))
                (1+ i)))
       ((eq (%punct-value tok) :star)
        ;; The location-counter symbol (#15): "*" in operand/primary position
@@ -284,13 +289,18 @@ list of non-empty lists of non-newline tokens, one per source line."
                (t (cl:push tok current))))
     (nreverse lines)))
 
-(defun parse (string &key (lexer 'default))
+(defun parse (string &key (lexer 'default) file)
   "Tokenize STRING with LEXER and parse it into a list of STATEMENT structs,
-one per non-blank source line. Signals LEX-ERROR or PARSE-FAILURE on
-malformed input -- both carry STRING as their SOURCE (#74, WITH-SOURCE-
-CONTEXT), so DIAGNOSTIC-TEXT can render the offending source line even if
-the caller only catches the condition well outside this call."
-  (with-source-context string
-    (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
-      (mapcar (lambda (line-tokens) (%parse-line line-tokens :mode-suffix-separator separator))
-              (%split-lines (tokenize string :lexer lexer))))))
+one per non-blank source line. FILE, when supplied, names the source in
+diagnostics. The second value is its source unit, used by include expansion
+and listings. Signals LEX-ERROR or PARSE-FAILURE with source context."
+  (let ((unit (make-source-unit :file (and file (namestring (pathname file))) :text string)))
+    (with-source-unit unit
+      (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
+        (values
+         (mapcar (lambda (line-tokens)
+                   (let ((statement (%parse-line line-tokens :mode-suffix-separator separator)))
+                     (setf (statement-source-unit statement) unit)
+                     statement))
+                 (%split-lines (tokenize string :lexer lexer)))
+         unit)))))

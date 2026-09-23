@@ -58,6 +58,7 @@ A missing top-level file given to `assemble-file` is the ordinary CL
 Returns `statements` with every `.include` replaced by the named file's
 statements, parsed with `lexer`.
 
-Diagnostics inside an included file render against the top-level source text
-for assembly errors; lexer and parser errors in an included file render against
-that file's own text.
+Diagnostics use the file and source line that contain the error. A macro
+invocation reports its call location and names its body location separately.
+Listings show each included file inline at its `.include` line, including
+blank and non-emitting lines; repeated includes appear at each occurrence.

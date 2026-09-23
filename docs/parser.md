@@ -80,8 +80,9 @@ matching against `operands` instead would make such a mode unmatchable.
 `match-operand-mode`/`try-match-operand-mode` take `operand-tokens`, not
 `operands`.
 
-`(parse string &key (lexer 'default))` tokenizes `string` with `lexer` and
-returns a list of `statement`. Signals `lex-error` or `parse-failure`.
+`(parse string &key (lexer 'default) file)` tokenizes `string` with `lexer` and
+returns a list of `statement` and a source unit as a second value. `file`
+names the source in diagnostics. Signals `lex-error` or `parse-failure`.
 
 ## Expression parser
 

@@ -1,24 +1,6 @@
 ;;;; diagnostic.lisp
-;;;; Shared diagnostic-rendering mechanism for the three program-source
-;;;; pipeline stages -- lexing (lexer.lisp), parsing (parser.lisp) and
-;;;; assembly (assembler.lisp) -- plus the opt-in strict operand-range check
-;;;; and the mode-selection ambiguity warning (#74).
-;;;;
-;;;; LASM-SYNTAX-ERROR (moved here from storage.lisp, where it used to sit
-;;;; beside the storage conditions with no renderer of its own) already
-;;;; carried a MESSAGE/LINE/COLUMN -- every stage already reports *where*.
-;;;; What was missing was rendering that position against the actual source
-;;;; line, and naming *what* was found alongside what was expected. Both are
-;;;; additive: DIAGNOSTIC-TEXT below degrades to the old one-line report when
-;;;; there is no source text or no column, so nothing that already prints a
-;;;; LASM-SYNTAX-ERROR changes shape unless SOURCE is available.
-;;;;
-;;;; A SOURCE slot on the condition itself (not a dynamic variable) is what
-;;;; lets a condition escaping ASSEMBLE's dynamic extent -- caught later, by
-;;;; a different caller, in a different stack frame -- still render with
-;;;; context: WITH-SOURCE-CONTEXT (below) fills the slot via HANDLER-BIND
-;;;; and *declines*, so the condition keeps its original identity and
-;;;; restarts intact; it isn't wrapped or resignalled.
+;;;; Positioned diagnostics retain source text and file after the signalling
+;;;; call returns. Context handlers fill missing slots without resignalling.
 
 (in-package #:lasm)
 
@@ -44,20 +26,23 @@ column, e.g.:
   3 | ldx (#5),Y
     |     ^
 
-SOURCE, when given, overrides the condition's own SOURCE slot (normally
-filled by WITH-SOURCE-CONTEXT at the pipeline's entry points) -- useful for
-re-rendering a condition caught with different or additional context.
-Degrades to a bare \"message (line N, column C)\" one-liner when there is no
-line at all, and omits the caret line when there is a line but no column."
+SOURCE overrides the condition's stored text. File-backed input renders
+PATH:LINE:COLUMN; input without a file renders LINE N, COLUMN C. Without
+a line, only the message appears. Without a column, the caret is omitted."
   (let* ((message (lasm-syntax-error-message condition))
          (line (lasm-syntax-error-line condition))
          (column (lasm-syntax-error-column condition))
          (src (if source-supplied-p source (lasm-syntax-error-source condition)))
          (src-line (and src line (%nth-source-line src line)))
-         (definition-line (lasm-syntax-error-definition-line condition)))
+         (file (lasm-syntax-error-file condition))
+         (definition-line (lasm-syntax-error-definition-line condition))
+         (definition-file (lasm-syntax-error-definition-file condition))
+         (definition-source (lasm-syntax-error-definition-source condition)))
     (with-output-to-string (out)
       (if line
-          (format out "line ~D~@[, column ~D~]: ~A" line column message)
+          (if file
+              (format out "~A:~D~@[:~D~]: ~A" file line column message)
+              (format out "line ~D~@[, column ~D~]: ~A" line column message))
           (format out "~A" message))
       (when src-line
         (let* ((label (format nil "~D" line))
@@ -67,8 +52,11 @@ line at all, and omits the caret line when there is a line but no column."
             (format out "~%~A | ~A^" gutter
                     (make-string (max 0 (1- column)) :initial-element #\Space)))))
       (when definition-line
-        (format out "~%expanded from macro body line ~D" definition-line)
-        (let ((definition-text (and src (%nth-source-line src definition-line))))
+        (if definition-file
+            (format out "~%expanded from macro body ~A:~D" definition-file definition-line)
+            (format out "~%expanded from macro body line ~D" definition-line))
+        (let ((definition-text (and (or definition-source src)
+                                    (%nth-source-line (or definition-source src) definition-line))))
           (when definition-text
             (format out "~%~D | ~A" definition-line definition-text)))))))
 
@@ -83,10 +71,11 @@ line at all, and omits the caret line when there is a line but no column."
    (column :initarg :column :initform nil :accessor lasm-syntax-error-column)
    (definition-line :initarg :definition-line :initform nil
                     :accessor lasm-syntax-error-definition-line)
-   ;; #74: filled in place by WITH-SOURCE-CONTEXT, not passed as an initarg
-   ;; at signal time -- the signalling call site (lexer.lisp, parser.lisp,
-   ;; mode.lisp, assembler.lisp) never has the whole source text in hand,
-   ;; only the entry point does.
+   (definition-file :initarg :definition-file :initform nil
+                    :accessor lasm-syntax-error-definition-file)
+   (definition-source :initarg :definition-source :initform nil
+                      :accessor lasm-syntax-error-definition-source)
+   (file :initarg :file :initform nil :accessor lasm-syntax-error-file)
    (source :initarg :source :initform nil :accessor lasm-syntax-error-source))
   (:report (lambda (c s) (write-string (diagnostic-text c) s))))
 
@@ -138,6 +127,22 @@ condition's slot as it was."
                              (lambda (c)
                                (unless (lasm-syntax-error-source c)
                                  (setf (lasm-syntax-error-source c) ,source-var)))))
+             ,@body)
+           (progn ,@body)))))
+
+(defmacro with-source-unit (unit &body body)
+  "Attach UNIT's file and text to positioned conditions in BODY."
+  (let ((unit-var (gensym "UNIT")))
+    `(let ((,unit-var ,unit))
+       (if ,unit-var
+           (handler-bind ((lasm-syntax-error
+                            (lambda (c)
+                              (unless (lasm-syntax-error-source c)
+                                (setf (lasm-syntax-error-source c)
+                                      (source-unit-text ,unit-var)))
+                              (unless (lasm-syntax-error-file c)
+                                (setf (lasm-syntax-error-file c)
+                                      (source-unit-file ,unit-var))))))
              ,@body)
            (progn ,@body)))))
 

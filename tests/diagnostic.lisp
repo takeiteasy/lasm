@@ -85,6 +85,23 @@
              (caret-pos (position #\^ caret-line)))
         (fiveam:is (= 8 caret-pos))))))
 
+(fiveam:test undefined-label-points-to-label-token
+  (handler-case
+      (assemble (format nil "nop~%bne missing + 1") :machine 'instr-test-machine)
+    (unresolved-label (c)
+      (fiveam:is (typep c 'lasm-syntax-error))
+      (fiveam:is (string= "missing" (unresolved-label-name c)))
+      (fiveam:is (= 2 (lasm-syntax-error-line c)))
+      (fiveam:is (= 5 (lasm-syntax-error-column c)))
+      (fiveam:is (search "bne missing + 1" (diagnostic-text c)))
+      (fiveam:is (search "^" (diagnostic-text c))))))
+
+(fiveam:test standalone-undefined-label-keeps-message-without-source
+  (handler-case (eval-expr-constant (parse-expression (tokenize "missing")))
+    (unresolved-label (c)
+      (fiveam:is (null (lasm-syntax-error-source c)))
+      (fiveam:is (search "unresolved label" (diagnostic-text c))))))
+
 (fiveam:test macro-assembly-error-reports-call-and-definition
   (handler-case
       (assemble ".macro bad

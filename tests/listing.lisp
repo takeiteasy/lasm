@@ -31,6 +31,28 @@ end: nop" :machine 'instr-test-machine))
       (fiveam:is (= 1 (listing-line-size e3)))
       (fiveam:is (= 3 (listing-line-line e3))))))
 
+(fiveam:test included-listing-renders-source-inline
+  (let* ((path (asdf:system-relative-pathname :lasm "tests/fixtures/include/nested.asm"))
+         (assembly (assemble-file path :machine 'instr-test-machine))
+         (text (listing-text assembly))
+         (first-include (search ".include \"sub/b.asm\"" text))
+         (nested-line (search "sub/b.asm:1 | nop" text))
+         (second-include (search ".include \"c.asm\"" text))
+         (leaf-line (search "sub/c.asm:1 | nop" text)))
+    (fiveam:is (and first-include nested-line second-include leaf-line))
+    (fiveam:is (< first-include nested-line second-include leaf-line))
+    (fiveam:is (= 1 (length (listing-lines-for-source-line assembly 1))))
+    (fiveam:is (= 1 (length (listing-lines-for-source-line
+                             assembly 1 :file (listing-line-file
+                                               (second (assembly-listing assembly)))))))))
+
+(fiveam:test repeated-include-creates-two-listing-entries
+  (let* ((assembly (assemble-file (asdf:system-relative-pathname
+                                   :lasm "tests/fixtures/include/twice.asm")
+                                  :machine 'instr-test-machine))
+         (file (listing-line-file (second (assembly-listing assembly)))))
+    (fiveam:is (= 2 (length (listing-lines-for-source-line assembly 1 :file file))))))
+
 (fiveam:test listing-entries-ascending-non-overlapping
   (let* ((a (assemble "ldx #1
 adc $10

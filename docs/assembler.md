@@ -25,14 +25,15 @@ the result.
 ## `assemble` / `assemble-statements`
 
 ```lisp
-(assemble SOURCE &key machine (lexer 'default) (origin 0) memory)
+(assemble SOURCE &key machine (lexer 'default) (origin 0) memory file)
 (assemble-statements STATEMENTS &key machine (origin 0) memory source)
 ```
 
 `assemble` is `parse` (see [Statement grammar & expression
 parser](parser.md)) and `expand-includes` ([Includes](includes.md)) followed by `assemble-statements` — a caller already
 holding a `statement` list (e.g. from its own preprocessing) can call the
-latter directly. Both return an `assembly`:
+latter directly. `file` names in-memory source in diagnostics and listings;
+`assemble-file` supplies its path automatically. Both return an `assembly`:
 
 ```lisp
 (defstruct assembly cells cell-width origin symbols symbol-info listing source)
@@ -655,7 +656,7 @@ at, `.org` can still move it further before the first byte).
 - `unknown-instruction` — an unregistered mnemonic (from
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in
-  the program (from `eval-expr`).
+  the program (from `eval-expr`). It includes the label token's position.
 - `unresolved-location` — a `"*"` location-counter reference folded with no
   `:pc` given (see "Location counter" above); does not occur during ordinary
   assembly, only from a standalone `eval-expr`/`eval-expr-constant` call.
