@@ -96,6 +96,11 @@ as its default (a mode with neither is an error); a mode without its own
 there is none either. A top-level `(encoding ...)` clause is not allowed
 here, since each mode supplies its own opcode.
 
+`definstruction` rejects unknown or malformed subclauses in each mode variant
+and in `(encoding ...)`. It also rejects repeated singular subclauses, such as
+two `(opcode ...)` forms. `operand`, `field-value`, and `for-choice` remain
+repeatable where supported.
+
 The per-mode override exists because a mode's syntax doesn't determine its
 semantics: an `immediate` operand is a literal value, ready to use directly,
 while `zero-page`/`absolute`/`indexed-x` etc. are all *addresses* whose value

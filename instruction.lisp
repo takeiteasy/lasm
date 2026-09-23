@@ -3015,6 +3015,22 @@ byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
                    machine name sub machine width))))
       (values opcode sub))))
 
+(defun %check-instruction-subclauses (body machine name context allowed repeatable)
+  (let ((seen nil))
+    (dolist (subclause body)
+      (unless (consp subclause)
+        (error "DEFINSTRUCTION ~S ~S: ~S has a malformed subclause ~S"
+               machine name context subclause))
+      (let ((head (first subclause)))
+        (unless (member head allowed :test #'eq)
+          (error "DEFINSTRUCTION ~S ~S: ~S has an unknown subclause ~S"
+                 machine name context subclause))
+        (unless (member head repeatable :test #'eq)
+          (when (member head seen :test #'eq)
+            (error "DEFINSTRUCTION ~S ~S: ~S has a duplicate ~S subclause"
+                   machine name context head))
+          (cl:push head seen))))))
+
 (defun %parse-mode-variant-clause-forms (variant-form machine name default-semantics-forms cycles-form)
   "VARIANT-FORM is one element of a multi-mode (modes ...) clause:
 (MODE-NAME (opcode n [:sub s]) (operand ...)* [(semantics form...)] [(cycles n)]).
@@ -3036,6 +3052,10 @@ may not be combined with a hole-selected selector on the same variant
 CYCLES-FORM for this mode alone -- e.g. a zero-page mode costing less than
 its absolute-mode sibling."
   (destructuring-bind (mode-sym &rest body) variant-form
+    (%check-instruction-subclauses
+     body machine name `(modes ,mode-sym)
+     '(opcode operand field-value for-choice sub-opcode layout semantics cycles)
+     '(operand field-value for-choice))
     (let* ((mode (find-mode-descriptor mode-sym))
            (opcode-subclause (find 'opcode body :key #'first))
            (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand)) body))
@@ -3048,12 +3068,6 @@ its absolute-mode sibling."
            (sub-opcode-subclause (find 'sub-opcode body :key #'first))
            (layout-subclause (find 'layout body :key #'first))
            (semantics-subclause (find 'semantics body :key #'first))
-           ;; NOTE (#92): like OPCODE-SUBCLAUSE/OPERAND-SUBCLAUSES/SUB-OPCODE-
-           ;; SUBCLAUSE/SEMANTICS-SUBCLAUSE above, this FINDs known subclause
-           ;; heads out of BODY and silently drops anything unrecognized -- a
-           ;; typo'd (cycle 2) vanishes with no error. Pre-existing, not
-           ;; specific to CYCLES; #92 tracks rejecting unknown subclauses
-           ;; here instead.
            (cycles-subclause (find 'cycles body :key #'first)))
       (%check-mode-hole-attributes mode machine name)
       (unless opcode-subclause
@@ -3280,6 +3294,9 @@ NO-MATCHING-CHOICE rather than silently falling through."
            (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
          (unless semantics-clause
            (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+         (%check-instruction-subclauses
+          (rest encoding-clause) machine name '(encoding)
+          '(opcode operand layout field-value) '(field-value))
          (let* ((opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
                 (operand-subclause (find 'operand (rest encoding-clause) :key #'first))
                 (layout-subclause (find 'layout (rest encoding-clause) :key #'first))
@@ -3357,6 +3374,10 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
            (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
          (unless semantics-clause
            (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+         (%check-instruction-subclauses
+          (rest encoding-clause) machine name '(encoding)
+          '(opcode operand field-value for-choice sub-opcode layout)
+          '(operand field-value for-choice))
          (let* ((mode-sym (first mode-forms))
                 (mode (find-mode-descriptor mode-sym))
                 (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))

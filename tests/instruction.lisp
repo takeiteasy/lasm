@@ -246,6 +246,52 @@
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))))))
 
+(fiveam:test multi-mode-rejects-unknown-and-malformed-subclauses
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (modes (immediate (opcode #xF0))
+                            (absolute (opcode #xF1) (cycle 2)))
+                     (semantics nil))))
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (modes (immediate (opcode #xF0) stray)
+                            (absolute (opcode #xF1)))
+                     (semantics nil)))))
+
+(fiveam:test encoding-rejects-unknown-subclauses-in-both-shapes
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (encoding (opcode #xF0) (opcod #xF1))
+                     (semantics nil))))
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (modes immediate)
+                     (encoding (opcode #xF0) (operand :mode) (cycle 2))
+                     (semantics nil)))))
+
+(fiveam:test instruction-rejects-duplicate-singular-subclauses
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (modes (immediate (opcode #xF0) (cycles 2) (cycles 3))
+                            (absolute (opcode #xF1)))
+                     (semantics nil))))
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (encoding (opcode #xF0) (opcode #xF1))
+                     (semantics nil))))
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction instr-test-machine bogus
+                     (modes immediate)
+                     (encoding (opcode #xF0) (opcode #xF1) (operand :mode))
+                     (semantics nil)))))
+
+(fiveam:test word-mode-rejects-unknown-subclause
+  (fiveam:signals error
+    (macroexpand-1 '(definstruction word-test-machine bogus
+                     (modes (immediate (opcode 1) (cycle 2))
+                            (absolute (opcode 2)))
+                     (semantics nil)))))
+
 (defmode two-hole-test-mode expr "," expr :width 1)
 
 ;;; Multi-operand instructions: a two-hole mode wires up one operand
