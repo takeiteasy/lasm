@@ -134,6 +134,24 @@ looks like."
     (fiveam:signals parse-failure
       (match-operand-mode (%tokens-for "[label]") 'test-register))))
 
+(defmode test-bracket-first (one-of test-bracket test-register))
+(defmode test-register-first (one-of test-register test-bracket))
+(defmode test-paren "(" expr ")")
+(defmode test-register-wrap (one-of test-register test-paren))
+(defmode test-nested-register (one-of test-bracket test-register-wrap))
+
+(fiveam:test register-qualified-alternative-wins-in-either-order
+  (let ((*register-alias-elements*
+          (machine-descriptor-register-alias-elements
+           (find-machine-descriptor 'test-machine))))
+    (flet ((pick (text mode)
+             (mode-descriptor-name
+              (first (nth-value 2 (try-match-operand-mode (%tokens-for text) mode))))))
+      (fiveam:is (eq 'test-register (pick "[bank1]" 'test-bracket-first)))
+      (fiveam:is (eq 'test-register (pick "[bank1]" 'test-register-first)))
+      (fiveam:is (eq 'test-bracket (pick "[label]" 'test-register-first)))
+      (fiveam:is (eq 'test-register-wrap (pick "[bank1]" 'test-nested-register))))))
+
 (fiveam:test find-mode-descriptor-unknown-signals-error
   (fiveam:signals error
     (find-mode-descriptor 'no-such-mode)))

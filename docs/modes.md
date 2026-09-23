@@ -164,7 +164,9 @@ the same as writing that mode's pattern directly.
 
 At match time, each alternative is tried against the rest of the pattern
 and the complete input. Among successful matches, the path with the most
-literal tokens wins; declaration order breaks ties, with an
+literal tokens wins; among those, the path with the most matched
+[register-qualified holes](#register-qualified-holes) wins, nested `one-of`
+alternatives included. Declaration order breaks any remaining tie, with an
 [`ambiguous-alternative` warning](diagnostics.md#alternative-ambiguity)
 when it does. An alternative that
 matches only a prefix cannot prevent a later complete match. Given
@@ -212,7 +214,10 @@ register bank `NAME`:
 The assembler accepts only a direct register alias in the qualified hole.
 Numbers, labels, and compound expressions remain available to an ordinary
 `expr` hole, so register-plus-offset and absolute-plus-offset alternatives
-remain distinguishable.
+remain distinguishable. In a `one-of`, a register alternative outranks a
+plain `expr` alternative with the same literals, whatever the declaration
+order: `(one-of addr-ind reg-ind)` over `"[" expr "]"` and `"[" (expr
+:register reg) "]"` picks `reg-ind` for `[r0]` and `addr-ind` for `[5]`.
 
 ### What `one-of` does and does not do
 

@@ -157,9 +157,9 @@ the program, not relaxation, picked the mode.
 ## Alternative ambiguity
 
 A `one-of` element picks the alternative whose match uses the most literal
-tokens ([Addressing modes, "Matching and
-backtracking"](modes.md#matching-and-backtracking)). When two alternatives
-tie, declaration order decides and assembly warns with an
+tokens, then the most register-qualified holes ([Addressing modes, "Matching
+and backtracking"](modes.md#matching-and-backtracking)). When two
+alternatives tie on both, declaration order decides and assembly warns with an
 `ambiguous-alternative` condition:
 
 ```lisp
@@ -175,12 +175,11 @@ tie, declaration order decides and assembly warns with an
 ```
 
 A register-qualified hole (`(expr :register r)`) is more specific than a
-plain `expr`, so `(one-of reg-ind addr-ind)` over `"[" (expr :register r)
-"]"` and `"[" expr "]"` picks `reg-ind` for `[r0]` without warning. Declared
-the other way round, the plain `expr` alternative wins and the warning
-fires. A hole prefix (`pick ra:3`) names the alternative outright and never
-warns. A forced mnemonic suffix fixes the mode, not the alternative, so a
-tie inside the forced mode still warns.
+plain `expr`, so `(one-of addr-ind reg-ind)` over `"[" expr "]"` and `"["
+(expr :register r) "]"` picks `reg-ind` for `[r0]` without warning, in
+either declaration order. A hole prefix (`pick ra:3`) names the alternative
+outright and never warns. A forced mnemonic suffix fixes the mode, not the
+alternative, so a tie inside the forced mode still warns.
 
 `ambiguous-alternative` is a subtype of `ambiguous-mode`, so a handler for
 either catches it. `ambiguous-mode-chosen` and `-alternatives` hold the

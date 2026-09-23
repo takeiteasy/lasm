@@ -308,6 +308,23 @@ ambi $30" :machine 'diag-test-machine))
   (encoding (opcode #x02) (operand :width 1))
   (semantics nil))
 
+(defmode diag-paren "(" expr ")")
+(defmode diag-reg-wrap (one-of diag-regind diag-paren))
+(defmode diag-nested-reg (one-of diag-ind diag-reg-wrap))
+(defmode diag-regind-a "[" (expr :register r) "]" :suffix "dqa")
+(defmode diag-regind-b "[" (expr :register r) "]" :suffix "dqb")
+(defmode diag-reg-twins (one-of diag-regind-a diag-regind-b))
+
+(definstruction diag-reg-machine ldn
+  (modes diag-nested-reg)
+  (encoding (opcode #x03) (operand :width 1))
+  (semantics nil))
+
+(definstruction diag-reg-machine ldt
+  (modes diag-reg-twins)
+  (encoding (opcode #x04) (operand :width 1))
+  (semantics nil))
+
 (defun %alternative-warnings (source machine)
   "Every AMBIGUOUS-ALTERNATIVE assembling SOURCE signals, muffled."
   (let (warnings)
@@ -348,8 +365,18 @@ alts 3" 'diag-test-machine)))))
 (fiveam:test register-qualified-alternative-outranks-plain-expr
   (fiveam:is (null (%alternative-warnings "ldr [r0]" 'diag-reg-machine)))
   (fiveam:is (null (%alternative-warnings "ldr [5]" 'diag-reg-machine)))
-  (let ((c (first (%alternative-warnings "ldi [r0]" 'diag-reg-machine))))
-    (fiveam:is (eq 'diag-ind (mode-descriptor-name (ambiguous-mode-chosen c))))))
+  (fiveam:is (null (%alternative-warnings "ldi [r0]" 'diag-reg-machine)))
+  (fiveam:is (null (%alternative-warnings "ldi [5]" 'diag-reg-machine))))
+
+(fiveam:test nested-register-qualified-alternative-outranks-plain-expr
+  (fiveam:is (null (%alternative-warnings "ldn [r0]" 'diag-reg-machine)))
+  (fiveam:is (null (%alternative-warnings "ldn [5]" 'diag-reg-machine))))
+
+(fiveam:test equally-register-qualified-alternatives-warn
+  (let ((c (first (%alternative-warnings "ldt [r1]" 'diag-reg-machine))))
+    (fiveam:is (eq 'diag-regind-a (mode-descriptor-name (ambiguous-mode-chosen c))))
+    (fiveam:is (equal '(diag-regind-b)
+                      (mapcar #'mode-descriptor-name (ambiguous-mode-alternatives c))))))
 
 ;;; Strict operand range (#74, absorbing #28/#43)
 
