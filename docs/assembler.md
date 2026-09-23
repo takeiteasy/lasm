@@ -462,11 +462,10 @@ their evaluated values and follow normal strict-range rules.
 On a word-encoded descriptor, each relative hole uses its selected
 `word-field-choice` range or its extra-word width
 (`%word-relative-offset-fits-p`, `assembler.lisp`). The check is just as
-unconditional as the byte-encoded one above — `%check-strict-operand-range!`
-is already a no-op for a word-encoded descriptor regardless of `:strict`,
-so `%relative-offset`'s own check is the *only* thing standing between an
-out-of-range branch and a silently wrapped one. `%choose-variant`'s own
-value filter (above) and its `#104` overflow diagnostic both need the same
+unconditional as the byte-encoded one above. Ordinary word holes are checked
+only when strict (`%check-strict-operand-range!`), against the field they are
+encoded into (`%word-field-bounds`), the same bound the value filter uses.
+`%choose-variant`'s own value filter (above) and its `#104` overflow diagnostic both need the same
 target → offset conversion *before* deciding whether any candidate fits at
 all, i.e. without `%relative-offset`'s own range check — `%relative-adjusted-values`
 factors that unchecked arithmetic out for both call sites.

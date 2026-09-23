@@ -567,3 +567,88 @@ lpa 5" 'diag-reg-machine))))
   ;; an unsigned hole's strict check quotes.
   (handler-case (progn (assemble "ophs 300" :machine 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
     (assembly-error (c) (fiveam:is (search "-128 and 255" (lasm-syntax-error-message c))))))
+
+;;; Strict operand range on a word-encoded machine
+
+(defmachine diag-word-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field x 4)
+    (field y 8)))
+
+(defmode diag-word-loose "#" expr)
+(defmode diag-word-strict "%" expr :strict t)
+(defmode diag-word-strict-signed "<" expr :strict t :signed t)
+(defmode diag-word-rel "^" expr :relative t)
+
+(definstruction diag-word-machine wloose
+  (modes diag-word-loose)
+  (encoding (opcode 1)
+    (operand v :field x
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15 :cells 1))))
+  (semantics (set! a v)))
+
+(definstruction diag-word-machine wstrict
+  (modes diag-word-strict)
+  (encoding (opcode 2)
+    (operand v :field x
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15 :cells 1))))
+  (semantics (set! a v)))
+
+(definstruction diag-word-machine wstrictsigned
+  (modes diag-word-strict-signed)
+  (encoding (opcode 3)
+    (operand v :field x
+      (variant (range -4 3) inline)
+      (variant :else (extra-word :escape 4 :cells 1))))
+  (semantics (set! a v)))
+
+(definstruction diag-word-machine winline
+  (modes diag-word-strict)
+  (encoding (opcode 4)
+    (operand v :field x (variant (range 0 7) inline)))
+  (semantics (set! a v)))
+
+(definstruction diag-word-machine wrel
+  (modes diag-word-rel)
+  (encoding (opcode 5)
+    (operand v :field y (variant (range -8 7) inline)))
+  (semantics (set! pc (+ pc v))))
+
+(defun %word-strict-error-text (source)
+  (handler-case (progn (assemble source :machine 'diag-word-machine) nil)
+    (assembly-error (e) (princ-to-string e))))
+
+(fiveam:test word-strict-defaults-off-and-wraps
+  (fiveam:finishes (assemble "wloose #300" :machine 'diag-word-machine)))
+
+(fiveam:test word-strict-mode-signals-on-extra-word-overflow
+  (fiveam:signals assembly-error (assemble "wstrict %300" :machine 'diag-word-machine))
+  (fiveam:is (search "-128 and 255" (%word-strict-error-text "wstrict %300"))))
+
+(fiveam:test word-strict-mode-accepts-in-range-values
+  (fiveam:finishes (assemble "wstrict %5" :machine 'diag-word-machine))
+  (fiveam:finishes (assemble "wstrict %200" :machine 'diag-word-machine)))
+
+(fiveam:test word-strict-global-switch-covers-non-strict-mode
+  (let ((*strict-operand-range* t))
+    (fiveam:signals assembly-error (assemble "wloose #300" :machine 'diag-word-machine))
+    (fiveam:finishes (assemble "wloose #200" :machine 'diag-word-machine))))
+
+(fiveam:test word-strict-inline-only-field-signals
+  (fiveam:signals assembly-error (assemble "winline %9" :machine 'diag-word-machine))
+  (fiveam:is (search "0 and 7" (%word-strict-error-text "winline %9")))
+  (fiveam:finishes (assemble "winline %7" :machine 'diag-word-machine)))
+
+(fiveam:test word-strict-signed-field-quotes-signed-bound
+  (fiveam:is (search "-128 and 127" (%word-strict-error-text "wstrictsigned <200")))
+  (fiveam:finishes (assemble "wstrictsigned <-100" :machine 'diag-word-machine)))
+
+(fiveam:test word-relative-hole-keeps-its-own-error
+  (let ((text (%word-strict-error-text "wrel ^100")))
+    (fiveam:is (search "relative branch offset" text))))

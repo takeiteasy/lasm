@@ -715,3 +715,7 @@
           (variant (choice shadow-alt-a) inline :range (0 7) :suffix "sk")
           (variant (choice shadow-alt-b) inline :range (0 7) :bias 8)))
        (semantics (set! a v))))))
+
+(fiveam:test choice-overflow-after-a-trailing-word-hole-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "move [0, 5], 99" :machine 'independent-choice-machine)))

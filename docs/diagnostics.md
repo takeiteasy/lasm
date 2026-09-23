@@ -241,11 +241,12 @@ A `relative` mode is unaffected by either switch — it already range-checks
 unconditionally and errors on overflow (see [Addressing modes, "PC-relative
 modes"](modes.md#pc-relative-modes)), strict or not, since a wrapped branch
 is a correctness bug regardless of whether wraparound is otherwise wanted.
-A word-encoded instruction (see [Assembler, "Word-encoded
-instructions"](assembler.md#word-encoded-instructions-20)) is likewise
-unaffected — an inline field's own declared `(range lo hi)` is already a
-hard boundary chosen at `definstruction` time, not a `wrap-value`
-truncation.
+On a word-encoded instruction (see [Assembler, "Word-encoded
+instructions"](assembler.md#word-encoded-instructions-20)) a strict hole is
+checked against the field it is encoded into: an inline field's own
+`(range lo hi)`, or an extra or trailing word's `:cells` width (signed when
+the hole is `:signed`). Without strictness, a value that fits no variant
+wraps into the widest one.
 
 **A `(choice mode)`-selected word field (#104) also errors unconditionally,
 like `relative`**, and for the same reason: once a hole's matched

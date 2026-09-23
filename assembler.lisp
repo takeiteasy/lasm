@@ -262,29 +262,39 @@ begin with."
   (let ((next-address (+ address (instruction-descriptor-size descriptor))))
     (%fits-signed-width-p (- value next-address) width cell-width)))
 
+(defun %operand-range (width cell-width signedp)
+  "(VALUES lo hi), the inclusive range of values WIDTH cells of CELL-WIDTH
+bits each can hold without WRAP-VALUE truncating -- the signed two's-
+complement range when SIGNEDP, else the wider unsigned-or-signed range
+%FITS-WIDTH-P itself accepts (mirrors that function's and %FITS-SIGNED-
+WIDTH-P's own bounds exactly, so a strict range check and the ordinary
+value filter never disagree about what \"fits\")."
+  (let ((bits (* cell-width width)))
+    (if signedp
+        (let ((bound (ash 1 (1- bits)))) (values (- bound) (1- bound)))
+        (values (- (ash 1 (1- bits))) (1- (ash 1 bits))))))
+
+(defun %word-field-bounds (choice cell-width)
+  "(VALUES lo hi), the inclusive range of pre-bias values the word field
+CHOICE encodes without truncation: an :INLINE field's declared RANGE, else
+its extra word's own width (signed when the field is SIGNEDP)."
+  (ecase (word-field-choice-kind choice)
+    (:inline (values (car (word-field-choice-range choice))
+                     (cdr (word-field-choice-range choice))))
+    ((:extra-word :trailing-word)
+     (%operand-range (word-field-choice-extra-cells choice) cell-width
+                     (word-field-choice-signedp choice)))))
+
 (defun %word-variant-fits-p (values descriptor cell-width)
   "T if VALUES -- one already-evaluated operand value per DESCRIPTOR's
-WORD-FIELDS entry, in order (#20) -- fits this word-field combo: an
-:EXTRA-WORD field fits when VALUE fits its own CHOICE-EXTRA-CELLS width
-(#135; unconditionally T before -- an extra word could only ever be the
-whole instruction word, which every operand value already has to fit
-somewhere), signed when the field is SIGNEDP, else unsigned; an :INLINE
-field fits only when VALUE falls in that field's declared (pre-bias) RANGE.
-Parallel to %FITS-WIDTH-P/%FITS-SIGNED-WIDTH-P for the byte-encoded case,
-used by %CHOOSE-VARIANT's value filter to pick the narrowest (fewest extra
-cells) combo a value actually fits."
+WORD-FIELDS entry, in order -- fits this word-field combo: each value must
+fall within its field's %WORD-FIELD-BOUNDS. Parallel to %FITS-WIDTH-P/
+%FITS-SIGNED-WIDTH-P for the byte-encoded case, used by %CHOOSE-VARIANT's
+value filter to pick the narrowest (fewest extra cells) combo a value
+actually fits."
   (every (lambda (value choice)
-           (ecase (word-field-choice-kind choice)
-             ;; #120: a :TRAILING-WORD hole fits exactly like :EXTRA-WORD --
-             ;; the value must fit its own trailing cells, signed per the hole
-             ;; -- it just has no field bits, and so no ESCAPE marker, of its
-             ;; own to spend instead.
-             ((:extra-word :trailing-word)
-              (if (word-field-choice-signedp choice)
-                  (%fits-signed-width-p value (word-field-choice-extra-cells choice) cell-width)
-                  (%fits-width-p value (word-field-choice-extra-cells choice) cell-width)))
-             (:inline (destructuring-bind (lo . hi) (word-field-choice-range choice)
-                        (<= lo value hi)))))
+           (multiple-value-bind (lo hi) (%word-field-bounds choice cell-width)
+             (<= lo value hi)))
          values (instruction-descriptor-word-fields descriptor)))
 
 (defun %choices-eligible-p (descriptor choices &optional selections)
@@ -625,12 +635,7 @@ tried to encode, not the absolute branch target."
     (loop for value in vals
           for field-choice in (instruction-descriptor-word-fields descriptor)
           for i from 0
-          do (multiple-value-bind (lo hi)
-                 (ecase (word-field-choice-kind field-choice)
-                   (:inline (destructuring-bind (lo . hi) (word-field-choice-range field-choice)
-                              (values lo hi)))
-                   (:extra-word (%operand-range (word-field-choice-extra-cells field-choice)
-                                                 cell-width (word-field-choice-signedp field-choice))))
+          do (multiple-value-bind (lo hi) (%word-field-bounds field-choice cell-width)
                (unless (<= lo value hi)
                  (return (values i value lo hi (word-field-choice-choice field-choice))))))))
 
@@ -1302,40 +1307,33 @@ field" (instruction-descriptor-name descriptor) offset)))
                               (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))))
     offset))
 
-(defun %operand-range (width cell-width signedp)
-  "(VALUES lo hi), the inclusive range of values WIDTH cells of CELL-WIDTH
-bits each can hold without WRAP-VALUE truncating -- the signed two's-
-complement range when SIGNEDP, else the wider unsigned-or-signed range
-%FITS-WIDTH-P itself accepts (mirrors that function's and %FITS-SIGNED-
-WIDTH-P's own bounds exactly, so a strict range check and the ordinary
-value filter never disagree about what \"fits\")."
-  (let ((bits (* cell-width width)))
-    (if signedp
-        (let ((bound (ash 1 (1- bits)))) (values (- bound) (1- bound)))
-        (values (- (ash 1 (1- bits))) (1- (ash 1 bits))))))
-
 (defun %check-strict-operand-range! (descriptor mode values line cell-width choices)
-  "Check ordinary byte fields marked strict. Relative fields are checked by %RELATIVE-OFFSET."
-  (unless (instruction-descriptor-word-fields descriptor)
-    (let ((relative-holes (instruction-descriptor-relative-holes descriptor)))
-      (loop for value in values
-            for width in (instruction-descriptor-operand-widths descriptor)
-            for choice in (or choices (make-list (length values)))
-            for signedp in (or (instruction-descriptor-operand-signedness descriptor)
-                                (make-list (length values)))
-            for i from 0
-            for hole-strictp = (and (not (nth i relative-holes))
-                                     (or *strict-operand-range*
-                                         (and mode (mode-descriptor-strictp mode))
-                                         (and choice (mode-descriptor-strictp choice))))
-            when hole-strictp
-              do (multiple-value-bind (lo hi)
-                     (%operand-range width cell-width signedp)
-                   (unless (<= lo value hi)
-                     (%assembly-error line
-                                       "~A: operand value ~D out of range for ~D-cell operand ~
+  "Check ordinary strict fields against the bounds of the field each is
+encoded into. Relative fields are checked by %RELATIVE-OFFSET."
+  (let ((relative-holes (instruction-descriptor-relative-holes descriptor))
+        (word-fields (instruction-descriptor-word-fields descriptor)))
+    (loop for value in values
+          for choice in (or choices (make-list (length values)))
+          for i from 0
+          when (and (not (nth i relative-holes))
+                    (or *strict-operand-range*
+                        (and mode (mode-descriptor-strictp mode))
+                        (and choice (mode-descriptor-strictp choice))))
+            do (if word-fields
+                   (multiple-value-bind (lo hi) (%word-field-bounds (nth i word-fields) cell-width)
+                     (unless (<= lo value hi)
+                       (%assembly-error line
+                                         "~A: operand value ~D out of range for its instruction-word ~
+field (must be between ~D and ~D)"
+                                         (instruction-descriptor-name descriptor) value lo hi)))
+                   (let ((width (nth i (instruction-descriptor-operand-widths descriptor)))
+                         (signedp (nth i (instruction-descriptor-operand-signedness descriptor))))
+                     (multiple-value-bind (lo hi) (%operand-range width cell-width signedp)
+                       (unless (<= lo value hi)
+                         (%assembly-error line
+                                           "~A: operand value ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
-                                       (instruction-descriptor-name descriptor) value width lo hi)))))))
+                                           (instruction-descriptor-name descriptor) value width lo hi))))))))
 
 (defun %make-growable-cells (size cell-width)
   (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
