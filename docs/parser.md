@@ -102,7 +102,7 @@ doesn't recognize as an operator).
 | 3 | `&` |
 | 4 | `<<` `>>` |
 | 5 | `+` `-` |
-| 6 | `*` `/` |
+| 6 | `*` `/` `%` |
 | 7 | prefix `-` `+` `~` `<` `>` |
 | 8 | primary: number, label, `*` (location counter), `( expr )` |
 
@@ -119,6 +119,11 @@ and `lda 2*3` (still multiplication, since `2` is already a complete left
 operand by the time `*` is seen) both parse as intended with no lexer
 change.
 
+`%` returns the remainder after truncating division, including for negative
+operands (`-5 % 3` is `-2`). With the default lexer, `%101` is a binary
+literal; put a space after `%` when the modulo right operand starts with `0`
+or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
+
 ### AST nodes
 
 ```lisp
@@ -128,7 +133,7 @@ change.
                                        ; -- no slots; it IS the value
 (defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
-                                       ;     :plus :minus :star :slash
+                                       ;     :plus :minus :star :slash :percent
 ```
 
 `expr-label-localp` is set from the lexer's `local-label-prefix` (`token-localp`,

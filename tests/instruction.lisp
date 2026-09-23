@@ -670,6 +670,14 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test eval-expr-constant-arithmetic
   (fiveam:is (= 7 (eval-expr-constant (match-operand-mode (%single-operand "#(3+4)") 'immediate)))))
 
+(fiveam:test eval-expr-constant-modulo
+  (flet ((value (source)
+           (eval-expr-constant (parse-expression (tokenize source)))))
+    (fiveam:is (= 3 (value "13 % 5")))
+    (fiveam:is (= -2 (value "-5 % 3")))
+    (fiveam:is (= 2 (value "5 % -3")))
+    (fiveam:signals division-by-zero (value "5 % 0"))))
+
 (fiveam:test eval-expr-constant-lo-hi
   (fiveam:is (= #x34 (eval-expr-constant (match-operand-mode (%single-operand "#<$1234") 'immediate))))
   (fiveam:is (= #x12 (eval-expr-constant (match-operand-mode (%single-operand "#>$1234") 'immediate)))))

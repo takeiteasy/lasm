@@ -273,7 +273,11 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
     (dolist (fmt (lexer-descriptor-number-formats descriptor))
       (unless (number-format-defaultp fmt)
         (dolist (prefix (sort (copy-list (number-format-prefixes fmt)) #'> :key #'length))
-          (when (%looking-at state prefix)
+          (when (and (%looking-at state prefix)
+                     (or (not (and (eq (number-format-name fmt) :bin)
+                                   (string= prefix "%")))
+                         (let ((next (%peek state (length prefix))))
+                           (and next (digit-char-p next 2)))))
             (%advance state (length prefix))
             (return-from %match-number
               (if (eq (number-format-name fmt) :char)
@@ -339,7 +343,8 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
 (defparameter *punctuators*
   '(("<<" . :shl) (">>" . :shr)
     ("|" . :pipe) ("^" . :caret) ("&" . :amp)
-    ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash) ("~" . :tilde)
+    ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash)
+    ("%" . :percent) ("~" . :tilde)
     ("(" . :lparen) (")" . :rparen) ("[" . :lbracket) ("]" . :rbracket)
     ("," . :comma) ("#" . :hash)
     ("<" . :lt) (">" . :gt) ("=" . :equals)))

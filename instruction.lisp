@@ -360,7 +360,8 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
          (:plus (+ l r))
          (:minus (- l r))
          (:star (* l r))
-         (:slash (truncate l r)))))))
+         (:slash (truncate l r))
+         (:percent (rem l r)))))))
 
 (defun eval-expr-constant (ast &key pc)
   "Fold AST to an integer with no symbol table -- the constant-only case of

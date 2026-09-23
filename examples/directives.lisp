@@ -43,7 +43,7 @@
 ;; in the middle of the code path, so a reserved buffer belongs in the data
 ;; area, not spliced between two executed instructions).
 (defparameter *source*
-  "        .equ initial, 10   ; a named constant, no address of its own
+  "        .equ initial, 23 % 13 ; a named constant, no address of its own
         .set sample, 5
         .org $8000         ; place the whole program at $8000
 start:  lda #initial   ; A = 10 (an .equ works as an immediate operand)

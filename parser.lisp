@@ -99,7 +99,7 @@
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
-                                             ;          :plus :minus :star :slash
+                                             ;          :plus :minus :star :slash :percent
 
 ;;; Shared error helper
 
@@ -114,7 +114,7 @@
 ;; unary operators bind tighter than any binary operator.
 (defparameter *binary-precedence*
   '((:pipe . 1) (:caret . 2) (:amp . 3) (:shl . 4) (:shr . 4)
-    (:plus . 5) (:minus . 5) (:star . 6) (:slash . 6)))
+    (:plus . 5) (:minus . 5) (:star . 6) (:slash . 6) (:percent . 6)))
 
 (defparameter *unary-ops*
   '((:minus . :neg) (:plus . :pos) (:tilde . :lognot) (:lt . :lo) (:gt . :hi)))

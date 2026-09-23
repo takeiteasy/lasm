@@ -103,9 +103,10 @@ example encodes two branch targets in one instruction and runs the result.
 sbcl --script examples/directives.lisp
 ```
 
-A leading `.org` places the program at a fixed address, `.byte` lays down a
-small data table read back through `lda`/`adc`'s `absolute` mode, and `.res`
-reserves a zero-filled scratch run — see [Directives](directives.md).
+A leading `.org` places the program at a fixed address, `.equ` uses a modulo
+expression, `.byte` lays down a small data table read back through
+`lda`/`adc`'s `absolute` mode, and `.res` reserves a zero-filled scratch run —
+see [Directives](directives.md).
 
 ```sh
 sbcl --script examples/pc-and-scopes.lisp

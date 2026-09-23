@@ -146,6 +146,18 @@ jmp start")))
     (fiveam:is (expr-binary-p (expr-binary-right ast)))
     (fiveam:is (eq :star (expr-binary-op (expr-binary-right ast))))))
 
+(fiveam:test modulo-has-multiplicative-precedence
+  (let ((ast (%expr "1+13 % 5*2")))
+    (fiveam:is (eq :plus (expr-binary-op ast)))
+    (fiveam:is (eq :star (expr-binary-op (expr-binary-right ast))))
+    (fiveam:is (eq :percent (expr-binary-op (expr-binary-left
+                                            (expr-binary-right ast)))))))
+
+(fiveam:test modulo-is-left-associative
+  (let ((ast (%expr "20 % 6 % 3")))
+    (fiveam:is (eq :percent (expr-binary-op ast)))
+    (fiveam:is (eq :percent (expr-binary-op (expr-binary-left ast))))))
+
 (fiveam:test parentheses-override-precedence
   (let ((ast (%expr "(1+2)*3")))
     (fiveam:is (eq :star (expr-binary-op ast)))

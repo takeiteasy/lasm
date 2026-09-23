@@ -17,6 +17,18 @@
     (fiveam:is (equal '(255 16 5 3 42 65) (mapcar #'token-value toks)))
     (fiveam:is (every (lambda (tok) (eq :number (token-type tok))) toks))))
 
+(fiveam:test percent-literal-and-operator-tokens
+  (let ((toks (%non-eof (tokenize "%101 13 % 5 13%2 %"))))
+    (fiveam:is (equal '(5 13 :percent 5 13 :percent 2 :percent)
+                       (mapcar #'token-value toks)))
+    (fiveam:is (eq :punctuation (token-type (third toks))))
+    (fiveam:is (eq :number (token-type (first toks))))))
+
+(fiveam:test percent-prefixed-binary-digit-keeps-literal-priority
+  (let ((toks (%non-eof (tokenize "a %1"))))
+    (fiveam:is (equal '(:identifier :number) (%types toks)))
+    (fiveam:is (= 1 (token-value (second toks))))))
+
 (fiveam:test default-lexer-line-comment
   (let ((toks (%non-eof (tokenize "lda a ; a comment
 sta b"))))

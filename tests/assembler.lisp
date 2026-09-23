@@ -344,6 +344,10 @@ target: nop" :machine 'instr-test-machine)))
   (let ((a (assemble ".byte 1, 2, 3" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
+(fiveam:test byte-directive-accepts-modulo-and-binary-literals
+  (let ((a (assemble ".byte 13 % 5, %101" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(3 5) (assembly-cells a)))))
+
 ;; #65 -- .CELL/.DAT are plain .BYTE aliases: same cells out, on both a
 ;; byte-addressed machine and a word-addressed one (WORDADDR-TEST-MACHINE,
 ;; below, mirrors BYTE-DIRECTIVE-LAYS-ONE-CELL-PER-VALUE-ON-WORD-ADDRESSED-

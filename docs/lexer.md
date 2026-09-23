@@ -78,7 +78,7 @@ their own for a conventional dialect.
 `:newline` tokens are significant — the grammar in
 [Statement grammar & expression parser](parser.md) is line-oriented.
 
-Punctuation tokens carry a keyword `value`: `:plus :minus :star :slash :amp
+Punctuation tokens carry a keyword `value`: `:plus :minus :star :slash :percent :amp
 :pipe :caret :tilde :shl :shr :lparen :rparen :lbracket :rbracket :comma :lt
 :gt :hash :equals`. Two-character operators (`<<`, `>>`) win maximal munch
 over their single-character prefixes. `#` has no meaning to the lexer itself
@@ -93,22 +93,18 @@ and unary-operator tables) — it exists only so the statement grammar
 (`parser.md`) can recognize `name = value` as sugar for `.equ name, value`
 (#35, see [Directives](directives.md#equ)).
 
+`%` begins a binary literal only when immediately followed by `0` or `1`.
+Otherwise it produces a `:percent` punctuation token for modulo. Write
+`13 % 5` for modulo with a numeric right operand; `13%1` tokenizes its `%1`
+as a binary literal. Configured `%` comments still take priority.
+
 ## Conditions
 
 `lex-error` (a subtype of `lasm-syntax-error`, itself a subtype of
 `lasm-error`) is signalled on malformed input — unterminated string/block
-comment/character literal, a numeric prefix with no digits following, or an
+comment/character literal, a numeric prefix other than `%` with no digits, or an
 unrecognized character. It carries `lasm-syntax-error-message`,
 `-line`, and `-column`, plus (once caught alongside the source text
 `tokenize` was given, which `with-source-context` attaches automatically) a
 `-source` rendered as an excerpt with a caret by `diagnostic-text` — see
 [Diagnostics](diagnostics.md).
-
-## Known limitations / deferred to later tickets
-
-- No `%` modulo operator is defined in the expression grammar (see
-  [Parser](parser.md)), so `%` is reserved as a binary-literal prefix only;
-  this sidesteps `%1010` vs. `a % b` ambiguity without a lexer special case.
-- The lexer does not distinguish labels from directives — `.org` and
-  `.loop` both lex as one `:identifier` token; the parser decides based on
-  what follows (label-suffix or not). Directive grammar itself is M2.
