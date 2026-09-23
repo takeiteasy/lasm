@@ -202,6 +202,27 @@
 
 ;;; Clause errors
 
+(fiveam:test instruction-rejects-duplicate-top-level-clauses
+  (loop for (head form) in
+        '((modes (definstruction instr-test-machine bogus
+                   (modes immediate) (modes absolute)
+                   (encoding (opcode #xFF) (operand :mode))
+                   (semantics nil)))
+          (encoding (definstruction instr-test-machine bogus
+                      (encoding (opcode #xFF)) (encoding (opcode #xFE))
+                      (semantics nil)))
+          (semantics (definstruction instr-test-machine bogus
+                       (encoding (opcode #xFF))
+                       (semantics nil) (semantics nil)))
+          (cycles (definstruction instr-test-machine bogus
+                    (encoding (opcode #xFF)) (semantics nil)
+                    (cycles 1) (cycles 2))))
+        for message = (handler-case (progn (macroexpand-1 form) nil)
+                        (error (condition) (princ-to-string condition)))
+        do (fiveam:is (not (null message)))
+           (fiveam:is (and message (search "BOGUS" message)))
+           (fiveam:is (and message (search (string-upcase (symbol-name head)) message)))))
+
 (fiveam:test missing-encoding-clause-signals-error
   (fiveam:signals error
     (eval '(definstruction instr-test-machine bogus

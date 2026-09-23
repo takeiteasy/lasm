@@ -67,6 +67,10 @@ itself resolves its own storage clauses — so `definstruction` can validate
 against them as soon as the form is compiled, not only after the file loads.
 Registration happens inside an `eval-when` for the same reason.
 
+Each top-level `(modes ...)`, `(encoding ...)`, `(semantics ...)`, and
+`(cycles ...)` clause may appear at most once. Repeating one is an error
+during macroexpansion.
+
 For word-encoded machines, instruction registration still runs during
 compilation and loading. Semantics compile on first execution, then the
 compiled function is shared by that instruction's variants. The first

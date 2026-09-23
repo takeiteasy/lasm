@@ -3277,8 +3277,11 @@ a hole matching none of the given keys -- including a hole with no recorded
 choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own (#126) -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
-  (let (modes-clause encoding-clause semantics-clause cycles-clause)
+  (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads)
     (dolist (clause clauses)
+      (when (member (first clause) seen-heads)
+        (error "DEFINSTRUCTION ~S ~S: duplicate ~S clause" machine name (first clause)))
+      (cl:push (first clause) seen-heads)
       (case (first clause)
         (modes (setf modes-clause clause))
         (encoding (setf encoding-clause clause))
