@@ -76,7 +76,11 @@ gives every operand the wider mode, since the assembler tries candidates in
 declaration order and a wider candidate placed first is found before a
 narrower one that would also have fit. The one exception is a candidate
 whose match used more literal tokens, or equally many and more
-[register-qualified holes](#register-qualified-holes), always wins. A label-bearing operand starts at
+[register-qualified holes](#register-qualified-holes), always wins, so
+declaration order never needs to put a more specific syntax first: with
+`absolute` declared before `"(" expr ")"`, `jmp (vec)` is still the
+indirect jump (see [`examples/modes.lisp`](../examples/modes.lisp)). A
+label-bearing operand starts at
 its narrowest candidate before any address is known (see
 [Assembler, "Convergence"](assembler.md#convergence)), but is subject to
 this same declaration-order tiebreak on every later pass, once a symbol

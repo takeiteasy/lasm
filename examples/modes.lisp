@@ -78,6 +78,21 @@
   (encoding (opcode #x8D) (operand :mode))
   (semantics (setf (mref machine 'ram operand) a)))
 
+;; JMP: ABSOLUTE is declared first and shares its bare `expr` syntax with the
+;; parenthesised INDIRECT, which also parses `(vec)` as a grouped expression.
+;; The assembler ranks the match with more literal tokens first, so `jmp
+;; (vec)` is INDIRECT whatever the declaration order, and `jmp $2000` is
+;; ABSOLUTE (docs/assembler.md, "Choosing a mode").
+(defmode indirect "(" expr ")")
+
+(definstruction sixtyfoo-m2 jmp
+  (modes
+    (absolute (opcode #x4C) (semantics (set! pc operand)))
+    (indirect (opcode #x6C)
+              (semantics (set! pc (+ (mref machine 'ram operand)
+                                     (* 256 (mref machine 'ram (+ operand 1))))))))
+  (semantics nil))
+
 (definstruction sixtyfoo-m2 hlt
   (encoding (opcode #x00))
   (semantics (trap :halt)))
@@ -104,8 +119,12 @@
                        ; sign-extends the fetched byte instead of treating
                        ; it as unsigned 251, the way IMMEDIATE's operand
                        ; would be
-        hlt
-scratch: .byte 42")
+        jmp (vec)      ; INDIRECT (#x6C): PC = the word stored at VEC, not
+                       ; an ABSOLUTE jump to VEC itself
+        ldx #99        ; skipped
+done:   hlt
+scratch: .byte 42
+vec:    .word done")
 
 (format t "~&Source:~%~A~2%" *source*)
 
@@ -122,4 +141,5 @@ scratch: .byte 42")
               (sref m 'a) (mref m 'ram #x10) (mref m 'ram #x2000))
       (format t "  \"scratch\" = $~4,'0X (zero-page), final A (from RAM[scratch]) = ~D~%"
               (gethash "scratch" (assembly-symbols assembly)) (sref m 'a))
-      (format t "  Y (signed) = ~D~%" (signed-value (sref m 'y) 8)))))
+      (format t "  Y (signed) = ~D~%" (signed-value (sref m 'y) 8))
+      (format t "  X = ~D (the LDX #99 after the indirect JMP was skipped)~%" (sref m 'x)))))
