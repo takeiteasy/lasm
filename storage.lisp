@@ -134,7 +134,7 @@ memory ~S on machine ~S"
   (names nil :type list)
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
-  (cell-width nil :type (or null (integer 1)))  ; memory, defaults to width
+  (cell-width nil :type (or null (integer 1)))  ; memory
   (endian nil :type (or null keyword))          ; memory, :little or :big, #66
   ;; #107: sub-ranges of a memory element with distinct access behavior --
   ;; ROM (writes discarded or rejected), a device window (reads/writes
@@ -537,11 +537,9 @@ machine's default layout -- callers hold no other kind (#64)."
      ;; MREF) do with a range of this array, not how the array itself is
      ;; allocated, so a ROM or device region still occupies backing cells
      ;; here even though ordinary reads/writes route around them.
-     (let ((cell-width (or (storage-element-cell-width element)
-                            (storage-element-width element))))
-       (make-array (ash 1 (storage-element-addr-width element))
-                   :element-type `(unsigned-byte ,cell-width)
-                   :initial-element 0)))))
+     (make-array (ash 1 (storage-element-addr-width element))
+                 :element-type `(unsigned-byte ,(storage-element-cell-width element))
+                 :initial-element 0))))
 
 ;; #109: append ENTRY (a (DEVICE . DATA) cons, DEVICE possibly NIL for a
 ;; software-raised signal) to MACHINE's pending interrupt queue, honoring
@@ -762,20 +760,17 @@ declares no NAMES or INDEX is outside them."
                                     :name name :address address))
     (values slot element (%region-at element address))))
 
-(defun %memory-cell-width (element)
-  (or (storage-element-cell-width element) (storage-element-width element)))
-
 (defun mref (machine name address)
   "Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
 in a :DEVICE region calls that region's READ instead of touching backing
 storage (0 when the region declares no READ); every other address --
-including one in a :RAM or :ROM region -- reads backing storage directly,
-same as before this ticket."
+including one in a :RAM or :ROM region -- reads backing storage directly.
+A device read is masked to the cell width, as writes are."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
-    (declare (ignore element))
     (if (and region (eq (memory-region-kind region) :device))
         (let ((read (memory-region-read region)))
-          (if read (funcall read machine address) 0))
+          (wrap-value (if read (funcall read machine address) 0)
+                      (storage-element-cell-width element)))
         (aref slot address))))
 
 (defun (setf mref) (value machine name address)
@@ -789,7 +784,7 @@ policy entirely -- LOAD-PROGRAM and the debugger burn a ROM image in that
 way. Returns the wrapped value in every case, matching plain (SETF MREF)'s
 existing return contract."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
-    (let ((wrapped (wrap-value value (%memory-cell-width element))))
+    (let ((wrapped (wrap-value value (storage-element-cell-width element))))
       (cond
         ((and region (eq (memory-region-kind region) :rom))
          (when (eq (memory-region-on-write region) :error)
@@ -820,7 +815,7 @@ storage, bypassing any #107 region's write policy -- a :ROM region accepts
 this store and a :DEVICE region's WRITE is never called. For LOAD-PROGRAM
 and the debugger: a ROM image is burned in, not stored by the CPU."
   (multiple-value-bind (slot element) (%memory-slot-checked machine name address)
-    (setf (aref slot address) (wrap-value value (%memory-cell-width element)))))
+    (setf (aref slot address) (wrap-value value (storage-element-cell-width element)))))
 
 (defun stack-push (machine name value)
   (multiple-value-bind (slot element) (%slot machine name :stack)

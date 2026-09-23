@@ -114,7 +114,7 @@ list for registers/flags, (CELLS . SP) for a stack, a cell vector for memory."
          (cons cells sp)))
       (:memory
        (let* ((runs (getf plist :runs))
-              (cell-width (%memory-cell-width element))
+              (cell-width (storage-element-cell-width element))
               (size (ash 1 (storage-element-addr-width element)))
               (cells (make-array size :element-type `(unsigned-byte ,cell-width)))
               (pos 0))

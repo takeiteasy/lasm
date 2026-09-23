@@ -229,7 +229,8 @@ never overlap and every name (region, register alias, storage element, or
   quoting unevaluated and `funcall` resolves it at call time. `:read` is
   called as `(funcall read machine address)`, `:write` as `(funcall write
   machine address value)` — both the *absolute* address, not a
-  region-relative offset.
+  region-relative offset. A `:read` result is masked to the memory's
+  `:cell-width`, as a store is.
 
 `mpeek` reads backing storage directly, bypassing a `:device` region's
 `:read` (returning 0 there, since a device region has no backing cell of its

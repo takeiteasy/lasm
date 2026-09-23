@@ -453,3 +453,16 @@ reset at the start of each test that reads it.")
     (eval '(defmachine bad-read-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :rom :read (lambda (m a) (declare (ignore m a)) 0)))))))
+
+(defun %region-test-wide-read (machine address)
+  (declare (ignore machine address))
+  #x1FF)
+
+(defmachine region-read-mask-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 4
+    (region io 0 3 :kind :device :read %region-test-wide-read)))
+
+(fiveam:test region-device-read-masks-to-cell-width
+  (let ((m (make-machine 'region-read-mask-machine)))
+    (fiveam:is (= #xFF (mref m 'ram 0)))))
