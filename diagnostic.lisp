@@ -53,7 +53,8 @@ line at all, and omits the caret line when there is a line but no column."
          (line (lasm-syntax-error-line condition))
          (column (lasm-syntax-error-column condition))
          (src (if source-supplied-p source (lasm-syntax-error-source condition)))
-         (src-line (and src line (%nth-source-line src line))))
+         (src-line (and src line (%nth-source-line src line)))
+         (definition-line (lasm-syntax-error-definition-line condition)))
     (with-output-to-string (out)
       (if line
           (format out "line ~D~@[, column ~D~]: ~A" line column message)
@@ -64,7 +65,12 @@ line at all, and omits the caret line when there is a line but no column."
           (format out "~%~A | ~A" label src-line)
           (when column
             (format out "~%~A | ~A^" gutter
-                    (make-string (max 0 (1- column)) :initial-element #\Space))))))))
+                    (make-string (max 0 (1- column)) :initial-element #\Space)))))
+      (when definition-line
+        (format out "~%expanded from macro body line ~D" definition-line)
+        (let ((definition-text (and src (%nth-source-line src definition-line))))
+          (when definition-text
+            (format out "~%~D | ~A" definition-line definition-text)))))))
 
 ;;; Conditions
 
@@ -73,8 +79,10 @@ line at all, and omits the caret line when there is a line but no column."
 ;; storage.lisp (#74) so the condition and its renderer live together.
 (define-condition lasm-syntax-error (lasm-error)
   ((message :initarg :message :initform nil :reader lasm-syntax-error-message)
-   (line :initarg :line :initform nil :reader lasm-syntax-error-line)
-   (column :initarg :column :initform nil :reader lasm-syntax-error-column)
+   (line :initarg :line :initform nil :accessor lasm-syntax-error-line)
+   (column :initarg :column :initform nil :accessor lasm-syntax-error-column)
+   (definition-line :initarg :definition-line :initform nil
+                    :accessor lasm-syntax-error-definition-line)
    ;; #74: filled in place by WITH-SOURCE-CONTEXT, not passed as an initarg
    ;; at signal time -- the signalling call site (lexer.lisp, parser.lisp,
    ;; mode.lisp, assembler.lisp) never has the whole source text in hand,

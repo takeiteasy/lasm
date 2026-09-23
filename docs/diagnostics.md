@@ -253,11 +253,12 @@ regardless of how the two modes' syntax differs. See [Instructions, "Opcode
 to descriptor decode"](instructions.md#opcode-to-descriptor-decode) for the
 full picture and a worked example.
 
+An assembly diagnostic from a macro expansion reports the outermost
+invocation line and includes the emitted statement's body line as a secondary
+location.
+
 ## Follow-ups not covered here
 
-- **Macro-expansion context.** A diagnostic inside a `.macro` expansion
-  currently points at the macro's own body line, with no indication of
-  which invocation produced it (see [Macros](macros.md)).
 - **Source file name.** `diagnostic-text` renders `line N` with no file
   name, and a diagnostic spanning `.include`d files does not say which file a
   line belongs to (see [Includes](includes.md)).

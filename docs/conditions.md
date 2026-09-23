@@ -32,7 +32,7 @@ just the reader table.
 | `snapshot-machine-mismatch` | `snapshot-error` | — |
 | `snapshot-malformed` | `snapshot-error` | — |
 | `snapshot-device-unknown` | `snapshot-error` | — |
-| `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-source` (writable — see [Diagnostics](diagnostics.md)) |
+| `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-definition-line`, `lasm-syntax-error-source` (writable — see [Diagnostics](diagnostics.md)) |
 | `lex-error` | `lasm-syntax-error` | — |
 | `parse-failure` | `lasm-syntax-error` | — |
 | `unresolved-location` | `lasm-error` | — |

@@ -220,6 +220,7 @@
    #:statement-operands
    #:statement-mode-suffix
    #:statement-line
+   #:statement-definition-line
    #:operand
    #:operand-p
    #:operand-tokens
@@ -355,6 +356,7 @@
    #:listing-line-address
    #:listing-line-size
    #:listing-line-line
+   #:listing-line-definition-line
    #:listing-line-kind
    #:listing-line-descriptor
    #:symbol-info
@@ -366,6 +368,8 @@
    #:symbol-info-localp
    #:symbol-info-value
    #:symbol-info-line
+   #:symbol-info-definition-line
+   #:lasm-syntax-error-definition-line
 
    ;; Emulator
    #:load-program

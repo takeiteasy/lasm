@@ -85,6 +85,31 @@
              (caret-pos (position #\^ caret-line)))
         (fiveam:is (= 8 caret-pos))))))
 
+(fiveam:test macro-assembly-error-reports-call-and-definition
+  (handler-case
+      (assemble ".macro bad
+ldx $5,X
+.endm
+bad" :machine 'instr-test-machine)
+    (assembly-error (condition)
+      (fiveam:is (= 4 (lasm-syntax-error-line condition)))
+      (fiveam:is (= 2 (lasm-syntax-error-definition-line condition)))
+      (let ((text (diagnostic-text condition)))
+        (fiveam:is (search "line 4" text))
+        (fiveam:is (search "macro body line 2" text))
+        (fiveam:is (search "ldx $5,X" text))))))
+
+(fiveam:test macro-encode-error-reports-call-and-definition
+  (let ((*strict-operand-range* t))
+    (handler-case
+        (assemble ".macro bad
+ldx #300
+.endm
+bad" :machine 'instr-test-machine)
+      (assembly-error (condition)
+        (fiveam:is (= 4 (lasm-syntax-error-line condition)))
+        (fiveam:is (= 2 (lasm-syntax-error-definition-line condition)))))))
+
 ;;; WITH-SOURCE-CONTEXT / condition SOURCE slot
 
 (fiveam:test assemble-error-carries-source-on-its-condition

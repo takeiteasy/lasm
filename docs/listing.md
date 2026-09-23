@@ -1,11 +1,8 @@
 # Listing and source map
 
-`assemble`/`assemble-statements` compute a complete address↔statement
-mapping during layout — see [Assembler](assembler.md) — and used to discard
-it once encoding was done, keeping only the final bytes and the label
-symbol table. `ASSEMBLY` now retains that mapping (#25), and this file
-renders it as a conventional listing and answers address↔line lookups
-against it.
+`assemble`/`assemble-statements` retain the address↔statement mapping
+computed during layout. This page covers listing rendering and address↔line
+lookups. See [Assembler](assembler.md) for layout.
 
 ```lisp
 (let ((a (assemble source :machine 'sixtyfoo)))
@@ -17,7 +14,7 @@ version.
 
 ## The retained mapping: `assembly-listing` / `assembly-source`
 
-`ASSEMBLY` (assembler.lisp) gains two slots:
+`ASSEMBLY` has two listing-related slots:
 
 - `assembly-listing` — a list of `listing-line`, ascending by address, one
   per address-occupying statement (an instruction, a `.byte`/`.word`, or a
@@ -30,7 +27,8 @@ version.
 (defstruct listing-line
   address    ; where this statement starts
   size       ; cells occupied
-  line       ; 1-based source line
+  line       ; 1-based invocation/source line
+  definition-line ; macro body line, or nil
   kind       ; :instruction | :emit | :reserve
   descriptor)  ; the chosen INSTRUCTION-DESCRIPTOR, :instruction only
 ```
@@ -57,14 +55,11 @@ one entry — an address belongs to at most one statement's
 and returns `nil`.
 
 `listing-lines-for-source-line` is the reverse direction, and returns a
-**list**, because line→address is not a function here: `.macro`/`.endm`
-expansion (see [Macros](macros.md)) copies each expanded statement's source
-line from the *macro body's own definition*, not the call site, so two
-invocations of the same one-instruction macro both contribute a
-`listing-line` tagged with that one body line, at two different addresses.
-A call site's own line, having expanded to no entry of its own (its
-statements were spliced in as the macro body plus a leading label
-placeholder), returns an empty list.
+**list**, because one source line can emit several statements. Expanded
+statements use the outermost invocation's line; repeated calls therefore
+have distinct lookups. `listing-line-definition-line` gives the body line
+that emitted each entry, or `nil` for ordinary statements. Macro definition
+lines have no listing entries of their own.
 
 `listing-line-at` is a linear scan over `assembly-listing` — fine at the
 program sizes LASM currently targets; an address-indexed structure is a
@@ -88,7 +83,7 @@ passes these as its `:data-regions` by default.
 (print-listing assembly &key stream) ; listing-text to *standard-output* by default
 ```
 
-Four columns: address, encoded cells (hex), and the original source line,
+Three columns: address, encoded cells (hex), and the original source line,
 one row per source line when `assembly-source` is present:
 
 ```
@@ -101,12 +96,9 @@ one row per source line when `assembly-source` is present:
 A source line with no `listing-line` at all — a comment, a label-only line,
 `.org`, `.equ` — still renders, with blank address/cells columns, so the
 listing is complete rather than silently skipping non-code lines. A macro
-invocation's body line renders once per entry found for it (see "Lookup"
-above), each at its own address; the call site's own line renders once with
-blank columns, same as any other address-free statement. The printed
-source text for a macro body line is the template as written (e.g. `ldx
-#val`), not the substituted argument — only the encoded cells shown
-alongside it reflect the actual invocation.
+invocation line renders once per emitted statement, each with its own address
+and cells. The source column shows the invocation as written.
+Macro definition lines render with blank address and cells columns.
 
 With `assembly-source` absent (`assemble-statements` called with no
 `:source`), `listing-text` degrades to an entry-ordered listing with no
@@ -167,11 +159,9 @@ global's own `symbol-info` heading its list:
 ```
 
 Both `assembly-symbols-list` and `assembly-symbol-groups` order symbols by
-their defining `symbol-info-line`, not by value — an `.equ`'s value isn't an
-address, so address order has no meaning for it, and a hash table has no
-declaration order of its own. (`symbol-info-line` inherits the same macro
-call-site/body-line quirk `listing-lines-for-source-line` documents above —
-a body-defined symbol's line is the macro body's own, not the invocation's.)
+their `symbol-info-line`, then by binding order within a line. An `.equ`'s
+value has no address meaning. Symbols defined by macros use the outermost
+invocation line; `symbol-info-definition-line` gives their body line.
 
 Every function above degrades to `NIL`/empty rather than erroring when
 `assembly-symbol-info` itself is `NIL` (e.g. an `assembly` built by some

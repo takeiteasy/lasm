@@ -115,6 +115,22 @@ a: nop" :machine 'instr-test-machine)))
     (fiveam:is (= #x101 (gethash "a" (assembly-symbols a))))
     (fiveam:is (equalp #(#x12 #x01 #x01) (subseq (assembly-cells a) 0 3)))))
 
+(fiveam:test macro-expanded-layout-can-require-more-than-eight-passes
+  (let* ((source
+           (with-output-to-string (out)
+             (format out ".macro load target, base, bias~%lda target-base+bias~%.endm~%")
+             (loop for i from 1 to 9
+                   do (when (> i 2) (format out "target~D:~%" (- i 2)))
+                      (format out "start~D: load target~D, start~D, ~D~%"
+                              i i i (if (= i 9) 254 251)))
+             (format out "target8:~%target9: nop~%")))
+         (a (assemble source :machine 'instr-test-machine))
+         (cells (assembly-cells a)))
+    (fiveam:is (= 28 (length cells)))
+    (loop for address from 0 below 27 by 3
+          do (fiveam:is (= #x12 (aref cells address))))
+    (fiveam:is (= #xEA (aref cells 27)))))
+
 (fiveam:test label-operand-self-reference-narrows-to-zero-page
   (let ((a (assemble "here: lda here" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 0) (assembly-cells a)))))

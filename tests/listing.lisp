@@ -107,20 +107,68 @@ nop" :machine 'instr-test-machine)))
 
 ;;; LISTING-LINES-FOR-SOURCE-LINE and macro expansion
 
-(fiveam:test lines-for-source-line-finds-macro-body-across-invocations
-  ;; Every invocation of TWO's body statements retains the *body's own*
-  ;; definition line, unchanged by substitution (macro.lisp) -- two
-  ;; invocations of a one-instruction macro both contribute a LISTING-LINE
-  ;; tagged with that one body line, at two different addresses.
+(fiveam:test lines-for-source-line-distinguishes-macro-invocations
   (let ((a (assemble ".macro two
 nop
 .endm
 two
 two" :machine 'instr-test-machine)))
-    (let ((entries (listing-lines-for-source-line a 2)))
-      (fiveam:is (= 2 (length entries)))
-      (fiveam:is (equal '(0 1) (mapcar #'listing-line-address entries))))
-    (fiveam:is (null (listing-lines-for-source-line a 4)))))
+    (fiveam:is (null (listing-lines-for-source-line a 2)))
+    (fiveam:is (equal '(0 1) (mapcar #'listing-line-address (assembly-listing a))))
+    (fiveam:is (= 4 (listing-line-line (first (assembly-listing a)))))
+    (fiveam:is (= 5 (listing-line-line (second (assembly-listing a)))))
+    (fiveam:is (every (lambda (entry) (= 2 (listing-line-definition-line entry)))
+                      (assembly-listing a)))
+    (fiveam:is (= 1 (length (listing-lines-for-source-line a 4))))
+    (fiveam:is (= 1 (length (listing-lines-for-source-line a 5))))
+    (fiveam:is (search "0000" (listing-text a)))
+    (fiveam:is (search "0001" (listing-text a)))))
+
+(fiveam:test nested-macro-listing-points-to-outer-call
+  (let* ((a (assemble ".macro inner
+nop
+.endm
+.macro outer
+inner
+.endm
+outer" :machine 'instr-test-machine))
+         (entry (first (assembly-listing a))))
+    (fiveam:is (= 7 (listing-line-line entry)))
+    (fiveam:is (= 2 (listing-line-definition-line entry)))))
+
+(fiveam:test macro-symbols-follow-call-order-and-keep-definition-lines
+  (let* ((a (assemble ".macro tagged
+tag: nop
+.endm
+tagged
+tagged" :machine 'instr-test-machine))
+         (symbols (assembly-symbols-list a :kind :label)))
+    (fiveam:is (equal '(4 5) (mapcar #'symbol-info-line symbols)))
+    (fiveam:is (equal '(2 2) (mapcar #'symbol-info-definition-line symbols)))
+    (fiveam:is (equal '(0 1) (mapcar #'symbol-info-value symbols)))))
+
+(fiveam:test symbols-within-one-macro-call-follow-body-order
+  (let* ((a (assemble ".macro pair
+first: nop
+second: nop
+.endm
+pair" :machine 'instr-test-machine))
+         (symbols (assembly-symbols-list a :kind :label)))
+    (fiveam:is (equal '(5 5) (mapcar #'symbol-info-line symbols)))
+    (fiveam:is (equal '(2 3) (mapcar #'symbol-info-definition-line symbols)))
+    (fiveam:is (equal '(0 1) (mapcar #'symbol-info-value symbols)))))
+
+(fiveam:test nested-macro-invocation-label-keeps-outer-body-line
+  (let* ((a (assemble ".macro inner
+nop
+.endm
+.macro outer
+here: inner
+.endm
+outer" :machine 'instr-test-machine))
+         (symbol (first (assembly-symbols-list a :kind :label))))
+    (fiveam:is (= 7 (symbol-info-line symbol)))
+    (fiveam:is (= 5 (symbol-info-definition-line symbol)))))
 
 ;;; LISTING-TEXT
 

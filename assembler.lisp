@@ -17,8 +17,8 @@
 ;;;; legal variant, and each subsequent pass re-chooses against the previous
 ;;;; pass's provisional symbol table, widening whatever no longer fits.
 ;;;; Widening is sticky -- a statement's chosen width, once committed, is a
-;;;; floor for every later pass -- which bounds the loop by the number of
-;;;; relaxable statements and makes it impossible to oscillate. %LAYOUT drives
+;;;; floor for every later pass -- which bounds the loop by possible width
+;;;; increases and prevents oscillation. %LAYOUT drives
 ;;;; %LAYOUT-PASS to a fixpoint on the per-statement width vector, then runs
 ;;;; one final pass whose output feeds %ENCODE.
 ;;;;
@@ -173,6 +173,7 @@ ever non-NIL for :INSTRUCTION."
   (address 0 :type (integer 0))
   (size 0 :type (integer 0))
   (line 0 :type (integer 0))
+  (definition-line nil :type (or null (integer 0)))
   (kind :instruction :type keyword)
   (descriptor nil :type (or null instruction-descriptor)))
 
@@ -193,15 +194,20 @@ the enclosing global label's name, or NIL for a global (or a top-level
 a computed value with no address meaning, %APPLY-ASSIGN-DIRECTIVE, #35).
 LOCALP mirrors STATEMENT-LABEL-LOCALP/EXPR-LABEL-LOCALP. VALUE duplicates
 the ASSEMBLY-SYMBOLS entry so a caller need not look twice. LINE is the
-statement's line; inherits #89's caveat that a macro-expanded statement's
-line is the body's own definition line, not the call site's."
+source invocation line. DEFINITION-LINE is the macro body line for an
+expanded symbol. ORDER records binding order within a source line."
   (name "" :type string)
   (qualified-name "" :type string)
   (scope nil :type (or null string))
   (kind :label :type keyword)
   (localp nil :type boolean)
   (value 0 :type integer)
-  (line 0 :type (integer 0)))
+  (line 0 :type (integer 0))
+  (definition-line nil :type (or null (integer 0)))
+  (order 0 :type (integer 0)))
+
+(defvar *current-definition-line* nil)
+(defvar *current-invocation-line* nil)
 
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
@@ -843,7 +849,9 @@ like \".a\" can't collide with alias \"a\"."
   (setf (gethash qualified-name symbols) value)
   (setf (gethash qualified-name info)
         (make-symbol-info :name name :qualified-name qualified-name :scope scope
-                           :kind kind :localp localp :value value :line line)))
+                           :kind kind :localp localp :value value :line line
+                           :definition-line *current-definition-line*
+                           :order (hash-table-count info))))
 
 (defun %bind-label! (statement symbols info address scope)
   "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS (and its
@@ -920,15 +928,16 @@ defined above it)"
       (when (%purep value-ast)
         (setf (gethash name constants) value)))))
 
-(defparameter *max-layout-iterations* 8
-  "Safety cap on the number of trial passes %LAYOUT will run while relaxing
-addressing-mode choices before giving up. Sticky widening (%LAYOUT-PASS's
-FLOORS) makes the per-statement width vector monotone non-decreasing and
-bounded above by each statement's widest declared variant, so it always
-reaches a fixpoint in at most (length statements) passes -- exceeding this
-cap without converging means that invariant has been broken elsewhere, not
-that the input program is unusual. Treated as an assertion: it has no test,
-since sticky widening makes it unreachable by construction.")
+(defun %layout-iteration-bound (statements machine)
+  "Two trial passes plus every possible widening of an expanded instruction."
+  (+ 2
+     (loop for statement in statements
+           for mnemonic = (statement-mnemonic statement)
+           when (and mnemonic (not (find-directive-descriptor mnemonic))
+                     (not (%include-statement-p statement)))
+             sum (max 0 (1- (length (remove-duplicates
+                                    (mapcar #'instruction-descriptor-size
+                                            (find-instruction-variants machine mnemonic)))))))))
 
 (defun %layout-pass (statements machine origin prev-symbols floors finalp cell-width)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
@@ -941,9 +950,9 @@ SYMBOLS itself cannot -- returned last so existing positional callers of the
 other five values are unaffected. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
-  (:instruction address descriptor asts line choices)
-  (:emit        address width asts line)
-  (:reserve     address count line)
+  (:instruction address descriptor asts line choices definition-line)
+  (:emit        address width asts line definition-line)
+  (:reserve     address count line definition-line)
 CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
 hole-aligned matched-alternative list for the chosen descriptor, threaded
 through so %ENCODE can read a hole's own matched ONE-OF alternative's
@@ -999,7 +1008,9 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
           for i from 0
           do (let* ((mnemonic (statement-mnemonic statement))
                      (directive (and mnemonic (find-directive-descriptor mnemonic)))
-                     (line (statement-line statement)))
+                     (line (statement-line statement))
+                     (*current-invocation-line* (and (statement-definition-line statement) line))
+                     (*current-definition-line* (statement-definition-line statement)))
                ;; A forced addressing-mode suffix (#40) names an addressing
                ;; mode, which only means something for an instruction
                ;; statement -- a directive has no addressing mode to force.
@@ -1038,14 +1049,14 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                             (when (minusp count)
                               (%assembly-error (statement-line statement)
                                                "~A: count must not be negative" mnemonic))
-                            (cl:push (list :reserve address count (statement-line statement)) sized)
+                            (cl:push (list :reserve address count line *current-definition-line*) sized)
                             (incf address count)
                             (setf emitted-p t)))
                          (:emit
                           (let* ((asts (%qualify-locals-in-asts!
                                         (%directive-args statement directive) scope line))
                                  (width (directive-descriptor-width directive)))
-                            (cl:push (list :emit address width asts (statement-line statement)) sized)
+                            (cl:push (list :emit address width asts line *current-definition-line*) sized)
                             (incf address (* width (length asts)))
                             (setf emitted-p t)))))
                       (t
@@ -1063,7 +1074,7 @@ EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                            ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
                            ;; RANGE!) once a value exists to check it against.
                            (cl:push (list :instruction address descriptor asts
-                                          (statement-line statement) choices)
+                                          line choices *current-definition-line*)
                                     sized)
                            (let ((size (instruction-descriptor-size descriptor)))
                              (setf (aref new-floors i) size)
@@ -1088,9 +1099,9 @@ CELL-WIDTH is MACHINE's own code cell width (#53), resolved once here and
 threaded through every pass."
   (let ((floors (make-array (length statements) :initial-element 0))
         (widths :none)
-        (symbols nil))
-    (dotimes (iteration *max-layout-iterations*)
-      (declare (ignore iteration))
+        (symbols nil)
+        (iteration-bound (%layout-iteration-bound statements machine)))
+    (loop repeat iteration-bound do
       (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths)
           (%layout-pass statements machine origin symbols floors nil cell-width)
         (declare (ignore sized final-address asm-origin))
@@ -1106,7 +1117,7 @@ pass chose different widths than the trial pass it followed"))
               (values final-symbols final-sized final-address final-asm-origin final-info))))
         (setf symbols new-symbols floors new-floors widths new-widths)))
     (%assembly-error nil "addressing-mode layout failed to converge after ~D iterations"
-                      *max-layout-iterations*)))
+                      iteration-bound)))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
@@ -1221,10 +1232,16 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
 %ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding."
   (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
     (dolist (entry sized-entries)
-      (ecase (first entry)
+      (let ((*current-definition-line* (car (last entry)))
+            (*current-invocation-line* (and (car (last entry))
+                                            (ecase (first entry)
+                                              (:instruction (fifth entry))
+                                              (:emit (fifth entry))
+                                              (:reserve (fourth entry))))))
+       (ecase (first entry)
         (:instruction
-         (destructuring-bind (kind address descriptor asts line choices) entry
-           (declare (ignore kind))
+         (destructuring-bind (kind address descriptor asts line choices definition-line) entry
+           (declare (ignore kind definition-line))
            (let* ((mode (instruction-descriptor-mode descriptor))
                   (relative-holes (instruction-descriptor-relative-holes descriptor))
                   (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
@@ -1239,8 +1256,8 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
                    for cell in (%encode-instruction-resolved descriptor values cell-width endian)
                    do (setf (aref cells i) cell) (incf i)))))
         (:emit
-         (destructuring-bind (kind address width asts line) entry
-           (declare (ignore kind line))
+         (destructuring-bind (kind address width asts line definition-line) entry
+           (declare (ignore kind line definition-line))
            (loop with i = (- address origin)
                  for ast in asts
                  do (dolist (cell (%encode-value-cells
@@ -1252,9 +1269,9 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
          ;; beyond making sure the run is covered (relevant when a .RESERVE
          ;; is the very last statement, so no later write grows the vector
          ;; past it).
-         (destructuring-bind (kind address count line) entry
-           (declare (ignore kind line))
-           (%ensure-cells-length cells (- (+ address count) origin))))))
+         (destructuring-bind (kind address count line definition-line) entry
+           (declare (ignore kind line definition-line))
+           (%ensure-cells-length cells (- (+ address count) origin)))))))
     (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)))
 
 ;;; Listing (#25) -- retain %LAYOUT's address<->statement mapping instead of
@@ -1268,16 +1285,19 @@ separate from it (rather than folded into the same walk) since %ENCODE
 needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
   (ecase (first entry)
     (:instruction
-     (destructuring-bind (kind address descriptor asts line choices) entry
+     (destructuring-bind (kind address descriptor asts line choices definition-line) entry
        (declare (ignore asts choices))
        (make-listing-line :address address :size (instruction-descriptor-size descriptor)
-                            :line line :kind kind :descriptor descriptor)))
+                            :line line :definition-line definition-line
+                            :kind kind :descriptor descriptor)))
     (:emit
-     (destructuring-bind (kind address width asts line) entry
-       (make-listing-line :address address :size (* width (length asts)) :line line :kind kind)))
+     (destructuring-bind (kind address width asts line definition-line) entry
+       (make-listing-line :address address :size (* width (length asts))
+                          :line line :definition-line definition-line :kind kind)))
     (:reserve
-     (destructuring-bind (kind address count line) entry
-       (make-listing-line :address address :size count :line line :kind kind)))))
+     (destructuring-bind (kind address count line definition-line) entry
+       (make-listing-line :address address :size count :line line
+                          :definition-line definition-line :kind kind)))))
 
 (defun %build-listing (sized-entries)
   "SIZED-ENTRIES in address order in, LISTING-LINE list in address order out
@@ -1330,12 +1350,20 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
            (endian (%machine-endian machine memory))
             (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine)))
             (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
-      (multiple-value-bind (symbols sized final-address asm-origin info)
-          (%layout (expand-macros statements machine) machine origin cell-width)
-        (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
-                       :cell-width cell-width
-                       :origin asm-origin :symbols symbols :symbol-info info
-                       :listing (%build-listing sized) :source source)))))
+      (handler-bind ((lasm-syntax-error
+                       (lambda (condition)
+                         (when *current-invocation-line*
+                           (setf (lasm-syntax-error-line condition)
+                                 *current-invocation-line*
+                                 (lasm-syntax-error-column condition) nil
+                                 (lasm-syntax-error-definition-line condition)
+                                 *current-definition-line*)))))
+        (multiple-value-bind (symbols sized final-address asm-origin info)
+            (%layout (expand-macros statements machine) machine origin cell-width)
+          (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
+                         :cell-width cell-width
+                         :origin asm-origin :symbols symbols :symbol-info info
+                         :listing (%build-listing sized) :source source))))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then

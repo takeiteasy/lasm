@@ -60,7 +60,8 @@ and rewrites it to a statement whose mnemonic is `.equ` with two operands
 [Directives, "`.equ`"](directives.md#equ).
 
 ```lisp
-(defstruct statement label mnemonic operands operand-tokens mode-suffix line)
+(defstruct statement label mnemonic operands operand-tokens mode-suffix
+                     line definition-line)
 (defstruct operand tokens)   ; raw token run — a simple-vector
 ```
 

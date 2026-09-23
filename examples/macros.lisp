@@ -51,6 +51,13 @@ cell2:  .byte 20")
 (let ((assembly (assemble *source* :machine 'sixtyfoo-macros)))
   (format t "  origin: $~4,'0X~%" (assembly-origin assembly))
   (format t "  bytes: ~{~2,'0X~^ ~}~%" (coerce (assembly-cells assembly) 'list))
+  (format t "~%Expansion locations:~%")
+  (dolist (entry (assembly-listing assembly))
+    (when (listing-line-definition-line entry)
+      (format t "  $~4,'0X: call line ~D, body line ~D~%"
+              (listing-line-address entry)
+              (listing-line-line entry)
+              (listing-line-definition-line entry))))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'sixtyfoo-macros)))

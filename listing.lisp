@@ -5,22 +5,9 @@
 ;;;; ASSEMBLE-STATEMENTS now retains instead of discarding once %ENCODE has
 ;;;; run.
 ;;;;
-;;;; LOOKUP DIRECTION -- address->line is a function (LISTING-LINE-AT: an
-;;;; address belongs to at most one entry's [address, address+size) run),
-;;;; but line->address is not: EXPAND-MACROS' %SUBSTITUTE-STATEMENT
-;;;; (macro.lisp, #33) copies each expanded statement's LINE from the
-;;;; *macro body's own definition*, unchanged by substitution -- so every
-;;;; invocation of a two-line macro produces two fresh statements both still
-;;;; tagged with their original line inside the .macro/.endm block, not the
-;;;; call site. Two invocations of the same macro therefore both contribute
-;;;; a LISTING-LINE at the *same* body line, at two different addresses --
-;;;; one source line legitimately owning several entries.
-;;;; LISTING-LINES-FOR-SOURCE-LINE returns all of them, in address order; a
-;;;; listing built from source text (LISTING-TEXT below) prints the body
-;;;; line's own text once per entry found for it, grouped by line rather
-;;;; than strictly by address -- the call site's own line, having expanded
-;;;; to no entry of its own, shows once with blank columns, same as any
-;;;; other address-free statement.
+;;;; Macro expansion records the outermost invocation line as the source line
+;;;; and retains the emitted body's definition line separately. Source-line
+;;;; lookups return all entries emitted by that line, in address order.
 ;;;;
 ;;;; RENDERING -- when ASSEMBLY-SOURCE is present, LISTING-TEXT walks the
 ;;;; source line by line (1-based) rather than the entry list directly, so a
@@ -204,14 +191,8 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; result) when ASSEMBLY-SYMBOL-INFO is itself NIL -- callers assembling by
 ;;; hand or from an older code path never crash on a missing table.
 ;;;
-;;; ORDERING -- ASSEMBLY-SYMBOLS-LIST and ASSEMBLY-SYMBOL-GROUPS both sort
-;;; by SYMBOL-INFO-LINE, not by VALUE/address: an .EQU's value is not an
-;;; address, so address order is undefined for it, and a hash table
-;;; preserves no declaration order of its own. SYMBOL-INFO-LINE inherits
-;;; #89's caveat (a macro-expanded statement's line is its body's own
-;;; definition line, not the call site's), so ordering among several
-;;; invocations of the same macro is not guaranteed either -- a pre-existing
-;;; limitation, not fixed here.
+;;; Symbols sort by invocation line and binding order. The definition line
+;;; remains available for macro provenance.
 ;;;
 ;;; PERFORMANCE -- ASSEMBLY-SYMBOLS-LIST is a full MAPHASH-and-sort per call,
 ;;; and ASSEMBLY-SYMBOL-GROUPS additionally calls ASSEMBLY-SYMBOL (itself a
@@ -248,7 +229,10 @@ NIL or nothing matches."
                                 (equal (symbol-info-scope v) scope)))
                    (cl:push v result)))
                info))
-    (sort result #'< :key #'symbol-info-line)))
+    (sort result (lambda (a b)
+                   (if (= (symbol-info-line a) (symbol-info-line b))
+                       (< (symbol-info-order a) (symbol-info-order b))
+                       (< (symbol-info-line a) (symbol-info-line b)))))))
 
 (defun assembly-symbol-groups (assembly)
   "ASSEMBLY's symbols (#37) grouped by enclosing scope, as an alist of

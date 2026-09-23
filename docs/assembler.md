@@ -352,10 +352,9 @@ is still true once widths have stopped changing — see
 [Directives](directives.md)), and its result — checked against the same
 width vector as an assertion — is what `%encode` sees. Because floors only
 ever increase and are bounded above by each statement's widest declared
-variant, this is guaranteed to terminate in at most as many passes as there
-are relaxable statements; a hard cap (`*max-layout-iterations*`, currently
-8) exists only as a defect check against that invariant, not as part of the
-intended control flow.
+variant, this terminates after the possible width increases across the
+expanded instructions. The assembler calculates that bound after macro
+expansion and reports a convergence error if it is exceeded.
 
 ## Multi-operand instructions
 

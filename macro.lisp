@@ -165,7 +165,7 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                   copy)
         else collect tok))
 
-(defun %substitute-statement (statement bindings names)
+(defun %substitute-statement (statement bindings names call-line)
   (let* ((substituted (%substitute-tokens (coerce (statement-operand-tokens statement) 'list)
                                            bindings names))
          (operand-tokens (coerce substituted 'simple-vector))
@@ -190,7 +190,9 @@ Reject malformed definitions and names reserved by MACHINE or directives."
      :operands (mapcar (lambda (group) (make-operand :tokens (coerce group 'simple-vector)))
                        groups)
      :mode-suffix (statement-mode-suffix statement)
-     :line (statement-line statement))))
+     :line call-line
+     :definition-line (or (statement-definition-line statement)
+                          (statement-line statement)))))
 
 (defun %macro-invocation-p (statement macros)
   "Return the descriptor invoked by STATEMENT, or NIL."
@@ -225,10 +227,11 @@ Reject malformed definitions and names reserved by MACHINE or directives."
             (when (statement-label statement)
               (make-statement :label (statement-label statement)
                                :label-localp (statement-label-localp statement)
-                               :line line))))
+                               :line line
+                               :definition-line (statement-definition-line statement)))))
       (append (and label-statement (list label-statement))
               (mapcar (lambda (body-statement)
-                        (%substitute-statement body-statement bindings names))
+                        (%substitute-statement body-statement bindings names line))
                       (macro-descriptor-body descriptor))))))
 
 (defun expand-macros (statements machine)

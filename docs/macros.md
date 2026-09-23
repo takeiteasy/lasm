@@ -83,6 +83,11 @@ default) rounds — a macro that (directly or through another macro) invokes
 itself never reaches a fixpoint and signals `macro-error` instead of growing
 the statement list without bound.
 
+Expanded statements use the outermost source invocation line for listings,
+symbols and diagnostics. Their macro body definition line is retained
+separately. Assembly errors show the invocation first, followed by the
+body line.
+
 ## Body-defined symbols
 
 Each invocation gives its body-defined labels and `.equ` names unique names,

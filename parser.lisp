@@ -71,7 +71,8 @@
                    ; the mnemonic has no suffix, or when the active lexer
                    ; disables mode-suffix syntax entirely (its
                    ; MODE-SUFFIX-SEPARATOR is NIL).
-  line)           ; source line number, for diagnostics
+  line            ; source line number, for diagnostics
+  definition-line) ; macro body line, or NIL outside an expansion
 
 (defstruct operand
   tokens)     ; simple-vector of raw tokens for this operand -- MATCH-OPERAND-MODE
