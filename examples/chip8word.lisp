@@ -33,16 +33,12 @@
 ;;;; That example deliberately sidesteps instruction-word entirely; this one
 ;;;; is the encoding side it named as a separate ticket.
 ;;;;
-;;;; Scope: nibble-faithful for every opcode family below, with one
-;;;; deliberate gap -- 0NNN (SYS addr) cannot coexist with 00E0/00EE here.
-;;;; A catch-all NNN hole at opcode 0 would overlap both pinned values under
-;;;; any layout choice, which %DESCRIPTORS-DISTINGUISHABLE-P (instruction.lisp)
-;;;; rejects as :INDISTINGUISHABLE; telling them apart needs priority/ordering
-;;;; semantics this ticket does not add (tracked separately, #139).
-;;;; HLT stands in for the one address 0NNN this example does use (0x000),
-;;;; the same role SYS addr's "ignored by modern interpreters" already
-;;;; plays in real CHIP8 -- repurposed here as an explicit, deterministic
-;;;; stop for the demo program, since CHIP8 itself has no halt opcode.
+;;;; Scope: nibble-faithful for every opcode family below. 0NNN (SYS addr)
+;;;; is declared with (fallback), so the pinned 00E0/00EE/0000 encodings
+;;;; (CLS, RET, HLT) decode ahead of it and `sys` rejects those three
+;;;; addresses at assembly time. HLT stands in for CHIP8's absent halt: real
+;;;; CHIP8 ignores 0NNN, so this example uses the pinned address 0x000 as an
+;;;; explicit, deterministic stop for the demo program.
 ;;;; SKP/SKNP (no keyboard on this machine) are stubbed deterministically:
 ;;;; SKP never skips (no key is ever "pressed"), SKNP always does.
 ;;;;
@@ -97,6 +93,14 @@
 (definstruction chip8wordfoo hlt
   (encoding (opcode 0) (layout nnn) (field-value nnn 0))
   (semantics (trap :halt)))
+
+;; SYS nnn -- 0NNN, a machine-code call real interpreters ignore. (fallback)
+;; leaves the pinned CLS/RET/HLT addresses to their own instructions.
+(definstruction chip8wordfoo sys
+  (modes wnnn)
+  (encoding (opcode 0) (layout nnn) (fallback)
+    (operand addr :field nnn))
+  (semantics nil))
 
 ;; JP nnn -- 1NNN, the 4/12 layout.
 (definstruction chip8wordfoo jp
@@ -314,7 +318,7 @@
 
 ;;; Exercises every family above: immediate and register forms of LD/ADD/SE,
 ;;; the rest of the 8XY_ ALU ops, SNE, CALL/RET (00EE), SKP/SKNP, the FX__
-;;; memory ops, DRW's default layout, and CLS/HLT (00E0/0x000) to finish.
+;;; memory ops, DRW's default layout, SYS (0NNN), and CLS/HLT (00E0/0x000) to finish.
 (defparameter *source*
   "  ld     V 0, #5      ; V0 = 5
   ld     V 1, #3      ; V1 = 3
@@ -356,6 +360,7 @@ double:
   add    V 0, #21
   ret
 done:
+  sys    $123         ; 0NNN -- ignored, like real CHIP8 interpreters
   cls                 ; 00E0 -- no-op here, no display
   hlt                 ; 0x000, this example's stand-in halt")
 
@@ -382,3 +387,9 @@ done:
       (assert (equal '(22 3 1 0 55 9 8 7) (loop for a from 515 to 522 collect (mref m 'ram a))))
       (assert (zerop (stack-depth m 'cs)))
       (format t "~%All assertions passed.~%"))))
+
+;; SYS cannot encode an address CLS/RET/HLT own.
+(dolist (address '(#x0e0 #x0ee 0))
+  (assert (handler-case (progn (assemble (format nil "sys ~D" address) :machine 'chip8wordfoo) nil)
+            (assembly-error () t))))
+(format t "SYS rejects the pinned addresses.~%")

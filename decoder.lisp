@@ -102,6 +102,23 @@ never run backward or past a rejected candidate's own bounds."
              (gethash (ldb (byte width shift) word)
                       (machine-descriptor-opcodes descriptor)))))
 
+(defun %shadowing-descriptor (descriptor cells)
+  "For a (fallback) DESCRIPTOR encoded as CELLS, the other descriptor that
+decodes those cells instead, or NIL."
+  (when (instruction-descriptor-fallback descriptor)
+    (let* ((layout (instruction-descriptor-word-layout descriptor))
+           (word (%fetch-cells (lambda (i) (nth i cells)) 0
+                               (instruction-word-layout-width-cells layout)
+                               (instruction-word-layout-cell-width layout)
+                               (instruction-word-layout-endian layout)))
+           (found (%find-word-candidate
+                   (find-machine-descriptor (instruction-descriptor-machine descriptor))
+                   layout word)))
+      (and found
+           (not (eq found descriptor))
+           (not (%sibling-combos-p found descriptor))
+           found))))
+
 (defun %word-decode-table (descriptor layout)
   "Publish a complete, read-only dispatch table for words up to 16 bits."
   (when (<= (instruction-word-layout-width layout) 16)
@@ -153,7 +170,8 @@ emission order. All operand lists belong to this call."
       descriptor))
 
 (defun %decode-word-instruction (read-cell address machine-name layout)
-  "Fetch a word and select its first matching descriptor.
+  "Fetch a word and select its first matching descriptor. A bucket is in
+specificity order, so a more specific encoding wins over a (fallback).
 Words up to 16 bits use a shared dispatch table; wider words scan their opcode
 bucket. Trailing cells are always fetched anew, and size follows the selected
 field choices rather than the descriptor's encoding-size variant."

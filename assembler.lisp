@@ -1387,9 +1387,15 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
                      do (setf (nth i values)
                               (%relative-offset address descriptor i value line cell-width)))
              (%check-strict-operand-range! descriptor mode values line cell-width choices)
-             (loop with i = (- address origin)
-                   for cell in (%encode-instruction-resolved descriptor values cell-width endian)
-                   do (setf (aref cells i) cell) (incf i)))))
+             (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
+                    (shadow (%shadowing-descriptor descriptor encoded)))
+               (when shadow
+                 (%assembly-error line "~A: this encoding decodes as ~A"
+                                  (instruction-descriptor-name descriptor)
+                                  (instruction-descriptor-name shadow)))
+               (loop with i = (- address origin)
+                     for cell in encoded
+                     do (setf (aref cells i) cell) (incf i))))))
         (:emit
          (destructuring-bind (kind address width asts line definition-line unit definition-unit) entry
            (declare (ignore kind line definition-line unit definition-unit))

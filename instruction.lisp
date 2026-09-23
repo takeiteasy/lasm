@@ -122,7 +122,8 @@ declares its own distinct (opcode ~S :sub s)"
                         (opcode-conflict-opcode c)))
                (:indistinguishable
                 (format s "Opcode ~S for instruction ~S on machine ~S is already registered to ~S with ~
-an indistinguishable encoding -- no operand field's raw bits tell the two apart at decode time"
+an indistinguishable encoding -- no operand field's raw bits tell the two apart at decode time; ~
+a more general instruction may declare (fallback) to sit behind a strictly more specific one"
                         (opcode-conflict-opcode c) (opcode-conflict-mnemonic c)
                         (opcode-conflict-machine c) (opcode-conflict-other-mnemonic c)))
                (:sub-opcode-required
@@ -258,6 +259,9 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; pinned field exactly like a hole's raw bits for co-tenancy purposes --
    ;; see %CONSTANTS-DISJOINT-P below.
    (word-constants nil :type list)
+  ;; T when the definstruction declared (fallback): a general encoding that
+  ;; may overlap strictly more specific co-tenants, which decode ahead of it.
+  (fallback nil :type boolean)
   ;; Named ONE-OF selections that do not have an operand hole, such as a
   ;; literal-only alternative.  This is separate from the hole-aligned
   ;; CHOICES value so existing callers keep their shape.
@@ -387,6 +391,15 @@ reference is not a label, so it's independent of \"no labels allowed here\"."
 
 (defvar *word-bit-constraints-cache* nil)
 
+(defun %insert-by-specificity (new bucket)
+  "BUCKET with each of NEW added ahead of the first descriptor it shadows,
+else last, so decode finds a more specific encoding before its fallback."
+  (dolist (descriptor new bucket)
+    (let ((position (position-if (lambda (other) (%shadows-p descriptor other)) bucket)))
+      (setf bucket (if position
+                       (append (subseq bucket 0 position) (list descriptor) (nthcdr position bucket))
+                       (append bucket (list descriptor)))))))
+
 (defun register-instruction-variants! (machine-name descriptors)
   "Register DESCRIPTORS -- one or more INSTRUCTION-DESCRIPTORs sharing one
 mnemonic -- on machine MACHINE-NAME, replacing any previous registration
@@ -409,7 +422,10 @@ actually match, regardless of which specific combo it's looking at. Two
 descriptors that are *not* siblings -- a different mnemonic, or the same
 mnemonic under a different (MODES ...) clause -- may also coexist at one
 opcode on a word-encoded machine, but only once %CHECK-OPCODE-DECODABLE!
-(below) confirms some operand field's raw bits tell them apart.
+(below) confirms some operand field's raw bits tell them apart, or that one
+is a (fallback) accepting strictly more than the other. A bucket is kept in
+specificity order -- every descriptor ahead of any fallback it shadows -- so
+decode's first match is always the most specific.
 
 A byte-encoded machine has no per-field discriminator to decode by at all, so
 by default any second descriptor at an opcode there -- same mnemonic or
@@ -482,8 +498,11 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
                    (setf (gethash opcode (machine-descriptor-opcodes md)) kept)
                    (remhash opcode (machine-descriptor-opcodes md)))))
     (maphash (lambda (opcode new)
-               (setf (gethash opcode (machine-descriptor-opcodes md))
-                     (append (gethash opcode (machine-descriptor-opcodes md)) new)))
+               (let ((bucket (gethash opcode (machine-descriptor-opcodes md))))
+                 (setf (gethash opcode (machine-descriptor-opcodes md))
+                       (if wordp
+                           (%insert-by-specificity new bucket)
+                           (append bucket new)))))
              additions)
     (setf (gethash name (machine-descriptor-instructions md)) descriptors)
     descriptors))
@@ -1718,6 +1737,68 @@ where the old hole/pin split needed two separate checks."
     (loop for ca in constraints-a
             thereis (some (lambda (cb) (%bit-constraints-disjoint-p ca cb)) constraints-b))))
 
+(defun %intervals-contain-p (intervals value)
+  (some (lambda (interval) (<= (car interval) value (cdr interval))) intervals))
+
+(defun %intervals-cover-p (intervals width)
+  (let ((expected 0))
+    (dolist (interval (sort (copy-list intervals) #'< :key #'car))
+      (when (> (car interval) expected) (return-from %intervals-cover-p nil))
+      (setf expected (max expected (1+ (cdr interval)))))
+    (>= expected (ash 1 width))))
+
+(defun %constraint-implied (specific-constraints constraint)
+  "Whether every word meeting all of SPECIFIC-CONSTRAINTS also meets
+CONSTRAINT: :YES, :NO, or :UNKNOWN when its window is too wide to enumerate.
+A descriptor's constraints occupy disjoint bits, so its accepted words are a
+product of per-constraint sets and enumerating CONSTRAINT's window is exact."
+  (destructuring-bind (width shift intervals) constraint
+    (if (%intervals-cover-p intervals width)
+        :yes
+        (%enumerate-constraint-window specific-constraints width shift intervals))))
+
+(defun %enumerate-constraint-window (specific-constraints width shift intervals)
+  ;; TODO: windows wider than 16 bits are :UNKNOWN (so never proven
+  ;; shadowed); walk the interval product instead if a wide field needs it.
+  (if (> width 16)
+      :unknown
+      (let ((overlapping
+              (loop for (cw cs civs) in specific-constraints
+                    for lo = (max shift cs)
+                    for hi = (min (+ shift width) (+ cs cw))
+                    when (< lo hi)
+                      collect (list (- lo shift) (- hi lo)
+                                    (mapcan (lambda (interval)
+                                              (%project-raw-interval interval (- lo cs) (- hi lo)))
+                                            civs)))))
+        (dotimes (value (ash 1 width) :yes)
+          (when (and (every (lambda (o)
+                              (destructuring-bind (offset overlap-width projected) o
+                                (%intervals-contain-p
+                                 projected (ldb (byte overlap-width offset) value))))
+                            overlapping)
+                     (not (%intervals-contain-p intervals value)))
+            (return :no))))))
+
+(defun %descriptor-subset (specific general)
+  "Whether every word SPECIFIC accepts is also accepted by GENERAL (the bits
+of their operand fields and pins): :YES, :NO or :UNKNOWN."
+  (let ((specific-constraints (%word-bit-constraints specific))
+        (results nil))
+    (dolist (constraint (%word-bit-constraints general))
+      (let ((result (%constraint-implied specific-constraints constraint)))
+        (when (eq result :no) (return-from %descriptor-subset :no))
+        (cl:push result results)))
+    (if (member :unknown results) :unknown :yes)))
+
+(defun %shadows-p (specific general)
+  "T when GENERAL is a (fallback) accepting every word SPECIFIC does and
+strictly more, so SPECIFIC must decode first."
+  (and (instruction-descriptor-fallback general)
+       (not (instruction-descriptor-fallback specific))
+       (eq :yes (%descriptor-subset specific general))
+       (eq :no (%descriptor-subset general specific))))
+
 (defun %check-opcode-decodable! (machine-name name a b)
   "Signal OPCODE-CONFLICT unless A and B -- two INSTRUCTION-DESCRIPTORs about
 to share one opcode on word-encoded MACHINE-NAME (#105), neither a sibling
@@ -1743,7 +1824,9 @@ field) supply the disagreement instead; two co-tenant no-operand descriptors
 with no constants are truly indistinguishable unless they are siblings
 (caught by %SIBLING-COMBOS-P above)."
   (unless (%sibling-combos-p a b)
-    (unless (%descriptors-distinguishable-p a b)
+    (unless (or (%descriptors-distinguishable-p a b)
+                (%shadows-p a b)
+                (%shadows-p b a))
       (error 'opcode-conflict :machine machine-name
                                :opcode (instruction-descriptor-opcode a)
                                :mnemonic name
@@ -3167,13 +3250,41 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                          (%mode-hole-alternatives mode) sub-spec mode mode-specified
                                          operand-registers)))))))))
 
+(defvar *definstruction-fallback* nil
+  "True while DEFINSTRUCTION expands an instruction declaring (fallback).")
+
+(defun %mark-fallback (descriptors)
+  (dolist (descriptor descriptors descriptors)
+    (setf (instruction-descriptor-fallback descriptor) t)))
+
 (defun %instruction-registration-form (machine name descriptors-form)
-  (let ((registration `(register-instruction-variants! ',machine ,descriptors-form)))
+  (let ((registration `(register-instruction-variants!
+                        ',machine
+                        ,(if *definstruction-fallback*
+                             `(%mark-fallback ,descriptors-form)
+                             descriptors-form))))
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        ,(if (%word-machine-p machine)
             `(%evaluate-instruction-registration ',registration)
             registration)
        ',name)))
+
+(defun %extract-fallback (machine name encoding-clause)
+  "Return (VALUES ENCODING-CLAUSE FALLBACKP), ENCODING-CLAUSE without its
+(fallback) subclause. Word-encoded machines only."
+  (let ((subclauses (remove-if-not (lambda (c) (and (consp c) (eq (first c) 'fallback)))
+                                   (rest encoding-clause))))
+    (cond
+      ((null subclauses) (values encoding-clause nil))
+      ((or (rest subclauses) (rest (first subclauses)))
+       (error "DEFINSTRUCTION ~S ~S: (fallback) takes no arguments and may appear once"
+              machine name))
+      ((not (%word-machine-p machine))
+       (error "DEFINSTRUCTION ~S ~S: (fallback) is a word-encoded-machine-only mechanism"
+              machine name))
+      (t (values (cons (first encoding-clause)
+                       (remove (first subclauses) (rest encoding-clause)))
+                 t)))))
 
 (defmacro definstruction (machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -3331,7 +3442,7 @@ a hole matching none of the given keys -- including a hole with no recorded
 choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own (#126) -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
-  (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads)
+  (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads fallbackp)
     (dolist (clause clauses)
       (when (member (first clause) seen-heads)
         (error "DEFINSTRUCTION ~S ~S: duplicate ~S clause" machine name (first clause)))
@@ -3342,7 +3453,10 @@ NO-MATCHING-CHOICE rather than silently falling through."
         (semantics (setf semantics-clause clause))
         (cycles (setf cycles-clause clause))
         (t (error "Unknown DEFINSTRUCTION clause head ~S in ~S" (first clause) clause))))
-    (let* ((mode-forms (rest modes-clause))
+    (multiple-value-setq (encoding-clause fallbackp)
+      (%extract-fallback machine name encoding-clause))
+    (let* ((*definstruction-fallback* fallbackp)
+           (mode-forms (rest modes-clause))
            (cycles-form (and cycles-clause (second cycles-clause))))
       (cond
         ;; No addressing mode -- no operand.

@@ -5094,3 +5094,133 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
            (fiveam:is (zerop checks))
            (fiveam:is (= 4 (length (find-instruction-variants 'order-test-machine 'mv)))))
       (setf (symbol-function '%check-opcode-decodable!) original))))
+
+;;; (fallback): a general co-tenant decoding behind strictly more specific ones.
+
+(defmachine fallback-test-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4) (field nnn 12)))
+
+(defmode fallback-nnn expr)
+
+(definstruction fallback-test-machine fbsys
+  (modes fallback-nnn)
+  (encoding (opcode 0) (fallback) (operand addr :field nnn))
+  (semantics nil))
+
+(definstruction fallback-test-machine fbcls
+  (encoding (opcode 0) (field-value nnn #xe0))
+  (semantics nil))
+
+(definstruction fallback-test-machine fbret
+  (encoding (opcode 0) (field-value nnn #xee))
+  (semantics nil))
+
+;; Fallback declared before its specific co-tenant.
+(definstruction fallback-test-machine fbjp
+  (modes fallback-nnn)
+  (encoding (opcode 1) (fallback) (operand addr :field nnn))
+  (semantics nil))
+
+(definstruction fallback-test-machine fbpin
+  (encoding (opcode 1) (field-value nnn 7))
+  (semantics nil))
+
+(defun fallback-decoded-name (source)
+  (let ((cells (assembly-cells (assemble source :machine 'fallback-test-machine))))
+    (instruction-descriptor-name
+     (decode-instruction-at (vector-cell-reader cells) 0 'fallback-test-machine))))
+
+(fiveam:test fallback-decodes-specific-before-general
+  (fiveam:is (string= "FBCLS" (fallback-decoded-name "fbcls")))
+  (fiveam:is (string= "FBRET" (fallback-decoded-name "fbret")))
+  (fiveam:is (string= "FBSYS" (fallback-decoded-name "fbsys $123")))
+  (fiveam:is (string= "FBPIN" (fallback-decoded-name "fbpin")))
+  (fiveam:is (string= "FBJP" (fallback-decoded-name "fbjp 8"))))
+
+(fiveam:test fallback-sits-last-in-its-bucket
+  (fiveam:is (string= "FBSYS" (instruction-descriptor-name
+                               (car (last (find-instruction-descriptors-by-opcode
+                                           'fallback-test-machine 0))))))
+  (fiveam:is (string= "FBJP" (instruction-descriptor-name
+                              (car (last (find-instruction-descriptors-by-opcode
+                                          'fallback-test-machine 1)))))))
+
+(fiveam:test fallback-redefinition-stays-last
+  (eval '(definstruction fallback-test-machine fbsys
+           (modes fallback-nnn)
+           (encoding (opcode 0) (fallback) (operand addr :field nnn))
+           (semantics nil)))
+  (fiveam:is (string= "FBSYS" (instruction-descriptor-name
+                               (car (last (find-instruction-descriptors-by-opcode
+                                           'fallback-test-machine 0))))))
+  (fiveam:is (string= "FBCLS" (fallback-decoded-name "fbcls"))))
+
+(fiveam:test fallback-rejects-assembling-a-shadowed-encoding
+  (dolist (source '("fbsys $e0" "fbsys $ee" "fbjp 7"))
+    (fiveam:signals assembly-error (assemble source :machine 'fallback-test-machine)))
+  (fiveam:finishes (assemble "fbsys $e1" :machine 'fallback-test-machine)))
+
+(fiveam:test fallback-requires-strictly-more-specific-co-tenant
+  ;; Each bogus fallback overlaps a plain co-tenant without containing it
+  ;; strictly: equal sets, partial overlap, and the narrower side.
+  (eval '(definstruction fallback-test-machine fbplain
+           (modes fallback-nnn)
+           (encoding (opcode 2) (operand addr :field nnn))
+           (semantics nil)))
+  (dolist (form '((definstruction fallback-test-machine fbequal
+                    (modes fallback-nnn)
+                    (encoding (opcode 2) (fallback) (operand addr :field nnn))
+                    (semantics nil))
+                  (definstruction fallback-test-machine fbnarrow
+                    (encoding (opcode 2) (fallback) (field-value nnn 5))
+                    (semantics nil))))
+    (handler-case (eval form)
+      (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+      (:no-error () (fiveam:fail "expected OPCODE-CONFLICT")))))
+
+(fiveam:test fallback-partial-overlap-is-rejected
+  (eval '(definstruction fallback-test-machine fblow
+           (modes fallback-nnn)
+           (encoding (opcode 3) (operand addr :field nnn (variant (range 0 100) inline)))
+           (semantics nil)))
+  (handler-case
+      (eval '(definstruction fallback-test-machine fbhigh
+               (modes fallback-nnn)
+               (encoding (opcode 3) (fallback)
+                 (operand addr :field nnn (variant (range 50 200) inline)))
+               (semantics nil)))
+    (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
+(fiveam:test fallback-rejected-on-byte-machine
+  (fiveam:signals error
+    (eval '(definstruction test-machine fbbyte
+             (encoding (opcode 201) (fallback))
+             (semantics nil)))))
+
+(defmachine fallback-wide-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 24 (field opcode 8) (field value 16)))
+
+(definstruction fallback-wide-test-machine wpin
+  (encoding (opcode 1) (field-value value #xbeef))
+  (semantics nil))
+
+(definstruction fallback-wide-test-machine wgen
+  (modes fallback-nnn)
+  (encoding (opcode 1) (fallback) (operand v :field value))
+  (semantics nil))
+
+(fiveam:test fallback-orders-wide-words-without-a-dispatch-table
+  (flet ((decoded (source)
+           (instruction-descriptor-name
+            (decode-instruction-at
+             (vector-cell-reader (assembly-cells (assemble source :machine 'fallback-wide-test-machine)))
+             0 'fallback-wide-test-machine))))
+    (fiveam:is (string= "WPIN" (decoded "wpin")))
+    (fiveam:is (string= "WGEN" (decoded "wgen 5")))))

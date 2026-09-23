@@ -230,10 +230,10 @@ cases together: a CHIP8-shaped machine (`chip8wordfoo`) whose
 default — `1NNN`/`2NNN`/`ANNN` split 4/12, `3XNN`/`6XNN`/`7XNN`/`5XY0`/`9XY0`/
 `8XY_` split 4/4/8 or stay on the default 4/4/4/4, `DXYN` on the default —
 all sharing one 16-bit word and `opcode` field. Nibble-faithful for every
-family CHIP8 defines except `0NNN` (a stated, deliberate gap — see the
-example's own header): the `8XY_` ALU ops, `5XY0`/`9XY0`, `EX9E`/`EXA1`,
+family CHIP8 defines: the `8XY_` ALU ops, `5XY0`/`9XY0`, `EX9E`/`EXA1`,
 `FX__`, and `00E0`/`00EE` all share an opcode with siblings told apart purely
-by a `field-value`-pinned field, not an operand hole. Unlike
+by a `field-value`-pinned field, not an operand hole, and `0NNN` decodes
+behind them as a `(fallback)`. Unlike
 `examples/chip8.lisp` above (which proves non-uniform *register* widths on
 the ordinary cell-encoded path), this one proves non-uniform
 *instruction-word* layouts and constant discriminator fields on the same

@@ -610,7 +610,8 @@ values from the other's, once both are narrowed down to only the bits they
 actually share. Registration compares inclusive bit-pattern ranges, including
 signed ranges that wrap across zero, without expanding each field value.
 Decode (`decode-instruction-at`) selects the first matching
-descriptor in registration order. Words up to 16 bits use a lazily built
+descriptor in the opcode's bucket, which is kept in specificity order (see
+[`(fallback)`](#fallback--general-co-tenants)). Words up to 16 bits use a lazily built
 table shared by all instances of that machine type; wider words scan the
 opcode's candidates. Successful instruction registration invalidates the
 table. Table construction matches bits without reading program memory.
@@ -910,10 +911,36 @@ to discriminate co-tenants.
 
 See [`examples/chip8word.lisp`](../examples/chip8word.lisp) for this run end
 to end across CHIP8's `8XY_` ALU family, `5XY0`/`9XY0`, `EX9E`/`EXA1`, `FX__`,
-and `00E0`/`00EE` — nibble-faithful except `0NNN`, which cannot coexist with
-`00E0`/`00EE` under this mechanism alone (a catch-all address hole at opcode
-`0` would overlap both pinned values; telling them apart needs priority
-ordering between co-tenants, not disjointness — tracked separately, #139).
+`00E0`/`00EE`, and `0NNN`.
+
+### `(fallback)` — general co-tenants
+
+Disjointness alone cannot place a catch-all next to the pins it covers:
+CHIP8's `0NNN` (`SYS addr`) accepts every address, including the `00E0` and
+`00EE` that `cls` and `ret` pin. An `(encoding ...)` clause may declare
+`(fallback)` to let the instruction overlap strictly more specific
+co-tenants, which decode ahead of it:
+
+```lisp
+(definstruction chip8wordfoo sys
+  (modes wnnn)
+  (encoding (opcode 0) (layout nnn) (fallback)
+    (operand addr :field nnn))
+  (semantics nil))
+```
+
+- A fallback overlaps a co-tenant only when every word the co-tenant accepts
+  is also accepted by the fallback, and the fallback accepts more. Equal
+  sets, partial overlaps and a fallback narrower than its co-tenant remain
+  `opcode-conflict` (`:indistinguishable`).
+- Decode tries every more specific co-tenant first, whatever the declaration
+  order; the fallback decodes only the words they leave.
+- An instruction that assembles to a word a more specific co-tenant decodes
+  (`sys $0e0`, which is `cls`) is an assembly error.
+- A fallback whose operand field is wider than 16 bits cannot be proven to
+  contain a co-tenant and is rejected as `:indistinguishable`.
+- `(fallback)` applies to the whole instruction and is valid in the
+  top-level `(encoding ...)` clause of word-encoded machines only.
 
 ### Signed word fields (#63)
 

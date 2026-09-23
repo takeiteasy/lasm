@@ -275,6 +275,16 @@ that widest fallback happens to be the strict mode, and wraps silently if
 it isn't. `*strict-operand-range*` doesn't have this gap, since it applies
 regardless of which mode was chosen.
 
+## Shadowed fallback encoding
+
+An instruction declaring `(fallback)` whose operands assemble to a word a
+more specific co-tenant decodes is an `assembly-error`, since the bytes would
+disassemble and run as the other instruction:
+
+```
+SYS: this encoding decodes as CLS
+```
+
 ## Opcode conflicts
 
 `opcode-conflict` — signalled by `definstruction`, not a runtime assembly
@@ -284,7 +294,10 @@ opcode without any operand field's raw bits actually telling them apart
 ("indistinguishable"); and, on a byte-encoded machine, any second descriptor
 at all landing on an already-claimed opcode ("undecodable — byte-encoded"),
 since a byte encoding has no per-field discriminator for decode to key off
-regardless of how the two modes' syntax differs. See [Instructions, "Opcode
+regardless of how the two modes' syntax differs. A word-encoded instruction
+declaring [`(fallback)`](instructions.md#fallback--general-co-tenants) may
+overlap strictly more specific co-tenants; any other overlap is
+"indistinguishable". See [Instructions, "Opcode
 to descriptor decode"](instructions.md#opcode-to-descriptor-decode) for the
 full picture and a worked example.
 
