@@ -250,6 +250,97 @@ ambi $30" :machine 'diag-test-machine))
       (assemble "lda $10" :machine 'instr-test-machine))
     (fiveam:is (null warned))))
 
+;;; ONE-OF ambiguity warning
+
+;; Identical syntax is only legal when both alternatives declare a :SUFFIX.
+(defmode diag-alt-a expr :suffix "da")
+(defmode diag-alt-b expr :suffix "db")
+(defmode diag-alt-paren "(" expr ")")
+(defmode diag-alt-slotted (one-of (diag-alt-slot diag-alt-a diag-alt-b)))
+(defmode diag-alt-pair expr "," (one-of diag-alt-a diag-alt-b))
+(defmode diag-alt-specific (one-of diag-alt-a diag-alt-paren))
+(defmode diag-alt-inner (one-of diag-alt-a diag-alt-b))
+(defmode diag-alt-outer (one-of diag-alt-inner diag-alt-paren))
+
+(definstruction diag-test-machine alts
+  (modes diag-alt-slotted)
+  (encoding (opcode #x0A) (operand :width 1))
+  (semantics (set! a operand)))
+
+(definstruction diag-test-machine altp
+  (modes diag-alt-pair)
+  (encoding (opcode #x0B) (operand :width 1) (operand :width 1))
+  (semantics (set! a operand)))
+
+(definstruction diag-test-machine altq
+  (modes diag-alt-specific)
+  (encoding (opcode #x0C) (operand :width 1))
+  (semantics (set! a operand)))
+
+(definstruction diag-test-machine alto
+  (modes diag-alt-outer)
+  (encoding (opcode #x0D) (operand :width 1))
+  (semantics (set! a operand)))
+
+(defmachine diag-reg-machine
+  (register r :width 8 :names (r0 r1))
+  (memory ram :width 8 :addr-width 8))
+
+(defmode diag-regind "[" (expr :register r) "]")
+(defmode diag-ind "[" expr "]")
+(defmode diag-reg-first (one-of diag-regind diag-ind))
+(defmode diag-ind-first (one-of diag-ind diag-regind))
+
+(definstruction diag-reg-machine ldr
+  (modes diag-reg-first)
+  (encoding (opcode #x01) (operand :width 1))
+  (semantics nil))
+
+(definstruction diag-reg-machine ldi
+  (modes diag-ind-first)
+  (encoding (opcode #x02) (operand :width 1))
+  (semantics nil))
+
+(defun %alternative-warnings (source machine)
+  "Every AMBIGUOUS-ALTERNATIVE assembling SOURCE signals, muffled."
+  (let (warnings)
+    (handler-bind ((ambiguous-alternative (lambda (c) (cl:push c warnings) (muffle-warning c))))
+      (assemble source :machine machine))
+    (nreverse warnings)))
+
+(fiveam:test tied-one-of-alternatives-signal-ambiguous-alternative
+  (let ((warnings (%alternative-warnings "alts 5" 'diag-test-machine)))
+    (fiveam:is (= 1 (length warnings)))
+    (let ((c (first warnings)))
+      (fiveam:is (typep c 'ambiguous-mode))
+      (fiveam:is (string-equal "alts" (ambiguous-mode-mnemonic c)))
+      (fiveam:is (eq 'diag-alt-a (mode-descriptor-name (ambiguous-mode-chosen c))))
+      (fiveam:is (equal '(diag-alt-b) (mapcar #'mode-descriptor-name (ambiguous-mode-alternatives c))))
+      (fiveam:is (= 0 (ambiguous-alternative-hole c)))
+      (fiveam:is (eq 'diag-alt-slot (ambiguous-alternative-slot c))))))
+
+(fiveam:test ambiguous-alternative-reports-its-hole-index
+  (let ((c (first (%alternative-warnings "altp 1, 2" 'diag-test-machine))))
+    (fiveam:is (= 1 (ambiguous-alternative-hole c)))
+    (fiveam:is (null (ambiguous-alternative-slot c)))))
+
+(fiveam:test ambiguous-alternative-warns-once-per-statement
+  (fiveam:is (= 3 (length (%alternative-warnings "alts 1
+alts 2
+alts 3" 'diag-test-machine)))))
+
+(fiveam:test more-literal-alternative-does-not-warn
+  (fiveam:is (null (%alternative-warnings "altq (5)" 'diag-test-machine))))
+
+(fiveam:test tie-on-losing-path-does-not-warn
+  (fiveam:is (null (%alternative-warnings "alto (5)" 'diag-test-machine))))
+
+(fiveam:test register-qualified-alternative-outranks-plain-expr
+  (fiveam:is (null (%alternative-warnings "ldr [r0]" 'diag-reg-machine)))
+  (fiveam:is (null (%alternative-warnings "ldr [5]" 'diag-reg-machine)))
+  (let ((c (first (%alternative-warnings "ldi [r0]" 'diag-reg-machine))))
+    (fiveam:is (eq 'diag-ind (mode-descriptor-name (ambiguous-mode-chosen c))))))
+
 ;;; Strict operand range (#74, absorbing #28/#43)
 
 (fiveam:test strict-mode-out-of-range-value-signals-assembly-error

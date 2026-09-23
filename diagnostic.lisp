@@ -108,6 +108,14 @@ candidates tie on total operand width -- CHOSEN (a MODE-DESCRIPTOR) is the
 one declaration order picked; ALTERNATIVES (a list of MODE-DESCRIPTOR) are
 the other tied candidates, in declaration order."))
 
+(define-condition ambiguous-alternative (ambiguous-mode)
+  ((hole :initarg :hole :reader ambiguous-alternative-hole)
+   (slot :initarg :slot :initform nil :reader ambiguous-alternative-slot))
+  (:documentation "Signalled when two or more alternatives of one ONE-OF
+element match an operand equally well. HOLE is the element's first hole
+index and SLOT its slot name, or NIL. CHOSEN and ALTERNATIVES name the
+alternatives' own MODE-DESCRIPTORs."))
+
 ;;; Source-context propagation
 
 (defmacro with-source-context (source &body body)

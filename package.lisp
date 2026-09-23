@@ -60,6 +60,9 @@
    #:ambiguous-mode-mnemonic
    #:ambiguous-mode-chosen
    #:ambiguous-mode-alternatives
+   #:ambiguous-alternative
+   #:ambiguous-alternative-hole
+   #:ambiguous-alternative-slot
    #:*strict-operand-range*
 
    ;; Machine definition

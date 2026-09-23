@@ -507,6 +507,22 @@ checks ordinary operand ranges. See docs/modes.md."
 
 ;;; Pattern matching
 
+(defun %register-hole-count (mode)
+  "The number of register-qualified (EXPR :REGISTER r) holes in MODE's own
+pattern. Nested ONE-OF alternatives are not counted."
+  (count-if (lambda (el) (and (eq (first el) :expr) (second el)))
+            (mode-descriptor-pattern mode)))
+
+(defun %one-of-tie-record (holes-from-end slot chosen tied)
+  "A tie record (HOLES-FROM-END SLOT CHOSEN . RUNNERS-UP) for a :ONE-OF element
+whose CHOSEN alternative matched with the same literal count as each of TIED,
+or NIL when none of TIED remains. A runner-up with fewer register-qualified
+holes than CHOSEN is less specific, so it is not a tie."
+  (let ((runners-up (remove-if (lambda (alt) (< (%register-hole-count alt)
+                                                (%register-hole-count chosen)))
+                               tied)))
+    (and runners-up (list* holes-from-end slot chosen runners-up))))
+
 (defun %match-mode-elements (tokens elements i end &optional require-end)
   "Match ELEMENTS (a suffix of some mode's pattern) against TOKENS from
 position I (bounded by END). Returns (VALUES asts choices next-i okp
@@ -541,20 +557,22 @@ can't create a cycle, since it replays the same patterns in the same order.
 
 Alternatives match with the remaining pattern and input. The successful path
 with the most literal tokens wins; declaration order breaks ties. The eighth
-return value is that path's literal count."
+return value is that path's literal count. The tenth lists one
+%ONE-OF-TIE-RECORD per :ONE-OF element on the winning path whose pick was
+decided by declaration order."
   (if (null elements)
        (if (and require-end (< i end))
            (values nil nil nil nil (%tok tokens i end) "Unexpected trailing token in operand")
-           (values nil nil i t nil nil nil 0 nil))
+           (values nil nil i t nil nil nil 0 nil nil))
       (let ((element (first elements)) (rest-elements (rest elements)))
         (ecase (first element)
           (:literal
            (let ((tok (%tok tokens i end)))
              (if (and tok (string-equal (token-text tok) (second element)))
-            (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
+            (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
                 (%match-mode-elements tokens rest-elements (1+ i) end require-end)
                 (if okp
-                        (values asts choices next-i t nil nil selections (1+ score) suffixes)
+                        (values asts choices next-i t nil nil selections (1+ score) suffixes ties)
                         (values nil nil nil nil failure-token message)))
                  (values nil nil nil nil tok
                          (format nil "Operand does not match addressing mode ~
@@ -579,12 +597,12 @@ return value is that path's literal count."
                                                          (symbol-name register))))))
                        (try (ast next-i-hole)
                          (if (or (null register) (valid-register-p ast))
-                              (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
+                              (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
                                   (%match-mode-elements tokens rest-elements next-i-hole end require-end)
                                 (if okp
                                     (when (> score best-score)
                                       (setf best (list (cons ast asts) (cons nil choices) next-i
-                                                       t nil nil selections score (cons prefix suffixes))
+                                                       t nil nil selections score (cons prefix suffixes) ties)
                                             best-score score))
                                    (setf last-failure-token failure-token
                                          last-message message)))
@@ -625,33 +643,45 @@ return value is that path's literal count."
                                             (%one-of-alternatives element))
                                    (token-value tok)))
                   (start (if alt-prefix (1+ i) i))
-                  last-failure-token last-message best (best-score -1))
+                  last-failure-token last-message best best-alt (best-score -1) tied)
              (dolist (alt-name (%one-of-alternatives element))
                (let ((alt (find-mode-descriptor alt-name)))
                  (when (or (null alt-prefix)
                            (and (mode-descriptor-suffix alt)
                                 (string-equal (mode-descriptor-suffix alt) alt-prefix)))
-                  (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
+                  (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
                       (%match-mode-elements tokens
                                             (append (mode-descriptor-pattern alt) rest-elements)
                                             start end require-end)
-                    (if okp
-                        (when (> score best-score)
-                          (let* ((slot (%one-of-slot element))
-                                 (count (%mode-hole-count alt))
-                                 (selection (and slot (cons slot (mode-descriptor-name alt)))))
-                            (setf best-score score
-                                  best
-                                  (list asts
-                                        (append (make-list count :initial-element alt)
-                                                (nthcdr count choices))
-                                        next-i t nil nil
-                                        (if slot
-                                            (cons selection
-                                                  (remove slot selections :key #'car :test #'eq))
-                                            selections)
-                                        score suffixes))))
-                        (setf last-failure-token failure-token last-message message))))))
+                    (cond
+                      ((not okp) (setf last-failure-token failure-token last-message message))
+                      ((= score best-score) (cl:push alt tied))
+                      ((> score best-score)
+                       (let* ((slot (%one-of-slot element))
+                              (count (%mode-hole-count alt))
+                              (selection (and slot (cons slot (mode-descriptor-name alt)))))
+                         (setf best-score score
+                               best-alt alt
+                               tied nil
+                               best
+                               (list asts
+                                     (append (make-list count :initial-element alt)
+                                             (nthcdr count choices))
+                                     next-i t nil nil
+                                     (if slot
+                                         (cons selection
+                                               (remove slot selections :key #'car :test #'eq))
+                                         selections)
+                                     score suffixes
+                                     (cons (length asts) ties))))))))))
+             (when best
+               ;; The tenth entry holds (holes-from-end . ties) until the
+               ;; tied set is final.
+               (destructuring-bind (holes-from-end . ties) (tenth best)
+                 (let ((record (and (null alt-prefix)
+                                    (%one-of-tie-record holes-from-end (%one-of-slot element)
+                                                        best-alt (reverse tied)))))
+                   (setf (tenth best) (if record (cons record ties) ties)))))
              (if best
                  (values-list best)
                  (values nil nil nil nil last-failure-token last-message))))))))
@@ -669,15 +699,17 @@ MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
 :ONE-OF -- see %MATCH-MODE-ELEMENTS -- a trailing value existing callers
 that only bind the first four are unaffected by."
   (let ((end (length tokens)))
-    (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
+    (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
         (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
       (declare (ignore next-i score))
       (cond
-         ((not okp) (values nil nil failure-token message nil nil nil))
+         ((not okp) (values nil nil failure-token message nil nil nil nil))
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.
-          (t (values asts t nil nil choices selections suffixes))))))
+          (t (values asts t nil nil choices selections suffixes
+                     (loop for (holes-from-end . rest) in ties
+                           collect (cons (- (length asts) holes-from-end) rest))))))))
 
 (defun try-match-operand-mode (tokens mode)
   "Like MATCH-OPERAND-MODE, but returns (VALUES asts T choices) on a match or
@@ -687,11 +719,13 @@ turn. MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
 naming one. CHOICES (#103, hole-aligned per #104) is the list of chosen
 MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
 see %MATCH-MODE-ELEMENTS. The fifth value is the hole-aligned list of
-forcing-prefix names written before each hole (a string, or NIL)."
+forcing-prefix names written before each hole (a string, or NIL). The sixth
+lists (HOLE SLOT CHOSEN . RUNNERS-UP) for each ONE-OF pick decided by
+declaration order alone, HOLE being the element's first hole index."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp failure-token message choices selections suffixes) (%match-mode-pattern tokens mode)
+    (multiple-value-bind (asts okp failure-token message choices selections suffixes ties) (%match-mode-pattern tokens mode)
       (declare (ignore failure-token message))
-       (if okp (values asts t choices selections suffixes) (values nil nil nil nil nil)))))
+       (if okp (values asts t choices selections suffixes ties) (values nil nil nil nil nil nil)))))
 
 (defun match-operand-mode (tokens mode)
   "Match TOKENS (a SIMPLE-VECTOR of raw tokens, e.g. an OPERAND's TOKENS or a

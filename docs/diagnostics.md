@@ -108,12 +108,6 @@ moo: operand "$10,X" matches no addressing mode -- this instruction accepts
 expr|[expr]
 ```
 
-Per-hole ambiguity — two `one-of` alternatives both matching the same
-operand text — is not detected: "Mode-selection ambiguity" below compares
-whole modes by name, and a mode with a `one-of` element has only the one
-name regardless of which alternative each hole picked (see the tracker for
-this follow-up).
-
 ## Mode-selection ambiguity
 
 Two modes sharing identical operand syntax (`zero-page`/`absolute`, a bare
@@ -159,6 +153,40 @@ either over-report or report a tie that resolves itself by the final pass.
 A forced mnemonic suffix skips mode selection entirely and so never
 produces this warning either — the whole point of a forced suffix is that
 the program, not relaxation, picked the mode.
+
+## Alternative ambiguity
+
+A `one-of` element picks the alternative whose match uses the most literal
+tokens ([Addressing modes, "Matching and
+backtracking"](modes.md#matching-and-backtracking)). When two alternatives
+tie, declaration order decides and assembly warns with an
+`ambiguous-alternative` condition:
+
+```lisp
+(defmode pick-a expr :suffix "ra")
+(defmode pick-b expr :suffix "rb")
+(defmode pick-any (one-of pick-a pick-b))
+```
+
+```lisp
+(assemble "pick 3" :machine 'some-machine)
+;; WARNING: pick: operand hole 0 matches 2 alternatives equally
+;; (pick-a, pick-b) -- picked pick-a by declaration order
+```
+
+A register-qualified hole (`(expr :register r)`) is more specific than a
+plain `expr`, so `(one-of reg-ind addr-ind)` over `"[" (expr :register r)
+"]"` and `"[" expr "]"` picks `reg-ind` for `[r0]` without warning. Declared
+the other way round, the plain `expr` alternative wins and the warning
+fires. A hole prefix (`pick ra:3`) names the alternative outright and never
+warns.
+
+`ambiguous-alternative` is a subtype of `ambiguous-mode`, so a handler for
+either catches it. `ambiguous-mode-chosen` and `-alternatives` hold the
+alternatives' own `mode-descriptor`s; `ambiguous-alternative-hole` is the
+element's first hole index and `ambiguous-alternative-slot` its slot name
+(or `nil`). Like `ambiguous-mode`, it is only checked on the final layout
+pass.
 
 ## Strict operand range
 

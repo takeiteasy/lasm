@@ -669,8 +669,13 @@
   (fiveam:signals assembly-error (assemble "oneinline #s:100" :machine 'prefix-machine)))
 
 (fiveam:test hole-prefix-selects-one-of-alternative
-  (fiveam:is (equal (%prefix-cells "pick 3") (%prefix-cells "pick ra:3")))
-  (fiveam:is (not (equal (%prefix-cells "pick 3") (%prefix-cells "pick rb:3")))))
+  (let ((count 0) unprefixed)
+    (handler-bind ((ambiguous-alternative (lambda (c) (incf count) (muffle-warning c))))
+      (setf unprefixed (%prefix-cells "pick 3"))
+      (fiveam:is (= 1 count))
+      (fiveam:is (equal unprefixed (%prefix-cells "pick ra:3")))
+      (fiveam:is (not (equal unprefixed (%prefix-cells "pick rb:3"))))
+      (fiveam:is (= 1 count)))))
 
 (fiveam:test mnemonic-suffix-on-word-mode-still-escapes-wide-values
   (fiveam:is (= 4 (length (%prefix-cells "oneq.hq #1000"))))

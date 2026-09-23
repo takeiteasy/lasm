@@ -45,6 +45,7 @@ just the reader table.
 | `assembly-error` | `lasm-syntax-error` | — |
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
+| `ambiguous-alternative` | `ambiguous-mode` | `ambiguous-alternative-hole`, `ambiguous-alternative-slot` |
 
 `signed-range-out-of-field` is not in this table: it's internal to
 `definstruction`'s own field-range checking, never escapes to a caller, and

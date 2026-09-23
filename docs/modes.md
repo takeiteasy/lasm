@@ -164,7 +164,9 @@ the same as writing that mode's pattern directly.
 
 At match time, each alternative is tried against the rest of the pattern
 and the complete input. Among successful matches, the path with the most
-literal tokens wins; declaration order breaks ties. An alternative that
+literal tokens wins; declaration order breaks ties, with an
+[`ambiguous-alternative` warning](diagnostics.md#alternative-ambiguity)
+when it does. An alternative that
 matches only a prefix cannot prevent a later complete match. Given
 
 ```lisp
@@ -687,8 +689,11 @@ under `:suffixes t`, so the text re-assembles to the same cells.
   `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
   unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns
-  `(values asts t choices selections)` on a match or four `nil` values on a
-  mismatch. This is what the assembler's mode-candidate filter uses to try
+  `(values asts t choices selections prefixes ties)` on a match or six `nil`
+  values on a mismatch. `ties` lists `(hole slot chosen . runners-up)` for
+  each `one-of` pick that declaration order alone decided (see
+  [Diagnostics, "Alternative ambiguity"](diagnostics.md#alternative-ambiguity)).
+  This is what the assembler's mode-candidate filter uses to try
   several of a mnemonic's modes against one operand without a
   `handler-case` per candidate.
 

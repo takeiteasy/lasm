@@ -501,7 +501,7 @@ alternative's :STRICT once a value exists to check it against."
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices selections hole-prefixes) = (multiple-value-list
+                 for (asts okp choices selections hole-prefixes ties) = (multiple-value-list
                                                        (if mode
                                                            (try-match-operand-mode tokens mode)
                                                            (values nil (zerop (length tokens)) nil)))
@@ -518,7 +518,7 @@ alternative's :STRICT once a value exists to check it against."
                    ;; can read a hole's own matched ONE-OF alternative's
                    ;; :STRICT once ENCODE has a value to check it against.
                    collect (list v (%qualify-locals-in-asts! asts scope (statement-line statement))
-                                 choices selections hole-prefixes))))
+                                 choices selections hole-prefixes ties))))
     (when (null candidates)
       (let ((prefixes (loop for v in variants
                             for mode = (instruction-descriptor-mode v)
@@ -598,7 +598,8 @@ accepts ~A"
                       (%signal-word-choice-overflow statement choice-narrowed symbols address anchor cell-width))
                      (t widest))))
       (when finalp
-        (%maybe-warn-ambiguous-mode statement candidates chosen))
+        (%maybe-warn-ambiguous-mode statement candidates chosen)
+        (%maybe-warn-ambiguous-alternative statement chosen))
       (values-list chosen))))
 
 (defun %word-choice-overflow-values (candidate symbols address cell-width)
@@ -679,6 +680,25 @@ width (~(~A~)~{, ~(~A~)~}) -- picked ~(~A~) by declaration order"
                                   (mode-descriptor-name chosen-mode)
                                   (mapcar #'mode-descriptor-name ties)
                                   (mode-descriptor-name chosen-mode))))))))
+
+(defun %maybe-warn-ambiguous-alternative (statement chosen)
+  "WARN with an AMBIGUOUS-ALTERNATIVE condition for each ONE-OF pick in
+CHOSEN's match (a %CHOOSE-VARIANT candidate) that declaration order alone
+decided -- see TRY-MATCH-OPERAND-MODE's tie records."
+  (loop for (hole slot alt . runners-up) in (sixth chosen)
+        do (warn 'ambiguous-alternative
+                 :mnemonic (statement-mnemonic statement)
+                 :chosen alt
+                 :alternatives runners-up
+                 :hole hole
+                 :slot slot
+                 :line (statement-line statement)
+                 :message (format nil "~A: operand hole ~D matches ~D alternatives equally ~
+(~(~A~)~{, ~(~A~)~}) -- picked ~(~A~) by declaration order"
+                                  (statement-mnemonic statement) hole (1+ (length runners-up))
+                                  (mode-descriptor-name alt)
+                                  (mapcar #'mode-descriptor-name runners-up)
+                                  (mode-descriptor-name alt)))))
 
 ;;; Directives (directive.lisp, #14) -- operand parsing and argument folding
 
