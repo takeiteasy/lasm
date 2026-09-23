@@ -6,8 +6,7 @@ exec ros -- $0 "$@"
 (ros:ensure-asdf)
 
 (progn
-  (let ((root (merge-pathnames "../" (make-pathname :name nil :type nil
-                                                    :defaults *load-truename*))))
+  (let ((root (make-pathname :name nil :type nil :defaults *load-truename*)))
     (unless (asdf:find-system :lasm nil)
       (asdf:load-asd (merge-pathnames "lasm.asd" root))))
   (ql:quickload :lasm :silent t))

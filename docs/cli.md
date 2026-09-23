@@ -61,7 +61,7 @@ Diagnostics go to standard error.
 ```
 
 Runs the command in `ARGS` (a list of strings, without the program name) and
-returns the exit status. `roswell/lasm.ros` is a thin wrapper around it.
+returns the exit status. `lasm.ros` is a thin wrapper around it.
 
 ## Building
 
@@ -70,6 +70,6 @@ library, `trivial-high-precision-timer` — see
 [Getting started](getting-started.md#roswell).
 
 ```sh
-ros roswell/lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
-ros build roswell/lasm.ros    # standalone roswell/lasm
+ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
+ros build lasm.ros    # standalone ./lasm
 ```

@@ -47,8 +47,8 @@ ln -s ~/quicklisp/local-projects/lasm ~/.roswell/local-projects/lasm
 ln -s ~/quicklisp/local-projects/trivial-high-precision-timer ~/.roswell/local-projects/
 ```
 
-Then `ros roswell/lasm.ros --help`, or `ros build roswell/lasm.ros` for a
-standalone `roswell/lasm`.
+Then `ros lasm.ros --help`, or `ros build lasm.ros` for a
+standalone `lasm`.
 
 ## Run the example
 
@@ -293,7 +293,7 @@ instruction raising one directly, masking via a flag, and `rfi`
 restoring exactly what delivery pushed. See [Interrupts](interrupts.md).
 
 ```sh
-ros roswell/lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
+ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
 ```
 
 The same counter-loop program assembled and run from the shell against a
@@ -303,20 +303,16 @@ machine defined in `examples/cli/sixtyfoo.lasm` — see [Command line](cli.md).
 
 ```sh
 sbcl --non-interactive \
-     --eval '(asdf:load-system :lasm/test)' \
-     --eval '(fiveam:run! (quote lasm:lasm))'
+     --eval '(asdf:test-system :lasm)'
 ```
 
 or, from a REPL:
 
 ```lisp
-(asdf:load-system :lasm/test)
-(fiveam:run! 'lasm:lasm)
+(asdf:test-system :lasm)
 ```
 
-Note: `(asdf:test-system :lasm/test)` only loads the system — `lasm.asd`
-does not define a `test-op` method, so it does not actually invoke
-`fiveam:run!`. Use one of the forms above.
+A failing check signals an error, so the process exits non-zero.
 
 ## Next
 

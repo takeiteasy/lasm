@@ -36,7 +36,8 @@
                (:file "output")
                (:file "snapshot")
                (:file "cli")
-               (:file "debugger")))
+               (:file "debugger"))
+  :in-order-to ((test-op (test-op #:lasm/test))))
 
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
@@ -70,4 +71,9 @@
                (:file "output")
                (:file "snapshot")
                (:file "cli")
-               (:file "debugger")))
+               (:file "debugger"))
+  :perform (test-op (op c)
+             (let ((results (uiop:symbol-call :fiveam :run (uiop:find-symbol* :lasm :lasm))))
+               (uiop:symbol-call :fiveam :explain! results)
+               (unless (uiop:symbol-call :fiveam :results-status results)
+                 (error "lasm tests failed")))))
