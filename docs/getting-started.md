@@ -313,8 +313,9 @@ or, from a REPL:
 ```
 
 A failing check signals an error, so the process exits non-zero. The suite
-also runs every `examples/**/*.lisp` script in its own SBCL process and
-fails if any exits non-zero, so keep new examples self-contained.
+also runs every `examples/**/*.lisp` script in its own SBCL process,
+started from a core with `examples/boot.lisp` already loaded, and fails if
+any exits non-zero, so keep new examples self-contained.
 Benchmarks that need external systems live in `bench/`.
 
 ## Next
