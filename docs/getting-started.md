@@ -120,8 +120,8 @@ see [Assembler, "Location counter"](assembler.md#location-counter) and
 sbcl --script examples/macros.lisp
 ```
 
-A two-parameter `.macro` expands twice against two different call sites,
-each under its own global label — see [Macros](macros.md).
+A macro uses a default parameter and a local `.equ` in two invocations under
+the same global label — see [Macros](macros.md).
 
 ```sh
 sbcl --script examples/include/include.lisp

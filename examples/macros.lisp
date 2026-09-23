@@ -1,14 +1,4 @@
-;;;; examples/macros.lisp
-;;;;
-;;;; .macro/.endm expansion (macro.lisp, #33): a two-parameter macro adds a
-;;;; constant to a memory location, expanded twice against two different
-;;;; call sites before layout ever sees the statement list. Each call site
-;;;; carries its own global label, per docs/macros.md's no-hygiene caveat --
-;;;; a macro body's local labels are scoped to whichever global label
-;;;; precedes the call, so two invocations under the *same* global label
-;;;; would collide.
-;;;;
-;;;; Run with:  sbcl --script examples/macros.lisp
+;;;; Run with: sbcl --script examples/macros.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
 
@@ -41,13 +31,15 @@
   (semantics (trap :halt)))
 
 (defparameter *source*
-  ".macro addconst dst, k     ; dst = *dst + k
+  ".macro addconst dst, k=1
+    .equ .amount, k
     lda dst
-    adc #k
+    adc #.amount
     sta dst
 .endm
 
 first:  addconst cell1, 5    ; cell1 = 10 + 5
+        addconst cell1       ; cell1 = 15 + 1
 second: addconst cell2, 3    ; cell2 = 20 + 3
         hlt
 cell1:  .byte 10

@@ -7,7 +7,8 @@ action with a statically-known size, while a macro spans a range of
 statements and its expansion isn't known until it's substituted (see
 [Directives, "Scope: `.macro` is not a
 directive"](directives.md#scope-macro-is-not-a-directive)). It's implemented
-as its own statement-expansion pass, `expand-macros` (`macro.lisp`), which
+as its own statement-expansion pass, `(expand-macros statements machine)`
+(`macro.lisp`), which
 `assemble-statements` ([Assembler](assembler.md)) runs before layout ever
 sees the statement list — so both of `assemble-statements`'s entry points
 (`assemble`, and a caller already holding a parsed `statement` list, see
@@ -29,22 +30,30 @@ See [`examples/macros.lisp`](../examples/macros.lisp) for a runnable version.
 ## Syntax
 
 A macro definition is `.macro name param...` — a name followed by zero or
-more parameter names, each a plain identifier. Unlike an ordinary statement's
-operands, a comma between the name and a parameter, or between two
-parameters, is optional and purely cosmetic (`.macro foo a, b` and `.macro
-foo a b` mean the same thing) — a `.macro` header has no expression syntax to
-disambiguate, so there's nothing a comma needs to separate. Everything
-between `.macro` and the matching `.endm` is the macro's body, stored
-unevaluated (not walked for labels, addressing modes, or anything else) until
-an invocation substitutes into it. A macro can be invoked before its own
-`.macro`...`.endm` block appears later in the same program — expansion
-collects every macro first, then rewrites invocations, so definition order
-doesn't matter.
+more plain identifier parameters. Commas between parameters are optional when
+there are no defaults. A trailing parameter may declare a default token run:
+
+```lisp
+.macro addconst dst, k=1 + 2
+    lda dst
+    adc #k
+    sta dst
+.endm
+
+    addconst cell       ; k expands to 1 + 2
+    addconst cell, 5    ; k expands to 5
+```
+
+Headers with defaults require commas between parameters. Required parameters
+precede optional ones. A default is inserted as written; it does not expand
+references to other parameters. Everything between `.macro` and `.endm` is
+stored until invocation. A macro can be invoked before its definition because
+expansion collects all definitions first.
 
 An invocation is an ordinary statement whose mnemonic names a macro:
 `statement-operands` (comma-split, one expression each — [Statement grammar &
-expression parser](parser.md)) supplies one argument per parameter, checked
-for an exact count match. A label on the invocation line is emitted as its
+expression parser](parser.md)) supplies arguments for all required parameters
+and optionally any trailing defaults. A label on the invocation line is emitted as its
 own label-only statement immediately ahead of the substituted body, so it
 binds to the address the expansion starts at — including for an
 empty-bodied macro, where it binds to whatever statement follows. This is
@@ -74,44 +83,26 @@ default) rounds — a macro that (directly or through another macro) invokes
 itself never reaches a fixpoint and signals `macro-error` instead of growing
 the statement list without bound.
 
-## Labels and hygiene
+## Body-defined symbols
 
-A macro body can define its own labels, but **there is no hygiene**: a label
-defined inside the body binds at ordinary layout time, in whatever scope was
-in effect at that expansion site, exactly like any other label. Invoking the
-same macro twice under the same enclosing global label — or twice at top
-level, if the body defines a global label of its own — collides, signalling
-the ordinary duplicate-label `assembly-error`, not something specific to
-macros:
-
-```lisp
-.macro tagged
-tag: nop        ; a global label inside the body
-.endm
-
-    tagged      ; binds "tag"
-    tagged      ; assembly-error: duplicate label "tag"
-```
-
-The documented pattern is to give each invocation its own global label and
-let the body use local labels (scoped to whichever global label precedes the
-invocation, see [Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16)):
+Each invocation gives its body-defined labels and `.equ` names unique names,
+including global and local names. References written in that body use the same
+unique names. Caller supplied argument tokens retain their original spelling.
+The names are private to the expansion: code outside it cannot refer to them
+by their source spelling. Local names still use the current global scope (see
+[Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16)).
 
 ```lisp
 .macro countdown
 .loop:  dex
-        bne .loop   ; scoped to whichever global label precedes this invocation
+        bne .loop
 .endm
 
-first:  countdown   ; .loop -> "first.loop"
-second: countdown   ; .loop -> "second.loop" -- no collision
+start:  countdown
+        countdown   ; each .loop is distinct
 ```
 
-Auto-uniquifying a macro body's own local labels (so repeat invocations never
-collide even under one enclosing global label) is tracked as a follow-up
-ticket.
-
-## Forced addressing-mode suffix (#40)
+## Forced addressing-mode suffix
 
 A mode suffix (see [Addressing modes, "Forcing a mode with a mnemonic
 suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)) is rejected on a
@@ -146,25 +137,10 @@ and forces its mode after expansion exactly as it would in ordinary code:
 - A label on the `.macro` or `.endm` line itself.
 - A malformed header — a parameter that isn't a plain identifier, or no name
   at all.
-- A duplicate macro name, or a name already registered as a directive
-  ([Directives](directives.md)).
-- An invocation whose argument count doesn't match the macro's declared
-  parameter count.
+- A duplicate macro name, or one registered as a directive or instruction on
+  the target machine.
+- A malformed default, required parameter after an optional one, or an
+  invocation with too few or too many arguments.
+- A parameter name also used for a body-defined symbol.
 - Expansion that doesn't converge within `*max-macro-expansion-rounds*`
   rounds (a directly or indirectly recursive macro).
-
-A collision between a macro name and a machine instruction's mnemonic is
-*not* checked here (a follow-up ticket) — it surfaces however the assembler
-would otherwise treat that statement once expansion is done.
-
-## Follow-ups
-
-- Auto-uniquified macro-body local labels (hygiene, above).
-- Parameter defaults / optional parameters.
-- Checking a macro name against the target machine's registered instruction
-  mnemonics.
-- Macro expansion can grow a program's statement count past
-  `*max-layout-iterations*`'s convergence budget (see [Assembler,
-  "Convergence"](assembler.md#convergence)).
-
-See the tracker for these.

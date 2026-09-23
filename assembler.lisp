@@ -1288,7 +1288,7 @@ needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
 
 (defun assemble-statements (statements &key machine (origin 0) memory source)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
-ASSEMBLY. Runs EXPAND-MACROS (macro.lisp, #33) first, so both this entry
+ASSEMBLY. Runs EXPAND-MACROS (macro.lisp) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
 blocks collected and every invocation replaced by its substituted body
 before layout ever looks at the statement list. Signals ASSEMBLY-ERROR on a
@@ -1331,7 +1331,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
             (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine)))
             (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
       (multiple-value-bind (symbols sized final-address asm-origin info)
-          (%layout (expand-macros statements) machine origin cell-width)
+          (%layout (expand-macros statements machine) machine origin cell-width)
         (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
                        :cell-width cell-width
                        :origin asm-origin :symbols symbols :symbol-info info
