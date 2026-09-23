@@ -215,34 +215,32 @@ Calls `step-machine` in a loop until one of several stop conditions:
 | `reason` | Meaning |
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. `trap` and #109's interrupt delivery remain two separate mechanisms; a model unifying them is future M6 work. |
+| `:fault` | A storage access signalled `storage-error`, including stack, register-bank, and memory range errors. The condition is the third return value. |
 | `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
 | `:idle` | #110: the machine went idle (see [Idle steps](#idle-steps-110) above) and, with `run`'s own no-budget call, nothing left running it could ever wake it back up — its pending interrupt queue is empty and no live device remains on its bus. A host can `signal-interrupt` or `wake-machine` and call `run` again, exactly as it already can after `:trap`. `run-for-cycles`/`run-for-duration` are unaffected by this check — an idle step there just keeps costing cycles until their own budget stops the loop. |
 | `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer. `run-for-cycles`/`run-for-duration` below add the cycle-based budgets `(cycles n)` was accepted for. |
 | `:max-cycles` | `run-for-cycles` only — see below. |
 | `:duration` | `run-for-duration` only — see below. |
 
-`steps` counts instructions that actually executed. A step that traps still
-counts (its semantics ran to completion before signalling); a step that
-fails to decode does not (nothing executed that iteration). An idle step
+`steps` counts completed steps and attempts that trap or fault. A fetch or
+interrupt-delivery storage fault counts as one attempted step. A step that
+fails to decode does not count. An idle step
 (#110) counts too, even though it executes no instruction — it still cost
 a cycle and ticked devices, the same reasoning that counts a trapping step.
-The same rule governs `machine-cycles` (below): a trapping instruction's
-cost is still added (its semantics ran to completion before signalling); a
-decode failure adds nothing.
+An instruction's declared cycle cost is added before its semantics runs.
+A fault during fetch adds no instruction cycles. Faults leave machine state
+as it stands when signalled. Direct `step-machine` calls still signal the
+condition. `run-for-cycles` and `run-for-duration` return the same `:fault`
+shape. Errors outside stepping, including run-loop callbacks, still signal.
 
-**Not currently a stop reason:** a storage condition raised from inside an
-instruction's semantics — `stack-overflow`, `stack-underflow`,
-`stack-index-out-of-range`, `address-out-of-range` (see [Machine model,
-"Conditions"](machine-model.md)) — propagates straight out of `run` as an
-ordinary Lisp error, since
-`step-machine` only catches `unknown-instruction` and `run` only catches
-`lasm-trap`. `interrupt-queue-full` (`signal-interrupt` past an
-`(interrupts ...)` clause's `:queue` depth with `:on-overflow :error`) is
-the same — an `:on-overflow :trap` machine gets `:trap` as its stop reason
-instead, since that path signals `lasm-trap`, not `interrupt-queue-full`. `tests/emulator.lisp`'s `stack-underflow-escapes-run` and
-`stack-overflow-escapes-run` pin this down as the current behaviour;
-whether `run` should instead catch `storage-error` and return a fourth stop
-reason is tracked as a follow-up.
+```lisp
+(multiple-value-bind (reason steps condition) (run machine)
+  (when (eq reason :fault)
+    (format *error-output* "Fault after ~D steps: ~A~%" steps condition)))
+```
+
+`interrupt-queue-full` is not a `storage-error`; its `:on-overflow :error`
+path still signals. Its `:on-overflow :trap` path returns `:trap`.
 
 ## Cycle-cost model, clock speed, and cycle-accurate execution (#75)
 

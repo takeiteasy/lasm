@@ -744,28 +744,54 @@ hlt" :machine 'stack-test-machine)))
       (fiveam:is (= 7 (mref m 'ram #x2000)))
       (fiveam:is (= 0 (stack-depth m 'ds))))))
 
-;; #51 finding: stack over/underflow are STORAGE-ERROR conditions
-;; (storage.lisp), not caught by RUN/STEP-MACHINE (which only handle
-;; LASM-TRAP and UNKNOWN-INSTRUCTION respectively) -- so they propagate out
-;; of RUN as a raw Lisp error rather than becoming a stop reason like :TRAP
-;; or :DECODE-FAILURE. These two tests pin down that current behaviour;
-;; see the follow-up ticket asking whether RUN should instead catch
-;; STORAGE-ERROR and return a new stop reason.
-
-(fiveam:test stack-underflow-escapes-run
+(fiveam:test stack-underflow-stops-run
   (let* ((m (make-machine 'stack-test-machine))
          (a (assemble "add
 hlt" :machine 'stack-test-machine)))
     (load-program m a)
-    (fiveam:signals stack-underflow (run m))))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (typep condition 'stack-underflow))
+      (fiveam:is (eq 'ds (storage-error-name condition)))
+      (fiveam:is (= 1 (machine-cycles m))))))
 
-(fiveam:test stack-overflow-escapes-run
+(fiveam:test stack-overflow-stops-run
   (let* ((m (make-machine 'shallow-stack-test-machine))
          (a (assemble "psh #1
 psh #2
 hlt" :machine 'shallow-stack-test-machine)))
     (load-program m a)
-    (fiveam:signals stack-overflow (run m))))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (typep condition 'stack-overflow))
+      (fiveam:is (= 1 (stack-depth m 'ds)))
+      (fiveam:is (= 2 (machine-cycles m))))))
+
+(fiveam:test direct-step-still-signals-storage-error
+  (let ((m (make-machine 'stack-test-machine)))
+    (load-program m (list #x04))
+    (fiveam:signals stack-underflow (step-machine m))))
+
+(fiveam:test fetch-storage-error-counts-attempted-step
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (list #xA2) :origin #xFFFF)
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (typep condition 'address-out-of-range))
+      (fiveam:is (= #x10000 (address-out-of-range-address condition)))
+      (fiveam:is (= 0 (machine-cycles m))))))
+
+(fiveam:test run-loop-does-not-catch-callback-storage-error
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (list #x04))
+    (fiveam:signals address-out-of-range
+      (%run-loop m :max-steps 1
+                   :stop-p (lambda ()
+                             (error 'address-out-of-range
+                                    :machine 'emu-test-machine :name 'ram :address #x10000))))))
 
 ;;; M3 milestone target: a hybrid machine -- accumulator + index registers +
 ;;; an implicit call stack (#52), mirroring examples/hybrid.lisp. JSR/RTS are
@@ -859,6 +885,16 @@ double: rts" :machine 'hybrid-test-machine)))
       (fiveam:is (= 5 steps)) ; lda, jsr, rts, sta, hlt
       (fiveam:is (= 5 (mref m 'ram #x1000)))
       (fiveam:is (= 0 (stack-depth m 's))))))
+
+(fiveam:test stack-index-fault-stops-run
+  (let* ((m (make-machine 'hybrid-test-machine))
+         (a (assemble "lda 0,S" :machine 'hybrid-test-machine)))
+    (load-program m a)
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (typep condition 'stack-index-out-of-range))
+      (fiveam:is (= 0 (stack-index-out-of-range-index condition))))))
 
 (fiveam:test stack-relative-reads-past-return-address
   ;; DOUBLE's argument is pushed before JSR's own return address, so it
@@ -1192,6 +1228,10 @@ hlt" :machine 'mixed-field-test-machine)))
   (encoding (opcode #x02))
   (semantics (trap :halt)))
 
+(definstruction cycle-test-machine fault
+  (encoding (opcode #x03))
+  (semantics (mref machine 'ram #x10000)))
+
 (definstruction cycle-test-machine lda
   (modes
     (immediate (opcode #x10) (semantics (set! x operand)) (cycles 2))
@@ -1335,6 +1375,17 @@ nop" :machine 'cycle-test-machine)))
       (fiveam:is (eq :duration reason))
       (fiveam:is (> steps 0))
       (fiveam:is (>= (machine-cycles m) 6)))))
+
+(fiveam:test budgeted-runs-stop-on-storage-fault
+  (dolist (run-function (list (lambda (m) (run-for-cycles m 100))
+                              (lambda (m) (run-for-duration m 1.0d0))))
+    (let ((m (make-machine 'cycle-test-machine)))
+      (load-program m (list #x00 #x03))
+      (multiple-value-bind (reason steps condition) (funcall run-function m)
+        (fiveam:is (eq :fault reason))
+        (fiveam:is (= 2 steps))
+        (fiveam:is (typep condition 'address-out-of-range))
+        (fiveam:is (= 2 (machine-cycles m)))))))
 
 (fiveam:test defmachine-rejects-non-positive-clock-speed
   (fiveam:signals error (eval '(defmachine bad-clock-test-machine

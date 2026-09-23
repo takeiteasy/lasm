@@ -136,15 +136,9 @@ what a human typing a small integer after `delete` almost certainly meant."
 
 ;;; Execution
 ;;;
-;;; DEBUG-STEP/DEBUG-CONTINUE/DEBUG-CONTINUE-TO all return (VALUES REASON
-;;; DETAIL) in the debugger's own vocabulary -- :BREAKPOINT, :STEP, :TRAP,
-;;; :DECODE-FAILURE, :MAX-STEPS -- rather than leaking %RUN-LOOP's own
-;;; reason keywords (:MAX-CYCLES/:DURATION never apply here since none of
-;;; these pass a cycle/duration budget, but :STEP's own budget must not be
-;;; reported as :MAX-STEPS, which %RUN-LOOP would otherwise say for *any*
-;;; MAX-STEPS-bounded stop including an ordinary `step N`). DETAIL is the
-;;; number of instructions actually executed, or the LASM-TRAP condition
-;;; for :TRAP.
+;;; DEBUG-STEP/DEBUG-CONTINUE/DEBUG-CONTINUE-TO return (VALUES REASON STEPS
+;;; [CONDITION]). A trap or fault supplies the condition as the third value.
+;;; DEBUG-STEP reports :STEP after N steps rather than :MAX-STEPS.
 ;;;
 ;;; #110: an idle STEP-MACHINE result is not a stop condition here either --
 ;;; DEBUG-STEP counts it as one of its N steps (so single-stepping through a
@@ -182,6 +176,7 @@ into the debugger's (see this section's header comment)."
                             :idle-stop t)
       (values (case reason
                 (:trap :trap)
+                (:fault :fault)
                 (:decode-failure :decode-failure)
                 (:idle :idle) ; #110 -- the machine went idle with nothing left to wake it
                 (:max-steps :max-steps)
@@ -193,7 +188,7 @@ into the debugger's (see this section's header comment)."
 failure, goes idle with nothing left to wake it (#110), or MAX-STEPS
 instructions have executed with none of those happening (a runaway-program
 guard, mirroring RUN's own). Returns (VALUES REASON STEPS [CONDITION]) --
-REASON one of :BREAKPOINT, :TRAP, :DECODE-FAILURE, :IDLE, :MAX-STEPS.
+REASON one of :BREAKPOINT, :TRAP, :FAULT, :DECODE-FAILURE, :IDLE, :MAX-STEPS.
 
 STOP-P is checked *after* each step executes (%RUN-LOOP's own contract), so
 continuing from a PC that is itself a breakpoint runs past it rather than
@@ -409,15 +404,18 @@ this call."
                        (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%" reason steps
                                (debug-session-addr-digits session) (%pc session)))))
                   ((string-equal cmd "continue")
-                   (multiple-value-bind (reason steps) (debug-continue session)
-                     (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%" reason steps
-                             (debug-session-addr-digits session) (%pc session))))
+                   (multiple-value-bind (reason steps condition) (debug-continue session)
+                     (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%~@[~A~%~]" reason steps
+                             (debug-session-addr-digits session) (%pc session)
+                             (and (eq reason :fault) condition))))
                   ((string-equal cmd "until")
                    (if (zerop (length rest))
                        "until: missing address or label"
-                       (multiple-value-bind (reason steps) (debug-continue-to session (%where-arg rest))
-                         (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%" reason steps
-                                 (debug-session-addr-digits session) (%pc session)))))
+                       (multiple-value-bind (reason steps condition)
+                           (debug-continue-to session (%where-arg rest))
+                         (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%~@[~A~%~]" reason steps
+                                 (debug-session-addr-digits session) (%pc session)
+                                 (and (eq reason :fault) condition)))))
                   ((string-equal cmd "print")
                    (if (zerop (length rest))
                        "print: missing name"

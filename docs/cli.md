@@ -37,7 +37,8 @@ usage.
 
 `assemble` defaults `OUT` to `FILE` with a `.bin` or `.hex` extension; see
 [Binary output](binary-output.md) for the formats. `run` prints the stop reason,
-step count and final `pc`. `disassemble` prints re-assemblable source, or with
+step count and final `pc`; a storage fault also prints its condition.
+`disassemble` prints re-assemblable source, or with
 `--annotate` an address/cells/text listing; it reads cells with the machine's
 cell width and endianness. `--data-region` (repeatable; `$hex`, `0xhex` or
 decimal bounds, `END` exclusive) renders that address range as `.byte` lines
@@ -48,7 +49,7 @@ instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 | Status | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | load, assembly or file error, or a `run` ending in a decode failure |
+| 1 | load, assembly or file error, or a `run` ending in a decode failure or storage fault |
 | 2 | usage error |
 
 Diagnostics go to standard error.

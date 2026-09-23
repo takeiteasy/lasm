@@ -180,12 +180,14 @@ the calling image."
          (max-steps (or (%cli-option-integer options :max-steps "--max-steps") 10000))
          (cycles (%cli-option-integer options :cycles "--cycles")))
     (load-program m assembly :memory memory)
-    (multiple-value-bind (reason steps)
+    (multiple-value-bind (reason steps condition)
         (if cycles
             (run-for-cycles m cycles :max-steps max-steps :memory memory)
             (run m :max-steps max-steps :memory memory))
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
-      (if (eq reason :decode-failure) 1 0))))
+      (when (eq reason :fault)
+        (format out "~A~%" condition))
+      (if (member reason '(:decode-failure :fault)) 1 0))))
 
 (defun %cli-command-disassemble (file machine lexer options out)
   (let* ((memory (%cli-memory options))

@@ -301,12 +301,10 @@ vocabulary](semantics.md)) and, on an `:on-overflow :trap` machine, by
 `signal-interrupt` past its `:queue` depth as well; neither is a storage
 error. See [Conditions](conditions.md) for each condition's readers.
 
-None of these storage conditions are currently a `run` stop reason (see
-[Emulator, "Stop reasons"](emulator.md#stop-reasons)) — an instruction that
-overflows or underflows a stack, addresses memory out of range, or
-overflows an interrupt queue with `:on-overflow :error`, escapes `run` as a
-raw Lisp condition rather than returning `:trap`, `:decode-failure`, or
-`:max-steps`.
+Storage conditions raised during a run step return `:fault`, the attempted
+step count, and the condition (see [Emulator, "Stop reasons"](emulator.md#stop-reasons)).
+Direct stepping still signals them. `interrupt-queue-full` is not a storage
+condition and continues to signal when `:on-overflow :error` is selected.
 
 ## Cell- vs. word-encoded instructions
 

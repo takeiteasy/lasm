@@ -227,6 +227,8 @@ decoded, not just the values."
 DURATION. Repeatedly STEP-MACHINE against MACHINE until one of:
   :TRAP           -- an instruction's semantics signalled LASM-TRAP; the
                       condition itself is returned as a third value.
+  :FAULT          -- a storage access signalled STORAGE-ERROR; the condition
+                      itself is returned as a third value.
   :DECODE-FAILURE -- STEP-MACHINE hit a byte that is not a registered
                       opcode.
   STOP-REASON     -- STOP-P (a no-argument predicate, checked after each
@@ -278,8 +280,11 @@ exactly as it already can after :TRAP."
                (setf resolved t))
              (handler-case
                (multiple-value-bind (result cost)
-                   (%step-machine-resolved machine selected-pc selected-memory machine-name
-                                           layout cell-width endian)
+                   (handler-case
+                       (%step-machine-resolved machine selected-pc selected-memory machine-name
+                                               layout cell-width endian)
+                     (storage-error (c)
+                       (return-from %run-loop (values :fault (1+ steps) c))))
                  (when (eq result :decode-failure)
                    (return-from %run-loop (values :decode-failure steps)))
                  (when on-step (funcall on-step cost))
@@ -300,7 +305,7 @@ exactly as it already can after :TRAP."
           finally (return (values :max-steps steps)))))
 
 (defun run (machine &key pc memory (max-steps 10000))
-  "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :DECODE-FAILURE,
+  "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :FAULT, :DECODE-FAILURE,
 :IDLE (#110 -- the machine went idle with nothing left that could wake it,
 see %RUN-LOOP), or :MAX-STEPS. Returns (VALUES reason steps [condition])."
   (%run-loop machine :pc pc :memory memory :max-steps max-steps :idle-stop t))

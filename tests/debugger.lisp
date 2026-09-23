@@ -154,6 +154,30 @@ loop.next: hlt" :machine 'emu-test-machine))
     (multiple-value-bind (reason) (debug-continue session)
       (fiveam:is (eq :decode-failure reason)))))
 
+(fiveam:test debugger-continue-reports-storage-fault
+  (dolist (continue-function (list (lambda (session) (debug-continue session))
+                                  (lambda (session) (debug-continue-to session 2))))
+    (let* ((m (make-machine 'stack-test-machine))
+           (session (make-debug-session m)))
+      (load-program m (list #x04))
+      (multiple-value-bind (reason steps condition) (funcall continue-function session)
+        (fiveam:is (eq :fault reason))
+        (fiveam:is (= 1 steps))
+        (fiveam:is (typep condition 'stack-underflow)))))
+  (let* ((m (make-machine 'stack-test-machine))
+         (session (make-debug-session m)))
+    (load-program m (list #x04))
+    (fiveam:signals stack-underflow (debug-step session))))
+
+(fiveam:test debugger-commands-show-storage-fault
+  (dolist (command '("continue" "until 2"))
+    (let* ((m (make-machine 'stack-test-machine))
+           (session (make-debug-session m)))
+      (load-program m (list #x04))
+      (let ((response (debug-command session command)))
+        (fiveam:is (search "Stopped: fault  steps=1" response))
+        (fiveam:is (search "Stack underflow" response))))))
+
 ;; #110: EMU-TEST-MACHINE declares no (interrupts ...) clause and no
 ;; devices -- a SLP with nothing to wake it must report :IDLE, not spin to
 ;; :MAX-STEPS, exactly like RUN itself.

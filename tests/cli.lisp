@@ -52,6 +52,17 @@
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: max-steps after 5 steps" out))))
 
+(fiveam:test cli-run-storage-fault-exits-one-and-shows-condition
+  (dolist (extra '(() ("--cycles" "100")))
+    (multiple-value-bind (status out err)
+        (%run-cli (append (list "run" (%cli-path "tests/fixtures/cli/storage-fault.asm")
+                                "-m" (%cli-path "tests/fixtures/cli/storage-fault.lasm"))
+                          extra))
+      (fiveam:is (= 1 status))
+      (fiveam:is (search "stopped: fault after 1 step, pc = $0001" out))
+      (fiveam:is (search "Stack underflow" out))
+      (fiveam:is (string= "" err)))))
+
 (fiveam:test cli-listing-and-symbols
   (multiple-value-bind (status out)
       (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--symbols")))
