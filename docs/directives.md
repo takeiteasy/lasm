@@ -84,18 +84,14 @@ address at or past the current one zero-fills the gap; moving backward
 signals `assembly-error` rather than guessing whether the intent was to
 overwrite or truncate.
 
-`.org`'s operand must fold to a **label-free constant** — a directive whose
-*address effect* moves the counter has to fold before layout can even
-compute the addresses layout itself relies on, so `.org some_label` signals
-`assembly-error` naming the label, rather than the bare `unresolved-label` a
-plain `eval-expr-constant` miss would give. (This is unrelated to layout
-running more than one pass to relax addressing-mode choices — `.org`'s own
-operand stays label-free on every pass.) This is the one directive-design
-rule every other built-in directive is shaped around: a directive whose
-*size or address effect* depends on an argument must fold that argument
-during layout; one whose size instead comes from argument *count*
-(`.byte`/`.word` below) can defer its values to encode, same as an ordinary
-instruction operand.
+`.org` accepts label and assignment expressions when their address
+dependencies are acyclic. Layout repeats until its address effect and
+instruction widths settle. A reference to a label whose address depends on
+that same `.org` signals `assembly-error`. For example, `.org target`
+followed immediately by `target:` is cyclic. A directive whose size or
+address effect depends on an argument resolves that argument during layout;
+`.byte` and `.word` defer their values to encoding because their sizes
+depend only on operand count.
 
 A label on a `.org` line binds to the address `.org` moves *to*:
 
@@ -169,8 +165,7 @@ result: .dat 0   ; one 16-bit cell, not two 8-bit bytes
 .res 4   ; four zero-filled cells
 ```
 
-Advances the address counter by its (single, constant — same label-free
-folding rule as `.org`) operand, zero-filled — cells, not necessarily
+Advances the address counter by its single operand, zero-filled — cells, not necessarily
 8-bit bytes (#53; `.org`'s own operand is an address and was always
 cell-indexed, so `.org` itself needs no such caveat). A negative count
 signals `assembly-error`. Since the emulator has no way to skip over a run
@@ -223,17 +218,16 @@ A local name (the lexer's `local-label-prefix`, e.g. `.n`) is scoped to its
 nearest preceding global label exactly like a local label — see
 [Assembler, "Local-label scoping"](assembler.md#local-label-scoping-16).
 
-Because `.org`/`.res` must fold their own operand during layout, they may
-reference only **pure** assignments — values derived from numbers and earlier
-pure assignments, without a label or `*`:
+Assignments based on earlier labels or `*` may feed `.org` and `.res`
+when they form no layout dependency cycle:
 
 ```lisp
 .equ bufsize, 16
-.res bufsize        ; fine
+.res bufsize
 
 start: nop
 .equ size, * - start
-.res size           ; assembly-error -- size depends on start's address
+.res size           ; reserves one cell
 ```
 
 An ordinary instruction operand or `.byte`/`.word` value has no such
@@ -258,10 +252,9 @@ own source position; a use before the first assignment is `assembly-error`.
 Ordinary labels still support forward references. Local `.set` names follow
 the same scope rule as local `.equ` names.
 
-`.set` occupies no address. A pure value may feed a later `.org` or `.res`;
-purity carries through earlier pure assignments and is updated on every
-reassignment. A value depending on a label or `*` cannot feed either layout
-directive. `assembly-symbols` and symbol listings show the final `.set` value.
+`.set` occupies no address. Its current value may feed a later `.org` or
+`.res` when the layout dependency is acyclic. `assembly-symbols` and
+symbol listings show the final `.set` value.
 
 `.include` is likewise not a directive; it is expanded before layout — see
 [Includes](includes.md).
@@ -286,9 +279,7 @@ restricted vocabulary actually requires.
 ## Conditions
 
 - `assembly-error` — wrong operand count for a directive's declared arity, a
-  non-constant `.org`/`.res` operand (a label reference, or a non-pure
-  assignment reference, which must fold before layout can compute addresses at
-  all — see "`.equ`" above), a backward-moving `.org`, a negative `.res`
+  cyclic or undefined `.org`/`.res` operand, a backward-moving `.org`, a negative `.res`
   count, an assignment's first operand not a bare identifier, an assignment
   value referencing a symbol not yet bound, a `.set` use before assignment,
   or a duplicate symbol.
@@ -301,7 +292,6 @@ restricted vocabulary actually requires.
 - `.ascii`/`.asciz` — needs a string node in the expression parser
   (`parse-expression`, [Statement grammar & expression parser](parser.md)),
   which has none today.
-- Allowing `.org`/`.res` to use address-dependent assignments.
 - The disassembler's undecodable-data lines always render as `.byte $XX`
   (`%data-line-text`, `disassembler.lisp`), even on a word-addressed machine
   — rendering `.cell`/`.dat` there needs the machine's cell width threaded

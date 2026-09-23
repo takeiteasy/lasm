@@ -152,10 +152,9 @@ reaches `assemble-statements` after parsing.
    statements stops changing. The first pass has no symbol table to fold
    against at all, so every label-bearing operand starts at its **narrowest**
    syntax-matching variant; each later pass only ever **widens** a statement
-   whose chosen mode no longer fits, never narrows one back down. That
-   monotonicity is what guarantees the loop terminates — see "Choosing a
-   mode" below for the mechanism (`floor`), and "Convergence" for the loop
-   itself.
+   whose chosen mode no longer fits. Directive address effects and symbol
+   values also settle across passes. Cyclic directive address dependencies
+   are rejected before layout; see "Convergence" below.
 2. **Encode.** Walk again, now with the complete symbol table: evaluate each
    statement's already-chosen variant's operand AST (`eval-expr`, below)
    against the symbol table, and encode (`encode-instruction`, or a
@@ -345,18 +344,17 @@ lda target    ; label -> starts at zero-page (narrowest); widens to absolute
 
 ### Convergence
 
-`%layout` compares the width vector two consecutive `%layout-pass` calls
-produce; once a pass reproduces the previous one exactly, one further pass
+`%layout` compares instruction widths, directive effects, and symbol values
+between passes; once a pass reproduces the previous one exactly, one further pass
 runs with a flag that turns on two checks that only make sense once
 relaxation has settled (an `.org` that briefly looked like it moved the
 address counter backward mid-relaxation is not actually an error unless it
 is still true once widths have stopped changing — see
 [Directives](directives.md)), and its result — checked against the same
-width vector as an assertion — is what `%encode` sees. Because floors only
-ever increase and are bounded above by each statement's widest declared
-variant, this terminates after the possible width increases across the
-expanded instructions. The assembler calculates that bound after macro
-expansion and reports a convergence error if it is exceeded.
+layout as an assertion — is what `%encode` sees. Width floors only increase.
+With cyclic directive dependencies rejected, forward values propagate through
+a bounded number of passes between widenings. The assembler calculates that
+bound after macro expansion and reports a convergence error if it is exceeded.
 
 ## Multi-operand instructions
 
@@ -583,29 +581,25 @@ computed value in `symbols` without occupying any address — distinct from a
 label, which always binds to the current address. Its value must fold
 *during the layout pass that reaches it*, against that pass's `symbols` table
 as built so far: an `.equ` can reference any label or assignment bound above it,
-never one below (a forward reference signals `assembly-error`, the same
-"must fold now" rule `.org`/`.res`'s own operand already follows). Rebinding
+never one below (a forward assignment reference signals `assembly-error`). Rebinding
 an already-bound name — a label redefined as an `.equ`, an `.equ` redefined
 as a label, or a second `.equ` of the same name — is the same duplicate-
 symbol `assembly-error` a repeated label signals.
 
-Because `.org`/`.res` must fold their own operand during layout, they may
-only reference **pure** assignments — values derived from numbers and other
-pure assignments, without a label or `*` (location counter):
+`.org` and `.res` may use labels and address-dependent assignments when
+their address dependencies are acyclic:
 
 ```lisp
 .equ bufsize, 16
-.res bufsize        ; fine -- bufsize doesn't depend on any address
+.res bufsize
 
 start: nop
 .equ size, * - start
-.res size           ; assembly-error -- size depends on start's address,
-                    ; which .res's own layout-time fold can't wait for
+.res size           ; reserves one cell
 ```
 
-This restriction only affects `.org`/`.res`; an ordinary instruction operand
-or `.byte`/`.word` value may reference any assignment, pure or not. Those
-operands fold during encoding, after layout has fixed their addresses.
+An ordinary instruction operand or `.byte`/`.word` value folds during
+encoding, after layout has fixed its address.
 
 An `.equ`'s `symbol-info` entry is tagged kind `:equ`, distinct
 from a label's `:label` — the discriminator a plain `symbols` lookup can't
@@ -619,8 +613,8 @@ disassembler's own label/`.equ` ambiguity (see
 `.set` assignment. It does not replace a label. Its value folds against the
 symbols already bound when layout reaches it. Instruction and data operands
 capture the current value at their own source position; a reference before
-the first assignment is `assembly-error`. Pure `.set` values may feed later
-`.org` and `.res` directives, including through earlier pure assignments.
+the first assignment is `assembly-error`. Address-dependent `.set` values
+may feed later `.org` and `.res` directives when layout remains acyclic.
 
 `assembly-symbols` retains the final value. Its `symbol-info` entry has kind
 `:set` and the last assignment's source location. See [Directives](directives.md#set)
@@ -656,8 +650,8 @@ at, `.org` can still move it further before the first byte).
   fit its operand's width (see "PC-relative offsets" above), a strict-mode
   operand out of range (see "Choosing a mode" above and
   [Diagnostics](diagnostics.md#strict-operand-range)), or a malformed
-  directive use (wrong operand count, a non-constant `.org`/`.res` operand,
-  an `.org`/`.res` operand referencing a non-pure assignment, an assignment value
+  directive use (wrong operand count, a cyclic or undefined `.org`/`.res` operand,
+  an assignment value
   referencing a symbol not yet defined, or a backward-moving `.org` — see
   [Directives](directives.md)).
 - `include-error` — a malformed or unresolvable `.include` (see

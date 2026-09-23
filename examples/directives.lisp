@@ -4,8 +4,7 @@
 ;;;; program at a fixed address, .BYTE lays down a small data table (whose
 ;;;; values are read back through LDA/ADC's ABSOLUTE mode, same as
 ;;;; examples/modes.lisp), .RES reserves a zero-filled scratch buffer between
-;;;; the code and the table -- sized by a .EQU constant (#35) rather than a
-;;;; literal -- and .EQU itself also names a repeated immediate value.
+;;;; the code and the table, sized by an address-derived .EQU.
 ;;;;
 ;;;; Run with:  sbcl --script examples/directives.lisp
 
@@ -45,7 +44,6 @@
 ;; area, not spliced between two executed instructions).
 (defparameter *source*
   "        .equ initial, 10   ; a named constant, no address of its own
-        .equ padsize, 2    ; -- pure (no label, no *), so .res may use it
         .set sample, 5
         .org $8000         ; place the whole program at $8000
 start:  lda #initial   ; A = 10 (an .equ works as an immediate operand)
@@ -54,6 +52,7 @@ start:  lda #initial   ; A = 10 (an .equ works as an immediate operand)
         adc table      ; A += RAM[table] (5) -- ABSOLUTE, same as sta above
         hlt
 scratch: .byte 0
+         .equ padsize, * - scratch + 1
 padding: .res padsize  ; two zero-filled scratch bytes, unread by this program
 table:   .byte sample
          .set sample, 10

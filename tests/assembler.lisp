@@ -411,11 +411,40 @@ nop
 nop" :machine 'instr-test-machine)))
 
 (fiveam:test org-with-label-operand-signals-assembly-error
-  ;; .org's operand must fold label-free in pass 1 -- there is no symbol
-  ;; table yet to resolve TARGET against.
+  ;; TARGET's address depends on the move to TARGET itself.
   (fiveam:signals assembly-error
     (assemble ".org target
 target: nop" :machine 'instr-test-machine)))
+
+(fiveam:test org-with-backward-label-operand
+  (let ((a (assemble (format nil "base: nop~%.org base + 4~%next: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA 0 0 0 #xEA) (assembly-cells a)))))
+
+(fiveam:test org-with-forward-label-after-independent-anchor
+  (let ((a (assemble (format nil ".org target~%.org 4~%target: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 4 (assembly-origin a)))
+    (fiveam:is (= 4 (gethash "target" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
+
+(fiveam:test res-with-forward-label-cycle-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble (format nil ".res target~%target: nop") :machine 'instr-test-machine)))
+
+(fiveam:test org-with-own-label-cycle-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble "target: .org target" :machine 'instr-test-machine)))
+
+(fiveam:test indirect-layout-cycle-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble (format nil ".org later~%.res 1~%later: .org 4")
+              :machine 'instr-test-machine)))
+
+(fiveam:test undefined-directive-label-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble ".res missing" :machine 'instr-test-machine)))
 
 (fiveam:test res-directive-reserves-zero-filled-bytes
   (let ((a (assemble "nop
@@ -526,8 +555,8 @@ bra .loop" :machine 'instr-test-machine)))
 
 ;;; .EQU / symbol assignment (#35) -- both spellings (".equ name, value" and
 ;;; "name = value"), layout-time backward-only folding, the same
-;;; duplicate-symbol rule a label uses, and the pure-.EQU restriction on
-;;; .ORG/.RES (#41 tracks lifting it). DEFDIRECTIVE registration and arity
+;;; duplicate-symbol rule a label uses, and layout directive expressions.
+;;; DEFDIRECTIVE registration and arity
 ;;; live in tests/directive.lisp -- these exercise statement-level dispatch,
 ;;; the same split that file documents for .ORG/.BYTE/.WORD/.RES.
 
@@ -616,20 +645,16 @@ start: nop" :machine 'instr-test-machine)))
     (fiveam:is (= #x8000 (assembly-origin a)))
     (fiveam:is (= #x8000 (gethash "start" (assembly-symbols a))))))
 
-(fiveam:test address-dependent-equ-referenced-by-res-signals-assembly-error
-  ;; "n" depends on "*", so it's absent from the pure-.EQU table .RES reads
-  ;; from -- see this file's header and assembler.lisp's #35 paragraph (#41
-  ;; tracks lifting this restriction).
-  (fiveam:signals assembly-error
-    (assemble "start: nop
-.equ n, * - start
-.res n" :machine 'instr-test-machine)))
+(fiveam:test address-dependent-equ-may-feed-res
+  (let ((a (assemble (format nil "start: nop~%.equ n, * - start~%.res n~%next: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 2 (gethash "next" (assembly-symbols a))))
+    (fiveam:is (equalp #(#xEA 0 #xEA) (assembly-cells a)))))
 
-(fiveam:test address-dependent-equ-referenced-by-org-signals-assembly-error
-  (fiveam:signals assembly-error
-    (assemble "start: nop
-.equ base, * + $100
-.org base" :machine 'instr-test-machine)))
+(fiveam:test address-dependent-equ-may-feed-org
+  (let ((a (assemble (format nil "start: nop~%.equ base, * + $100~%.org base~%next: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 257 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test equals-sugar-is-equivalent-to-equ
   (let ((a (assemble "x = 5
@@ -736,16 +761,22 @@ last: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "n" (assembly-symbols a))))
     (fiveam:is (= #x8000 (gethash "last" (assembly-symbols a))))))
 
-(fiveam:test address-dependent-set-is-not-a-layout-constant
-  (fiveam:signals assembly-error
-    (assemble "start: nop
-.set n, * - start
-.res n" :machine 'instr-test-machine))
-  (fiveam:signals assembly-error
-    (assemble ".set n, 2
-start: nop
-.set n, * - start
-.res n" :machine 'instr-test-machine)))
+(fiveam:test address-dependent-set-may-feed-res
+  (let ((a (assemble (format nil ".set n, 2~%start: nop~%.set n, * - start~%.res n~%next: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 2 (gethash "next" (assembly-symbols a))))))
+
+(fiveam:test res-label-value-updates-after-mode-widens
+  (let ((a (assemble (format nil "lda far~%base: nop~%.res base~%next: nop~%.res 300~%far: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 3 (gethash "base" (assembly-symbols a))))
+    (fiveam:is (= 7 (gethash "next" (assembly-symbols a))))))
+
+(fiveam:test local-label-may-feed-res
+  (let ((a (assemble (format nil "start: nop~%.loop: nop~%.res .loop~%next: nop")
+                     :machine 'instr-test-machine)))
+    (fiveam:is (= 1 (gethash "start.loop" (assembly-symbols a))))
+    (fiveam:is (= 3 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test pure-equ-chain-feeds-a-layout-directive
   (let ((a (assemble ".equ a, 2

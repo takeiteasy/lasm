@@ -19,8 +19,8 @@
 ;;;; Widening is sticky -- a statement's chosen width, once committed, is a
 ;;;; floor for every later pass -- which bounds the loop by possible width
 ;;;; increases and prevents oscillation. %LAYOUT drives
-;;;; %LAYOUT-PASS to a fixpoint on the per-statement width vector, then runs
-;;;; one final pass whose output feeds %ENCODE.
+;;;; %LAYOUT-PASS to a fixpoint on widths, directive effects, and symbols,
+;;;; then runs one final pass whose output feeds %ENCODE.
 ;;;;
 ;;;; A statement whose mnemonic carries a forced addressing-mode suffix
 ;;;; (#40, e.g. "lda.w") skips mode selection entirely -- %CHOOSE-VARIANT
@@ -72,8 +72,8 @@
 ;;;; .EQU and .SET bind computed values without occupying an address. Both
 ;;;; fold against preceding bindings during layout. .SET may replace an
 ;;;; assignment, so mode selection uses its current value and emitted operands
-;;;; capture it before encode. A separate table tracks pure assignments for
-;;;; .ORG/.RES, whose operands must fold while addresses are being placed.
+;;;; capture it before encode. .ORG/.RES operands use current assignments and
+;;;; provisional forward labels while layout settles.
 ;;;;
 ;;;; %LAYOUT's SIZED-ENTRIES already *is* the address<->statement mapping a
 ;;;; listing/source map needs (#25) -- ASSEMBLE-STATEMENTS used to let it
@@ -724,25 +724,20 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
                               (statement-mnemonic statement) n (length operands))))))
     (mapcar #'%directive-operand-ast operands)))
 
-(defun %directive-constant-arg (statement directive address scope constants)
-  "Fold DIRECTIVE's single argument (STATEMENT's one operand) to a constant
--- used for .ORG and .RES, whose size/address effect must be known in pass
-1, before any label has resolved. ADDRESS is this statement's own address
-(already known in pass 1), resolving a location-counter reference (\"*\",
-#15) in the operand -- e.g. \".org *+16\" pads 16 bytes forward from here.
-SCOPE qualifies local references before folding. CONSTANTS contains the
-pure assignment values currently in scope; address-dependent assignments
-are absent. An unavailable value signals ASSEMBLY-ERROR."
+(defun %directive-constant-arg (statement directive address scope directive-symbols labels previous)
+  "Fold .ORG/.RES's operand against current symbols and previous-pass forward
+labels. Return NIL when a known forward label has no provisional value yet."
   (let ((ast (%qualify-locals! (first (%directive-args statement directive))
                                 scope (statement-line statement))))
-    (handler-case (eval-expr ast :symbols constants :pc address)
+    (handler-case (eval-expr ast :symbols directive-symbols :pc address)
       (unresolved-label (c)
-        (%assembly-error (statement-line statement)
-                          "~A: operand must be a constant expression -- ~S ~
-is not resolvable here"
-                          (statement-mnemonic statement) (unresolved-label-name c))))))
+        (if (and (null previous) (gethash (unresolved-label-name c) labels))
+            nil
+            (%assembly-error (statement-line statement)
+                             "~A: symbol ~S is not resolvable here"
+                             (statement-mnemonic statement) (unresolved-label-name c)))))))
 
-(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp constants)
+(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp directive-symbols labels previous)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
 new-address new-asm-origin): before any statement has occupied an address
 (EMITTED-P NIL), .ORG moves both the address counter and the assembly's own
@@ -756,10 +751,10 @@ layout pass (see %LAYOUT) can turn what was a legal forward pad into an
 apparent backward move, and that must not fail until the widths have
 actually converged -- a trial pass instead clamps forward (MAX VALUE ADDRESS)
 so layout can keep iterating. A \"*\" in the operand (#15) resolves against
-ADDRESS -- the counter's value *before* this .ORG moves it. CONSTANTS is
-%DIRECTIVE-CONSTANT-ARG's pure-.EQU table (#35)."
-  (let ((value (%directive-constant-arg statement directive address scope constants)))
+ADDRESS -- the counter's value *before* this .ORG moves it."
+  (let ((value (%directive-constant-arg statement directive address scope directive-symbols labels previous)))
     (cond
+      ((null value) (values address asm-origin))
       ((not emitted-p) (values value value))
       ((>= value address) (values value asm-origin))
       (finalp (%assembly-error (statement-line statement)
@@ -804,7 +799,7 @@ call made idempotent some other way."
   (dolist (ast asts) (%qualify-locals! ast scope line))
   asts)
 
-(defun %bind-symbol! (symbols info qualified-name name value line kind scope localp &optional rebindp)
+(defun %bind-symbol! (symbols info qualified-name name value line kind scope localp &optional rebindp directive-symbols)
   "Bind a symbol and its metadata. REBINDP permits replacing assignments only."
   (when (and *register-aliases* (nth-value 1 (gethash name *register-aliases*)))
     (%assembly-error line "~A ~S collides with a register alias of the same name"
@@ -814,13 +809,15 @@ call made idempotent some other way."
                                  '(:equ :set)))
       (%assembly-error line "Duplicate symbol ~S" qualified-name)))
   (setf (gethash qualified-name symbols) value)
+  (when directive-symbols
+    (setf (gethash qualified-name directive-symbols) value))
   (setf (gethash qualified-name info)
         (make-symbol-info :name name :qualified-name qualified-name :scope scope
                            :kind kind :localp localp :value value :line line
                            :definition-line *current-definition-line*
                            :order (hash-table-count info))))
 
-(defun %bind-label! (statement symbols info address scope)
+(defun %bind-label! (statement symbols info address scope directive-symbols)
   "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS (and its
 SYMBOL-INFO in INFO, #37), qualifying it against SCOPE first if it's local
 (#16). Returns the SCOPE in effect for any later statement: a global label
@@ -832,25 +829,15 @@ SCOPE unchanged."
       ((null label) scope)
       ((statement-label-localp statement)
        (%bind-symbol! symbols info (%qualify-local scope label line) label address line
-                       :label scope t)
+                       :label scope t nil directive-symbols)
        scope)
       (t
-       (%bind-symbol! symbols info label label address line :label nil nil)
+       (%bind-symbol! symbols info label label address line :label nil nil nil directive-symbols)
        label))))
 
 ;;; Assignments bind values at layout time without occupying an address.
 
-(defun %purep (ast constants)
-  "Whether AST depends only on numbers and current pure assignments."
-  (etypecase ast
-    (expr-number t)
-    (expr-label (nth-value 1 (gethash (expr-label-name ast) constants)))
-    (expr-location nil)
-    (expr-unary (%purep (expr-unary-operand ast) constants))
-    (expr-binary (and (%purep (expr-binary-left ast) constants)
-                      (%purep (expr-binary-right ast) constants)))))
-
-(defun %apply-assign-directive (statement directive address symbols info constants scope)
+(defun %apply-assign-directive (statement directive address symbols info scope directive-symbols)
   "Bind .EQU or .SET at layout time and return its name and folded value."
   (let* ((line (statement-line statement))
          (asts (%directive-args statement directive))
@@ -870,14 +857,10 @@ SCOPE unchanged."
                                         "~A: operand must be resolvable here -- ~
 symbol ~S is not yet defined"
                                         (statement-mnemonic statement) (unresolved-label-name c))))))
-      (let ((purep (%purep value-ast constants))
-            (kind (if (eq (directive-descriptor-action directive) :reassign)
+      (let ((kind (if (eq (directive-descriptor-action directive) :reassign)
                       :set :equ)))
         (%bind-symbol! symbols info name unqualified-name value line kind
-                        (and localp scope) localp (eq kind :set))
-        (if purep
-            (setf (gethash name constants) value)
-            (remhash name constants))
+                        (and localp scope) localp (eq kind :set) directive-symbols)
         (values name value)))))
 
 (defun %capture-set-values (ast symbols set-names line)
@@ -915,25 +898,150 @@ symbol ~S is not yet defined"
                  set-names)
         symbols)))
 
-(defun %layout-iteration-bound (statements machine)
-  "Two trial passes plus every possible widening of an expanded instruction."
-  (+ 2
-     (loop for statement in statements
-           for mnemonic = (statement-mnemonic statement)
-           when (and mnemonic (not (find-directive-descriptor mnemonic))
-                     (not (%include-statement-p statement)))
-             sum (max 0 (1- (length (remove-duplicates
-                                    (mapcar #'instruction-descriptor-size
-                                            (find-instruction-variants machine mnemonic)))))))))
+(defun %layout-labels (statements)
+  "Collect label definitions before resolving forward directive references."
+  (let ((labels (make-hash-table :test 'equal))
+        (assignments (make-hash-table :test 'equal))
+        (scopes (make-array (length statements)))
+        (scope nil))
+    (loop for statement in statements for i from 0
+          for directive = (and (statement-mnemonic statement)
+                               (find-directive-descriptor (statement-mnemonic statement)))
+          for action = (and directive (directive-descriptor-action directive))
+          do (setf (aref scopes i) scope)
+             (let ((label (statement-label statement)))
+               (when label
+                 (setf (gethash (if (statement-label-localp statement)
+                                    (%qualify-local scope label (statement-line statement))
+                                    label)
+                                labels)
+                       (cons i action))
+                 (unless (statement-label-localp statement)
+                   (setf scope label))))
+             (unless (eq action :set-origin)
+               (setf (aref scopes i) scope))
+             (when (member action '(:assign :reassign))
+               (let* ((name-ast (first (%directive-args statement directive)))
+                      (name (and (expr-label-p name-ast)
+                                 (if (expr-label-localp name-ast)
+                                     (%qualify-local scope (expr-label-name name-ast)
+                                                     (statement-line statement))
+                                     (expr-label-name name-ast)))))
+                 (when name (cl:push i (gethash name assignments))))))
+    (values labels assignments scopes)))
 
-(defun %layout-pass (statements machine origin prev-symbols set-names floors finalp cell-width)
+(defun %first-expr-label (ast)
+  (etypecase ast
+    ((or expr-number expr-location) nil)
+    (expr-label (expr-label-name ast))
+    (expr-unary (%first-expr-label (expr-unary-operand ast)))
+    (expr-binary (or (%first-expr-label (expr-binary-left ast))
+                     (%first-expr-label (expr-binary-right ast))))))
+
+(defun %check-layout-dependencies (statements labels assignments scopes)
+  "Reject directive operands whose address effects depend on themselves."
+  (let* ((n (length statements))
+         (edges (make-array (* 3 n) :initial-element nil))
+         (directives (make-array n :initial-element nil))
+         (emitted-p nil))
+    (labels ((before (i) (* 2 i))
+             (after (i) (1+ (* 2 i)))
+             (assignment (i) (+ (* 2 n) i))
+             (add (from to) (cl:pushnew to (aref edges from)))
+             (walk-expr (ast from i)
+               (etypecase ast
+                 (expr-number nil)
+                 (expr-location (add from (before i)))
+                 (expr-label
+                  (let* ((name (expr-label-name ast))
+                         (definition (gethash name labels))
+                         (prior (find-if (lambda (j) (< j i))
+                                         (gethash name assignments))))
+                    (cond
+                      ((and prior (or (null definition) (< prior (car definition))))
+                       (add from (assignment prior)))
+                      (definition
+                       (add from (if (eq (cdr definition) :set-origin)
+                                     (after (car definition))
+                                     (before (car definition))))))))
+                 (expr-unary (walk-expr (expr-unary-operand ast) from i))
+                 (expr-binary (walk-expr (expr-binary-left ast) from i)
+                              (walk-expr (expr-binary-right ast) from i))))
+             (operand (statement directive i from)
+               (walk-expr (%qualify-locals!
+                           (first (%directive-args statement directive))
+                           (aref scopes i) (statement-line statement))
+                          from i)))
+      (loop for statement in statements for i from 0
+            for directive = (and (statement-mnemonic statement)
+                                 (find-directive-descriptor (statement-mnemonic statement)))
+            for action = (and directive (directive-descriptor-action directive))
+            do (when (plusp i) (add (before i) (after (1- i))))
+               (case action
+                 (:set-origin
+                  (setf (aref directives i) statement)
+                  (operand statement directive i (after i))
+                  (when emitted-p (add (after i) (before i))))
+                 (:reserve
+                  (setf (aref directives i) statement)
+                  (add (after i) (before i))
+                  (operand statement directive i (after i))
+                  (setf emitted-p t))
+                 ((:assign :reassign)
+                  (add (after i) (before i))
+                  (walk-expr (%qualify-locals!
+                              (second (%directive-args statement directive))
+                              (aref scopes i) (statement-line statement))
+                             (assignment i) i))
+                 (otherwise
+                  (add (after i) (before i))
+                  (when (statement-mnemonic statement) (setf emitted-p t)))))
+      (let ((active (make-hash-table))
+            (seen (make-hash-table)))
+        (loop for i below n when (aref directives i)
+              do (labels ((visit (node)
+                           (when (gethash node active)
+                             (let* ((statement (aref directives i))
+                                    (directive (find-directive-descriptor
+                                                (statement-mnemonic statement)))
+                                    (name (%first-expr-label
+                                           (first (%directive-args statement directive)))))
+                               (%assembly-error (statement-line statement)
+                                                "~A: cyclic layout dependency through ~S"
+                                                (statement-mnemonic statement) name)))
+                           (unless (gethash node seen)
+                             (setf (gethash node active) t)
+                             (dolist (next (aref edges node)) (visit next))
+                             (remhash node active)
+                             (setf (gethash node seen) t))))
+                   (visit (after i))))))
+    labels))
+
+(defun %layout-iteration-bound (statements machine)
+  "Allow one full symbol-propagation sweep between instruction widenings."
+  (let ((widenings
+          (loop for statement in statements
+                for mnemonic = (statement-mnemonic statement)
+                when (and mnemonic (not (find-directive-descriptor mnemonic))
+                          (not (%include-statement-p statement)))
+                  sum (max 0 (1- (length (remove-duplicates
+                                         (mapcar #'instruction-descriptor-size
+                                                 (find-instruction-variants machine mnemonic)))))))))
+    (+ 2 (* (1+ widenings) (1+ (length statements))))))
+
+(defun %same-symbols-p (left right)
+  (and left (= (hash-table-count left) (hash-table-count right))
+       (loop for name being the hash-keys of left using (hash-value value)
+             always (multiple-value-bind (other foundp) (gethash name right)
+                      (and foundp (eql value other))))))
+
+(defun %layout-pass (statements machine origin prev-symbols set-names floors finalp cell-width labels)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
-final-address asm-origin new-floors widths info). SYMBOLS is a fresh string ->
+final-address asm-origin new-floors widths info effects). SYMBOLS is a fresh string ->
 value hash table built by this pass alone (a label's address or an
 assignment's current value). INFO is a fresh, parallel qualified-name -> SYMBOL-INFO
 table (#37), built and keyed the same way, carrying the scope/kind metadata
-SYMBOLS itself cannot -- returned last so existing positional callers of the
-other five values are unaffected. SIZED-ENTRIES is, in order, one tagged
+SYMBOLS itself cannot. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line choices definition-line unit definition-unit)
@@ -972,18 +1080,17 @@ statement's own operands (its own label bound first -- \"loop: bne .x\"'s .x
 is scoped to LOOP, not whatever preceded it) can be qualified via
 %QUALIFY-LOCALS!.
 
-CONSTANTS is a second, sparser table -- built alongside SYMBOLS -- of
-the pure assignment bindings seen so far (%PUREP); it's what
-%DIRECTIVE-CONSTANT-ARG passes to .ORG/.RES, since those must fold before
-addresses are final.
+LABELS identifies forward label names for directive operands. EFFECTS records
+the resulting .ORG addresses and .RES counts for convergence checks.
 
 CELL-WIDTH is MACHINE's own code cell width (#53, %MACHINE-CELL-WIDTH) --
 every operand-width fit check below (%CHOOSE-VARIANT) is counted in cells of
 this width, resolved once by %LAYOUT rather than per pass or per statement."
   (let ((symbols (make-hash-table :test 'equal))
+        (directive-symbols (make-hash-table :test 'equal))
         (info (make-hash-table :test 'equal))
-        (constants (make-hash-table :test 'equal))
         (mode-symbols (%mode-symbols prev-symbols set-names))
+        (effects (make-array (length statements) :initial-element nil))
         (new-floors (copy-seq floors))
         (address origin)
         (asm-origin origin)
@@ -991,6 +1098,11 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
         (scope nil)
         sized
         widths)
+    (when prev-symbols
+      (maphash (lambda (name value)
+                 (when (gethash name labels)
+                   (setf (gethash name directive-symbols) value)))
+               prev-symbols))
     (loop for statement in statements
           for i from 0
           do (let* ((mnemonic (statement-mnemonic statement))
@@ -1015,27 +1127,30 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                  ((and directive (eq (directive-descriptor-action directive) :set-origin))
                   (multiple-value-bind (new-address new-origin)
                       (%apply-origin-directive statement directive address asm-origin
-                                                emitted-p scope finalp constants)
+                                                emitted-p scope finalp directive-symbols labels prev-symbols)
                     (setf address new-address asm-origin new-origin))
-                  (setf scope (%bind-label! statement symbols info address scope)))
+                  (setf (aref effects i) address)
+                  (setf scope (%bind-label! statement symbols info address scope directive-symbols)))
                  ;; Assignments contribute no SIZED entry or address space.
                  ;; A label on the same line binds first and sets local scope.
                  ((and directive (member (directive-descriptor-action directive)
                                          '(:assign :reassign)))
-                  (setf scope (%bind-label! statement symbols info address scope))
+                  (setf scope (%bind-label! statement symbols info address scope directive-symbols))
                   (multiple-value-bind (name value)
-                      (%apply-assign-directive statement directive address symbols info constants scope)
+                      (%apply-assign-directive statement directive address symbols info scope directive-symbols)
                     (when (and mode-symbols (gethash name set-names))
                       (setf (gethash name mode-symbols) value))))
                  (t
-                  (setf scope (%bind-label! statement symbols info address scope))
+                  (setf scope (%bind-label! statement symbols info address scope directive-symbols))
                   (when mnemonic
                     (cond
                       (directive
                        (ecase (directive-descriptor-action directive)
                          (:reserve
                           (let ((count (%directive-constant-arg statement directive address
-                                                                   scope constants)))
+                                                                   scope directive-symbols labels prev-symbols)))
+                            (setf (aref effects i) count)
+                            (setf count (or count 0))
                             (when (minusp count)
                               (%assembly-error (statement-line statement)
                                                "~A: count must not be negative" mnemonic))
@@ -1079,7 +1194,7 @@ EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                              (cl:push size widths)
                              (incf address size))
                            (setf emitted-p t))))))))))
-    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths) info)))
+    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths) info effects)))
 
 (defun %layout (statements machine origin cell-width)
   "Returns (VALUES symbols sized-entries final-address asm-origin info) --
@@ -1088,39 +1203,43 @@ label-bearing (or RELATIVE-mode) operand's addressing-mode width can't be
 decided in one walk over STATEMENTS, since it depends on an address that
 isn't known until layout has placed it -- so %LAYOUT-PASS runs repeatedly,
 re-choosing every statement's variant against the previous pass's complete
-symbol table, each pass only ever widening (never re-narrowing) a statement
-that no longer fits, until the vector of chosen widths stops changing. Once
-two consecutive passes agree, one more pass runs with FINALP T -- surfacing
-the two checks %LAYOUT-PASS defers until relaxation has settled -- and its
-result, checked against the same width vector as an assertion, is returned.
+symbol table, each pass only ever widening a statement that no longer fits.
+The loop stops when widths, directive effects, and symbols all agree across
+passes. One final pass checks that layout still agrees.
 CELL-WIDTH is MACHINE's own code cell width (#53), resolved once here and
 threaded through every pass."
-  (let ((floors (make-array (length statements) :initial-element 0))
-        (widths :none)
-        (symbols nil)
-        (set-names (make-hash-table :test 'equal))
-        (iteration-bound (%layout-iteration-bound statements machine)))
+  (multiple-value-bind (labels assignments scopes) (%layout-labels statements)
+    (%check-layout-dependencies statements labels assignments scopes)
+    (let ((floors (make-array (length statements) :initial-element 0))
+          (widths :none)
+          (effects nil)
+          (symbols nil)
+          (set-names (make-hash-table :test 'equal))
+          (iteration-bound (%layout-iteration-bound statements machine)))
     (loop repeat iteration-bound do
-      (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths new-info)
-          (%layout-pass statements machine origin symbols set-names floors nil cell-width)
+      (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths new-info new-effects)
+          (%layout-pass statements machine origin symbols set-names floors nil cell-width labels)
         (declare (ignore sized final-address asm-origin))
         (maphash (lambda (name info)
                    (when (eq :set (symbol-info-kind info))
                      (setf (gethash name set-names) t)))
                  new-info)
-        (when (equal new-widths widths)
+        (when (and (equal new-widths widths)
+                   (equalp new-effects effects)
+                   (%same-symbols-p new-symbols symbols))
           (return-from %layout
             (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
-                                   final-floors final-widths final-info)
-                (%layout-pass statements machine origin new-symbols set-names new-floors t cell-width)
+                                   final-floors final-widths final-info final-effects)
+                (%layout-pass statements machine origin new-symbols set-names new-floors t cell-width labels)
               (declare (ignore final-floors))
-              (unless (equal final-widths new-widths)
-                (%assembly-error nil "addressing-mode layout did not converge -- the final ~
-pass chose different widths than the trial pass it followed"))
+              (unless (and (equal final-widths new-widths)
+                           (equalp final-effects new-effects)
+                           (%same-symbols-p final-symbols new-symbols))
+                (%assembly-error nil "layout did not converge in the final pass"))
               (values final-symbols final-sized final-address final-asm-origin final-info))))
-        (setf symbols new-symbols floors new-floors widths new-widths)))
+        (setf symbols new-symbols floors new-floors widths new-widths effects new-effects)))
     (%assembly-error nil "addressing-mode layout failed to converge after ~D iterations"
-                      iteration-bound)))
+                      iteration-bound))))
 
 ;;; Pass 2: encode -- evaluate operands against the completed symbol table
 
@@ -1323,8 +1442,8 @@ point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
 blocks collected and every invocation replaced by its substituted body
 before layout ever looks at the statement list. Signals ASSEMBLY-ERROR on a
 duplicate symbol, an operand matching no addressing mode, a malformed or
-backward-moving directive, a forward assignment reference, or an impure
-assignment used by .ORG/.RES. Signals MACRO-ERROR on a malformed .macro/.endm
+backward-moving directive, a forward assignment reference, or a cyclic
+.ORG/.RES address dependency. Signals MACRO-ERROR on a malformed .macro/.endm
 block or invocation, UNKNOWN-INSTRUCTION on an unregistered mnemonic, and
 UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label that is never
 defined anywhere in STATEMENTS. ORIGIN is the assembly's starting address
