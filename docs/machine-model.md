@@ -64,10 +64,11 @@ widths against a machine defined earlier in the same file.
   index (`PICK`/`OVER`-style; offset 0 is the top, the same entry
   `stack-pop` would return). This is also what the `stack-relative`
   addressing mode (`n,S`, see [Addressing modes](modes.md)) resolves
-  against; the stack pointer itself stays internal bookkeeping either
-  way — `stack-depth` is the only way to read it, and there is no `sp`
-  storage element. A machine with only a stack (plus PC and memory) is a
-  valid, fully expressible machine — see
+  against. `stack-pointer` reads or sets the number of live entries, from 0
+  through the declared depth. Moving it does not clear stored cells; raising
+  it can expose values previously popped. Invalid values signal
+  `stack-pointer-out-of-range`. A machine with only a stack (plus PC and
+  memory) is a valid, fully expressible machine — see
   [`examples/stack.lisp`](../examples/stack.lisp), the M3 milestone's
   validation that this abstraction isn't secretly register-shaped;
   [`examples/hybrid.lisp`](../examples/hybrid.lisp) is M3's second
@@ -264,7 +265,7 @@ signed/unsigned mode.
 |---|---|---|
 | register (scalar) / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
 | register (banked, `:count > 1`) | `(regref machine name index)` | `(setf (regref machine name index) v)` |
-| stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-ref machine name offset) v)` |
+| stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-pointer machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-pointer machine name) v)`, `(setf (stack-ref machine name offset) v)` |
 | memory | `(mref machine name address)`, `(mpeek machine name address)` | `(setf (mref machine name address) v)` |
 | stack-pointer (#166) | `(sp-pop machine reg memory grows)` | `(sp-push machine reg memory grows v)` |
 
@@ -281,6 +282,10 @@ the call site — see [Semantics vocabulary, `push`/`pop`](semantics.md).
 `mpeek` is `mref`'s inspection-only sibling — see "Memory regions" above for
 what it bypasses and why.
 
+Inside a semantics body, fixed-stack accessors accept a bare stack name and
+default to the sole `(stack ...)` element: `(stack-depth)`, `(stack-pointer)`,
+and `(stack-ref offset)`. The explicit forms remain available to host code.
+
 `flag` writes `0` for `nil` or integer `0`, and `1` for `t` or any nonzero
 integer. Other values follow Lisp truthiness. It reads back as `0` or `1`.
 
@@ -291,7 +296,8 @@ All signalled conditions inherit `lasm-error`: `unknown-storage`,
 region declaring `:on-write :error` — see "Memory regions" above),
 `stack-overflow`, `stack-underflow`,
 `stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
-`(setf stack-ref)`), `register-index-out-of-range` (an out-of-range
+`(setf stack-ref)`), `stack-pointer-out-of-range` (an invalid pointer value),
+`register-index-out-of-range` (an out-of-range
 `index` to `regref`/`(setf regref)`), `no-such-device` (see
 [Devices](devices.md)), `interrupt-queue-full` (a `signal-interrupt` past
 an `(interrupts ...)` clause's `:queue` depth with the default

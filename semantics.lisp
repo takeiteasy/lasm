@@ -12,7 +12,8 @@
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
-operators SET!, PUSH, POP, SET-FLAGS!, TRAP, EXTRA-CYCLES, and
+operators SET!, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
+SET-FLAGS!, TRAP, EXTRA-CYCLES, and
 INTERRUPT-RETURN.
 
 #108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
@@ -44,6 +45,10 @@ the descriptor is already known here. STACK-NAME, given or defaulted, may
 name either kind -- PUSH/POP expand to STACK-PUSH/STACK-POP for a :stack
 element or SP-PUSH/SP-POP for a stack-pointer register, transparently to the
 caller.
+
+STACK-POINTER, STACK-DEPTH, and STACK-REF operate on fixed :stack elements.
+Their stack name defaults only when exactly one fixed stack is declared;
+STACK-REF takes the offset before an optional bare stack name.
 
 Storage elements with :count > 1 (banked registers, #13) are bound as a
 local macro instead of a symbol-macro -- symbol-macrolet can't express an
@@ -96,6 +101,12 @@ these for a run-time-computed index."
              (sole-stack (cond
                            ((= (length stack-names) 1) (first stack-names))
                            ((and (null stack-names) (= (length pointer-names) 1)) (first pointer-names))))
+             (sole-fixed-stack (and (= (length stack-names) 1) (first stack-names)))
+             (fixed-stack-error
+               (if stack-names
+                   (format nil "More than one stack element on machine ~S -- name one explicitly"
+                           machine-name)
+                   (format nil "No stack element on machine ~S" machine-name)))
              (stack-error (cond
                             ((and (null stack-names) (null pointer-names))
                              (format nil "PUSH/POP on machine ~S: no stack element or ~
@@ -156,6 +167,18 @@ clause declared" machine-name)))
                           (if entry
                               `(sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
                               `(stack-pop ,',machine-var ',target))))
+                      (stack-pointer (&optional (stack-name nil supplied-p))
+                        (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
+                          (unless target (error ',fixed-stack-error))
+                          `(%stack-pointer ,',machine-var ',target)))
+                      (stack-depth (&optional (stack-name nil supplied-p))
+                        (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
+                          (unless target (error ',fixed-stack-error))
+                          `(%stack-pointer ,',machine-var ',target)))
+                      (stack-ref (offset &optional (stack-name nil supplied-p))
+                        (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
+                          (unless target (error ',fixed-stack-error))
+                          `(%stack-ref ,',machine-var ',target ,offset)))
                       (set-flags! (&rest assignments)
                         `(progn ,@(mapcar (lambda (a)
                                              `(setf (flag ,',machine-var ',(first a)) ,(second a)))

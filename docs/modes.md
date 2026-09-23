@@ -576,13 +576,13 @@ names or what the parsed offset means — that's entirely up to the
 instruction's semantics, exactly as `absolute`'s operand only becomes "a RAM
 address" because some instruction's `semantics` passes it to `mref`. A
 `stack-relative` instruction resolves its operand with
-[`stack-ref`](machine-model.md) against a stack named in the semantics body:
+[`stack-ref`](machine-model.md) against the machine's sole fixed stack:
 
 ```lisp
 (definstruction hybridfoo lda
   (modes stack-relative)          ; source: lda 1,S
   (encoding (opcode #xA3) (operand :mode))
-  (semantics (set! a (stack-ref machine 's operand))))
+  (semantics (set! a (stack-ref operand))))
 ```
 
 `stack-ref`'s own offset convention is top-relative and unsigned: offset 0

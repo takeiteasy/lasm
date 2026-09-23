@@ -26,6 +26,8 @@
    #:stack-underflow
    #:stack-index-out-of-range
    #:stack-index-out-of-range-index
+   #:stack-pointer-out-of-range
+   #:stack-pointer-out-of-range-value
    #:register-index-out-of-range
    #:register-index-out-of-range-index
    #:no-such-device
@@ -147,6 +149,7 @@
    #:stack-pop
    #:stack-depth
    #:stack-ref
+   #:stack-pointer
    #:sp-push
    #:sp-pop
    #:flag

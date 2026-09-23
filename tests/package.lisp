@@ -14,6 +14,7 @@
 ;; (docs/diagnostics.md, docs/instructions.md) had the same gap.
 (fiveam:test documented-api-symbols-are-external
   (dolist (name '("REGREF" "REGISTER-INDEX-OUT-OF-RANGE"
+                  "STACK-POINTER" "STACK-POINTER-OUT-OF-RANGE"
                   "MACHINE-PEEK-READER" "OPCODE-CONFLICT"))
     (fiveam:is (eq :external (nth-value 1 (find-symbol name '#:lasm)))
                "~A is not external in #:lasm" name)))

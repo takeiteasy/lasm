@@ -54,6 +54,33 @@
   (let ((m (make-machine 'test-machine)))
     (fiveam:signals stack-underflow (stack-pop m 's))))
 
+(fiveam:test stack-pointer-reads-and-moves-stack-depth
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 10)
+    (stack-push m 's 20)
+    (fiveam:is (= 2 (stack-pointer m 's)))
+    (setf (stack-pointer m 's) 1)
+    (fiveam:is (= 1 (stack-depth m 's)))
+    (fiveam:is (= 10 (stack-ref m 's 0)))
+    (setf (stack-pointer m 's) 2)
+    (fiveam:is (= 20 (stack-pop m 's)))
+    (fiveam:is (= 10 (stack-pop m 's)))))
+
+(fiveam:test stack-pointer-validates-range-without-changing-state
+  (let ((m (make-machine 'test-machine)))
+    (stack-push m 's 7)
+    (handler-case (setf (stack-pointer m 's) 5)
+      (stack-pointer-out-of-range (condition)
+        (fiveam:is (eq 's (storage-error-name condition)))
+        (fiveam:is (= 5 (stack-pointer-out-of-range-value condition)))))
+    (dolist (value '(-1 5 1.5 nil))
+      (fiveam:signals stack-pointer-out-of-range
+        (setf (stack-pointer m 's) value))
+      (fiveam:is (= 1 (stack-pointer m 's))))
+    (setf (stack-pointer m 's) 4)
+    (fiveam:signals stack-overflow (stack-push m 's 8))
+    (fiveam:is (= 4 (stack-pointer m 's)))))
+
 ;;; #166: SP-PUSH/SP-POP -- register-indexed push/pop for a (stack-pointer
 ;;; ...) clause. SP is deliberately wider than RAM's :addr-width, to exercise
 ;;; the addr-width masking SP-PUSH/SP-POP apply when indexing.

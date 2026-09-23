@@ -29,9 +29,8 @@ evaluates `body` with:
   form for a run-time-computed index.
 - the operators below, available as local macros for the extent of `body`.
 - memory accessed by name through the `mref` accessor, since it takes an
-  explicit address operand. Stacks are accessed through `push`/`pop` by
-  name too, though the name may be omitted on a single-stack machine — see
-  below.
+  explicit address operand. Fixed-stack accessors and `push`/`pop` accept
+  bare stack names and can omit the name when a default exists.
 
 The [device](devices.md) bus API (`device-count`, `device-info`,
 `device-send`, ...) is likewise **not** bound here — an `hwn`/`hwq`/`hwi`-
@@ -45,10 +44,21 @@ follows the same convention for a software `int`-style instruction.
   flag symbol, or any other `setf`-able place (e.g. `(mref m 'ram addr)`).
 - `(push value &optional stack-name)` — push `value` onto the named stack.
 - `(pop &optional stack-name)` — pop and return the top of the named stack.
+- `(stack-depth &optional stack-name)` — read the fixed stack's live depth.
+- `(stack-pointer &optional stack-name)` — read or set the fixed stack's live
+  depth, as in `(setf (stack-pointer) 1)`.
+- `(stack-ref offset &optional stack-name)` — read or set a fixed-stack cell
+  relative to the top, as in `(setf (stack-ref 0) 7)`.
 
-`stack-name`, given or defaulted, may name either a `(stack ...)` element or
-a register bound by a `(stack-pointer ...)` clause (#166 — see [Machine
-model, `stack-pointer`](machine-model.md)) — `push`/`pop` expand to
+The three fixed-stack accessors default to the sole `(stack ...)` element.
+With zero or multiple fixed stacks, give a bare name such as `(stack-ref 0
+return-stack)`. They do not operate on register-backed stack pointers. Host
+code uses `(stack-depth machine name)`, `(stack-pointer machine name)`, and
+`(stack-ref machine name offset)`.
+
+For `push`/`pop`, `stack-name`, given or defaulted, may name either a
+`(stack ...)` element or a register bound by a `(stack-pointer ...)` clause
+(see [Machine model, `stack-pointer`](machine-model.md)) — `push`/`pop` expand to
 `stack-push`/`stack-pop` or `sp-push`/`sp-pop` accordingly, transparently to
 the caller. This works whether or not the machine declares an
 `(interrupts ...)` clause.

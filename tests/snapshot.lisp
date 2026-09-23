@@ -82,6 +82,16 @@
                       (car (gethash 's (machine-slots target)))))
     (fiveam:is (= 1 (stack-depth target 's)))))
 
+(fiveam:test snapshot-restores-a-moved-stack-pointer
+  (let ((source (%fresh)) (target (%fresh)))
+    (stack-push source 's 5)
+    (stack-push source 's 6)
+    (setf (stack-pointer source 's) 1)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (= 1 (stack-pointer target 's)))
+    (setf (stack-pointer target 's) 2)
+    (fiveam:is (= 6 (stack-ref target 's 0)))))
+
 (fiveam:test snapshot-memory-is-run-length-encoded
   (let* ((m (%dirty))
          (runs (getf (cdr (assoc 'ram (getf (cdr (machine-snapshot m)) :elements))) :runs)))

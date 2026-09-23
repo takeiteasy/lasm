@@ -58,6 +58,13 @@ memory ~S on machine ~S"
                      (stack-index-out-of-range-index c)
                      (storage-error-name c) (storage-error-machine c)))))
 
+(define-condition stack-pointer-out-of-range (storage-error)
+  ((value :initarg :value :reader stack-pointer-out-of-range-value))
+  (:report (lambda (c s)
+             (format s "Stack pointer ~S out of range for stack ~S on machine ~S"
+                     (stack-pointer-out-of-range-value c)
+                     (storage-error-name c) (storage-error-machine c)))))
+
 ;; #13: signalled by REGREF/(SETF REGREF) for an INDEX outside a banked
 ;; register's [0, count) range. Mirrors STACK-INDEX-OUT-OF-RANGE's shape.
 (define-condition register-index-out-of-range (storage-error)
@@ -863,10 +870,27 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
         (setf (cdr slot) new-sp)
         (aref vec new-sp)))))
 
-(defun stack-depth (machine name)
+(defun %stack-pointer (machine name)
   (multiple-value-bind (slot element) (%slot machine name :stack)
     (declare (ignore element))
     (cdr slot)))
+
+(defun (setf %stack-pointer) (value machine name)
+  (multiple-value-bind (slot element) (%slot machine name :stack)
+    (unless (and (integerp value) (<= 0 value (storage-element-depth element)))
+      (error 'stack-pointer-out-of-range
+             :machine (machine-descriptor-name (machine-descriptor machine))
+             :name name :value value))
+    (setf (cdr slot) value)))
+
+(defun stack-pointer (machine name)
+  (%stack-pointer machine name))
+
+(defun (setf stack-pointer) (value machine name)
+  (setf (%stack-pointer machine name) value))
+
+(defun stack-depth (machine name)
+  (%stack-pointer machine name))
 
 ;; #50: indexed access into a stack, for a stack-relative addressing mode
 ;; (mode.lisp's STACK-RELATIVE) or any semantics body that needs to look past
@@ -877,7 +901,7 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
 ;; how STACK-PUSH/STACK-POP already use SP. Bottom-relative indexing (index 0
 ;; = oldest entry) is still reachable by callers via STACK-DEPTH when wanted;
 ;; it just isn't OFFSET's own convention.
-(defun stack-ref (machine name offset)
+(defun %stack-ref (machine name offset)
   (multiple-value-bind (slot element) (%slot machine name :stack)
     (declare (ignore element))
     (let ((sp (cdr slot)))
@@ -886,7 +910,7 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
                                           :name name :index offset))
       (aref (car slot) (- sp 1 offset)))))
 
-(defun (setf stack-ref) (value machine name offset)
+(defun (setf %stack-ref) (value machine name offset)
   (multiple-value-bind (slot element) (%slot machine name :stack)
     (let ((sp (cdr slot)))
       (unless (and (>= offset 0) (< offset sp))
@@ -894,3 +918,9 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
                                           :name name :index offset))
       (setf (aref (car slot) (- sp 1 offset))
             (wrap-value value (storage-element-width element))))))
+
+(defun stack-ref (machine name offset)
+  (%stack-ref machine name offset))
+
+(defun (setf stack-ref) (value machine name offset)
+  (setf (%stack-ref machine name offset) value))

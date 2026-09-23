@@ -89,6 +89,20 @@
     (push (+ (pop) (pop)))
     (fiveam:is (= 7 (pop)))))
 
+(fiveam:test fixed-stack-accessors-use-the-sole-stack
+  (with-machine (m test-machine)
+    (push 11)
+    (push 22)
+    (fiveam:is (= 2 (stack-depth)))
+    (fiveam:is (= 22 (stack-ref 0)))
+    (setf (stack-ref 1) 33)
+    (fiveam:is (= 33 (stack-ref 1)))
+    (setf (stack-pointer) 1)
+    (fiveam:is (= 1 (stack-depth)))
+    (setf (stack-pointer) 2)
+    (fiveam:is (= 22 (pop)))
+    (fiveam:is (= 33 (pop)))))
+
 ;; Two-stack and no-stack machines keep PUSH/POP's stack name mandatory --
 ;; the ambiguity is caught at macroexpansion time, so it must be provoked
 ;; through EVAL of a quoted form rather than a literal form in this file
@@ -100,6 +114,30 @@
 
 (defmachine no-stack-test-machine
   (register a :width 8))
+
+(fiveam:test fixed-stack-accessors-accept-explicit-names
+  (with-machine (m two-stack-test-machine)
+    (push 4 s1)
+    (push 7 s2)
+    (fiveam:is (= 1 (stack-depth s1)))
+    (fiveam:is (= 7 (stack-ref 0 s2)))
+    (setf (stack-ref 0 s1) 9)
+    (setf (stack-pointer s2) 0)
+    (fiveam:is (= 0 (stack-depth s2)))
+    (fiveam:is (= 9 (pop s1)))))
+
+(fiveam:test fixed-stack-accessors-require-a-default-or-explicit-name
+  (dolist (machine '(two-stack-test-machine no-stack-test-machine pointer-only-test-machine))
+    (dolist (form '((stack-depth) (stack-ref 0) (stack-pointer)
+                    (setf (stack-ref 0) 1) (setf (stack-pointer) 1)))
+      (fiveam:signals error
+        (eval `(with-machine (m ,machine) ,form))))))
+
+(fiveam:test fixed-stack-accessors-reject-a-pointer-register
+  (with-machine (m pointer-only-test-machine)
+    (fiveam:signals unknown-storage (stack-depth sp))
+    (fiveam:signals unknown-storage (stack-pointer sp))
+    (fiveam:signals unknown-storage (stack-ref 0 sp))))
 
 (fiveam:test push-with-no-stack-name-errors-on-multiple-stacks
   (fiveam:signals error
@@ -151,13 +189,13 @@
 (fiveam:test bare-push-pop-still-defaults-to-the-stack-element-over-a-pointer
   (with-machine (m stack-and-pointer-test-machine)
     (push 9)                            ; no name -- must hit S, not SP
-    (fiveam:is (= 1 (stack-depth m 's)))
+    (fiveam:is (= 1 (stack-depth)))
     (fiveam:is (zerop (sref m 'sp)))
     (fiveam:is (= 9 (pop)))))
 
 (fiveam:test push-pop-name-the-pointer-explicitly-on-a-mixed-machine
   (with-machine (m stack-and-pointer-test-machine)
     (push 9 sp)
-    (fiveam:is (zerop (stack-depth m 's)))
+    (fiveam:is (zerop (stack-depth)))
     (fiveam:is (/= 0 (sref m 'sp)))
     (fiveam:is (= 9 (pop sp)))))

@@ -50,13 +50,13 @@
 (definstruction hybridfoo lda
   (modes
     (immediate      (opcode #xA9) (semantics (set! a operand)))
-    (stack-relative (opcode #xA3) (semantics (set! a (stack-ref machine 's operand))))
+    (stack-relative (opcode #xA3) (semantics (set! a (stack-ref operand))))
     (absolute       (opcode #xAD)))
   (semantics (set! a (mref machine 'ram operand))))
 
 (definstruction hybridfoo sta
   (modes
-    (stack-relative (opcode #x83) (semantics (setf (stack-ref machine 's operand) a)))
+    (stack-relative (opcode #x83) (semantics (setf (stack-ref operand) a)))
     (absolute       (opcode #x8D)))
   (semantics (setf (mref machine 'ram operand) a)))
 
