@@ -1,6 +1,6 @@
-;;;; SBCL: sbcl --script examples/cpu-scaling.lisp ../star/star.asd [CPUS] [FRAMES]
+;;;; SBCL: sbcl --script bench/cpu-scaling.lisp ../star/star.asd [CPUS] [FRAMES]
 
-(load (merge-pathnames "boot.lisp" *load-pathname*))
+(load (merge-pathnames "../examples/boot.lisp" *load-pathname*))
 (asdf:load-asd (truename (or (first (uiop:command-line-arguments)) "../star/star.asd")))
 (asdf:load-system :star/anima16)
 

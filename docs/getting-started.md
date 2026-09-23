@@ -312,7 +312,10 @@ or, from a REPL:
 (asdf:test-system :lasm)
 ```
 
-A failing check signals an error, so the process exits non-zero.
+A failing check signals an error, so the process exits non-zero. The suite
+also runs every `examples/**/*.lisp` script in its own SBCL process and
+fails if any exits non-zero, so keep new examples self-contained.
+Benchmarks that need external systems live in `bench/`.
 
 ## Next
 

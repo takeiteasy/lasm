@@ -80,21 +80,21 @@ precompiled runtime measurements above.
 With Quicklisp dependencies installed and STAR checked out alongside LASM:
 
 ```sh
-/usr/bin/time -l sbcl --script examples/memory-audit.lisp ../star/star.asd
-sbcl --script examples/cpu-scaling.lisp ../star/star.asd 100 60
+/usr/bin/time -l sbcl --script bench/memory-audit.lisp ../star/star.asd
+sbcl --script bench/cpu-scaling.lisp ../star/star.asd 100 60
 ```
 
 Run once to populate compiled files, then measure a fresh process. Add
 `--dynamic-space-size 128` before `--script` for the smaller runtime heap.
 The memory script reports post-GC heap and allocation counters; macOS
 `time` reports peak process RSS. Counters and compiler settings introduce
-small variation. Both examples require SBCL.
+small variation. Both scripts require SBCL.
 
 For build measurements, run:
 
 ```sh
-/usr/bin/time -l sbcl --dynamic-space-size 256 --script examples/build-memory-audit.lisp ../star/star.asd --star-tests
-/usr/bin/time -l sbcl --dynamic-space-size 256 --script examples/build-memory-audit.lisp ../star/star.asd --combined --star-tests
+/usr/bin/time -l sbcl --dynamic-space-size 256 --script bench/build-memory-audit.lisp ../star/star.asd --star-tests
+/usr/bin/time -l sbcl --dynamic-space-size 256 --script bench/build-memory-audit.lisp ../star/star.asd --combined --star-tests
 ```
 
 The script reports allocation and heap use per compiled STAR file and
