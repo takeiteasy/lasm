@@ -507,6 +507,8 @@ checks ordinary operand ranges. See docs/modes.md."
 
 ;;; Pattern matching
 
+;; TODO: static top-level count; a register hole inside a nested ONE-OF is
+;; invisible. Count register holes along the matched path if nesting matters.
 (defun %register-hole-count (mode)
   "The number of register-qualified (EXPR :REGISTER r) holes in MODE's own
 pattern. Nested ONE-OF alternatives are not counted."

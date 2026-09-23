@@ -282,6 +282,13 @@ ambi $30" :machine 'diag-test-machine))
   (encoding (opcode #x0D) (operand :width 1))
   (semantics (set! a operand)))
 
+(defmode diag-alt-forced (one-of diag-alt-a diag-alt-b) :suffix "df")
+
+(definstruction diag-test-machine altf
+  (modes diag-alt-forced)
+  (encoding (opcode #x0E) (operand :width 1))
+  (semantics (set! a operand)))
+
 (defmachine diag-reg-machine
   (register r :width 8 :names (r0 r1))
   (memory ram :width 8 :addr-width 8))
@@ -328,6 +335,9 @@ ambi $30" :machine 'diag-test-machine))
   (fiveam:is (= 3 (length (%alternative-warnings "alts 1
 alts 2
 alts 3" 'diag-test-machine)))))
+
+(fiveam:test forced-mnemonic-suffix-still-warns-on-tied-alternative
+  (fiveam:is (= 1 (length (%alternative-warnings "altf.df 5" 'diag-test-machine)))))
 
 (fiveam:test more-literal-alternative-does-not-warn
   (fiveam:is (null (%alternative-warnings "altq (5)" 'diag-test-machine))))

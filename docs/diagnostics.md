@@ -2,11 +2,11 @@
 
 LASM's lexer, parser, and assembler report positioned program errors through
 `lasm-syntax-error`. `diagnostic.lisp` renders those positions against source
-text and supports the mode-selection warning and strict operand range check;
+text and supports the ambiguity warnings and strict operand range check;
 [Lexer](lexer.md), [Statement grammar & expression parser](parser.md), and
 [Assembler](assembler.md) each still document their own conditions in full —
 this page is about the rendering and the two opt-in behaviors (the
-ambiguity warning, strict operand range), not a duplicate condition list —
+ambiguity warnings, strict operand range), not a duplicate condition list —
 see [Conditions](conditions.md) for every condition type and its readers.
 
 ## `diagnostic-text`
@@ -179,7 +179,8 @@ plain `expr`, so `(one-of reg-ind addr-ind)` over `"[" (expr :register r)
 "]"` and `"[" expr "]"` picks `reg-ind` for `[r0]` without warning. Declared
 the other way round, the plain `expr` alternative wins and the warning
 fires. A hole prefix (`pick ra:3`) names the alternative outright and never
-warns.
+warns. A forced mnemonic suffix fixes the mode, not the alternative, so a
+tie inside the forced mode still warns.
 
 `ambiguous-alternative` is a subtype of `ambiguous-mode`, so a handler for
 either catches it. `ambiguous-mode-chosen` and `-alternatives` hold the

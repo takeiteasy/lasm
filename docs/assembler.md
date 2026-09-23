@@ -290,7 +290,10 @@ distinguished between them. This is *not* the `zero-page`/`absolute` case
 above — those differ in width, so relaxation resolves the choice on its own
 and never warns; the warning fires only when width alone can't break the
 tie either. See [Diagnostics, "Mode-selection
-ambiguity"](diagnostics.md#mode-selection-ambiguity).
+ambiguity"](diagnostics.md#mode-selection-ambiguity). The same pass warns
+with `ambiguous-alternative` when declaration order alone decided a `one-of`
+element's alternative (see [Diagnostics, "Alternative
+ambiguity"](diagnostics.md#alternative-ambiguity)).
 
 An out-of-range value that falls back to `wrap-value` (the "no candidate
 fits" case above) is by default silent, same as it always was — opt into an
@@ -667,6 +670,8 @@ at, `.org` can still move it further before the first byte).
 - `ambiguous-mode` — a warning (program execution continues after it), not
   an error; see "Choosing a mode" above and
   [Diagnostics](diagnostics.md#mode-selection-ambiguity).
+- `ambiguous-alternative` — a subtype of `ambiguous-mode` for a tied `one-of`
+  alternative; see [Diagnostics](diagnostics.md#alternative-ambiguity).
 
 Every condition above that subtypes `lasm-syntax-error` renders with a
 source excerpt and caret via `diagnostic-text` once source text is
