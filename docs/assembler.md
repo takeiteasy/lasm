@@ -208,12 +208,16 @@ declared in `(modes ...)`:
      opposite situation from `zero-page`/`absolute`, which share *identical*
      syntax and are told apart only by whether a value fits — exactly where
      relaxation is meaningful.
-   - **Specificity.** Candidates whose match used more
-     [register-qualified holes](modes.md#register-qualified-holes) move
-     ahead of the rest; otherwise declaration order is kept. `[r1]` against
-     `"[" expr "]"` and `"[" (expr :register r) "]"` variants picks the
-     register variant even when the plain one is declared first or is
-     wider, since a register alias is also a valid plain `expr` value.
+   - **Specificity.** Only the best-matching candidates continue. A match
+     is scored by its literal tokens first, then its
+     [register-qualified holes](modes.md#register-qualified-holes); the rest
+     are dropped, whatever their width or declaration order. `(5)` against
+     `"(" expr ")"` and plain `expr` variants picks the parenthesised
+     variant, since the plain one also parses `(5)` as a grouped
+     expression. `[r1]` likewise picks a `"[" (expr :register r) "]"`
+     variant over `"[" expr "]"`. A value that overflows the chosen
+     variant's field (`($1234)` in a one-byte parenthesised mode) never
+     falls back to a wider, less specific variant.
 2. **Floor.** Drop any variant smaller (by `instruction-descriptor-size`)
    than this statement's current floor — the size it committed to on an
    earlier pass (0 on the first pass, when nothing has committed to anything
@@ -288,9 +292,8 @@ declared in `(modes ...)`:
 
 Once relaxation has converged (the final pass, not a mid-relaxation trial —
 see "Convergence" below), `%choose-variant` also checks for **ambiguity**:
-if the chosen candidate ties on total operand width and register-qualified
-hole count with another syntax-matching candidate of a different mode, it
-`warn`s with an
+if the chosen candidate ties on total operand width with another equally
+specific candidate of a different mode, it `warn`s with an
 `ambiguous-mode` condition naming both, since nothing but declaration order
 distinguished between them. This is *not* the `zero-page`/`absolute` case
 above — those differ in width, so relaxation resolves the choice on its own

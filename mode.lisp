@@ -697,14 +697,14 @@ that only bind the first four are unaffected by."
         (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
       (declare (ignore next-i))
       (cond
-         ((not okp) (values nil nil failure-token message nil nil nil nil 0))
+         ((not okp) (values nil nil failure-token message nil nil nil nil (cons 0 0)))
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.
           (t (values asts t nil nil choices selections suffixes
                      (loop for (holes-from-end . rest) in ties
                            collect (cons (- (length asts) holes-from-end) rest))
-                     (cdr score)))))))
+                     score))))))
 
 (defun try-match-operand-mode (tokens mode)
   "Like MATCH-OPERAND-MODE, but returns (VALUES asts T choices) on a match or
@@ -717,14 +717,15 @@ see %MATCH-MODE-ELEMENTS. The fifth value is the hole-aligned list of
 forcing-prefix names written before each hole (a string, or NIL). The sixth
 lists (HOLE SLOT CHOSEN . RUNNERS-UP) for each ONE-OF pick decided by
 declaration order alone, HOLE being the element's first hole index. The
-seventh is the number of register-qualified holes the match used."
+seventh is the match score, (LITERALS . REGISTER-HOLES), (0 . 0) on a
+mismatch -- see %MATCH-MODE-ELEMENTS."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp failure-token message choices selections suffixes ties registers)
+    (multiple-value-bind (asts okp failure-token message choices selections suffixes ties score)
         (%match-mode-pattern tokens mode)
       (declare (ignore failure-token message))
        (if okp
-           (values asts t choices selections suffixes ties registers)
-           (values nil nil nil nil nil nil 0)))))
+           (values asts t choices selections suffixes ties score)
+           (values nil nil nil nil nil nil (cons 0 0))))))
 
 (defun match-operand-mode (tokens mode)
   "Match TOKENS (a SIMPLE-VECTOR of raw tokens, e.g. an OPERAND's TOKENS or a

@@ -342,6 +342,33 @@ ambi $30" :machine 'diag-test-machine))
   (modes (diag-regind-1 (opcode #x09) (semantics nil))
          (diag-regind-1b (opcode #x0A) (semantics nil))))
 
+(defmode diag-paren-1 "(" expr ")" :width 1)
+(defmode diag-paren-1b "(" expr ")" :width 1)
+(defmode diag-paren-2 "(" expr ")" :width 2)
+(defmode diag-plain-1 expr :width 1)
+(defmode diag-plain-2 expr :width 2)
+(defmode diag-reg-only (expr :register r) :width 1)
+
+(definstruction diag-reg-machine lpa
+  (modes (diag-paren-1 (opcode #x10) (semantics nil))
+         (diag-plain-2 (opcode #x11) (semantics nil))))
+
+(definstruction diag-reg-machine lpb
+  (modes (diag-plain-2 (opcode #x12) (semantics nil))
+         (diag-paren-1 (opcode #x13) (semantics nil))))
+
+(definstruction diag-reg-machine lpw
+  (modes (diag-plain-1 (opcode #x14) (semantics nil))
+         (diag-paren-2 (opcode #x15) (semantics nil))))
+
+(definstruction diag-reg-machine lpr
+  (modes (diag-reg-only (opcode #x16) (semantics nil))
+         (diag-paren-1 (opcode #x17) (semantics nil))))
+
+(definstruction diag-reg-machine lpt
+  (modes (diag-paren-1 (opcode #x18) (semantics nil))
+         (diag-paren-1b (opcode #x19) (semantics nil))))
+
 (defun %mode-warnings (source machine)
   "The cells and every AMBIGUOUS-MODE assembling SOURCE signals, muffled."
   (let (warnings)
@@ -410,6 +437,39 @@ alts 3" 'diag-test-machine)))))
   (let ((c (first (nth-value 1 (%mode-warnings "lvt [r1]" 'diag-reg-machine)))))
     (fiveam:is (eq 'diag-regind-1 (mode-descriptor-name (ambiguous-mode-chosen c))))
     (fiveam:is (equal '(diag-regind-1b)
+                      (mapcar #'mode-descriptor-name (ambiguous-mode-alternatives c))))))
+
+(fiveam:test literal-ranked-variant-outranks-plain-expr
+  (flet ((check (source cells)
+           (multiple-value-bind (actual warnings) (%mode-warnings source 'diag-reg-machine)
+             (fiveam:is (equalp cells actual))
+             (fiveam:is (null warnings)))))
+    (check "lpa (5)" #(#x10 5))
+    (check "lpa 5" #(#x11 5 0))
+    (check "lpb (5)" #(#x13 5))
+    (check "lpb 5" #(#x12 5 0))
+    (check "lpw (5)" #(#x15 5 0))
+    (check "lpw 5" #(#x14 5))))
+
+(fiveam:test literal-ranked-variant-holds-when-value-overflows
+  (let ((cells (%mode-warnings "lpa ($1234)" 'diag-reg-machine)))
+    (fiveam:is (= #x10 (aref cells 0)))
+    (fiveam:is (= 2 (length cells)))))
+
+(fiveam:test literal-ranked-variant-holds-for-forward-label
+  (fiveam:is (equalp #(#x10 2 #x11 5 0)
+                     (%mode-warnings "lpa (later)
+later:
+lpa 5" 'diag-reg-machine))))
+
+(fiveam:test literals-outrank-register-holes
+  (fiveam:is (equalp #(#x17 1) (%mode-warnings "lpr (r1)" 'diag-reg-machine)))
+  (fiveam:is (equalp #(#x16 1) (%mode-warnings "lpr r1" 'diag-reg-machine))))
+
+(fiveam:test equally-specific-paren-variants-warn
+  (let ((c (first (nth-value 1 (%mode-warnings "lpt (5)" 'diag-reg-machine)))))
+    (fiveam:is (eq 'diag-paren-1 (mode-descriptor-name (ambiguous-mode-chosen c))))
+    (fiveam:is (equal '(diag-paren-1b)
                       (mapcar #'mode-descriptor-name (ambiguous-mode-alternatives c))))))
 
 (fiveam:test equally-register-qualified-alternatives-warn

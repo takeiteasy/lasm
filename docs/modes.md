@@ -75,8 +75,8 @@ their syntax**. Getting this backwards doesn't error — it just silently
 gives every operand the wider mode, since the assembler tries candidates in
 declaration order and a wider candidate placed first is found before a
 narrower one that would also have fit. The one exception is a candidate
-whose match used more [register-qualified
-holes](#register-qualified-holes), which is always tried first. A label-bearing operand starts at
+whose match used more literal tokens, or equally many and more
+[register-qualified holes](#register-qualified-holes), always wins. A label-bearing operand starts at
 its narrowest candidate before any address is known (see
 [Assembler, "Convergence"](assembler.md#convergence)), but is subject to
 this same declaration-order tiebreak on every later pass, once a symbol
@@ -220,8 +220,9 @@ remain distinguishable. In a `one-of`, a register alternative outranks a
 plain `expr` alternative with the same literals, whatever the declaration
 order: `(one-of addr-ind reg-ind)` over `"[" expr "]"` and `"[" (expr
 :register reg) "]"` picks `reg-ind` for `[r0]` and `addr-ind` for `[5]`.
-The same holds between an instruction's variants, ahead of width (see
-[Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)).
+Instruction variants rank the same way, ahead of width: more literals
+first, then more register-qualified holes (see [Assembler, "Choosing a
+mode"](assembler.md#choosing-a-mode)).
 
 ### What `one-of` does and does not do
 
@@ -698,12 +699,13 @@ under `:suffixes t`, so the text re-assembles to the same cells.
   `parse-failure` if `tokens` don't match `mode`, or leave a trailing token
   unconsumed.
 - `(try-match-operand-mode tokens mode)` — the non-signalling form: returns
-  `(values asts t choices selections prefixes ties registers)` on a match,
-  or `nil`s and a `registers` of 0 on a mismatch. `ties` lists `(hole slot
+  `(values asts t choices selections prefixes ties score)` on a match,
+  or `nil`s and a `score` of `(0 . 0)` on a mismatch. `ties` lists `(hole slot
   chosen . runners-up)` for each `one-of` pick that declaration order alone
   decided (see [Diagnostics, "Alternative
-  ambiguity"](diagnostics.md#alternative-ambiguity)); `registers` counts the
-  register-qualified holes the match used.
+  ambiguity"](diagnostics.md#alternative-ambiguity)); `score` is
+  `(literals . register-holes)`: the literal tokens and register-qualified
+  holes the match used.
   This is what the assembler's mode-candidate filter uses to try
   several of a mnemonic's modes against one operand without a
   `handler-case` per candidate.
