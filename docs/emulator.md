@@ -85,27 +85,12 @@ it running afterward. It's also the base the assembler computes a
 `relative`-mode offset from (see below) — `pc` is already the *next*
 instruction's address by the time semantics runs.
 
-If the decoded instruction's mode is `:signed`
-([Addressing modes, "Signed operands"](modes.md#signed-operands)) — `relative`
-([Addressing modes, "PC-relative modes"](modes.md#pc-relative-modes)) included,
-since `:relative` implies `:signed` — every fetched field is reinterpreted as
-a signed integer (`signed-value`, each by its own operand width) before being
-passed to `execute-instruction`. The assembler encoded a `relative` operand
-specifically as a two's-complement offset
-([Assembler](assembler.md#pc-relative-offsets)); either way, fetching treats
-every operand as unsigned like any other mode, so this is undone here rather
-than in every signed instruction's own `semantics`. A `relative` instruction's
-body therefore just writes `(set! pc (+ pc operand))`. A `relative` mode
-always has exactly one field (`definstruction` rejects one with more,
-[Instructions, "Repeated `(operand ...)` subclauses"](instructions.md)), so
-this reinterprets the sole fetched value for it, never several — but an
-ordinary (non-`relative`) `:signed` mode may have more than one field, and
-each is reinterpreted independently. This is per hole, not just per whole
-mode: a `one-of` hole with per-hole `:signed` ([Addressing modes, "Per-hole
-`:signed`"](modes.md#per-hole-signed)) is reinterpreted only when the
-matched descriptor's own `operand-signedness` (instruction.lisp) says that
-hole is signed — a sibling descriptor claimed for the mode's unsigned
-alternative leaves the same hole untouched.
+Each signed operand field is decoded as a signed integer before semantics
+runs. A relative field is always signed and contains an offset from the
+address after the complete instruction. On a byte-encoded machine, the
+descriptor's `operand-signedness` list selects the fields to sign-extend;
+on a word-encoded machine, each matched field choice carries its own
+signedness. Other fields remain unsigned. See [Addressing modes](modes.md#per-hole-relative).
 
 Returns `(values result cost)`: `result` is the executed
 `instruction-descriptor`, or the keyword `:decode-failure` (without

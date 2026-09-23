@@ -28,16 +28,15 @@ mode, built-in or user-declared, goes through the same `defmode`.
 (defmode NAME pattern-element... [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t])
 ```
 
-`pattern-element` is a string literal, the symbol `expr`, or `(one-of
-mode...)` — see [Per-operand modes](#per-operand-modes) below. A mode may be
-literal-only, such as `(defmode stack-pointer "SP")`; it then contributes zero
-operand holes.
+`pattern-element` is a string literal, `expr`, `(expr :signed t)`,
+`(expr :relative t)`, or `(one-of mode...)`. A mode may be literal-only,
+such as `(defmode stack-pointer "SP")`; it then contributes zero holes.
 
 `NAME` is a symbol, registered globally (like a lexer — see below).
-`pattern-element` is either a string literal (matched against a token's
-verbatim text, case-insensitively — so `"X"` matches `x` too) or the symbol
-`expr` (parses one expression with the shared Pratt parser, `parse.lisp`).
-At least one `expr` is required. `:width`, if given, is this mode's default
+String literals match token text case-insensitively. `expr` parses one
+expression with the shared parser.
+`(expr :register NAME)` can combine `:register` with hole options. A mode
+can also contain only literals. `:width`, if given, is this mode's default
 operand byte width — see [`(encoding ...)`](instructions.md) and the
 width-resolution note below. `:signed t`, if given, marks this mode's
 operand as a signed quantity rather than an unsigned one — see
@@ -92,17 +91,11 @@ multi-mode variant with no `(operand :width n)` of its own resolve to.
 machine rather than hard-coded into the mode.
 
 A mode with more than one `expr` hole wires up one operand encoding field
-per hole — a two-register `mov` is the standard example (see [Instructions,
-"Repeated `(operand ...)` subclauses"](instructions.md)). A `:signed` mode
-may have any number of holes — each is sign-extended independently (see
-[Signed operands](#signed-operands) below). The one restriction is specific
-to a **whole-mode** `:relative`: a mode declared with `:relative t` directly
-may not have more than one hole, since its *offset* applies to the operand
-as a whole and a bare `defmode` has no `one-of` to name which hole is the
-offset. A `one-of` alternative may declare its own `:relative` independently
-of its siblings and of the pattern's other holes — see [Per-hole
-`:relative`](#per-hole-relative) below — which is how a multi-hole pattern
-gets a relative hole at all. A `one-of` element (below) contributes the holes
+per hole (see [Instructions](instructions.md#repeated-operand--subclauses--multi-operand-instructions)).
+Each hole can declare `:signed` or `:relative` independently. A mode-wide
+option supplies the default for every plain `expr` hole; an explicit hole
+option overrides it. `:relative nil` leaves inherited signedness intact,
+while `:relative t` always implies signedness. A `one-of` element contributes the holes
 declared by the selected alternative. Alternatives may vary in count and, on
 a byte-encoded machine, may disagree on their own `:width` (see
 [Per-hole `:width`](#per-hole-width) below) or `:relative`.
@@ -312,8 +305,8 @@ neither is supported yet.
 
 ### Per-hole `:strict`
 
-Unlike `:relative`/`:suffix`, a `one-of` alternative *may*
-declare `:strict t` — it needs no decode-time record of which alternative
+Like `:relative`, a `one-of` alternative may declare `:strict t`. Unlike
+`:relative`, `:strict` needs no decode-time record of which alternative
 matched, since it is a pure encode-time range check with no bearing on size,
 value, or decode at all (see [Diagnostics, "Strict operand
 range"](diagnostics.md#strict-operand-range)). A hole is strict when
@@ -465,28 +458,24 @@ silently ignoring it.
 
 ### Per-hole `:relative`
 
-A `one-of` alternative on a **byte-encoded** machine may also declare its
-own `:relative t`, independently of its siblings — the operand it names is
-a PC-relative offset (see [PC-relative modes](#pc-relative-modes) below),
-while a sibling alternative at the same hole, or an entirely different hole
-of the same pattern, stays an ordinary value. This is what lets a mnemonic
-whose operand is *either* an absolute jump target *or* a relative branch
-offset — disambiguated by syntax, e.g. a marker prefix on the relative
-form — share one addressing mode and one opcode.
+A plain `expr` hole can declare its own attributes:
 
-Unlike `:signed` and `:width`, which are per-hole *booleans* (any number of
-holes may independently be true), `:relative` is **positional**: at most one
-hole of a given expanded addressing-mode use may ever be the relative one,
-since `%relative-offset`'s arithmetic (see [Assembler, "PC-relative
-offsets"](assembler.md#pc-relative-offsets)) applies to a single operand
-value. `definstruction` signals an error if two holes of the same expanded
-combination both resolve to a `:relative` alternative — including a
-whole-mode `:relative` mode combined with a `one-of` hole that also resolves
-relative, which has the same conflict. A mode's *own* `:relative t` combined
-with a `one-of` as its single hole is rejected outright, for the same
-reason: which alternative matched would silently take precedence over the
-mode's own declaration rather than the two ever combining coherently — write
-`:relative t` on the `one-of` alternative that needs it instead.
+```lisp
+(defmode branch-and-immediate (expr :relative t) "," (expr :signed t))
+(defmode two-targets (expr :relative t) "," (expr :relative t))
+(defmode mixed-defaults (expr :relative nil :signed nil) "," expr :relative t)
+```
+
+Each relative hole contains an absolute target in source code and encodes a
+signed offset from the address after the complete instruction. Multiple
+holes may be relative. A hole's `:relative t` implies `:signed t`; an
+explicit `:signed nil` on that hole is an error. `:relative nil` removes
+offset computation while retaining signedness inherited from the mode unless
+that hole also declares `:signed nil`.
+
+A `one-of` alternative can also declare attributes for its own `expr` holes.
+Mode-wide `:relative` and `:signed` options cannot be applied to an enclosing
+`one-of` element; declare them on the alternatives instead.
 
 As with `:signed`/`:width`, a hole only needs a decode-time discriminator
 when its alternatives actually *disagree* on `:relative`; the discriminator
@@ -513,18 +502,9 @@ end (the single-hole selector case), and
 ...)` table where the relative hole's sibling independently disagrees on
 `:width`.
 
-This does not disturb [the assembler's relaxation
-pass](assembler.md#convergence), for the same reason per-hole `:width`
-doesn't (above): which sibling descriptor a statement uses is decided purely
-by syntax, not by a value that might still be provisional mid-relaxation.
-
-On a **word-encoded** machine, per-hole `:relative` works the same way
-(#62) — the same `(choice m)` selector requirement applies when a hole's
-`one-of` alternatives disagree on `:relative`, and the same one-hole-only
-restriction applies across a whole combo (see [Instructions, "PC-relative
-operands"](instructions.md#pc-relative-operands-62) and [Assembler,
-"PC-relative offsets"](assembler.md#pc-relative-offsets) for how the offset
-itself packs into an instruction-word field there).
+On a word-encoded machine, each relative hole uses its selected field's
+range. Alternatives that disagree on relativeness need a `(choice m)`
+selector for that field.
 
 ## Signed operands
 
@@ -557,20 +537,15 @@ its own, with no offset computation attached.
 
 ## PC-relative modes
 
-`relative` matches the *same* bare-`expr` syntax as `absolute` — the two are
-disambiguated only by `mode-descriptor-relativep`, not by pattern. This
-section describes a whole-mode `relative`, always exactly one hole; see
-[Per-hole `:relative`](#per-hole-relative) above for a `one-of` alternative
-declaring `:relative` on just one hole of a multi-hole pattern, on a
-byte-encoded machine — the arithmetic below is identical either way, just
-scoped to that one hole rather than the whole operand. What differs is what
-the parsed value means and when it's computed:
+`relative` matches the same bare `expr` syntax as `absolute`; its
+mode-wide `:relative t` marks every plain hole. Hole options and selected
+`one-of` alternatives can mark individual holes instead.
 
 - An `absolute` operand's value **is** the address encoded, evaluated once
   the symbol table is complete ([Assembler](assembler.md)).
 - A `relative` operand's value is a *target address*, but what gets encoded
   is the signed offset from the address of the instruction **after** the
-  branch: `offset = target - (branch-address + 1 + operand-width)`. The
+  branch: `offset = target - (instruction-address + instruction-size)`. The
   assembler computes this once both the branch and its target have an
   address ([Assembler](assembler.md#pc-relative-offsets)), and signals
   `assembly-error` if the offset doesn't fit the operand's width rather than

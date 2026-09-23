@@ -222,22 +222,12 @@ hex format."
          (if prefix (format nil "~A~X" prefix value) (format nil "~D" value))))))
 
 (defun %operand-render-values (descriptor values address size)
-  "VALUES as DECODE-INSTRUCTION-AT returned them, adjusted for rendering: the
-one hole DESCRIPTOR's own RELATIVE-HOLE-INDEX names (#130), if any, holds a
-signed offset from the *next* instruction (assembler.lisp's %RELATIVE-OFFSET
-computes it the same way on encode), so it renders as the absolute branch
-target ADDRESS + SIZE + VALUE -- what a bare :RELATIVE expr operand's own
-source syntax expects on re-assembly. Every other hole -- including every
-hole of a descriptor with no relative hole at all -- renders as decoded.
-This is per hole, not per whole descriptor: a multi-hole pattern (#130) may
-have a relative hole alongside ordinary siblings, and only the relative
-hole's own value gets this adjustment, mirroring %CHOOSE-VARIANT's and
-%ENCODE's own per-hole treatment of the same index (assembler.lisp)."
-  (let ((relative-index (instruction-descriptor-relative-hole-index descriptor)))
-    (if relative-index
+  "Render each relative offset as an absolute target."
+  (let ((relative-holes (instruction-descriptor-relative-holes descriptor)))
+    (if (some #'identity relative-holes)
         (loop for v in values
               for i from 0
-              collect (if (eql i relative-index) (+ address size v) v))
+              collect (if (nth i relative-holes) (+ address size v) v))
         values)))
 
 (defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements

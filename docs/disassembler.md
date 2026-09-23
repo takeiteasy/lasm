@@ -233,20 +233,10 @@ renders as the absolute target address, `address + size + value` — what a
 `relative` mode's own bare-`expr` operand syntax expects to see on
 re-assembly, not merely a convenience.
 
-This is per hole, not per whole descriptor: `%operand-render-values` reads
-the decoded descriptor's own `relative-hole-index`
-([Instructions](instructions.md#relative-hole-index)) and adjusts only the
-value at that index this way. A whole-mode `relative` mode's descriptor
-always has exactly one hole, so this subsumes that case unchanged; a
-multi-hole descriptor where a `one-of` alternative independently declares
-its own `:relative` ([Addressing modes, "Per-hole
-`:relative`"](modes.md#per-hole-relative)) renders only its own hole as a
-resolved target, while every sibling hole — including one governed by a
-non-relative alternative of the same `one-of`, or an entirely different
-hole of the same pattern — renders its own decoded value plainly, same as a
-descriptor with no relative hole at all. `relative-hole-index` is `nil` for
-a descriptor with no relative hole, in which case every value renders
-plainly, unchanged from before #130.
+`%operand-render-values` applies this adjustment to every true entry in
+the descriptor's [`relative-holes`](instructions.md#relative-holes) list.
+Other fields render their decoded values unchanged. For word instructions,
+the decoder returns the descriptor matching the encoded field choices.
 
 `:labels t` (the default) substitutes a symbol name for an operand value.
 With `symbol-info` (#37, e.g. via `disassemble-assembly`, which passes it

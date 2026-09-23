@@ -443,19 +443,91 @@
 
 (defmode relative-two-hole-test-mode expr "," expr :width 1 :relative t)
 
-(fiveam:test relative-mode-with-more-than-one-hole-signals-error
-  (fiveam:signals error
-    (eval '(definstruction instr-test-machine bogus
-             (modes relative-two-hole-test-mode)
-             (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
-             (semantics nil)))))
+(definstruction instr-test-machine relpair
+  (modes relative-two-hole-test-mode)
+  (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
+  (semantics nil))
 
-;; A whole-mode :RELATIVE whose single hole is itself a ONE-OF (#130) has no
-;; coherent meaning either, even though it has only one hole: %BYTE-
-;; RELATIVE-HOLE-INDEX resolves a ONE-OF hole from its own matched
-;; alternative first, never falling back to MODE's own RELATIVEP -- so
-;; MODE's own :RELATIVE T would be silently dropped (encoding as an
-;; absolute value) rather than erroring where the contradiction is written.
+(fiveam:test relative-mode-with-more-than-one-hole
+  (fiveam:is (equal '(t t) (instruction-descriptor-relative-holes
+                           (find-instruction 'instr-test-machine 'relpair))))
+  (fiveam:is (equalp #(#xFF #xFD #xFD)
+                     (assembly-cells (assemble "relpair *, *" :machine 'instr-test-machine)))))
+
+(fiveam:test relative-holes-use-independent-targets
+  (fiveam:is (equalp #(#xFF 0 1 #xEA #xEA)
+                     (assembly-cells (assemble "relpair first, second
+first: nop
+second: nop" :machine 'instr-test-machine))))
+  (fiveam:signals assembly-error
+    (assemble "relpair *, $1000" :machine 'instr-test-machine)))
+
+(defmode hole-attribute-mix (expr :relative t) "," (expr :signed t) "," expr :width 1)
+(definstruction instr-test-machine attrmix
+  (modes hole-attribute-mix)
+  (encoding (opcode #xFA) (operand target :mode) (operand delta :mode) (operand raw :mode))
+  (semantics nil))
+
+(defmode hole-attribute-override (expr :relative nil :signed nil) "," expr
+  :width 1 :relative t)
+(definstruction instr-test-machine attrover
+  (modes hole-attribute-override)
+  (encoding (opcode #xFB) (operand raw :mode) (operand target :mode))
+  (semantics nil))
+
+(fiveam:test direct-hole-attributes-encode-independently
+  (let ((a (assemble "attrmix *, -5, 200" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xFA #xFC #xFB 200) (assembly-cells a)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'instr-test-machine)
+      (fiveam:is (equal '(t nil nil) (instruction-descriptor-relative-holes descriptor)))
+      (fiveam:is (equal '(t t nil) (instruction-descriptor-operand-signedness descriptor)))
+      (fiveam:is (equal '(-4 -5 200) values)))))
+
+(fiveam:test hole-attributes-override-mode-defaults
+  (let ((a (assemble "attrover 200, *" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#xFB 200 #xFD) (assembly-cells a)))
+    (let ((descriptor (find-instruction 'instr-test-machine 'attrover)))
+      (fiveam:is (equal '(nil t) (instruction-descriptor-relative-holes descriptor)))
+      (fiveam:is (equal '(nil t) (instruction-descriptor-operand-signedness descriptor))))))
+
+(fiveam:test direct-relative-hole-overflow-signals-error
+  (fiveam:signals assembly-error
+    (assemble "attrmix $1000, 0, 0" :machine 'instr-test-machine)))
+
+(fiveam:test direct-hole-attributes-disassemble-and-reassemble
+  (let* ((a (assemble "attrmix *, -5, 200" :machine 'instr-test-machine))
+         (line (first (disassemble-assembly a :machine 'instr-test-machine :labels nil))))
+    (fiveam:is (equalp (assembly-cells a)
+                       (assembly-cells (assemble (disassembly-line-text line)
+                                                 :machine 'instr-test-machine))))))
+
+(defmode hole-attribute-alt-plain "[" expr "," expr "]" :width 1)
+(defmode hole-attribute-alt-relative "#" expr "," (expr :relative t) :width 1)
+(defmode hole-attribute-alternatives (one-of hole-attribute-alt-plain
+                                            hole-attribute-alt-relative))
+(definstruction instr-test-machine attrchoice
+  (modes hole-attribute-alternatives)
+  (encoding (opcode #xFC)
+            (operand first-value :mode)
+            (operand second-value :mode)
+            (sub-opcode
+              (variant (choice hole-attribute-alt-plain hole-attribute-alt-plain) (sub 0))
+              (variant (choice hole-attribute-alt-plain hole-attribute-alt-relative) (sub 1))
+              (variant (choice hole-attribute-alt-relative hole-attribute-alt-plain) (sub 2))
+              (variant (choice hole-attribute-alt-relative hole-attribute-alt-relative) (sub 3))))
+  (semantics nil))
+
+(fiveam:test multi-hole-one-of-alternative-keeps-its-own-hole-attributes
+  (let* ((a (assemble "attrchoice #5, *" :machine 'instr-test-machine))
+         (line (first (disassemble-assembly a :machine 'instr-test-machine :labels nil))))
+    (fiveam:is (equalp #(#xFC 3 5 #xFC) (assembly-cells a)))
+    (fiveam:is (equalp (assembly-cells a)
+                       (assembly-cells (assemble (disassembly-line-text line)
+                                                 :machine 'instr-test-machine))))))
+
+;; ONE-OF alternatives supply their own attributes, so the enclosing mode
+;; cannot also assign a relative default to those holes.
 (defmode relative-one-of-hole-test-a expr)
 (defmode relative-one-of-hole-test-b "[" expr "]")
 (defmode relative-one-of-hole-test-mode
@@ -2555,10 +2627,10 @@ wsi #-100" :machine 'mixed-field-test-machine)
                           (variant :else (extra-word :escape #x200 :cells 1))))
   (semantics (set! pc (+ pc value))))
 
-(fiveam:test word-whole-mode-relative-descriptors-carry-relative-hole-index
+(fiveam:test word-whole-mode-relative-descriptors-carry-relative-holes
   (let ((variants (find-instruction-variants 'word-relative-test-machine "WBRA")))
     (fiveam:is (= 2 (length variants)))
-    (fiveam:is (every (lambda (d) (eql 0 (instruction-descriptor-relative-hole-index d))) variants))))
+    (fiveam:is (every (lambda (d) (equal '(t) (instruction-descriptor-relative-holes d))) variants))))
 
 (fiveam:test word-whole-mode-relative-stamps-signedp-on-word-fields-and-alternatives
   (let ((inline-d (first (find-instruction-variants 'word-relative-test-machine "WBRA"))))
@@ -2604,35 +2676,89 @@ wsi #-100" :machine 'mixed-field-test-machine)
                (wrel-abs (set! a value))
                (wrel-rel (set! a (wrap-value (+ a value) 16))))))
 
-(fiveam:test word-per-hole-relative-one-of-relative-hole-index-follows-matched-choice
+(fiveam:test word-per-hole-relative-one-of-relative-holes-follow-matched-choice
   (let* ((variants (find-instruction-variants 'word-relative-test-machine "WJMR"))
          (abs-d (find-if (lambda (d) (eq 'wrel-abs (word-field-choice-choice (first (instruction-descriptor-word-fields d)))))
                           variants))
          (rel-d (find-if (lambda (d) (eq 'wrel-rel (word-field-choice-choice (first (instruction-descriptor-word-fields d)))))
                           variants)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index abs-d)))
-    (fiveam:is (eql 0 (instruction-descriptor-relative-hole-index rel-d)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-relative-holes abs-d)))
+    (fiveam:is (equal '(t) (instruction-descriptor-relative-holes rel-d)))
     (fiveam:is (not (word-field-choice-signedp (first (instruction-descriptor-word-fields abs-d)))))
     (fiveam:is (word-field-choice-signedp (first (instruction-descriptor-word-fields rel-d))))))
 
 (defmode wrel-both (one-of wrel-abs wrel-rel) "," (one-of wrel-abs wrel-rel))
 
-(fiveam:test word-two-relative-holes-in-one-combo-signals-error
-  ;; #62's positional rule -- mirrors %CHECK-BYTE-ONE-OF-RELATIVE: at most
-  ;; one hole of a given expanded word combo may ever resolve relative. Both
-  ;; holes here can independently choose WREL-REL, so %EXPAND-WORD-COMBOS'
-  ;; Cartesian product includes a combo where they both do.
-  (fiveam:signals error
-    (eval '(definstruction word-relative-test-machine bogus
-             (modes wrel-both)
-             (encoding (opcode 5)
-                       (operand a-val :field dst
-                         (variant (choice wrel-abs) inline :range (0 3) :bias 0)
-                         (variant (choice wrel-rel) inline :range (-2 1) :bias 0))
-                       (operand b-val :field src
-                         (variant (choice wrel-abs) inline :range (0 511) :bias 0)
-                         (variant (choice wrel-rel) inline :range (-256 255) :bias 0)))
-             (semantics nil)))))
+(definstruction word-relative-test-machine wrelboth
+  (modes wrel-both)
+  (encoding (opcode 5)
+            (operand a-val :field dst
+              (variant (choice wrel-abs) inline :range (0 1) :bias 0)
+              (variant (choice wrel-rel) inline :range (-2 -1) :bias 0))
+            (operand b-val :field src
+              (variant (choice wrel-abs) inline :range (0 255) :bias 0)
+              (variant (choice wrel-rel) inline :range (-256 -1) :bias 0)))
+  (semantics nil))
+
+(fiveam:test word-two-relative-holes-in-one-combo
+  (let* ((a (assemble "wrelboth #*, #*" :machine 'word-relative-test-machine))
+         (cells (assembly-cells a)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader cells) 0 'word-relative-test-machine)
+      (fiveam:is (equal '(t t) (instruction-descriptor-relative-holes descriptor)))
+      (fiveam:is (equal '(-2 -2) values)))))
+
+(defmode word-attribute-mix (expr :relative t) "," (expr :signed t))
+(definstruction word-relative-test-machine wattr
+  (modes word-attribute-mix)
+  (encoding (opcode 10)
+            (operand target :field dst (variant (range -2 1) inline))
+            (operand delta :field src (variant (range -256 255) inline)))
+  (semantics nil))
+
+(fiveam:test word-direct-hole-attributes
+  (let ((a (assemble "wattr *, -3" :machine 'word-relative-test-machine)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'word-relative-test-machine)
+      (fiveam:is (equal '(t nil) (instruction-descriptor-relative-holes descriptor)))
+      (fiveam:is (equal '(-2 -3) values)))))
+
+(fiveam:test word-direct-relative-hole-overflow-signals-error
+  (fiveam:signals assembly-error
+    (assemble "wattr $1000, 0" :machine 'word-relative-test-machine)))
+
+(defmode word-attribute-alt-plain "[" expr "," expr "]")
+(defmode word-attribute-alt-relative "#" expr "," (expr :relative t))
+(defmode word-attribute-alternatives
+  (one-of word-attribute-alt-plain word-attribute-alt-relative))
+(definstruction word-relative-test-machine walt
+  (modes word-attribute-alternatives)
+  (encoding (opcode 11)
+            (operand first-value :field dst
+              (variant (choice word-attribute-alt-plain) inline :range (0 1))
+              (variant (choice word-attribute-alt-relative) inline :range (2 3)))
+            (operand second-value :field src
+              (variant (choice word-attribute-alt-plain) inline :range (0 255))
+              (variant (choice word-attribute-alt-relative) inline :range (-256 -1))))
+  (semantics nil))
+
+(fiveam:test word-multi-hole-alternative-keeps-its-own-relative-hole
+  (let* ((a (assemble "walt #2, *" :machine 'word-relative-test-machine))
+         (line (first (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'word-relative-test-machine)
+      (fiveam:is (equal '(nil t) (instruction-descriptor-relative-holes descriptor)))
+      (fiveam:is (equal '(2 -2) values)))
+    (fiveam:is (equalp (assembly-cells a)
+                       (assembly-cells (assemble (disassembly-line-text line)
+                                                 :machine 'word-relative-test-machine))))))
+
+(fiveam:test word-two-relative-holes-disassemble-and-reassemble
+  (let* ((a (assemble "wrelboth #*, #*" :machine 'word-relative-test-machine))
+         (line (first (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))))
+    (fiveam:is (equalp (assembly-cells a)
+                       (assembly-cells (assemble (disassembly-line-text line)
+                                                 :machine 'word-relative-test-machine))))))
 
 ;; #105/#62: %CHECK-OPCODE-DECODABLE!'s co-tenant ambiguity analysis
 ;; must include a RELATIVE-stamped signed field's wrapped negative chunk as it
@@ -3765,12 +3891,12 @@ widthd #300" :machine 'instr-test-machine)
                (rl-instr-abs (set! pc val))
                (rl-instr-rel (set! pc (+ pc val))))))
 
-(fiveam:test one-of-relative-stamps-relative-hole-index-per-descriptor
+(fiveam:test one-of-relative-stamps-relative-holes-per-descriptor
   (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x65))
          (abs (find 0 descs :key #'instruction-descriptor-sub-opcode))
          (rel (find 1 descs :key #'instruction-descriptor-sub-opcode)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index abs)))
-    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index rel)))))
+    (fiveam:is (equal '(nil) (instruction-descriptor-relative-holes abs)))
+    (fiveam:is (equal '(t) (instruction-descriptor-relative-holes rel)))))
 
 (fiveam:test one-of-relative-encode-decode-round-trips-the-absolute-alternative
   (fiveam:is (equalp #(#x65 0 200) (assembly-cells (assemble "reld 200" :machine 'instr-test-machine))))
@@ -3833,36 +3959,32 @@ reld #*" :machine 'instr-test-machine)
 (fiveam:test one-of-relative-agreeing-alternatives-need-no-selector
   (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x67)))
     (fiveam:is (= 1 (length descs)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index (first descs))))))
+    (fiveam:is (equal '(nil) (instruction-descriptor-relative-holes (first descs))))))
 
-;; Two holes each independently resolving relative for the SAME expanded
-;; descriptor has no coherent meaning -- %RELATIVE-OFFSET applies to one
-;; hole only. %CHECK-BYTE-ONE-OF-RELATIVE's positional rule must reject
-;; this even though each hole individually carries a valid selector.
+;; Each selected alternative supplies its own hole's relative flag.
 (defmode rl-instr-two-abs expr :width 1)
 (defmode rl-instr-two-rel "#" expr :width 1 :relative t)
 (defmode rl-instr-two (one-of rl-instr-two-abs rl-instr-two-rel) ","
                        (one-of rl-instr-two-abs rl-instr-two-rel))
 
-(fiveam:test one-of-relative-two-holes-in-one-sibling-signals-error
-  (fiveam:signals error
-    (eval '(definstruction instr-test-machine reldbad2
-             (modes rl-instr-two)
-             (encoding (opcode #x68)
-                       (operand v1 :mode)
-                       (operand v2 :mode)
-                       (sub-opcode
-                         (variant (choice rl-instr-two-abs rl-instr-two-abs) (sub 0))
-                         (variant (choice rl-instr-two-abs rl-instr-two-rel) (sub 1))
-                         (variant (choice rl-instr-two-rel rl-instr-two-abs) (sub 2))
-                         (variant (choice rl-instr-two-rel rl-instr-two-rel) (sub 3))))
-             (semantics nil)))))
+(definstruction instr-test-machine reldboth
+  (modes rl-instr-two)
+  (encoding (opcode #x68)
+            (operand v1 :mode)
+            (operand v2 :mode)
+            (sub-opcode
+              (variant (choice rl-instr-two-abs rl-instr-two-abs) (sub 0))
+              (variant (choice rl-instr-two-abs rl-instr-two-rel) (sub 1))
+              (variant (choice rl-instr-two-rel rl-instr-two-abs) (sub 2))
+              (variant (choice rl-instr-two-rel rl-instr-two-rel) (sub 3))))
+  (semantics nil))
 
-;; Per-hole :RELATIVE is out of scope on a word-encoded machine, same as a
-;; whole-mode :RELATIVE -- %RELATIVE-OFFSET's arithmetic assumes a
-;; cell-counted operand width; any ONE-OF hole whose alternatives declare
-;; :RELATIVE at all (agreeing or not) is a DEFINSTRUCTION-time error.
-(fiveam:test one-of-relative-on-word-machine-signals-error
+(fiveam:test one-of-two-relative-holes-in-one-sibling
+  (fiveam:is (equalp #(#x68 3 #xFC #xFC)
+                     (assembly-cells (assemble "reldboth #*, #*" :machine 'instr-test-machine)))))
+
+;; Identical field ranges cannot distinguish the selected alternative.
+(fiveam:test overlapping-word-relative-alternatives-signal-error
   (fiveam:signals error
     (eval '(definstruction mixed-field-test-machine reldword
              (modes rl-instr-one)
@@ -3920,13 +4042,11 @@ reld #*" :machine 'instr-test-machine)
   (let* ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x0F))
          (signed (find 0 descs :key #'instruction-descriptor-sub-opcode))
          (relative (find 1 descs :key #'instruction-descriptor-sub-opcode)))
-    ;; Both siblings agree on OPERAND-SIGNEDNESS (T) -- the shared MODE-
-    ;; DESCRIPTOR-SIGNEDP consequence of RELATIVE implying SIGNED -- but only
-    ;; RELATIVE-HOLE-INDEX tells them apart.
+    ;; Both siblings are signed; only the relative flags distinguish them.
     (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness signed)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index signed)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-relative-holes signed)))
     (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness relative)))
-    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index relative)))))
+    (fiveam:is (equal '(t) (instruction-descriptor-relative-holes relative)))))
 
 (fiveam:test one-of-signed-and-relative-round-trips-the-plain-signed-alternative
   ;; The offset arithmetic actually differs, not just the descriptor slots:
@@ -3965,9 +4085,9 @@ target: nop")
          (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
          (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
     (fiveam:is (equal '(1) (instruction-descriptor-operand-widths narrow)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index narrow)))
+    (fiveam:is (equal '(nil) (instruction-descriptor-relative-holes narrow)))
     (fiveam:is (equal '(2) (instruction-descriptor-operand-widths wide)))
-    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index wide)))))
+    (fiveam:is (equal '(t) (instruction-descriptor-relative-holes wide)))))
 
 (fiveam:test one-of-relative-and-width-round-trips-the-narrow-non-relative-alternative
   (fiveam:is (equalp #(#x6A 0 200) (assembly-cells (assemble "relwd 200" :machine 'instr-test-machine))))
@@ -4039,10 +4159,10 @@ target: nop")
          (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
     (fiveam:is (equal '(1 1) (instruction-descriptor-operand-widths narrow)))
     (fiveam:is (equal '(nil nil) (instruction-descriptor-operand-signedness narrow)))
-    (fiveam:is (null (instruction-descriptor-relative-hole-index narrow)))
+    (fiveam:is (equal '(nil nil) (instruction-descriptor-relative-holes narrow)))
     (fiveam:is (equal '(2 1) (instruction-descriptor-operand-widths wide)))
     (fiveam:is (equal '(t nil) (instruction-descriptor-operand-signedness wide)))
-    (fiveam:is (= 0 (instruction-descriptor-relative-hole-index wide)))))
+    (fiveam:is (equal '(t nil) (instruction-descriptor-relative-holes wide)))))
 
 (fiveam:test one-of-three-way-disagreement-round-trips-the-narrow-alternative
   (let ((cells (assembly-cells (assemble "trisig 5, 7" :machine 'instr-test-machine))))

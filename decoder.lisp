@@ -147,6 +147,11 @@ emission order. All operand lists belong to this call."
                      (incf offset extra-cells))))))))
     (values values offset matches t)))
 
+(defun %resolved-word-sibling (descriptor matches)
+  (or (and (instruction-descriptor-word-siblings descriptor)
+           (gethash matches (instruction-descriptor-word-siblings descriptor)))
+      descriptor))
+
 (defun %decode-word-instruction (read-cell address machine-name layout)
   "Fetch a word and select its first matching descriptor.
 Words up to 16 bits use a shared dispatch table; wider words scan their opcode
@@ -164,8 +169,9 @@ field choices rather than the descriptor's encoding-size variant."
         (multiple-value-bind (values offset matches okp)
             (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
           (declare (ignore okp))
-          (values descriptor values offset matches
-                  (instruction-descriptor-choice-selections descriptor)))
+          (let ((selected (%resolved-word-sibling descriptor matches)))
+            (values selected values offset matches
+                    (instruction-descriptor-choice-selections selected))))
         (values :decode-failure nil nil))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width endian)

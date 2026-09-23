@@ -60,8 +60,9 @@
         (multiple-value-bind (values size choices okp)
             (%try-decode-word-candidate reader address width-cells cell-width descriptor word endian)
           (when okp
-            (return (values descriptor values size choices
-                            (instruction-descriptor-choice-selections descriptor)))))))))
+            (let ((selected (%resolved-word-sibling descriptor choices)))
+              (return (values selected values size choices
+                              (instruction-descriptor-choice-selections selected))))))))))
 
 (fiveam:test indexed-decode-agrees-with-candidate-scan-for-every-word
   (dolist (name '(disasm-word-machine independent-choice-machine))

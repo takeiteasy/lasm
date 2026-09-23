@@ -232,14 +232,9 @@ declared in `(modes ...)`:
      "PC-relative offsets" below) and checks it against the signed range
      instead of comparing the raw target to an operand width. This is a
      *per-hole* check, same as `:signed` below: a candidate's
-     `relative-hole-index` ([Instructions](instructions.md#relative-hole-index))
-     names at most one hole to check this way — a whole-mode `relative`
-     candidate's own single hole, or a `one-of` hole whose matched
-     alternative declares its own `:relative` ([Addressing modes, "Per-hole
-     `:relative`"](modes.md#per-hole-relative)) — checked against *that
-     hole's own* width, not the candidate's total operand width; every other
-     hole of the same candidate is filtered by its own ordinary `:signed`/
-     unsigned rule instead.
+     `relative-holes` ([Instructions](instructions.md#relative-holes)) marks
+     every relative field. Each offset is checked against that field's own
+     range. Other fields use their signed or unsigned range.
    - A non-`relative` **`:signed`** mode candidate ([Addressing modes,
      "Signed operands"](modes.md#signed-operands)) fits against the signed
      range only (`%fits-signed-width-p`), not the wider unsigned-inclusive
@@ -446,31 +441,12 @@ which hole is relative, so it's never adjusted per hole (see below).
 renders a negative offset as its two's-complement cell (e.g. `-3` as `#xFD`
 on an 8-bit-cell machine).
 
-The width the offset is range-checked *against*, by contrast, is always the
-relative hole's own — `relative-hole-index` names which one
-([Instructions](instructions.md#relative-hole-index)) — never the sum of
-every hole's width. On a multi-hole descriptor (a `one-of` hole declaring
-its own `:relative` alongside an ordinary sibling hole, [Addressing modes,
-"Per-hole `:relative`"](modes.md#per-hole-relative)), using the total width
-here instead would silently let an offset that only fits the combined width
-of every hole through, rather than the relative hole's own — and either
-wrap to the wrong branch target, or (worse) let relaxation pick a candidate
-on the strength of a fit test that was never really testing that hole at
-all. If the offset doesn't fit the relative hole's own width, this signals
-`assembly-error` naming the mnemonic, the offset, and the legal range,
-rather than silently wrapping to a branch at the wrong address. Every other
-hole of the same descriptor is left exactly as `eval-expr` folded it, and is
-still strict-range-checked normally (see [Diagnostics, "Strict operand
-range"](diagnostics.md#strict-operand-range)) — only the relative hole's own
-value gets this adjustment and its own unconditional check.
+Each relative hole is range-checked against its own width, independently
+of its siblings. Overflow signals `assembly-error`. Ordinary holes keep
+their evaluated values and follow normal strict-range rules.
 
-On a word-encoded descriptor (#62), `relative-hole-index` names a hole into
-`word-fields` rather than `operand-widths` (`operand-widths` is always
-`nil` there), and the "width the offset is range-checked against" above is
-that hole's own `word-field-choice` instead: an `:inline` field's own
-(pre-bias) `range`, or, for an `:extra-word` field, a signed fit within
-*that field's own* declared `extra-cells * cell-width` bits (#135 — not
-always the whole instruction word's own `width-cells`)
+On a word-encoded descriptor, each relative hole uses its selected
+`word-field-choice` range or its extra-word width
 (`%word-relative-offset-fits-p`, `assembler.lisp`). The check is just as
 unconditional as the byte-encoded one above — `%check-strict-operand-range!`
 is already a no-op for a word-encoded descriptor regardless of `:strict`,

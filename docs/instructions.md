@@ -273,7 +273,7 @@ decode with genuinely different operand sizes while sharing one opcode.
 
 It similarly lets a hole disagree on `:relative` (see [Addressing modes,
 "Per-hole `:relative`"](modes.md#per-hole-relative)) — each expanded
-descriptor's own `relative-hole-index` (below) is stamped from which
+descriptor's own `relative-holes` (below) is stamped from which
 alternative it was claimed for, so a `jmr 10`/`jmr #target`-shaped pair of
 statements can encode one operand plainly and the other as a PC-relative
 offset while sharing one opcode.
@@ -432,38 +432,14 @@ which register doesn't vary by `sub-choices` or field-variant combo. See
 rendering"](disassembler.md#register-index-operand-rendering) for what reads
 it.
 
-### `relative-hole-index`
+### `relative-holes`
 
-Every byte-encoded `instruction-descriptor` also carries a single
-`relative-hole-index` slot — `nil` when no hole of this descriptor is a
-PC-relative offset, else the 0-based index of the one hole that is. Unlike
-`operand-signedness`/`operand-widths`, which are hole-aligned *lists* (any
-number of holes may independently be signed, or independently disagree on
-width), `:relative` is **positional** — at most one hole of a pattern may
-ever be the relative one (`%check-relative-mode-holes`/
-`%check-byte-one-of-relative`, `instruction.lisp`) — so a single index
-suffices. A whole-mode `relative` mode (`mode-descriptor-relativep`) always
-has exactly one hole, so it always stamps `relative-hole-index` as `0`; a
-`one-of` alternative declaring its own `:relative` (see [Addressing modes,
-"Per-hole `:relative`"](modes.md#per-hole-relative)) stamps whichever hole
-it belongs to, or `nil` for a sibling descriptor whose matched alternative
-at that hole isn't relative. Both cases fold into this one slot, so every
-consumer — the assembler's mode selector and `%encode` (see [Assembler,
-"PC-relative offsets"](assembler.md#pc-relative-offsets)), and the
-disassembler's operand rendering (see
-[Disassembler](disassembler.md#relative-operand-rendering)) — reads
-`relative-hole-index` uniformly rather than branching on
-`mode-descriptor-relativep` separately. Computed once per expanded
-descriptor (`%byte-descriptor-forms`, `%byte-relative-hole-index`), for the
-same reason `operand-signedness`/`operand-widths` are.
-
-A word-encoded descriptor carries `relative-hole-index` too (#62,
-`%word-relative-hole-index`) — computed once per `%expand-word-combos`
-combo rather than once per mode, since sibling combos may pick different
-`(choice m)`-selected variants at the same hole and so disagree on which
-hole, if any, is relative. See ["Word-encoded
-instructions"](#word-encoded-instructions-20) below for how a relative hole
-packs into an instruction-word field.
+Each instruction descriptor carries a `relative-holes` list aligned with its
+operand fields. A true entry marks a field that holds a signed PC-relative
+offset. Byte and word encodings both allow several relative fields; each is
+measured from the address after the complete instruction. Word decoding
+returns the descriptor for the matched field choices, so disassembly uses
+the same flags that assembly used.
 
 ### Repeated `(operand ...)` subclauses — multi-operand instructions
 
@@ -498,11 +474,9 @@ Declaring the wrong number of `(operand ...)` subclauses for a mode's hole
 count — too few or too many — is an error at `definstruction`'s
 macroexpansion time, not a runtime surprise.
 
-A `:relative` mode ([Addressing modes](modes.md#pc-relative-modes)) may not
-have more than one hole: its offset applies to the operand as a whole, and
-there is currently no way to mark just one hole of a multi-hole mode as the
-relative one (see [Addressing modes](modes.md#width) and the tracker for
-this follow-up).
+A mode may mark any number of `expr` holes as relative or signed. Each
+relative hole has its own range check and uses the complete instruction's
+end address as its offset base (see [Addressing modes](modes.md#per-hole-relative)).
 
 A `(one-of mode...)` pattern element ([Addressing modes, "Per-operand
 modes"](modes.md#per-operand-modes)) counts as one hole, the same as a plain
@@ -991,11 +965,10 @@ an offset outside the inline range's own bounds spills into its own
 following word — `:cells` cells wide, defaulting to the instruction word's
 own width — relaxed into by the same narrow-before-wide combo ordering
 (`%expand-word-combos`, [Assembler](assembler.md#choosing-a-mode)) that
-already relaxes an ordinary value-selected field. A relative field is implicitly signed regardless of
-whether it names a `(choice m)` alternative or is plain value-selected —
-its own `MODE`'s `:relative t` already implies `:signed t`
-(`mode-descriptor-signedp`, [Addressing modes](modes.md#signed-operands)) —
-so an offset outside its declared inline range, with no escape to relax
+already relaxes an ordinary value-selected field. A relative field is signed
+whether it comes from a mode-wide option, an `expr` hole option, or a
+selected alternative ([Addressing modes](modes.md#per-hole-relative)). An
+offset outside its declared inline range, with no escape to relax
 into, is an unconditional `assembly-error` (see [Assembler, "PC-relative
 offsets"](assembler.md#pc-relative-offsets)), never a silent `wrap-value`
 truncation to the wrong branch target. See
@@ -1304,10 +1277,6 @@ field(s). It does not cover:
   select — see [Assembler](assembler.md).
 - A fetch/execute loop advancing `pc` over encoded cells — see
   [Emulator](emulator.md).
-- Marking just one hole of a multi-hole mode as PC-relative — a `:relative`
-  mode may only have one hole (see "Repeated `(operand ...)` subclauses"
-  above and [Addressing modes](modes.md#pc-relative-modes)) — a separate,
-  follow-up feature.
 
 Banked (`:count > 1`) registers work the same way in word-encoded semantics
 as everywhere else — bound as `(NAME idx)` via `regref` — see [Semantics

@@ -93,6 +93,13 @@ instruction — one operand encoding field per hole, named `dst`/`val` so
 `(operand ...)` subclauses"](instructions.md).
 
 ```sh
+sbcl --script examples/hole-attributes.lisp
+```
+
+Expression holes with independent signed and relative attributes. The
+example encodes two branch targets in one instruction and runs the result.
+
+```sh
 sbcl --script examples/directives.lisp
 ```
 

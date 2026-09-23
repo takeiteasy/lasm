@@ -162,11 +162,22 @@ those off first)."
                 ((and (symbolp el) (string-equal (symbol-name el) "EXPR")) (list :expr))
                 ((and (consp el) (symbolp (first el))
                       (string-equal (symbol-name (first el)) "EXPR"))
-                 (destructuring-bind (expr &key register) el
+                 (destructuring-bind (expr &key register (relative nil relative-given-p)
+                                             (signed nil signed-given-p)) el
                    (declare (ignore expr))
-                   (unless (and register (symbolp register))
+                   (when (and register (not (symbolp register)))
                      (error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
-                   (list :expr register)))
+                   (when (and (member :register (rest el)) (null register))
+                     (error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
+                   (when (and relative-given-p (not (member relative '(nil t))))
+                     (error "Malformed DEFMODE expression hole ~S -- :RELATIVE must be T or NIL" el))
+                   (when (and signed-given-p (not (member signed '(nil t))))
+                     (error "Malformed DEFMODE expression hole ~S -- :SIGNED must be T or NIL" el))
+                   (when (and relative (eq signed nil) signed-given-p)
+                     (error "DEFMODE expression hole ~S: :RELATIVE T implies :SIGNED T" el))
+                   (append (list :expr register)
+                           (when relative-given-p (list :relative relative))
+                           (when signed-given-p (list :signed signed)))))
                  ((%one-of-element-p el)
                   (let ((slot (%one-of-slot el))
                         (alternatives (%one-of-alternatives el)))
@@ -249,6 +260,31 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
   (defun %mode-hole-alternatives (mode &optional seen)
     (%pattern-hole-alternatives (mode-descriptor-pattern mode) seen))
 
+  (defun %expr-hole-attribute (element mode attribute)
+    (let* ((options (cddr element))
+           (relative (if (member :relative options)
+                         (getf options :relative)
+                         (mode-descriptor-relativep mode)))
+           (signed (if (member :signed options)
+                       (getf options :signed)
+                       (mode-descriptor-signedp mode))))
+      (when (and relative (member :signed options) (not signed))
+        (error "DEFMODE ~S: a relative EXPR hole cannot be unsigned"
+               (mode-descriptor-name mode)))
+      (ecase attribute
+        (:relative relative)
+        (:signed (or relative signed)))))
+
+  (defun %mode-hole-attributes (mode attribute)
+    "Return default attributes in pattern order."
+    (loop for element in (mode-descriptor-pattern mode)
+          append (ecase (first element)
+                   (:literal nil)
+                   (:expr (list (%expr-hole-attribute element mode attribute)))
+                   (:one-of (%mode-hole-attributes
+                             (find-mode-descriptor (first (%one-of-alternatives element)))
+                             attribute)))))
+
   (defun %pattern-nested-one-of-signed-p (pattern &optional seen)
     "T if any :ONE-OF element nested anywhere in PATTERN -- at any depth, not
 just PATTERN's own top-level elements -- has an alternative declaring
@@ -265,6 +301,13 @@ made. SEEN guards the same hand-written-redefinition-cycle case
           thereis (when (eq (first element) :one-of)
                      (let ((alts (mapcar #'find-mode-descriptor (%one-of-alternatives element))))
                       (or (some #'mode-descriptor-signedp alts)
+                          (some (lambda (alt)
+                                  (some (lambda (hole)
+                                          (and (eq (first hole) :expr)
+                                               (or (getf (cddr hole) :signed)
+                                                   (getf (cddr hole) :relative))))
+                                        (mode-descriptor-pattern alt)))
+                                alts)
                           (some (lambda (alt)
                                   (let ((alt-name (mode-descriptor-name alt)))
                                     (unless (member alt-name seen)
@@ -359,14 +402,16 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
 
   (defstruct mode-hole-tuple
     groups
-    hole-alternatives)
+    hole-alternatives
+    hole-sources)
 
   (defun %mode-hole-tuples (mode &optional seen)
     "Fixed-arity shapes across independently varying ONE-OF elements."
-    (labels ((walk (pattern base-start start groups holes)
+    (labels ((walk (pattern base-start start groups holes sources)
                (if (null pattern)
                    (list (make-mode-hole-tuple :groups (reverse groups)
-                                              :hole-alternatives holes))
+                                              :hole-alternatives holes
+                                              :hole-sources sources))
                    (let* ((element (first pattern))
                            (alts (and (eq (first element) :one-of) (%one-of-alternatives element)))
                           (base-count (ecase (first element)
@@ -398,8 +443,27 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
                                                     :slot (%one-of-slot element))
                                                   groups)
                                             groups)
-                                        (append holes (make-list count :initial-element alts))))))))
-      (walk (mode-descriptor-pattern mode) 0 0 nil nil)))
+                                        (append holes (make-list count :initial-element alts))
+                                        (append sources
+                                                (ecase (first element)
+                                                  (:literal nil)
+                                                  (:expr (list (list :expr element)))
+                                                  (:one-of
+                                                   (loop for index below count
+                                                         collect (list :one-of alts index alt)))))))))))
+      (walk (mode-descriptor-pattern mode) 0 0 nil nil nil)))
+
+  (defun %hole-source-attribute (mode source attribute &optional choice)
+    (ecase (first source)
+      (:expr (%expr-hole-attribute (second source) mode attribute))
+      (:one-of
+       (let* ((alt (find-mode-descriptor (or choice (fourth source)
+                                             (first (second source)))))
+              (attributes (%mode-hole-attributes alt attribute)))
+         (nth (third source) attributes)))))
+
+  (defun %mode-hole-sources (mode)
+    (mode-hole-tuple-hole-sources (first (%mode-hole-tuples mode))))
 
   (defun %mode-hole-count-range (mode &optional seen)
     "(VALUES MIN MAX) hole count across every one of MODE's alternative-tuples
@@ -423,65 +487,23 @@ a mode with no varying :ONE-OF element."
             (error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
           (%check-suffix-collision name suffix)
-          (make-mode-descriptor :name name :pattern pattern :width width
-                                 :relativep relative
-                                 :signedp (or relative signed)
-                                 :suffix suffix
-                                 :strictp strict
-                                 :varyingp (and (%pattern-varying-one-of-element pattern) t)))))))
+          (let ((descriptor
+                  (make-mode-descriptor :name name :pattern pattern :width width
+                                        :relativep relative :signedp (or relative signed)
+                                        :suffix suffix :strictp strict
+                                        :varyingp (and (%pattern-varying-one-of-element pattern) t))))
+            (dolist (element pattern)
+              (when (eq (first element) :expr)
+                (%expr-hole-attribute element descriptor :signed)))
+            descriptor))))))
 
 (defmacro defmode (name &body pattern)
-  "Define an addressing mode named NAME matching PATTERN, a sequence of
-string literals, the symbol EXPR (one per operand hole), and/or
-(ONE-OF mode...) alternations (#103, at least two already-registered modes;
-see \"Per-operand modes\" in docs/modes.md) -- each hole an addressing mode
-declares may independently pick its own syntax from a set of other modes,
-e.g. a bare register or \"[\" expr \"]\" indirection at the same operand
-position. ONE-OF alternatives may disagree on hole count (#120, see
-docs/modes.md's \"Varying hole counts across alternatives\") -- at most one
-ONE-OF element per pattern may vary, and none of its alternatives may
-itself be a varying mode. Every alternative may declare neither :SUFFIX
-itself (#153 extends per-hole attributes further) nor -- on a
-word-encoded machine -- :RELATIVE, which
-stays byte-machine-only; :STRICT, :SIGNED, :WIDTH, and :RELATIVE (on a
-byte-encoded machine) are the exceptions -- an alternative may declare any
-of the four on its own, honored per hole rather than per statement (see
-docs/modes.md's \"Per-hole :strict\"/\"Per-hole :signed\"/\"Per-hole
-:width\"/\"PC-relative modes\" sections). A per-hole :SIGNED, :WIDTH, or
-:RELATIVE still needs a way to recover, at decode time, which alternative a
-hole actually matched when its siblings disagree -- DEFINSTRUCTION
-(instruction.lisp) enforces that, not this macro; :RELATIVE additionally
-needs to know, per expanded descriptor, which hole of a multi-hole pattern
-is the relative one, also enforced there. Optionally
-followed by
-:WIDTH n (a default operand byte width instructions using this
-mode may omit from their own encoding), :SIGNED t (this mode's operand is a
-signed quantity -- the emulator sign-extends it and the assembler
-range-checks candidate values against the signed range; #30), :RELATIVE t
-(this mode's operand is a PC-relative offset rather than an absolute value
--- see RELATIVE below and #23; implies :SIGNED t, so passing :SIGNED NIL
-alongside :RELATIVE T is an error), and/or :SUFFIX \"s\" (a gas-style
-mnemonic suffix, e.g. \"w\"/\"z\" -- a program can append SEPARATOR ++ s to
-a mnemonic, e.g. \"lda.w\", to force this mode regardless of what the
-operand's value folds to, bypassing relaxation entirely; #40, see
-docs/modes.md), and/or :STRICT t (an operand that doesn't fit this mode's
-own width is an ASSEMBLY-ERROR at encode time rather than silently wrapping
-via WRAP-VALUE; #74, see docs/diagnostics.md -- *STRICT-OPERAND-RANGE*
-makes every mode behave this way without marking any one of them). Signals
-an error if SUFFIX is already claimed by a different mode. E.g.:
-
-  (defmode immediate  \"#\" expr        :width 1)
-  (defmode zero-page  expr            :width 1)
-  (defmode absolute   expr)
-  (defmode indexed-x  expr \",\" \"X\")
-  (defmode indirect-y \"(\" expr \")\" \",\" \"Y\")
-  (defmode signed-imm \"#\" expr        :width 1 :signed t)
-  (defmode relative   expr            :width 1 :relative t)
-
-Registers the resulting MODE-DESCRIPTOR under NAME in *MODES*, inside an
-EVAL-WHEN so it is available at macroexpansion time like DEFMACHINE
-(machine.lisp) -- DEFINSTRUCTION resolves mode names against this registry
-when its own form is compiled."
+  "Define a mode from literal tokens, EXPR holes, and ONE-OF alternatives.
+A hole may use (EXPR :REGISTER name :SIGNED boolean :RELATIVE boolean).
+Hole options override mode-wide :SIGNED and :RELATIVE defaults. A relative
+hole is signed, and any number of holes may be relative. :WIDTH supplies
+the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
+checks ordinary operand ranges. See docs/modes.md."
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (setf (gethash ',name *modes*) (build-mode-descriptor ',name ',pattern))
      ',name))

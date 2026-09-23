@@ -10,9 +10,12 @@
 (defmode test-indirect-y "(" expr ")" "," "Y")
 (defmode test-no-width expr)
 (defmode test-signed-imm "#" expr :width 1 :signed t)
+(defmode test-hole-overrides (expr :relative nil :signed nil) ","
+  (expr :relative t) "," (expr :relative nil) :relative t)
 (defmode test-plus "[" expr "+" expr "]")
 (defmode test-bracket "[" expr "]")
 (defmode test-register "[" (expr :register bank) "]")
+(defmode test-register-with-attributes "[" (expr :register bank :signed nil) "]")
 (defmode test-fixed-sp "SP")
 (defmode test-fixed-pc "PC")
 (defmode test-fixed-or-value
@@ -58,6 +61,34 @@ looks like."
 (fiveam:test defmode-relative-t-signed-nil-signals-error
   (fiveam:signals error
     (eval '(defmode bogus-relative-unsigned expr :relative t :signed nil))))
+
+(fiveam:test expr-hole-attributes-override-mode-defaults
+  (let ((mode (find-mode-descriptor 'test-hole-overrides)))
+    (fiveam:is (equal '(nil t nil) (%mode-hole-attributes mode :relative)))
+    (fiveam:is (equal '(nil t t) (%mode-hole-attributes mode :signed)))))
+
+(fiveam:test expr-hole-options-combine-with-register
+  (fiveam:is (equal '(:expr bank :signed nil)
+                    (second (mode-descriptor-pattern
+                             (find-mode-descriptor 'test-register-with-attributes))))))
+
+(fiveam:test expr-relative-implies-signed
+  (let ((mode (build-mode-descriptor 'test-hole-relative '((expr :relative t)))))
+    (fiveam:is (equal '(t) (%mode-hole-attributes mode :signed)))))
+
+(fiveam:test expr-relative-and-unsigned-signals-error
+  (fiveam:signals error
+    (eval '(defmode bogus-hole-relative (expr :relative t :signed nil))))
+  (fiveam:signals error
+    (eval '(defmode bogus-inherited-relative (expr :signed nil) :relative t))))
+
+(fiveam:test nested-one-of-cannot-hide-hole-signedness
+  (eval '(defmode nested-attr-signed "#" (expr :signed t)))
+  (eval '(defmode nested-attr-plain "[" expr "]"))
+  (eval '(defmode nested-attr-inner (one-of nested-attr-signed nested-attr-plain)))
+  (eval '(defmode nested-attr-other "@" expr))
+  (fiveam:signals error
+    (eval '(defmode nested-attr-outer (one-of nested-attr-inner nested-attr-other)))))
 
 (fiveam:test defmode-allows-literal-only-pattern
   (let ((mode (find-mode-descriptor 'test-fixed-sp)))
