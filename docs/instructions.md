@@ -604,10 +604,13 @@ into (`%expand-word-combos`, always compatible with each other), and,
 independently, several genuinely distinct descriptors — different mnemonics,
 or one mnemonic's different modes, possibly naming different
 [per-instruction layouts](#per-instruction-layouts-64) — that `definstruction`
-has verified are *decode-distinguishable*: some field either candidate
-occupies (an operand hole or a `field-value` pin alike) accepts disjoint raw
-values from the other's, once both are narrowed down to only the bits they
-actually share. Registration compares inclusive bit-pattern ranges, including
+has verified are *decode-distinguishable*: no instruction word satisfies both
+candidates' fields (operand holes and `field-value` pins alike) at once. One
+field can settle it, by accepting disjoint raw values from the other's once
+both are narrowed to the bits they share; so can several overlapping fields
+taken together. Overlapping fields are checked together only while they span
+16 bits or fewer; a wider group is rejected as `:indistinguishable` unless a
+single field settles it. Registration compares inclusive bit-pattern ranges, including
 signed ranges that wrap across zero, without expanding each field value.
 Decode (`decode-instruction-at`) selects the first matching
 descriptor in the opcode's bucket, which is kept in specificity order (see

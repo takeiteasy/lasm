@@ -1725,17 +1725,53 @@ as any other sibling pair."
                                  projected-b))
                          projected-a))))))))
 
+(defun %constraint-components (constraints)
+  "Group CONSTRAINTS into lists that chain together through shared bits."
+  (let ((components nil))
+    (dolist (c constraints)
+      (destructuring-bind (width shift intervals) c
+        (declare (ignore intervals))
+        (let ((touching nil) (rest nil))
+          (dolist (component components)
+            (if (some (lambda (o) (< (max shift (second o))
+                                     (min (+ shift width) (+ (second o) (first o)))))
+                      component)
+                (cl:push component touching)
+                (cl:push component rest)))
+          (setf components (cons (cons c (apply #'append touching)) rest)))))
+    components))
+
+(defun %joint-constraints-disjoint-p (constraints-a constraints-b)
+  "T when some group of overlapping constraints spanning both descriptors,
+taken together, is met by no instruction word. Only groups spanning at most 16
+bits are enumerated."
+  (some (lambda (component)
+          (let* ((lo (reduce #'min component :key #'second))
+                 (hi (reduce #'max component :key (lambda (c) (+ (first c) (second c)))))
+                 (width (- hi lo)))
+            ;; TODO: groups spanning more than 16 bits are never proven
+            ;; disjoint; chain the shared bits instead if a wide ISA needs it (#214).
+            (and (<= width 16)
+                 (intersection component constraints-a :test #'eq)
+                 (intersection component constraints-b :test #'eq)
+                 (let ((projections (%constraint-window-projections component width lo)))
+                   (dotimes (value (ash 1 width) t)
+                     (when (%window-value-meets-p projections value)
+                       (return nil)))))))
+        (%constraint-components (append constraints-a constraints-b))))
+
 (defun %descriptors-distinguishable-p (a b)
-  "T if some bit-level constraint of A (%WORD-BIT-CONSTRAINTS, #140) and some
-constraint of B share bits and disagree there (%BIT-CONSTRAINTS-DISJOINT-P)
--- the sole decodability proof %CHECK-OPCODE-DECODABLE! needs. Checking every
-constraint of A against every constraint of B covers each unordered pair
-regardless of which descriptor it came from, so one nested loop suffices
-where the old hole/pin split needed two separate checks."
+  "T if no instruction word satisfies both A's and B's bit constraints
+(%WORD-BIT-CONSTRAINTS) -- the sole decodability proof %CHECK-OPCODE-DECODABLE!
+needs. Some constraint of A disagreeing with some constraint of B on their
+shared bits (%BIT-CONSTRAINTS-DISJOINT-P) settles it cheaply; failing that,
+several overlapping constraints are checked together
+(%JOINT-CONSTRAINTS-DISJOINT-P)."
   (let ((constraints-a (%word-bit-constraints a))
         (constraints-b (%word-bit-constraints b)))
-    (loop for ca in constraints-a
-            thereis (some (lambda (cb) (%bit-constraints-disjoint-p ca cb)) constraints-b))))
+    (or (loop for ca in constraints-a
+                thereis (some (lambda (cb) (%bit-constraints-disjoint-p ca cb)) constraints-b))
+        (%joint-constraints-disjoint-p constraints-a constraints-b))))
 
 (defun %intervals-contain-p (intervals value)
   (some (lambda (interval) (<= (car interval) value (cdr interval))) intervals))
@@ -1757,26 +1793,34 @@ product of per-constraint sets and enumerating CONSTRAINT's window is exact."
         :yes
         (%enumerate-constraint-window specific-constraints width shift intervals))))
 
+(defun %constraint-window-projections (constraints width shift)
+  "Each of CONSTRAINTS that overlaps the WIDTH-bit window at SHIFT, as
+(OFFSET OVERLAP-WIDTH INTERVALS): its intervals projected onto the overlap,
+which starts OFFSET bits into the window."
+  (loop for (cw cs civs) in constraints
+        for lo = (max shift cs)
+        for hi = (min (+ shift width) (+ cs cw))
+        when (< lo hi)
+          collect (list (- lo shift) (- hi lo)
+                        (mapcan (lambda (interval)
+                                  (%project-raw-interval interval (- lo cs) (- hi lo)))
+                                civs))))
+
+(defun %window-value-meets-p (projections value)
+  "Whether VALUE, a window's bits, lies inside every one of PROJECTIONS."
+  (every (lambda (o)
+           (destructuring-bind (offset overlap-width projected) o
+             (%intervals-contain-p projected (ldb (byte overlap-width offset) value))))
+         projections))
+
 (defun %enumerate-constraint-window (specific-constraints width shift intervals)
   ;; TODO: windows wider than 16 bits are :UNKNOWN (so never proven
-  ;; shadowed); walk the interval product instead if a wide field needs it.
+  ;; shadowed); walk the interval product instead if a wide field needs it (#214).
   (if (> width 16)
       :unknown
-      (let ((overlapping
-              (loop for (cw cs civs) in specific-constraints
-                    for lo = (max shift cs)
-                    for hi = (min (+ shift width) (+ cs cw))
-                    when (< lo hi)
-                      collect (list (- lo shift) (- hi lo)
-                                    (mapcan (lambda (interval)
-                                              (%project-raw-interval interval (- lo cs) (- hi lo)))
-                                            civs)))))
+      (let ((overlapping (%constraint-window-projections specific-constraints width shift)))
         (dotimes (value (ash 1 width) :yes)
-          (when (and (every (lambda (o)
-                              (destructuring-bind (offset overlap-width projected) o
-                                (%intervals-contain-p
-                                 projected (ldb (byte overlap-width offset) value))))
-                            overlapping)
+          (when (and (%window-value-meets-p overlapping value)
                      (not (%intervals-contain-p intervals value)))
             (return :no))))))
 
@@ -1805,7 +1849,7 @@ to share one opcode on word-encoded MACHINE-NAME (#105), neither a sibling
 combo of the other (%SIBLING-COMBOS-P) -- can be told apart at decode time.
 
 #140: A and B need not name the same instruction-word layout (#64) --
-%DESCRIPTORS-DISTINGUISHABLE-P pairs their bit-level constraints (operand
+%DESCRIPTORS-DISTINGUISHABLE-P compares their bit-level constraints (operand
 holes and (field-value ...) pins alike) by the bits they actually occupy,
 fully or partially overlapping, so decode never needs to know which layout
 matched before it can tell two candidates apart: every WORD-FIELD-CHOICE and
@@ -1814,7 +1858,8 @@ its own descriptor's layout at DEFINSTRUCTION time. :REASON :INDISTINGUISHABLE
 when no such disagreement exists.
 
 Requires *at least one* disagreement, not that every constraint disagrees --
-decode only needs one field to tell the two apart. A no-operand descriptor
+decode only needs one field, or one group of overlapping fields, to tell the
+two apart. A no-operand descriptor
 with no WORD-CONSTANTS has no constraints at all, so
 %DESCRIPTORS-DISTINGUISHABLE-P finds nothing to check on its own --
 %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) matches a no-operand descriptor

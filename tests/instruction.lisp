@@ -1442,6 +1442,42 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (string= "PARTIALHI" (instruction-descriptor-name
                                       (decode-instruction-at (vector-cell-reader hi) 0 'word-layouts-test-machine))))))
 
+(definstruction word-layouts-test-machine jointa
+  (modes word-layouts-x)
+  (encoding (opcode 7) (layout narrow) (field-value x 1) (field-value y 0)
+    (operand v :field z))
+  (semantics (set! a v)))
+
+(definstruction word-layouts-test-machine jointb
+  (modes word-layouts-xy)
+  (encoding (opcode 7)
+    (operand x :field x (variant (range 5 8) inline))
+    (operand y :field y))
+  (semantics (set! a x) (set! b y)))
+
+(fiveam:test definstruction-co-tenants-distinguished-only-jointly-are-accepted
+  ;; JOINTA's narrow x=1 and y=0 pins together fix default X to 4. Each pin
+  ;; alone overlaps JOINTB's X range 5-8, but no word satisfies both.
+  (let ((a (assembly-cells (assemble "jointa 9" :machine 'word-layouts-test-machine)))
+        (b (assembly-cells (assemble "jointb 6, 9" :machine 'word-layouts-test-machine))))
+    (fiveam:is (string= "JOINTA" (instruction-descriptor-name
+                                   (decode-instruction-at (vector-cell-reader a) 0 'word-layouts-test-machine))))
+    (fiveam:is (string= "JOINTB" (instruction-descriptor-name
+                                   (decode-instruction-at (vector-cell-reader b) 0 'word-layouts-test-machine))))))
+
+(fiveam:test definstruction-co-tenants-overlapping-jointly-are-rejected
+  ;; Widening X to 4-8 admits the word JOINTA accepts.
+  (handler-case
+      (eval '(definstruction word-layouts-test-machine bogus
+               (modes word-layouts-xy)
+               (encoding (opcode 7)
+                 (operand x :field x (variant (range 4 8) inline))
+                 (operand y :field y))
+               (semantics (set! a x) (set! b y))))
+    (opcode-conflict (c)
+      (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
 (fiveam:test raw-interval-projection-matches-small-value-sets
   (loop for field-width from 1 to 5 do
     (loop for offset below field-width do
