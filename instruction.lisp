@@ -1725,123 +1725,113 @@ as any other sibling pair."
                                  projected-b))
                          projected-a))))))))
 
-(defun %constraint-components (constraints)
-  "Group CONSTRAINTS into lists that chain together through shared bits."
-  (let ((components nil))
-    (dolist (c constraints)
-      (destructuring-bind (width shift intervals) c
-        (declare (ignore intervals))
-        (let ((touching nil) (rest nil))
-          (dolist (component components)
-            (if (some (lambda (o) (< (max shift (second o))
-                                     (min (+ shift width) (+ (second o) (first o)))))
-                      component)
-                (cl:push component touching)
-                (cl:push component rest)))
-          (setf components (cons (cons c (apply #'append touching)) rest)))))
-    components))
+(defun %interval-states-step (states intervals bit-index bit)
+  "Advance STATES -- integers J*4 + tight-low*2 + tight-high, one per interval
+of INTERVALS still able to match -- past BIT at BIT-INDEX of the field."
+  (let ((next nil))
+    (dolist (state states)
+      (let* ((interval (svref intervals (ash state -2)))
+             (low (ldb (byte 1 bit-index) (car interval)))
+             (high (ldb (byte 1 bit-index) (cdr interval)))
+             (tight-low (and (logbitp 1 state) (= bit low)))
+             (tight-high (and (logbitp 0 state) (= bit high))))
+        (unless (or (and (logbitp 1 state) (< bit low))
+                    (and (logbitp 0 state) (> bit high)))
+          (pushnew (if (or tight-low tight-high)
+                       (+ (logandc2 state 3) (if tight-low 2 0) (if tight-high 1 0))
+                       0)
+                   next))))
+    (sort next #'<)))
+
+(defun %constraints-satisfiable-p (constraints)
+  "Whether some instruction word meets every one of CONSTRAINTS (width, shift
+and inclusive raw intervals each). Walks the word's bits from the top; each
+constraint tracks which of its intervals the bits so far can still match, so
+the cost is independent of field width."
+  (let* ((cs (mapcar (lambda (c)
+                       (destructuring-bind (width shift intervals) c
+                         (list shift (+ shift width) (coerce intervals 'simple-vector))))
+                     constraints))
+         (top (reduce #'max cs :key #'second))
+         (bottom (reduce #'min cs :key #'first))
+         (seen (make-hash-table :test #'equal)))
+    (labels ((advance (pos states bit)
+               (let ((next (loop for (shift end intervals) in cs
+                                 for state in states
+                                 collect (if (or (>= pos end) (< pos shift))
+                                             :off
+                                             (let ((stepped (%interval-states-step
+                                                             (if (eq state :off)
+                                                                 (loop for j below (length intervals) collect (+ (* j 4) 3))
+                                                                 state)
+                                                             intervals (- pos shift) bit)))
+                                               (when (null stepped)
+                                                 (return-from advance nil))
+                                               (if (= pos shift) :off stepped))))))
+                 (solve (1- pos) next)))
+             (solve (pos states)
+               (or (< pos bottom)
+                   (multiple-value-bind (result found) (gethash (cons pos states) seen)
+                     (if found
+                         result
+                         (setf (gethash (cons pos states) seen)
+                               (or (advance pos states 0) (advance pos states 1))))))))
+      (solve (1- top) (make-list (length cs) :initial-element :off)))))
 
 (defun %joint-constraints-disjoint-p (constraints-a constraints-b)
-  "T when some group of overlapping constraints spanning both descriptors,
-taken together, is met by no instruction word. Only groups spanning at most 16
-bits are enumerated."
-  (some (lambda (component)
-          (let* ((lo (reduce #'min component :key #'second))
-                 (hi (reduce #'max component :key (lambda (c) (+ (first c) (second c)))))
-                 (width (- hi lo)))
-            ;; TODO: groups spanning more than 16 bits are never proven
-            ;; disjoint; chain the shared bits instead if a wide ISA needs it (#214).
-            (and (<= width 16)
-                 (intersection component constraints-a :test #'eq)
-                 (intersection component constraints-b :test #'eq)
-                 (let ((projections (%constraint-window-projections component width lo)))
-                   (dotimes (value (ash 1 width) t)
-                     (when (%window-value-meets-p projections value)
-                       (return nil)))))))
-        (%constraint-components (append constraints-a constraints-b))))
+  "T when no instruction word meets all of both descriptors' constraints."
+  (not (%constraints-satisfiable-p (append constraints-a constraints-b))))
 
 (defun %descriptors-distinguishable-p (a b)
   "T if no instruction word satisfies both A's and B's bit constraints
 (%WORD-BIT-CONSTRAINTS) -- the sole decodability proof %CHECK-OPCODE-DECODABLE!
 needs. Some constraint of A disagreeing with some constraint of B on their
 shared bits (%BIT-CONSTRAINTS-DISJOINT-P) settles it cheaply; failing that,
-several overlapping constraints are checked together
-(%JOINT-CONSTRAINTS-DISJOINT-P)."
+all the constraints are solved together (%JOINT-CONSTRAINTS-DISJOINT-P)."
   (let ((constraints-a (%word-bit-constraints a))
         (constraints-b (%word-bit-constraints b)))
     (or (loop for ca in constraints-a
                 thereis (some (lambda (cb) (%bit-constraints-disjoint-p ca cb)) constraints-b))
         (%joint-constraints-disjoint-p constraints-a constraints-b))))
 
-(defun %intervals-contain-p (intervals value)
-  (some (lambda (interval) (<= (car interval) value (cdr interval))) intervals))
-
-(defun %intervals-cover-p (intervals width)
-  (let ((expected 0))
+(defun %interval-gaps (intervals width)
+  "The inclusive raw intervals of a WIDTH-bit field that INTERVALS leave out."
+  (let ((expected 0) (gaps nil))
     (dolist (interval (sort (copy-list intervals) #'< :key #'car))
-      (when (> (car interval) expected) (return-from %intervals-cover-p nil))
+      (when (> (car interval) expected)
+        (cl:push (cons expected (1- (car interval))) gaps))
       (setf expected (max expected (1+ (cdr interval)))))
-    (>= expected (ash 1 width))))
+    (when (< expected (ash 1 width))
+      (cl:push (cons expected (1- (ash 1 width))) gaps))
+    gaps))
 
-(defun %constraint-implied (specific-constraints constraint)
-  "Whether every word meeting all of SPECIFIC-CONSTRAINTS also meets
-CONSTRAINT: :YES, :NO, or :UNKNOWN when its window is too wide to enumerate.
-A descriptor's constraints occupy disjoint bits, so its accepted words are a
-product of per-constraint sets and enumerating CONSTRAINT's window is exact."
+(defun %constraint-implied-p (specific-constraints constraint)
+  "Whether every word meeting all of SPECIFIC-CONSTRAINTS also meets CONSTRAINT."
   (destructuring-bind (width shift intervals) constraint
-    (if (%intervals-cover-p intervals width)
-        :yes
-        (%enumerate-constraint-window specific-constraints width shift intervals))))
+    (let ((gaps (%interval-gaps intervals width)))
+      (or (null gaps)
+          (not (%constraints-satisfiable-p
+                (cons (list width shift gaps)
+                      (remove-if-not (lambda (c)
+                                       (destructuring-bind (cw cs civs) c
+                                         (declare (ignore civs))
+                                         (and (< shift (+ cs cw)) (< cs (+ shift width)))))
+                                     specific-constraints))))))))
 
-(defun %constraint-window-projections (constraints width shift)
-  "Each of CONSTRAINTS that overlaps the WIDTH-bit window at SHIFT, as
-(OFFSET OVERLAP-WIDTH INTERVALS): its intervals projected onto the overlap,
-which starts OFFSET bits into the window."
-  (loop for (cw cs civs) in constraints
-        for lo = (max shift cs)
-        for hi = (min (+ shift width) (+ cs cw))
-        when (< lo hi)
-          collect (list (- lo shift) (- hi lo)
-                        (mapcan (lambda (interval)
-                                  (%project-raw-interval interval (- lo cs) (- hi lo)))
-                                civs))))
-
-(defun %window-value-meets-p (projections value)
-  "Whether VALUE, a window's bits, lies inside every one of PROJECTIONS."
-  (every (lambda (o)
-           (destructuring-bind (offset overlap-width projected) o
-             (%intervals-contain-p projected (ldb (byte overlap-width offset) value))))
-         projections))
-
-(defun %enumerate-constraint-window (specific-constraints width shift intervals)
-  ;; TODO: windows wider than 16 bits are :UNKNOWN (so never proven
-  ;; shadowed); walk the interval product instead if a wide field needs it (#214).
-  (if (> width 16)
-      :unknown
-      (let ((overlapping (%constraint-window-projections specific-constraints width shift)))
-        (dotimes (value (ash 1 width) :yes)
-          (when (and (%window-value-meets-p overlapping value)
-                     (not (%intervals-contain-p intervals value)))
-            (return :no))))))
-
-(defun %descriptor-subset (specific general)
+(defun %descriptor-subset-p (specific general)
   "Whether every word SPECIFIC accepts is also accepted by GENERAL (the bits
-of their operand fields and pins): :YES, :NO or :UNKNOWN."
-  (let ((specific-constraints (%word-bit-constraints specific))
-        (results nil))
-    (dolist (constraint (%word-bit-constraints general))
-      (let ((result (%constraint-implied specific-constraints constraint)))
-        (when (eq result :no) (return-from %descriptor-subset :no))
-        (cl:push result results)))
-    (if (member :unknown results) :unknown :yes)))
+of their operand fields and pins)."
+  (let ((specific-constraints (%word-bit-constraints specific)))
+    (every (lambda (constraint) (%constraint-implied-p specific-constraints constraint))
+           (%word-bit-constraints general))))
 
 (defun %shadows-p (specific general)
   "T when GENERAL is a (fallback) accepting every word SPECIFIC does and
 strictly more, so SPECIFIC must decode first."
   (and (instruction-descriptor-fallback general)
        (not (instruction-descriptor-fallback specific))
-       (eq :yes (%descriptor-subset specific general))
-       (eq :no (%descriptor-subset general specific))))
+       (%descriptor-subset-p specific general)
+       (not (%descriptor-subset-p general specific))))
 
 (defun %check-opcode-decodable! (machine-name name a b)
   "Signal OPCODE-CONFLICT unless A and B -- two INSTRUCTION-DESCRIPTORs about

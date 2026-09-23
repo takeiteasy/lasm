@@ -1548,6 +1548,76 @@ second: nop" :machine 'instr-test-machine))))
                              (decode-instruction-at (vector-cell-reader cells) 0
                                                     'wide-constraint-test-machine))))))))
 
+;;; %CONSTRAINTS-SATISFIABLE-P walks bits rather than enumerating fields, so
+;;; it is checked against brute force over a small word.
+
+(fiveam:test constraints-satisfiable-matches-brute-force
+  (let ((state 141))
+    (flet ((rand (n)
+             (setf state (mod (+ (* state 1103515245) 12345) (ash 1 31)))
+             (mod (ash state -8) n)))
+      (dotimes (trial 600)
+        (let ((constraints nil) (shift 0))
+          (dotimes (i (1+ (rand 3)))
+            (let* ((width (1+ (rand 4)))
+                   (intervals (loop repeat (rand 3)
+                                    collect (let ((lo (rand (ash 1 width))))
+                                              (cons lo (+ lo (rand (- (ash 1 width) lo))))))))
+              (cl:push (list width (+ shift (rand 3)) intervals) constraints)
+              (setf shift (+ shift (rand 4)))))
+          (let ((expected (loop for word below (ash 1 12)
+                                  thereis (every (lambda (c)
+                                                   (destructuring-bind (width shift intervals) c
+                                                     (let ((v (ldb (byte width shift) word)))
+                                                       (some (lambda (iv) (<= (car iv) v (cdr iv)))
+                                                             intervals))))
+                                                 constraints))))
+            (fiveam:is (eq (and expected t)
+                           (%constraints-satisfiable-p constraints)))))))))
+
+(defmachine wide-fallback-test-machine
+  (register pc :width 32)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 32 (field opcode 8) (field src 24)))
+
+(defmode wide-fallback-imm "#" expr)
+
+(definstruction wide-fallback-test-machine widefbgen
+  (modes wide-fallback-imm)
+  (encoding (opcode 1) (fallback) (operand v :field src))
+  (semantics nil))
+
+(definstruction wide-fallback-test-machine widefbpin
+  (encoding (opcode 1) (field-value src #x123456))
+  (semantics nil))
+
+(fiveam:test fallback-contains-co-tenant-on-a-wide-field
+  (flet ((decoded (source)
+           (instruction-descriptor-name
+            (decode-instruction-at
+             (vector-cell-reader (assembly-cells (assemble source :machine 'wide-fallback-test-machine)))
+             0 'wide-fallback-test-machine))))
+    (fiveam:is (string= "WIDEFBGEN" (decoded "widefbgen #5")))
+    (fiveam:signals assembly-error
+      (assemble "widefbgen #1193046" :machine 'wide-fallback-test-machine))))
+
+(fiveam:test wide-field-co-tenants-are-checked-exactly
+  ;; A pin just outside a 24-bit range is accepted; inside it, rejected.
+  (eval '(definstruction wide-constraint-test-machine widepin
+           (encoding (opcode 2) (field-value src #x123456))
+           (semantics nil)))
+  (eval '(definstruction wide-constraint-test-machine widerange
+           (modes wide-constraint-imm)
+           (encoding (opcode 2) (operand v :field src (variant (range 0 #x123455) inline)))
+           (semantics nil)))
+  (handler-case
+      (eval '(definstruction wide-constraint-test-machine widebad
+               (modes wide-constraint-imm)
+               (encoding (opcode 2) (operand v :field src (variant (range 0 #x123456) inline)))
+               (semantics nil)))
+    (opcode-conflict (c) (fiveam:is (eq :indistinguishable (opcode-conflict-reason c))))
+    (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
+
 ;;; #138: an (operand ... :field opcode) hole would OR its own bits into the
 ;;; already-placed opcode field at encode time (%ENCODE-WORD-INSTRUCTION) --
 ;;; rejected the same way (field-value opcode ...) already is (#136, above).

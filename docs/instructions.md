@@ -608,9 +608,7 @@ has verified are *decode-distinguishable*: no instruction word satisfies both
 candidates' fields (operand holes and `field-value` pins alike) at once. One
 field can settle it, by accepting disjoint raw values from the other's once
 both are narrowed to the bits they share; so can several overlapping fields
-taken together. Overlapping fields are checked together only while they span
-16 bits or fewer; a wider group is rejected as `:indistinguishable` unless a
-single field settles it. Registration compares inclusive bit-pattern ranges, including
+taken together, at any field width. Registration compares inclusive bit-pattern ranges, including
 signed ranges that wrap across zero, without expanding each field value.
 Decode (`decode-instruction-at`) selects the first matching
 descriptor in the opcode's bucket, which is kept in specificity order (see
@@ -940,8 +938,6 @@ co-tenants, which decode ahead of it:
   order; the fallback decodes only the words they leave.
 - An instruction that assembles to a word a more specific co-tenant decodes
   (`sys $0e0`, which is `cls`) is an assembly error.
-- A fallback whose operand field is wider than 16 bits cannot be proven to
-  contain a co-tenant and is rejected as `:indistinguishable`.
 - `(fallback)` applies to the whole instruction and is valid in the
   top-level `(encoding ...)` clause of word-encoded machines only.
 
