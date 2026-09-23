@@ -629,3 +629,34 @@ looks like."
   (fiveam:signals error (%mode-hole-count (find-mode-descriptor 'cyc-mode-a)))
   ;; Restore CYC-BASE-1 for any test run after this one in the same image.
   (eval '(defmode cyc-base-1 expr)))
+
+;;; Hole forcing prefixes
+
+(defmode hp-plain expr)
+(defmode hp-plain-copy expr)
+(defmode hp-twin-a expr :suffix "twa")
+(defmode hp-twin-b expr :suffix "twb")
+(defmode hp-twins (one-of hp-twin-a hp-twin-b))
+
+(defun %prefixed-tokens (string)
+  (%collapse-hole-prefixes (%tokens-for string) 0 ":"))
+
+(fiveam:test try-match-reports-hole-prefixes
+  (multiple-value-bind (asts okp choices selections prefixes)
+      (try-match-operand-mode (%prefixed-tokens "w:5") 'hp-plain)
+    (declare (ignore choices selections))
+    (fiveam:is-true okp)
+    (fiveam:is (= 1 (length asts)))
+    (fiveam:is (equal '("w") prefixes)))
+  (fiveam:is (equal '(nil) (nth-value 4 (try-match-operand-mode (%prefixed-tokens "5") 'hp-plain)))))
+
+(fiveam:test one-of-prefix-restricts-alternative
+  (fiveam:is (eq 'hp-twin-b (mode-descriptor-name
+                             (first (nth-value 2 (try-match-operand-mode (%prefixed-tokens "twb:5") 'hp-twins))))))
+  (fiveam:is (eq 'hp-twin-a (mode-descriptor-name
+                             (first (nth-value 2 (try-match-operand-mode (%prefixed-tokens "5") 'hp-twins)))))))
+
+(fiveam:test identical-syntax-alternatives-need-suffixes
+  (fiveam:signals error
+    (eval '(defmode hp-bad-twins (one-of hp-plain hp-plain-copy))))
+  (fiveam:finishes (eval '(defmode hp-ok-twins (one-of hp-twin-a hp-twin-b)))))

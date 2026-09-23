@@ -576,3 +576,120 @@
                                                        :machine 'independent-choice-machine)))
       (step-machine machine)
       (fiveam:is (= (second case) (sref machine 'observed))))))
+
+;;; Hole forcing prefixes
+
+(defmachine prefix-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field x 4)
+    (field y 4)
+    (field z 4)))
+
+(defmode prefix-imm "#" expr)
+(defmode prefix-imm-q "#" expr :suffix "hq")
+(defmode prefix-pair expr "," expr)
+(defmode prefix-alt-a expr :suffix "ra")
+(defmode prefix-alt-b expr :suffix "rb")
+(defmode prefix-pick (one-of prefix-alt-a prefix-alt-b))
+
+(definstruction prefix-machine one
+  (modes prefix-imm)
+  (encoding (opcode 1)
+    (operand v :field x
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15) :suffix "w")))
+  (semantics (set! a v)))
+
+(definstruction prefix-machine oneq
+  (modes prefix-imm-q)
+  (encoding (opcode 2)
+    (operand v :field x
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15))))
+  (semantics (set! a v)))
+
+(definstruction prefix-machine oneinline
+  (modes prefix-imm)
+  (encoding (opcode 3)
+    (operand v :field x
+      (variant (range 0 7) inline :suffix "s")
+      (variant :else (extra-word :escape 15) :suffix "w")))
+  (semantics (set! a v)))
+
+(definstruction prefix-machine two
+  (modes prefix-pair)
+  (encoding (opcode 4)
+    (operand p :field x
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15) :suffix "w"))
+    (operand q :field y
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape 15) :suffix "w")))
+  (semantics (set! a (+ p q))))
+
+(definstruction prefix-machine pick
+  (modes prefix-pick)
+  (encoding (opcode 5)
+    (operand v :field x
+      (variant (choice prefix-alt-a) inline :range (0 7))
+      (variant (choice prefix-alt-b) inline :range (0 7) :bias 8)))
+  (semantics (set! a v)))
+
+(defun %prefix-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'prefix-machine)) 'list))
+
+(defun %prefix-round-trip (source)
+  "Disassembled text of SOURCE, checked to re-assemble to identical cells."
+  (let* ((assembly (assemble source :machine 'prefix-machine))
+         (text (disassembly-line-text
+                (first (disassemble-assembly assembly :machine 'prefix-machine :labels nil)))))
+    (fiveam:is (equal (coerce (assembly-cells assembly) 'list) (%prefix-cells text)))
+    text))
+
+(fiveam:test hole-prefix-forces-extra-word
+  (fiveam:is (= 2 (length (%prefix-cells "one #5"))))
+  (fiveam:is (= 4 (length (%prefix-cells "one #w:5"))))
+  (fiveam:is (equal '(5 0) (last (%prefix-cells "one #w:5") 2))))
+
+(fiveam:test hole-prefix-forces-one-hole-of-several
+  (fiveam:is (= 4 (length (%prefix-cells "two w:1, 2"))))
+  (fiveam:is (= 4 (length (%prefix-cells "two 1, w:2"))))
+  (fiveam:is (= 6 (length (%prefix-cells "two w:1, w:2"))))
+  (fiveam:is (not (equal (%prefix-cells "two w:1, 2") (%prefix-cells "two 1, w:2")))))
+
+(fiveam:test hole-prefix-unknown-name-signals
+  (fiveam:signals assembly-error (assemble "one #z:5" :machine 'prefix-machine)))
+
+(fiveam:test hole-prefix-forced-inline-overflow-signals
+  (fiveam:is (= 2 (length (%prefix-cells "oneinline #s:5"))))
+  (fiveam:signals assembly-error (assemble "oneinline #s:100" :machine 'prefix-machine)))
+
+(fiveam:test hole-prefix-selects-one-of-alternative
+  (fiveam:is (equal (%prefix-cells "pick 3") (%prefix-cells "pick ra:3")))
+  (fiveam:is (not (equal (%prefix-cells "pick 3") (%prefix-cells "pick rb:3")))))
+
+(fiveam:test mnemonic-suffix-on-word-mode-still-escapes-wide-values
+  (fiveam:is (= 4 (length (%prefix-cells "oneq.hq #1000"))))
+  (fiveam:is (= 2 (length (%prefix-cells "oneq.hq #5")))))
+
+(fiveam:test hole-prefix-round-trips-through-disassembler
+  (fiveam:is (string= "one #w:$5" (%prefix-round-trip "one #w:5")))
+  (fiveam:is (string= "one #$5" (%prefix-round-trip "one #5")))
+  (fiveam:is (string= "two w:$1,$2" (%prefix-round-trip "two w:1, 2")))
+  (fiveam:is (string= "two $1,w:$2" (%prefix-round-trip "two 1, w:2")))
+  (fiveam:is (string= "pick rb:$3" (%prefix-round-trip "pick rb:3"))))
+
+(fiveam:test hole-prefix-duplicate-variant-suffix-rejected
+  (fiveam:signals error
+    (macroexpand-1
+     '(definstruction prefix-machine dupsfx
+       (modes prefix-imm)
+       (encoding (opcode 6)
+        (operand v :field x
+          (variant (range 0 7) inline :suffix "w")
+          (variant :else (extra-word :escape 15) :suffix "w")))
+       (semantics (set! a v))))))

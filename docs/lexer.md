@@ -16,7 +16,8 @@ sharing one hard-coded assembly syntax.
   (string-delim "\"")
   (ident-chars :alnum "_.")
   (line-continuation "\\")
-  (mode-suffix-separator "."))
+  (mode-suffix-separator ".")
+  (hole-prefix-separator ":"))
 ```
 
 `deflexer` registers a `lexer-descriptor` under `NAME`, retrievable with
@@ -54,7 +55,7 @@ their own for a conventional dialect.
 - `(mode-suffix-separator string)` — e.g. `"."` (the `default` lexer's
   setting). Separates a mnemonic from a forced addressing-mode suffix (e.g.
   the `.w` in `lda.w`; see [Addressing modes, "Forcing a mode with a
-  mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix), #40).
+  mnemonic suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)).
   Every character of it must already be listed in `ident-chars`, the same
   way `local-label-prefix` must be — otherwise `lda.w` would split into two
   tokens at the lexer level and the parser would never see one run to split
@@ -62,6 +63,12 @@ their own for a conventional dialect.
   later as a baffling "no addressing mode matches this operand". A
   `nil`/omitted clause disables mode-suffix syntax entirely — a dotted
   mnemonic is then just an ordinary (if unusual) identifier.
+- `(hole-prefix-separator string)` — e.g. `":"` (the `default` lexer's
+  setting). Separates a suffix name from the operand hole it forces, as in
+  `#w:5` (see [Addressing modes, "Forcing one hole with a
+  prefix"](modes.md#forcing-one-hole-with-a-prefix)). It must be the
+  `label-suffix`, `"#"`, or `"="`; `deflexer` rejects any other spelling. A
+  `nil`/omitted clause disables hole prefixes.
 - `(location-counter string)` — one optional nonempty punctuation spelling,
   such as `"$"` or `"."`. It denotes the current address when it is a
   complete token. `$FF` remains a hex number and `.loop` remains an

@@ -351,10 +351,6 @@ nested varying modes are rejected."
             (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
                    name alt-names))
           (dolist (alt alts)
-            (when (mode-descriptor-suffix alt)
-              (error "DEFMODE ~S: ONE-OF alternative ~S declares a whole-mode attribute ~
-(:SUFFIX) -- not yet supported per-hole inside ONE-OF"
-                     name (mode-descriptor-name alt)))
             (when (mode-descriptor-varyingp alt)
               (error "DEFMODE ~S: ONE-OF alternative ~S itself has a ONE-OF whose own ~
 alternatives disagree on hole count -- nesting a varying ONE-OF inside another is not yet ~
@@ -375,9 +371,10 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
                      name (mode-descriptor-name alt) (mode-descriptor-name alt))))
           (loop for (alt . later) on alts
                 do (dolist (other later)
-                     (when (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
+                     (when (and (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
+                                (not (and (mode-descriptor-suffix alt) (mode-descriptor-suffix other))))
                        (error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
--- nothing could ever choose between them"
+-- nothing could ever choose between them (give both a :SUFFIX to select by prefix)"
                               name (mode-descriptor-name alt) (mode-descriptor-name other)))))))))
 
   (defun %pattern-varying-one-of-element (pattern &optional seen)
@@ -548,23 +545,26 @@ return value is that path's literal count."
   (if (null elements)
        (if (and require-end (< i end))
            (values nil nil nil nil (%tok tokens i end) "Unexpected trailing token in operand")
-           (values nil nil i t nil nil nil 0))
+           (values nil nil i t nil nil nil 0 nil))
       (let ((element (first elements)) (rest-elements (rest elements)))
         (ecase (first element)
           (:literal
            (let ((tok (%tok tokens i end)))
              (if (and tok (string-equal (token-text tok) (second element)))
-            (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+            (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
                 (%match-mode-elements tokens rest-elements (1+ i) end require-end)
                 (if okp
-                        (values asts choices next-i t nil nil selections (1+ score))
+                        (values asts choices next-i t nil nil selections (1+ score) suffixes)
                         (values nil nil nil nil failure-token message)))
                  (values nil nil nil nil tok
                          (format nil "Operand does not match addressing mode ~
 (expected ~S~@[, found ~S~])"
                                  (second element) (and tok (token-text tok)))))))
            (:expr
-            (let ((register (second element))
+            (let* ((register (second element))
+                   (prefix (and (eq (token-type (or (%tok tokens i end) (make-token))) :hole-prefix)
+                                (token-value (%tok tokens i end))))
+                   (start (if prefix (1+ i) i))
                   (last-failure-token nil)
                   (last-message nil)
                   (best nil)
@@ -579,12 +579,12 @@ return value is that path's literal count."
                                                          (symbol-name register))))))
                        (try (ast next-i-hole)
                          (if (or (null register) (valid-register-p ast))
-                              (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+                              (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
                                   (%match-mode-elements tokens rest-elements next-i-hole end require-end)
                                 (if okp
                                     (when (> score best-score)
                                       (setf best (list (cons ast asts) (cons nil choices) next-i
-                                                       t nil nil selections score)
+                                                       t nil nil selections score (cons prefix suffixes))
                                             best-score score))
                                    (setf last-failure-token failure-token
                                          last-message message)))
@@ -593,7 +593,7 @@ return value is that path's literal count."
                                                         register)))))
                 (handler-case
                     (multiple-value-bind (ast next-i-hole)
-                        (parse-expression tokens :start i :end end)
+                        (parse-expression tokens :start start :end end)
                       (try ast next-i-hole)
                       ;; The expression parser intentionally remains greedy. A literal
                       ;; plus immediately following this hole is the one contextual
@@ -601,11 +601,11 @@ return value is that path's literal count."
                       (when (and (first rest-elements)
                                  (eq (first (first rest-elements)) :literal)
                                  (string= (second (first rest-elements)) "+"))
-                        (loop for split from (1+ i) below next-i-hole
+                        (loop for split from (1+ start) below next-i-hole
                               when (eq (%punct-value (%tok tokens split end)) :plus)
                               do (handler-case
                                      (multiple-value-bind (short short-next)
-                                         (parse-expression tokens :start i :end split)
+                                         (parse-expression tokens :start start :end split)
                                        (when (= short-next split)
                                          (try short short-next)))
                                    (parse-failure () nil))))
@@ -618,13 +618,23 @@ return value is that path's literal count."
                                         :column (lasm-syntax-error-column c))
                             (lasm-syntax-error-message c)))))))
           (:one-of
-           (let (last-failure-token last-message best (best-score -1))
+           (let* ((tok (%tok tokens i end))
+                  (alt-prefix (and tok (eq (token-type tok) :hole-prefix)
+                                   (find-if (lambda (n) (let ((sfx (mode-descriptor-suffix (find-mode-descriptor n))))
+                                                          (and sfx (string-equal sfx (token-value tok)))))
+                                            (%one-of-alternatives element))
+                                   (token-value tok)))
+                  (start (if alt-prefix (1+ i) i))
+                  last-failure-token last-message best (best-score -1))
              (dolist (alt-name (%one-of-alternatives element))
                (let ((alt (find-mode-descriptor alt-name)))
-                  (multiple-value-bind (asts choices next-i okp failure-token message selections score)
+                 (when (or (null alt-prefix)
+                           (and (mode-descriptor-suffix alt)
+                                (string-equal (mode-descriptor-suffix alt) alt-prefix)))
+                  (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
                       (%match-mode-elements tokens
                                             (append (mode-descriptor-pattern alt) rest-elements)
-                                            i end require-end)
+                                            start end require-end)
                     (if okp
                         (when (> score best-score)
                           (let* ((slot (%one-of-slot element))
@@ -640,8 +650,8 @@ return value is that path's literal count."
                                             (cons selection
                                                   (remove slot selections :key #'car :test #'eq))
                                             selections)
-                                        score))))
-                        (setf last-failure-token failure-token last-message message)))))
+                                        score suffixes))))
+                        (setf last-failure-token failure-token last-message message))))))
              (if best
                  (values-list best)
                  (values nil nil nil nil last-failure-token last-message))))))))
@@ -659,15 +669,15 @@ MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
 :ONE-OF -- see %MATCH-MODE-ELEMENTS -- a trailing value existing callers
 that only bind the first four are unaffected by."
   (let ((end (length tokens)))
-    (multiple-value-bind (asts choices next-i okp failure-token message selections)
+    (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes)
         (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
-      (declare (ignore next-i))
+      (declare (ignore next-i score))
       (cond
-         ((not okp) (values nil nil failure-token message nil nil))
+         ((not okp) (values nil nil failure-token message nil nil nil))
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.
-          (t (values asts t nil nil choices selections))))))
+          (t (values asts t nil nil choices selections suffixes))))))
 
 (defun try-match-operand-mode (tokens mode)
   "Like MATCH-OPERAND-MODE, but returns (VALUES asts T choices) on a match or
@@ -676,11 +686,12 @@ mode candidate filter (assembler.lisp) uses this to try several modes in
 turn. MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
 naming one. CHOICES (#103, hole-aligned per #104) is the list of chosen
 MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
-see %MATCH-MODE-ELEMENTS."
+see %MATCH-MODE-ELEMENTS. The fifth value is the hole-aligned list of
+forcing-prefix names written before each hole (a string, or NIL)."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
-    (multiple-value-bind (asts okp failure-token message choices selections) (%match-mode-pattern tokens mode)
+    (multiple-value-bind (asts okp failure-token message choices selections suffixes) (%match-mode-pattern tokens mode)
       (declare (ignore failure-token message))
-       (if okp (values asts t choices selections) (values nil nil nil nil)))))
+       (if okp (values asts t choices selections suffixes) (values nil nil nil nil nil)))))
 
 (defun match-operand-mode (tokens mode)
   "Match TOKENS (a SIMPLE-VECTOR of raw tokens, e.g. an OPERAND's TOKENS or a

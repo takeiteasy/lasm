@@ -308,34 +308,35 @@ alternative apart from its mode's whole-statement setting.
 
 A statement whose mnemonic carries a forced addressing-mode suffix (`lda.w`,
 `lda.z`; see [Addressing modes, "Forcing a mode with a mnemonic
-suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix), #40) skips all
-three filters above. `%choose-variant` hands off to `%choose-forced-
-variant`, which:
+suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)) narrows the
+mnemonic's variants before any filter runs:
 
-1. Resolves the suffix to its `mode-descriptor` (`find-mode-by-suffix`) —
+1. The suffix resolves to its `mode-descriptor` (`find-mode-by-suffix`) —
    `assembly-error` if no mode declares that suffix.
-2. Finds the one variant of this mnemonic using that mode — `assembly-error`
+2. Only the variants of this mnemonic using that mode stay — `assembly-error`
    if none does (this also covers a no-operand variant, whose `mode` is
    `nil`).
-3. Matches the operand tokens against that mode's syntax alone
-   (`try-match-operand-mode`) — `assembly-error`, naming the forced mode, on
-   a mismatch.
-4. Returns that variant unconditionally — **no floor check, no value
-   filter**. An out-of-range value silently wraps at encode time via
-   `encode-instruction`'s `wrap-value`, exactly like a single-mode M1
-   instruction always did; this is one more instance of the class the
-   tracker's "diagnose out-of-range operand values instead of silently
-   wrapping" ticket covers unifying, so it gets no ticket of its own. The
-   one exception is a forced `relative` mode: `%relative-offset` (see "PC-
-   relative offsets" below) still range-checks unconditionally at encode
-   time and signals `assembly-error` on overflow, since that check isn't
-   part of the value filter this bypasses at all.
+3. The syntax, floor, and value filters above then run over what is left,
+   so a word-encoded mode still picks between its inline and extra-word
+   combos by value. A byte-encoded mode has one variant left, chosen
+   unconditionally: an out-of-range value silently wraps at encode time via
+   `encode-instruction`'s `wrap-value`. A forced `relative` mode still
+   range-checks at encode time and signals `assembly-error` on overflow.
+   An operand that does not match the forced mode's syntax is an
+   `assembly-error` naming the mode.
 
-This doesn't threaten [Convergence](#convergence) below: a forced
-statement's chosen variant depends only on its own suffix and operand
-syntax, never on the symbol table, so it picks the exact same (constant)
-width on every pass — trivially monotone, the same way a floor, once set,
-never decreases.
+#### Forcing one hole with a prefix
+
+A word-encoded hole can be forced with a prefix (`seta #w:5`; see
+[Addressing modes, "Forcing one hole with a prefix"](modes.md#forcing-one-hole-with-a-prefix)).
+After the syntax match, only combos whose word-field choice for that hole
+declares the named `:suffix` (see [Instructions, "Variant
+suffixes"](instructions.md#variant-suffixes)) stay. If none does,
+`assembly-error` lists the accepted prefixes. A forced inline variant whose
+value does not fit signals `assembly-error` once layout has converged.
+
+Both kinds of forcing depend only on the statement's own syntax, never on
+the symbol table, so they keep [Convergence](#convergence) below monotone.
 
 ```lisp
 lda $10       ; constant, fits zero-page -> zero-page (first declared fit)

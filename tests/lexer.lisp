@@ -184,3 +184,12 @@ sta b"))))
         (percent-toks (%non-eof (tokenize "a %101" :lexer 'percent-comment-syntax))))
     (fiveam:is (equal '(:identifier :number) (%types default-toks)))
     (fiveam:is (equal '(:identifier) (%types percent-toks)))))
+
+(fiveam:test hole-prefix-separator-validation
+  (fiveam:is (equal ":" (lexer-descriptor-hole-prefix-separator (find-lexer-descriptor 'default))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-prefix '((ident-chars :alnum "_") (hole-prefix-separator "_"))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-prefix '((label-suffix ":") (hole-prefix-separator "@"))))
+  (fiveam:is (null (lexer-descriptor-hole-prefix-separator
+                    (build-lexer-descriptor 'no-prefix '((label-suffix ":")))))))

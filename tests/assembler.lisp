@@ -1177,7 +1177,7 @@ target: whlt" :machine 'word-relative-test-machine)))
 (fiveam:test choice-selected-field-with-forced-suffix-picks-matched-alternative
   ;; #104: WCXS's one mode (WC-TWO-FORCED) contains a ONE-OF, so
   ;; %EXPAND-WORD-COMBOS still expands it into two sibling descriptors under
-  ;; that one mode name -- %CHOOSE-FORCED-VARIANT must pick the sibling
+  ;; that one mode name -- %CHOOSE-VARIANT must pick the sibling
   ;; whose CHOICE-selected field agrees with the operand's own matched
   ;; alternative, not an arbitrary one. Same bias values as WCX above.
   (let ((bare (assembly-cells (assemble "wcxs.c 5" :machine 'word-test-machine)))

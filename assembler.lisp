@@ -23,15 +23,12 @@
 ;;;; then runs one final pass whose output feeds %ENCODE.
 ;;;;
 ;;;; A statement whose mnemonic carries a forced addressing-mode suffix
-;;;; (#40, e.g. "lda.w") skips mode selection entirely -- %CHOOSE-VARIANT
-;;;; hands off to %CHOOSE-FORCED-VARIANT, which resolves the suffix to its
-;;;; mode and returns it unconditionally, bypassing both the floor and value
-;;;; filters (an out-of-range value silently wraps at encode time, like a
-;;;; single-mode M1 instruction always did -- one more instance of the class
-;;;; #28 tracks unifying). This doesn't threaten the fixpoint argument above:
-;;;; a forced statement's chosen variant depends only on its own suffix and
-;;;; operand syntax, never on the symbol table, so it picks the same
-;;;; (constant) width on every pass -- trivially monotone.
+;;;; (e.g. "lda.w") has its variants narrowed to that suffix's mode by
+;;;; %NARROW-TO-FORCED-MODE before %CHOOSE-VARIANT's filters run. A per-hole
+;;;; forcing prefix ("seta #w:5") instead filters candidates by the word
+;;;; variant :SUFFIX it names (%HOLE-PREFIXES-ELIGIBLE-P). Both depend only
+;;;; on the statement's own syntax, never the symbol table, so neither
+;;;; disturbs the fixpoint argument above.
 ;;;;
 ;;;; Local labels (an identifier starting with the lexer's LOCAL-LABEL-PREFIX,
 ;;;; e.g. ".loop") are scoped to their nearest preceding non-local ("global")
@@ -349,71 +346,58 @@ its own hole count actually matches CHOICES' length."
           always (or (null wanted)
                      (and hole-choice (eq wanted (mode-descriptor-name hole-choice)))))))
 
-(defun %choose-forced-variant (statement variants)
-  "STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
-\"lda.w\"). Resolve it to the one VARIANTS entry using that mode and match
-STATEMENT's operand tokens against it, bypassing %CHOOSE-VARIANT's floor and
-value filters entirely -- the whole point of a forced suffix is that the
-caller, not relaxation, decides the mode. An out-of-range value for that
-mode is not an error here: ENCODE-INSTRUCTION's existing WRAP-VALUE
-truncates it silently, exactly as a single-mode M1 instruction always did
-(this is one more instance of the class #28 tracks unifying). The one
-exception is a forced RELATIVE mode: %RELATIVE-OFFSET (below) still
-range-checks unconditionally at encode time and signals ASSEMBLY-ERROR on
-overflow, since that check isn't part of this filter at all.
-
-Whose forced MODE contains a ONE-OF, several VARIANTS entries can share that
-one mode name -- one sibling combo per %EXPAND-WORD-COMBOS variant
-combination on a word-encoded machine (#20, instruction.lisp), or one per
-claimed ONE-OF alternative on a byte-encoded machine whose sub-opcode is
-hole-selected (#126, %BYTE-DESCRIPTOR-FORMS), same as an unforced candidate
-set either way. %CHOICES-ELIGIBLE-P still applies here, after matching: the
-plain (FIND ... :KEY #'MODE-DESCRIPTOR-NAME) below picks some same-mode
-sibling just to size the \"does this mnemonic have this mode at all\" check,
-but the actual return value is re-selected among every same-mode sibling for
-the one whose own selector, if any, agrees with the operand's own matched
-alternative -- skipping this would let an arbitrary sibling's field code (or
-sub-opcode) win regardless of which ONE-OF alternative was actually written,
-silently encoding the wrong addressing form exactly the way an unfiltered
-candidate set would (see %CHOOSE-VARIANT's own point 1.5). A mode with no
-CHOICE-selected/sub-selected field at all has only one such sibling (or
-several vacuously all-eligible ones), so this changes nothing for that case.
-
-Returns (VALUES chosen-descriptor hole-asts choices), like %CHOOSE-VARIANT
-(#115) -- CHOICES is TRY-MATCH-OPERAND-MODE's own hole-aligned match result
-for MODE, already computed below to check syntax, simply threaded out
-instead of discarded."
+(defun %narrow-to-forced-mode (statement variants)
+  "STATEMENT carries a mnemonic mode suffix (e.g. \"w\" from \"lda.w\"). Return
+(VALUES narrowed-variants mode): the VARIANTS using the suffix's mode -- more
+than one when the mode has sibling word combos or hole-selected sub-opcodes,
+which %CHOOSE-VARIANT's ordinary filters then choose between. Signals
+ASSEMBLY-ERROR if no mode has the suffix or the mnemonic has no variant using
+it."
   (let* ((suffix (statement-mode-suffix statement))
          (mode (find-mode-by-suffix suffix))
-         (operand-tokens (statement-operand-tokens statement))
-         (anchor (and (plusp (length operand-tokens)) (aref operand-tokens 0))))
+         (narrowed (and mode
+                        (remove-if-not (lambda (v)
+                                         (and (instruction-descriptor-mode v)
+                                              (eq (mode-descriptor-name (instruction-descriptor-mode v))
+                                                  (mode-descriptor-name mode))))
+                                       variants))))
     (unless mode
       (%assembly-error (statement-line statement)
-                        "~A: no addressing mode has suffix ~S"
-                        (statement-mnemonic statement) suffix))
-    (let ((variant (find (mode-descriptor-name mode) variants
-                          :key (lambda (v) (and (instruction-descriptor-mode v)
-                                                 (mode-descriptor-name (instruction-descriptor-mode v)))))))
-      (unless variant
-        (%assembly-error (statement-line statement)
-                          "~A: has no addressing-mode variant using .~A -- this instruction ~
-accepts ~A"
-                          (statement-mnemonic statement) suffix (%accepted-modes-text variants)))
-      (multiple-value-bind (asts okp choices selections) (try-match-operand-mode operand-tokens mode)
-        (unless okp
-          (%assembly-error-at anchor
-                               "~A: operand ~S does not match the forced .~A ~
-(~(~A~), syntax ~A) addressing mode"
-                               (statement-mnemonic statement) (%operand-text operand-tokens)
-                               suffix (mode-descriptor-name mode) (%mode-syntax-text mode)))
-        (values (or (find-if (lambda (v) (and (instruction-descriptor-mode v)
-                                               (eq (mode-descriptor-name (instruction-descriptor-mode v))
-                                                   (mode-descriptor-name mode))
-                                                (%choices-eligible-p v choices selections)))
-                              variants)
-                    variant)
-                asts
-                choices)))))
+                       "~A: no addressing mode has suffix ~S"
+                       (statement-mnemonic statement) suffix))
+    (unless narrowed
+      (%assembly-error (statement-line statement)
+                       "~A: has no addressing-mode variant using .~A -- this instruction accepts ~A"
+                       (statement-mnemonic statement) suffix (%accepted-modes-text variants)))
+    (values narrowed mode)))
+
+(defun %hole-prefixes-eligible-p (descriptor hole-prefixes)
+  "T if every non-NIL entry of HOLE-PREFIXES (the forcing prefix written
+before each hole, or NIL) names the :SUFFIX of DESCRIPTOR's word-field choice
+for that hole. A descriptor without word fields has no such choice, so any
+prefix makes it ineligible."
+  (let ((fields (instruction-descriptor-word-fields descriptor)))
+    (loop for prefix in hole-prefixes
+          for i from 0
+          always (or (null prefix)
+                     (let ((suffix (and (< i (length fields))
+                                        (word-field-choice-suffix (nth i fields)))))
+                       (and suffix (string-equal suffix prefix)))))))
+
+(defun %hole-prefix-error (statement tokens variants prefixes anchor)
+  "Signal ASSEMBLY-ERROR for a forcing prefix in PREFIXES that no variant of
+STATEMENT's mnemonic declares as a :SUFFIX for that hole."
+  (let* ((prefix (find-if #'identity prefixes))
+         (accepted (remove-duplicates
+                    (loop for v in variants
+                          append (loop for f in (instruction-descriptor-word-fields v)
+                                       when (word-field-choice-suffix f)
+                                         collect (word-field-choice-suffix f)))
+                    :test #'string-equal)))
+    (%assembly-error-at anchor
+                        "~A: operand ~S: no variant has forcing prefix ~S -- ~:[byte-encoded ~
+operands are forced with a mnemonic suffix~;accepted prefixes: ~:*~{~A~^, ~}~]"
+                        (statement-mnemonic statement) (%operand-text tokens) prefix accepted)))
 
 (defun %choose-variant (statement variants address &key symbols scope (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
@@ -485,15 +469,12 @@ syntax (e.g. zero-page before absolute):
    on a trial pass, and erroring off a value that has not settled yet would
    be a false positive.
 
-If STATEMENT carries a forced addressing-mode suffix (#40, e.g. \"w\" from
-\"lda.w\"), none of the above runs -- %CHOOSE-FORCED-VARIANT resolves the
-suffix to its mode, matches syntax against that one variant only, and
-returns it unconditionally, without the floor or value filter. This is
-still safe for %LAYOUT's fixpoint argument: a forced statement's chosen
-variant depends only on its own suffix and operand syntax, never on
-SYMBOLS, so it picks the exact same (constant) width on every pass --
-trivially monotone, same as sticky widening's floor, so it can never be the
-statement that keeps relaxation from converging.
+If STATEMENT carries a forced addressing-mode suffix (e.g. \"w\" from
+\"lda.w\"), VARIANTS is first narrowed to that suffix's mode
+(%NARROW-TO-FORCED-MODE) and the filters above run over what is left. A
+hole forcing prefix (\"#w:5\") additionally keeps only candidates whose word
+field for that hole declares the named :SUFFIX. Neither reads SYMBOLS, so
+both keep the choice constant across passes, trivially monotone.
 
 FINALP (#74), like %LAYOUT-PASS's own, defers a check that only makes sense
 once relaxation has converged: when two or more syntax-matching candidates
@@ -511,14 +492,16 @@ CHOSEN's own match (NIL entries for a hole not governed by any ONE-OF, NIL
 throughout for a no-operand statement), carried through so
 %CHECK-STRICT-OPERAND-RANGE! (below) can read a hole's own matched
 alternative's :STRICT once a value exists to check it against."
-  (when (statement-mode-suffix statement)
-    (return-from %choose-variant (%choose-forced-variant statement variants)))
-  (let* ((tokens (statement-operand-tokens statement))
+  (let* ((forced-mode (and (statement-mode-suffix statement)
+                           (multiple-value-bind (narrowed mode) (%narrow-to-forced-mode statement variants)
+                             (setf variants narrowed)
+                             mode)))
+         (tokens (statement-operand-tokens statement))
          (anchor (and (plusp (length tokens)) (aref tokens 0)))
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices selections) = (multiple-value-list
+                 for (asts okp choices selections hole-prefixes) = (multiple-value-list
                                                        (if mode
                                                            (try-match-operand-mode tokens mode)
                                                            (values nil (zerop (length tokens)) nil)))
@@ -528,14 +511,27 @@ alternative's :STRICT once a value exists to check it against."
                            ;; sub-opcode don't match what this operand's
                            ;; ONE-OF hole(s) actually chose -- vacuously T
                            ;; for a candidate with no such selector at all.
-                           (%choices-eligible-p v choices selections))
+                           (%choices-eligible-p v choices selections)
+                           (%hole-prefixes-eligible-p v hole-prefixes))
                    ;; #115: CHOICES rides along with each candidate (not just
                    ;; used to filter, above) so %CHECK-STRICT-OPERAND-RANGE!
                    ;; can read a hole's own matched ONE-OF alternative's
                    ;; :STRICT once ENCODE has a value to check it against.
                    collect (list v (%qualify-locals-in-asts! asts scope (statement-line statement))
-                                 choices selections))))
+                                 choices selections hole-prefixes))))
     (when (null candidates)
+      (let ((prefixes (loop for v in variants
+                            for mode = (instruction-descriptor-mode v)
+                            for prefixes = (and mode (nth-value 4 (try-match-operand-mode tokens mode)))
+                            when (some #'identity prefixes) return prefixes)))
+        (when prefixes
+          (%hole-prefix-error statement tokens variants prefixes anchor)))
+      (when forced-mode
+        (%assembly-error-at anchor
+                            "~A: operand ~S does not match the forced .~A (~(~A~), syntax ~A) addressing mode"
+                            (statement-mnemonic statement) (%operand-text tokens)
+                            (statement-mode-suffix statement) (mode-descriptor-name forced-mode)
+                            (%mode-syntax-text forced-mode)))
       (%assembly-error-at anchor
                            "~A: operand ~S matches no addressing mode -- this instruction ~
 accepts ~A"
@@ -591,8 +587,9 @@ accepts ~A"
            ;; on a multi-mode mnemonic mixing CHOICE- and value-selected
            ;; modes, CANDIDATES' first entry need not be this one.
            (choice-narrowed
-             (find-if (lambda (c) (some #'word-field-choice-choice
-                                         (instruction-descriptor-word-fields (first c))))
+             (find-if (lambda (c) (or (some #'word-field-choice-choice
+                                            (instruction-descriptor-word-fields (first c)))
+                                      (some #'identity (fifth c))))
                       candidates))
            (chosen (cond
                      (fitting fitting)
@@ -647,8 +644,8 @@ this far from parsing to point at just the offending hole."
     (let* ((descriptor (first candidate))
            (operand-name (nth hole (instruction-descriptor-operand-names descriptor))))
       (%assembly-error-at anchor
-                           "~A: operand value ~D out of range ~D..~D for addressing form ~
-~(~A~)~@[ (operand ~(~A~))~]"
+                           "~A: operand value ~D out of range ~D..~D~@[ for addressing form ~
+~(~A~)~]~@[ (operand ~(~A~))~]"
                            (statement-mnemonic statement) value lo hi
                            choice-name operand-name))))
 

@@ -95,7 +95,9 @@ The same treatment applies to a forced mnemonic suffix (`lda.z`, see
 [Addressing modes, "Forcing a mode with a mnemonic
 suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix)) that names a real
 mode the instruction just doesn't declare, or whose syntax the operand
-doesn't match.
+doesn't match. A hole prefix ([Addressing modes, "Forcing one hole with a
+prefix"](modes.md#forcing-one-hole-with-a-prefix)) that no variant declares
+as a `:suffix` reports the prefixes the instruction does accept.
 
 A mode containing a `(one-of ...)` element ([Addressing modes, "Per-operand
 modes"](modes.md#per-operand-modes)) renders that element as its

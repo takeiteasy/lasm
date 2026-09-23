@@ -1899,7 +1899,7 @@ second: nop" :machine 'instr-test-machine))))
 ;; WCXS (#104): a forced-suffix (#40) single-mode instruction whose one mode
 ;; contains a ONE-OF -- %EXPAND-WORD-COMBOS (instruction.lisp) still expands
 ;; it into several sibling descriptors (one per field variant) sharing this
-;; one mode's name, exactly the shape %CHOOSE-FORCED-VARIANT's own
+;; one mode's name, exactly the shape %NARROW-TO-FORCED-MODE's own
 ;; same-mode-name FIND has to pick correctly among by CHOICE eligibility,
 ;; not just grab the first. See tests/assembler.lisp's own use of this.
 (defmode wc-two-forced (one-of wc-reg wc-ind) :suffix "c")

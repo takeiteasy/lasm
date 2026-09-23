@@ -263,6 +263,11 @@ the lexer declares a `mode-suffix-separator` — needed for fidelity, since
 `lda.w $10` and `lda $10` can assemble to a different number of cells.
 `:suffixes nil` renders the bare mnemonic instead.
 
+Under `:suffixes t` the disassembler also renders a hole's forcing prefix
+([Addressing modes, "Forcing one hole with a prefix"](modes.md#forcing-one-hole-with-a-prefix)),
+e.g. `seta #w:$5`, whenever the decoded variant or `one-of` alternative
+declares a `:suffix` and the lexer declares a `hole-prefix-separator`.
+
 ## `disassembly-text` / `print-disassembly`
 
 ```lisp
@@ -289,13 +294,13 @@ input came from `assemble` on the same machine, with `:labels nil` and
 `:suffixes t`. It does **not** generally hold for:
 
 - **A word-encoded machine's bytes that spent an extra word on a value that
-  would fit inline.** The assembler's own mode selection always picks the
-  narrowest encoding a value fits (see [Assembler, "Choosing a
-  mode"](assembler.md#choosing-a-mode)), and there is no forced-variant syntax for a
-  word machine's inline-vs-extra-word choice — unlike a byte machine's mode
-  `:suffix` (`lda.w`), nothing in the source syntax can say "use the wider
-  encoding." Such bytes round-trip *semantically* (the decoded values are
-  correct) but not byte-identically.
+  would fit inline, when the escaping variant declares no `:suffix`.** The
+  assembler's own mode selection picks the narrowest encoding a value fits
+  (see [Assembler, "Choosing a mode"](assembler.md#choosing-a-mode)). A
+  variant declaring a `:suffix` can be forced with a hole prefix
+  (`seta #w:5`), which the disassembler renders, so those bytes round-trip
+  byte-identically. Without one they round-trip *semantically* (the
+  decoded values are correct) but not byte-identically.
 - **A program with forward references.** The assembler's mode-relaxation
   floor is monotone across its layout passes, so an original assembly can
   settle on a wider encoding than a from-scratch pass over the final values
@@ -317,5 +322,3 @@ a human-readable listing. It does not cover:
 - Reconstructing an `.equ`'s *name* independent of whether its value
   happens to collide with an instruction address — see "Round-trip
   fidelity" above.
-- A forced-variant syntax for word-encoded machines, closing the one
-  remaining fidelity gap noted above — tracked as a follow-up.

@@ -226,7 +226,25 @@ suffix rather than the whole tail after the first dot."
                     (subseq mnemonic-text (+ pos (length separator))))
             (values mnemonic-text nil)))))
 
-(defun %parse-line (line-tokens &key mode-suffix-separator)
+(defun %collapse-hole-prefixes (tokens start separator)
+  "Replace each identifier token immediately followed by a SEPARATOR token,
+from START on, with one :HOLE-PREFIX token whose value is the identifier."
+  (if (null separator)
+      tokens
+      (let ((out (coerce (subseq tokens 0 start) 'list)) (i start) (len (length tokens)))
+        (loop while (< i len)
+              do (let ((tok (aref tokens i)) (next (and (< (1+ i) len) (aref tokens (1+ i)))))
+                   (if (and next (eq (token-type tok) :identifier)
+                            (string= (token-text next) separator))
+                       (progn (cl:push (make-token :type :hole-prefix :value (token-value tok)
+                                                   :text (concatenate 'string (token-text tok) separator)
+                                                   :line (token-line tok) :column (token-column tok))
+                                       out)
+                              (incf i 2))
+                       (progn (cl:push tok out) (incf i)))))
+        (coerce (nreverse out) 'simple-vector))))
+
+(defun %parse-line (line-tokens &key mode-suffix-separator hole-prefix-separator)
   (let* ((tokens (coerce line-tokens 'simple-vector))
          (len (length tokens))
          (pos 0) label label-localp mnemonic operands (operand-tokens #())
@@ -237,6 +255,8 @@ suffix rather than the whole tail after the first dot."
       (setf label (token-value (aref tokens pos))
             label-localp (token-localp (aref tokens pos)))
       (incf pos 2))
+    (setf tokens (%collapse-hole-prefixes tokens pos hole-prefix-separator)
+          len (length tokens))
     (cond
       ;; "name = value" (#35): sugar for ".equ name, value" -- checked before
       ;; the ordinary mnemonic case below, since an identifier followed by
@@ -298,10 +318,13 @@ diagnostics. The second value is its source unit, used by include expansion
 and listings. Signals LEX-ERROR or PARSE-FAILURE with source context."
   (let ((unit (make-source-unit :file (and file (namestring (pathname file))) :text string)))
     (with-source-unit unit
-      (let ((separator (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))))
+      (let* ((descriptor (find-lexer-descriptor lexer))
+             (separator (lexer-descriptor-mode-suffix-separator descriptor))
+             (prefix-separator (lexer-descriptor-hole-prefix-separator descriptor)))
         (values
          (mapcar (lambda (line-tokens)
-                   (let ((statement (%parse-line line-tokens :mode-suffix-separator separator)))
+                   (let ((statement (%parse-line line-tokens :mode-suffix-separator separator
+                                                   :hole-prefix-separator prefix-separator)))
                      (setf (statement-source-unit statement) unit)
                      statement))
                  (%split-lines (tokenize string :lexer lexer)))

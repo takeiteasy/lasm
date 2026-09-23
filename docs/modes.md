@@ -146,15 +146,15 @@ name). At `defmode` time, every alternative:
   independently; their alternatives cannot themselves be varying modes;
 - may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below),
   `:signed` (see [Per-hole `:signed`](#per-hole-signed) below), `:width`
-  (see [Per-hole `:width`](#per-hole-width) below), or `:relative` (see
-  [Per-hole `:relative`](#per-hole-relative) below) — but not `:suffix`
-  itself: honoring a per-hole `:suffix` needs some way to recover, at decode
-  time, which alternative a hole actually matched, which doesn't yet have a
-  design (#153);
+  (see [Per-hole `:width`](#per-hole-width) below), `:relative` (see
+  [Per-hole `:relative`](#per-hole-relative) below), or `:suffix` (see
+  [Forcing one hole with a prefix](#forcing-one-hole-with-a-prefix) below);
 - must not share identical syntax with another alternative in the same
   `one-of` (checked case-insensitively, since a `:literal` element already
   matches that way) — nothing could ever choose between two alternatives
-  that read the same.
+  that read the same — unless every alternative sharing that syntax declares
+  a `:suffix`, which then selects between them. Without a prefix, the first
+  declared alternative wins.
 
 A `one-of` needs at least two alternatives; one alternative would just be
 the same as writing that mode's pattern directly.
@@ -644,6 +644,31 @@ written literally inside a macro body.
 
 See [`examples/complete.lisp`](../examples/complete.lisp) for a runnable
 program using `sta.w`/`lda.z` to force a mode.
+
+## Forcing one hole with a prefix
+
+A `:suffix` also names an operand-level choice, written as a prefix before
+the operand it forces (the separator is the lexer's `hole-prefix-separator`,
+see [Lexer](lexer.md)):
+
+```lisp
+seta #w:5     ; force the extra-word encoding of a value that fits inline
+two w:1, 2    ; force the first hole only
+pick rb:3     ; force the alternative whose mode declares :suffix "rb"
+```
+
+- Before a `one-of` element, the name selects the alternative whose mode
+  declares that `:suffix`, in place of the first-declared one.
+- Before an `expr` hole, the name selects a word-encoded variant declaring
+  the same `:suffix` (see [Instructions, "Variant
+  suffixes"](instructions.md#variant-suffixes)). Both can be combined, the
+  alternative name first: `rb:w:3`.
+- A byte-encoded machine has no per-hole variants; it forces a whole mode
+  with a mnemonic suffix instead (above).
+
+`try-match-operand-mode` returns the written prefix names as a fifth value,
+hole-aligned, `nil` for an unprefixed hole. `disassemble-*` renders them
+under `:suffixes t`, so the text re-assembles to the same cells.
 
 ## Matching
 

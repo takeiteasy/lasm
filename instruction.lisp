@@ -1483,7 +1483,9 @@ hole-selected one would both be trying to write it."
   ;; every variant there stays NIL, exactly as before #118.
   (choice nil :type (or null symbol))
   ;; Alternate syntax for a canonical encoding; never matched at decode.
-  (alias nil :type boolean))
+  (alias nil :type boolean)
+  ;; Name a source hole prefix ("w:5") selects this variant with.
+  (suffix nil :type (or null string)))
 
 (defstruct word-operand-spec
   (name nil)                  ; operand field name, or NIL for unnamed
@@ -1560,7 +1562,9 @@ hole-selected one would both be trying to write it."
   ;; (biased) RANGE.
   (signedp nil :type boolean)
   ;; #187: mirrors WORD-VARIANT-ALIAS.
-  (alias nil :type boolean))
+  (alias nil :type boolean)
+  ;; Mirrors WORD-VARIANT-SUFFIX.
+  (suffix nil :type (or null string)))
 
 (defun %word-choice-matches-p (raw-value choice)
   "T if RAW-VALUE matches CHOICE's field bits. Signed inline values are
@@ -1747,6 +1751,21 @@ with no constants are truly indistinguishable unless they are siblings
                                :reason :indistinguishable))))
 
 (defun %parse-word-variant-form (form field-name)
+  "Parse FORM (see %PARSE-WORD-VARIANT-FORM-1), first lifting a trailing
+:SUFFIX \"s\" key -- the name a hole prefix (\"s:5\") selects the variant by --
+off the variant's own tail."
+  (let* ((pos (position :suffix form))
+         (suffix (and pos (nth (1+ pos) form))))
+    (when pos
+      (unless (and (stringp suffix) (plusp (length suffix)))
+        (error "DEFINSTRUCTION: field ~S: variant :suffix must be a non-empty string, got ~S"
+               field-name suffix))
+      (setf form (append (subseq form 0 pos) (nthcdr (+ pos 2) form))))
+    (let ((variant (%parse-word-variant-form-1 form field-name)))
+      (setf (word-variant-suffix variant) suffix)
+      variant)))
+
+(defun %parse-word-variant-form-1 (form field-name)
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
 into a WORD-VARIANT. SELECTOR is (range LO HI) for a value-selected :INLINE
 variant (optionally :BIAS N, default 0), :ELSE for the value-selected
@@ -1867,6 +1886,17 @@ scope."
             ((< hi 0) (list (cons (+ lo (ash 1 field-width)) (+ hi (ash 1 field-width)))))
             (t (list (cons 0 hi) (cons (+ lo (ash 1 field-width)) max))))))))
 
+(defun %check-word-variant-suffixes! (variants field-name)
+  "Signal a DEFINSTRUCTION-time error when two of VARIANTS share a :SUFFIX and
+a CHOICE selector -- a hole prefix could not tell them apart."
+  (loop for (v . later) on variants
+        when (and (word-variant-suffix v)
+                  (find-if (lambda (o) (and (equal (word-variant-suffix o) (word-variant-suffix v))
+                                            (eq (word-variant-choice o) (word-variant-choice v))))
+                           later))
+          do (error "DEFINSTRUCTION: field ~S: more than one variant declares :suffix ~S"
+                    field-name (word-variant-suffix v))))
+
 (defun %check-word-variants (variants field-width field-name hole-signedp &optional mode source)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
 variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
@@ -1899,6 +1929,7 @@ ungoverned by a disagreeing ONE-OF (%WORD-HOLE-SIGNEDP-LIST, which already
 folds in per-hole relativeness) -- passed through to
 %WORD-VARIANT-SIGNEDP-AT-PARSE so a signed or relative hole's value-selected
 variant is treated as signed here too."
+  (%check-word-variant-suffixes! variants field-name)
   (dolist (alias variants)
     (when (and (word-variant-alias alias) (eq (word-variant-kind alias) :inline))
       (let ((canonical (remove-if-not
@@ -2297,17 +2328,18 @@ narrower extra word before one needing a wider one."
         (word-variant-extra-cells variant)
         (word-variant-choice variant)
         (word-variant-alias variant)
-        (%word-variant-signedp-at-parse variant hole-signedp mode source)))
+        (%word-variant-signedp-at-parse variant hole-signedp mode source)
+        (word-variant-suffix variant)))
 
 (defun %build-word-alternatives (data)
   (mapcar (lambda (menu)
             (mapcar (lambda (entry)
-                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp)
+                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp &optional suffix)
                           entry
                         (make-word-field-choice
                          :width width :shift shift :kind kind :bias bias :range range
                          :escape escape :extra-cells extra-cells :choice choice
-                         :alias alias :signedp signedp)))
+                         :alias alias :signedp signedp :suffix suffix)))
                     menu))
           data))
 

@@ -56,7 +56,7 @@
     (opcode 1)
     (operand value :field src
       (variant (range -1 30) inline :bias 1)
-      (variant :else (extra-word :escape #x3ff))))
+      (variant :else (extra-word :escape #x3ff) :suffix "w")))
   (semantics (set! a operand)))
 
 (definstruction wordfoo setb
@@ -108,6 +108,8 @@
       (variant :else (extra-word :escape #x3ff :cells 1))))
   (semantics (set! a operand)))
 
+;; SETA's escape declares :SUFFIX "w", so source can force the extra word for
+;; a value that would fit inline: "seta #w:7".
 ;; SETA's operand (5) fits inline; SETB's (1000) needs its own extra word --
 ;; one program exercising both forms of the same instruction. SETC then
 ;; exercises the same inline/extra-word split again, but signed: -5 fits its
@@ -120,6 +122,7 @@ add              ; A = A + B
 setc #-5         ; A = -5, sign-extended from an inline two's-complement field
 setc #-5000      ; A = -5000, sign-extended from SRC's own escaped extra word
 setd #200        ; A = 200, escapes to SRC's own 1-byte extra word, not a full one
+seta #w:7        ; A = 7, forced into SRC's extra word although it fits inline
 hlt")
 
 (format t "~&Source:~%~A~2%" *source*)
@@ -128,9 +131,9 @@ hlt")
 (let ((assembly (assemble *source* :machine 'wordfoo)))
   (format t "  bytes:  ~S~%" (coerce (assembly-cells assembly) 'list))
   (format t "  length: ~D bytes (2 each for SETA/ADD/HLT/SETC's one word, 4 for ~
-SETB/SETC's extra-word forms, 3 for SETD's own 1-byte extra word)~%"
+SETB/SETC's extra-word forms, 3 for SETD's own 1-byte extra word, 4 for the forced SETA)~%"
           (length (assembly-cells assembly)))
-  (assert (= 19 (length (assembly-cells assembly))))
+  (assert (= 23 (length (assembly-cells assembly))))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'wordfoo)))
@@ -149,8 +152,8 @@ SETB/SETC's extra-word forms, 3 for SETD's own 1-byte extra word)~%"
     (assert (= -5000 (signed-value (sref m 'a) 16)))
     (multiple-value-bind (reason steps) (run m)
       (format t "  stopped: ~A after ~D more step~:P~%" reason steps)
-      (format t "  after SETD #200, A = ~D (expected 200)~%" (sref m 'a))
+      (format t "  after SETA #w:7, A = ~D (expected 7)~%" (sref m 'a))
       (assert (eq :trap reason))
-      (assert (= 2 steps))
-      (assert (= 200 (sref m 'a)))
+      (assert (= 3 steps))
+      (assert (= 7 (sref m 'a)))
       (format t "~%All assertions passed.~%"))))

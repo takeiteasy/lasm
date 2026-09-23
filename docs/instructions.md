@@ -1030,6 +1030,23 @@ now that several variants of one kind can share a field — overlapping inline
 ranges and duplicate escapes require explicit aliases. Inline-vs-escape
 collisions are always rejected at `definstruction` time.
 
+### Variant suffixes
+
+Any `(variant ...)` form accepts a trailing `:suffix "name"`, the name a
+hole prefix selects it with in source (see [Addressing modes, "Forcing one
+hole with a prefix"](modes.md#forcing-one-hole-with-a-prefix)):
+
+```lisp
+(operand value :field src
+  (variant (range -1 30) inline :bias 1)
+  (variant :else (extra-word :escape #x3ff) :suffix "w"))
+```
+
+`seta #w:5` then encodes the extra-word form even though 5 fits inline. A
+forced inline variant whose value does not fit is an `assembly-error`.
+Two variants of one field with the same `:suffix` and `choice` selector are
+a `definstruction`-time error.
+
 #### Aliased escapes
 
 Two alternatives that are two spellings of one encoding may share an escape

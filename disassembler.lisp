@@ -52,9 +52,9 @@
 ;;;; the input came from ASSEMBLE on the same machine, with :LABELS NIL and
 ;;;; :SUFFIXES T. It does NOT generally hold for: (a) a word-encoded
 ;;;; machine's bytes that spent an extra word on a value that would fit
-;;;; inline -- %CHOOSE-VARIANT (assembler.lisp) always picks the narrowest
-;;;; fit and there is no forced-variant syntax for a word machine's
-;;;; inline-vs-extra-word choice (unlike a byte machine's mode :SUFFIX); (b)
+;;;; inline, when the escaping variant declares no :SUFFIX for a hole prefix
+;;;; to force it with -- %CHOOSE-VARIANT (assembler.lisp) picks the narrowest
+;;;; fit; (b)
 ;;;; a program with forward references, whose original assembly may have
 ;;;; settled on a wider encoding than a from-scratch pass over the final
 ;;;; values would pick (%CHOOSE-VARIANT's relaxation floor is monotone
@@ -243,7 +243,7 @@ hex format."
         values)))
 
 (defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements
-                               choice-selections)
+                               choice-selections prefix-separator)
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -293,15 +293,25 @@ selected one -- only a field with no CHOICE variant at all still leaves this
 NIL, and a hole with a CHOICE-selected field elsewhere in the same
 instruction but no record of its own is unaffected either way. #126's byte
 path has no mixed case: every alternative of a sub-selected hole is claimed
-by construction (%CHECK-BYTE-SUB-VARIANTS!)."
+by construction (%CHECK-BYTE-SUB-VARIANTS!).
+
+PREFIX-SEPARATOR, when non-NIL, is the lexer's hole-prefix separator: a hole
+whose matched word-field choice declares a :SUFFIX renders as \"suffix:value\",
+and a ONE-OF alternative declaring a mode :SUFFIX renders its own
+\"suffix:\" ahead of the alternative, so the text re-assembles to the same
+encoding."
   (with-output-to-string (s)
     (let ((vals render-values) (choices hole-choices) (elements hole-elements))
       (labels ((render-pattern (pattern)
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
-                      (:expr (let ((register (second el)))
-                               (cl:pop choices)
+                      (:expr (let ((register (second el))
+                                   (hole-choice (cl:pop choices)))
+                               (when (and prefix-separator (word-field-choice-p hole-choice)
+                                          (word-field-choice-suffix hole-choice))
+                                 (write-string (word-field-choice-suffix hole-choice) s)
+                                 (write-string prefix-separator s))
                              (let* ((v (cl:pop vals))
                                     (element (cl:pop elements))
                                     (alias (if register
@@ -318,8 +328,13 @@ by construction (%CHECK-BYTE-SUB-VARIANTS!)."
                               (matched (%matched-choice-name choices 0))
                               (alt-name (or (and (member matched alternatives) matched)
                                             (cdr (assoc (%one-of-slot el) choice-selections))
-                                            (first alternatives))))
-                         (render-pattern (mode-descriptor-pattern (find-mode-descriptor alt-name)))))))))
+                                            (first alternatives)))
+                              (alt (find-mode-descriptor alt-name)))
+                         (when (and prefix-separator (mode-descriptor-suffix alt)
+                                    (eq alt-name matched))
+                           (write-string (mode-descriptor-suffix alt) s)
+                           (write-string prefix-separator s))
+                         (render-pattern (mode-descriptor-pattern alt))))))))
         (render-pattern (mode-descriptor-pattern mode))))))
 
 ;; TODO: this does a FIND-MACHINE-DESCRIPTOR/GETHASH pair per rendered line
@@ -364,7 +379,10 @@ MODE-SUFFIX-SEPARATOR to write it with."
                                        lexer reverse-symbols choices (%hole-elements descriptor)
                                         (machine-descriptor-register-alias-elements
                                          (find-machine-descriptor (instruction-descriptor-machine descriptor)))
-                                        choice-selections))
+                                        choice-selections
+                                        (and suffixes
+                                             (lexer-descriptor-hole-prefix-separator
+                                              (find-lexer-descriptor lexer)))))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)

@@ -18,6 +18,7 @@
 
 (defstruct token
   type    ; :identifier :number :string :punctuation :label-suffix :newline :eof
+          ; :hole-prefix (built by the parser from NAME + hole-prefix-separator)
   value   ; parsed value: string (identifier/string), integer (number),
           ; keyword (punctuation/label-suffix)
   text    ; verbatim source text
@@ -50,6 +51,10 @@
   ident-extra-chars     ; string of non-alphanumeric chars allowed in identifiers
   line-continuation     ; string, or nil to disable line continuation
   location-counter     ; optional standalone spelling of the location counter
+  hole-prefix-separator ; string, or nil to disable per-hole forcing prefixes
+                        ; -- separates a suffix name from the operand it
+                        ; forces, e.g. the ":" in "#w:5". Must lex as its
+                        ; own token, never inside an identifier.
   mode-suffix-separator); string, or nil to disable mode-suffix syntax (#40)
                         ; -- separates a mnemonic from a forced addressing-
                         ; mode suffix, e.g. the "." in "lda.w" (mode.lisp's
@@ -100,6 +105,7 @@
 (defun build-lexer-descriptor (name clauses)
   (let (comment-styles number-formats label-suffix local-label-prefix
         string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
+        hole-prefix-separator
         location-counter location-counter-clause-p)
     (dolist (clause clauses)
       (case (first clause)
@@ -111,6 +117,7 @@
         (ident-chars (setf ident-extra-chars (parse-ident-chars-clause (rest clause))))
         (line-continuation (setf line-continuation (second clause)))
         (mode-suffix-separator (setf mode-suffix-separator (second clause)))
+        (hole-prefix-separator (setf hole-prefix-separator (second clause)))
         (location-counter
          (setf location-counter-clause-p t location-counter (second clause))
          (unless (= 2 (length clause))
@@ -125,6 +132,14 @@
                (notevery (lambda (c) (find c ident-extra-chars)) mode-suffix-separator))
       (error "DEFLEXER ~S: mode-suffix-separator ~S must consist only of ~
 characters already listed in ident-chars" name mode-suffix-separator))
+    (when hole-prefix-separator
+      (unless (and (stringp hole-prefix-separator) (plusp (length hole-prefix-separator))
+                   (notany (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)
+                                           (member c '(#\Space #\Tab #\Newline))))
+                           hole-prefix-separator)
+                   (or (equal hole-prefix-separator label-suffix)
+                       (find hole-prefix-separator '("#" "=") :test #'string=)))
+        (error "DEFLEXER ~S: hole-prefix-separator ~S must be the label-suffix, \"#\" or \"=\"" name hole-prefix-separator)))
     (when (find #\Null ident-extra-chars)
       (error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
     (when location-counter-clause-p
@@ -148,7 +163,8 @@ characters already listed in ident-chars" name mode-suffix-separator))
                             :ident-extra-chars ident-extra-chars
                             :line-continuation line-continuation
                             :location-counter location-counter
-                            :mode-suffix-separator mode-suffix-separator)))
+                            :mode-suffix-separator mode-suffix-separator
+                            :hole-prefix-separator hole-prefix-separator)))
 
 (defmacro deflexer (name &body clauses)
   "Define a surface syntax named NAME from CLAUSES, each one of:
@@ -161,6 +177,10 @@ characters already listed in ident-chars" name mode-suffix-separator))
      (line-continuation string)
      (location-counter string)
      (mode-suffix-separator string)
+     (hole-prefix-separator string)
+
+HOLE-PREFIX-SEPARATOR separates a suffix name from the operand hole it
+forces, e.g. the \":\" in \"#w:5\". It must be the label-suffix, \"#\" or \"=\".
 
 MODE-SUFFIX-SEPARATOR (#40) separates a mnemonic from a forced addressing-
 mode suffix, e.g. the \".\" in \"lda.w\" (mode.lisp's DEFMODE :SUFFIX
@@ -183,7 +203,8 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   (string-delim "\"")
   (ident-chars :alnum "_.")
   (line-continuation "\\")
-  (mode-suffix-separator "."))
+  (mode-suffix-separator ".")
+  (hole-prefix-separator ":"))
 
 ;;; Tokenizer
 
