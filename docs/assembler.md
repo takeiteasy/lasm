@@ -54,7 +54,9 @@ latter directly. `file` names in-memory source in diagnostics and listings;
   Labels and assignments share one flat table; `.set` can update an
   assignment (see "`.set`" below). The table stays untagged (`eval-expr`
   reads it as a plain name → value map) — see `symbol-info` below for the
-  scope/kind metadata this can't carry.
+  scope/kind metadata this can't carry. Local keys contain a reserved NUL
+  separator between the global and local names; use `assembly-symbol` with
+  `:scope` to look them up.
 - `symbol-info` — a hash table (qualified name string → `symbol-info`), built
   alongside `symbols` and keyed the same way, carrying what `symbols` alone
   cannot: whether an entry is a label, `.equ`, or `.set`, and its enclosing scope
@@ -544,7 +546,7 @@ b:
 
 `%layout` threads a `scope` variable (the nearest preceding global label's own
 name) through the statement list; every local label definition and reference
-is qualified to `scope ++ name` (`%qualify-local`/`%qualify-locals!` in
+is qualified to `scope ++ NUL ++ name` (`%qualify-local`/`%qualify-locals!` in
 `assembler.lisp`) before it ever reaches the symbol table or an operand
 AST — so `symbols` itself stays the same flat string → address table, and
 `eval-expr` needs no scope argument of its own. **A statement's own label is
@@ -553,19 +555,14 @@ qualified** — so in `loop: bne .x`, `.x` is scoped to `loop`, the label on
 that same line, not whatever preceded it.
 
 A local label with no enclosing global label — at its definition or at a
-reference — signals `assembly-error`. A qualified name can collide with an
-identically-spelled global (a global literally named `loop.next` alongside a
-`.next:` under `loop:`) — this surfaces loudly as the ordinary duplicate-label
-`assembly-error`, never as silent aliasing; a follow-up ticket tracks a
-reserved separator that rules this out entirely. An `.equ` name (below) is
-qualified the same way if it's local, and shares this collision hazard.
+reference — signals `assembly-error`. A global named `loop.next` and a local
+`.next` under `loop` can coexist. An `.equ` or `.set` name uses the same key
+rule when local.
 
 Alongside `symbols`, `%bind-symbol!` records each entry's unqualified name,
-enclosing scope, and kind (label vs. `.equ`, below) in `symbol-info` (#37) —
-captured once, at the moment a name is bound, rather than recovered later by
-splitting the qualified string on `local-label-prefix`. Splitting couldn't
-tell a real global named `loop.next` apart from local `.next` under `loop`
-(the same collision hazard just above); recording scope at bind time can. See
+enclosing scope, and kind (label vs. `.equ`, below) in `symbol-info` —
+captured when a name is bound. `symbol-info-qualified-name` remains readable,
+so both of those names display as `loop.next`; their scope distinguishes them. See
 [Listing and source map](listing.md#symbol-table) for the scope-aware lookup
 and grouped listing built on `symbol-info`.
 

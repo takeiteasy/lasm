@@ -51,6 +51,18 @@
     (let ((bp (debug-break session ".loop" :scope "count")))
       (fiveam:is (= #x102 (breakpoint-address bp))))))
 
+(fiveam:test debug-break-distinguishes-global-from-scoped-local
+  (let* ((a (assemble "loop: hlt
+.next: hlt
+loop.next: hlt" :machine 'emu-test-machine))
+         (m (make-machine 'emu-test-machine)))
+    (load-program m a)
+    (let ((session (make-debug-session m :assembly a)))
+      (fiveam:is (= 1 (breakpoint-address
+                        (debug-break session ".next" :scope "loop"))))
+      (fiveam:is (= 2 (breakpoint-address
+                        (debug-break session "loop.next")))))))
+
 (fiveam:test debug-break-by-label-rejects-equ
   (let* ((a (assemble ".equ limit, 10
         ldx #1

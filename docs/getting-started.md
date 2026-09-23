@@ -112,6 +112,13 @@ see [Directives](directives.md).
 sbcl --script examples/pc-and-scopes.lisp
 ```
 
+`examples/scoped-counter-alias.lisp` shows a `$` location-counter alias and
+two distinct symbols that share the readable spelling `loop.next`:
+
+```sh
+sbcl --script examples/scoped-counter-alias.lisp
+```
+
 Two routines each define their own `.loop:` local label without colliding
 (scoped to `count_down`/`count_up`), and a `.word *` emits its own address —
 see [Assembler, "Location counter"](assembler.md#location-counter) and

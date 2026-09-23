@@ -35,9 +35,9 @@
 ;;;;
 ;;;; Local labels (an identifier starting with the lexer's LOCAL-LABEL-PREFIX,
 ;;;; e.g. ".loop") are scoped to their nearest preceding non-local ("global")
-;;;; label (#16): %LAYOUT threads a SCOPE variable, updated by every global
+;;;; label: %LAYOUT threads a SCOPE variable, updated by every global
 ;;;; label definition, and qualifies each local name -- both a definition and
-;;;; a reference -- to SCOPE ++ NAME (e.g. "loop" ++ ".next" -> "loop.next")
+;;;; a reference -- to SCOPE ++ NUL ++ NAME
 ;;;; before it ever reaches the symbol table, so SYMBOLS itself stays a flat
 ;;;; string -> address table and EVAL-EXPR needs no scope of its own. A local
 ;;;; label with no enclosing global label is an ASSEMBLY-ERROR. See
@@ -165,23 +165,10 @@ ever non-NIL for :INSTRUCTION."
   (descriptor nil :type (or null instruction-descriptor)))
 
 (defstruct symbol-info
-  "One ASSEMBLY-SYMBOL-INFO entry (#37) -- the scope and kind metadata
-ASSEMBLY-SYMBOLS itself cannot carry, since that table must stay a flat
-string -> value map (EVAL-EXPR's documented contract, and every caller that
-folds an expr-label against it). Captured at bind time (%BIND-SYMBOL!) rather
-than recovered later by splitting QUALIFIED-NAME on LOCAL-LABEL-PREFIX -- a
-global literally spelled \"loop.next\" is indistinguishable from local
-\".next\" under scope \"loop\" by string-splitting alone (#36), but not by
-this struct, since SCOPE is recorded, not inferred.
-NAME is the unqualified spelling as written (e.g. \".next\", or \"loop\" for
-a global); QUALIFIED-NAME is NAME's ASSEMBLY-SYMBOLS key (e.g. \"loop.next\",
-or just \"loop\" for a global -- global names are never qualified). SCOPE is
-the enclosing global label's name, or NIL for a global assignment. KIND is
-:LABEL, :EQU, or :SET.
-LOCALP mirrors STATEMENT-LABEL-LOCALP/EXPR-LABEL-LOCALP. VALUE duplicates
-the ASSEMBLY-SYMBOLS entry so a caller need not look twice. LINE is the
-source invocation line. DEFINITION-LINE is the macro body line for an
-expanded symbol. ORDER records binding order within a source line."
+  "Metadata for a bound symbol. QUALIFIED-NAME is readable; local hash keys
+use a reserved separator instead. SCOPE distinguishes equal readable names.
+VALUE is the symbol's final value, LINE its invocation line, and
+DEFINITION-LINE its macro body line when applicable."
   (name "" :type string)
   (qualified-name "" :type string)
   (scope nil :type (or null string))
@@ -210,7 +197,7 @@ expanded symbol. ORDER records binding order within a source line."
   (cell-width 8 :type (integer 1))
   (origin 0 :type (integer 0))
   (symbols nil :type (or null hash-table))  ; string -> final value
-  (symbol-info nil :type (or null hash-table))  ; qualified name -> SYMBOL-INFO
+  (symbol-info nil :type (or null hash-table))  ; internal key -> SYMBOL-INFO
                                                  ; (#37) -- scope/kind metadata
                                                  ; for every ASSEMBLY-SYMBOLS
                                                  ; entry, built alongside it
@@ -735,7 +722,8 @@ labels. Return NIL when a known forward label has no provisional value yet."
             nil
             (%assembly-error (statement-line statement)
                              "~A: symbol ~S is not resolvable here"
-                             (statement-mnemonic statement) (unresolved-label-name c)))))))
+                             (statement-mnemonic statement)
+                             (%display-symbol-key (unresolved-label-name c))))))))
 
 (defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp directive-symbols labels previous)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
@@ -766,12 +754,12 @@ ADDRESS -- the counter's value *before* this .ORG moves it."
 ;;; preceding global label before it ever reaches the (flat) symbol table.
 
 (defun %qualify-local (scope name line)
-  "Qualify local label NAME (its LOCAL-LABEL-PREFIX included, e.g. \".next\")
-against SCOPE, the nearest preceding global label's name -- e.g. SCOPE
-\"loop\" and NAME \".next\" qualify to \"loop.next\". Signals ASSEMBLY-ERROR
-if SCOPE is NIL (a local label with no enclosing global label)."
+  "Return the internal key for local NAME under SCOPE."
   (unless scope
     (%assembly-error line "Local label ~S has no enclosing global label" name))
+  (concatenate 'string scope (string #\Null) name))
+
+(defun %display-qualified-local (scope name)
   (concatenate 'string scope name))
 
 (defun %qualify-locals! (ast scope line)
@@ -780,7 +768,7 @@ from AST to its SCOPE-qualified name (%QUALIFY-LOCAL), leaving every other
 node untouched. Safe to call on any AST since each statement's operand ASTs
 (mode.lisp/parser.lisp) are freshly parsed and not shared -- it does not
 clear LOCALP after qualifying, so calling it twice on the same node
-double-qualifies the name (e.g. \"loop.next\" becomes \"looploop.next\"). This
+double-qualifies the name. This
 is why %LAYOUT re-parses every statement's operands on every relaxation
 pass instead of reusing one pass's ASTs on the next -- a follow-up ticket
 tracks caching them across passes, which would need this cleared or the
@@ -807,12 +795,16 @@ call made idempotent some other way."
   (when (nth-value 1 (gethash qualified-name symbols))
     (unless (and rebindp (member (symbol-info-kind (gethash qualified-name info))
                                  '(:equ :set)))
-      (%assembly-error line "Duplicate symbol ~S" qualified-name)))
+      (%assembly-error line "Duplicate symbol ~S" (%display-symbol-key qualified-name))))
   (setf (gethash qualified-name symbols) value)
   (when directive-symbols
     (setf (gethash qualified-name directive-symbols) value))
   (setf (gethash qualified-name info)
-        (make-symbol-info :name name :qualified-name qualified-name :scope scope
+        (make-symbol-info :name name
+                           :qualified-name (if localp
+                                               (%display-qualified-local scope name)
+                                               qualified-name)
+                           :scope scope
                            :kind kind :localp localp :value value :line line
                            :definition-line *current-definition-line*
                            :order (hash-table-count info))))
@@ -856,7 +848,8 @@ SCOPE unchanged."
                       (%assembly-error line
                                         "~A: operand must be resolvable here -- ~
 symbol ~S is not yet defined"
-                                        (statement-mnemonic statement) (unresolved-label-name c))))))
+                                        (statement-mnemonic statement)
+                                        (%display-symbol-key (unresolved-label-name c)))))))
       (let ((kind (if (eq (directive-descriptor-action directive) :reassign)
                       :set :equ)))
         (%bind-symbol! symbols info name unqualified-name value line kind
@@ -872,7 +865,7 @@ symbol ~S is not yet defined"
          (multiple-value-bind (value presentp) (gethash (expr-label-name ast) symbols)
            (unless presentp
              (%assembly-error line "Symbol ~S is not yet assigned"
-                              (expr-label-name ast)))
+                              (%display-symbol-key (expr-label-name ast))))
            (make-expr-number :value value))
          ast))
     (expr-unary

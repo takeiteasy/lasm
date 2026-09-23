@@ -276,6 +276,10 @@ indented. Returns a string when `stream` is `nil` (the default); otherwise
 writes to `stream`. `print-disassembly` instead renders an
 address/cells/text listing for humans — *not* re-assemblable source.
 
+When a local label and a global share the readable spelling `loop.next`,
+label substitution omits the local name and renders its address numerically.
+This keeps the rendered operand unambiguous.
+
 ## Round-trip fidelity — the honest scope
 
 `assemble` → `disassemble-*` → `assemble` reproduces identical cells when the

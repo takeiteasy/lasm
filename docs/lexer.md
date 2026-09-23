@@ -3,6 +3,7 @@
 `deflexer` declares a *parameterized* surface syntax: comment styles,
 number-literal prefixes, label suffix, local-label prefix, string delimiter,
 identifier character class, line continuation, and mode-suffix separator.
+It can also define an alternate location-counter spelling.
 Different fantasy CPUs can each declare their own dialect rather than
 sharing one hard-coded assembly syntax.
 
@@ -61,6 +62,11 @@ their own for a conventional dialect.
   later as a baffling "no addressing mode matches this operand". A
   `nil`/omitted clause disables mode-suffix syntax entirely — a dotted
   mnemonic is then just an ordinary (if unusual) identifier.
+- `(location-counter string)` — one optional nonempty punctuation spelling,
+  such as `"$"` or `"."`. It denotes the current address when it is a
+  complete token. `$FF` remains a hex number and `.loop` remains an
+  identifier. `*` remains available in every lexer. Operator, comment,
+  string, and label delimiters cannot be used as the alias.
 
 ## Tokens
 
@@ -69,8 +75,8 @@ their own for a conventional dialect.
 
 | Slot | Meaning |
 |---|---|
-| `type` | `:identifier` `:number` `:string` `:punctuation` `:label-suffix` `:newline` `:eof` |
-| `value` | parsed value — string (identifier/string), integer (number), keyword (punctuation/label-suffix) |
+| `type` | `:identifier` `:number` `:string` `:punctuation` `:location-counter` `:label-suffix` `:newline` `:eof` |
+| `value` | parsed value — string (identifier/string), integer (number), keyword (punctuation/location counter/label suffix) |
 | `text` | verbatim source text |
 | `line`, `column` | 1-based source position |
 | `localp` | `:identifier` only — T if `text` starts with `local-label-prefix` (#16) |

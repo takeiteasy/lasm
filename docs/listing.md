@@ -134,7 +134,7 @@ bind time rather than recovered afterward:
 ```lisp
 (defstruct symbol-info
   name            ; unqualified spelling, e.g. ".next"
-  qualified-name  ; assembly-symbols key, e.g. "loop.next"
+  qualified-name  ; readable name, e.g. "loop.next"
   scope           ; enclosing global label's name, or NIL
   kind            ; :label | :equ | :set
   localp
@@ -156,7 +156,10 @@ Query functions built on it:
 
 `assembly-symbol` looks up a single name, qualifying it against `scope` the
 same way the assembler would (so `(assembly-symbol a ".next" :scope "loop")`
-finds what `loop: .next:` bound). `assembly-symbols-list` returns every
+finds what `loop: .next:` bound). Without `:scope`, `"loop.next"` names the
+global, if present. Local `assembly-symbols` keys contain a reserved NUL
+separator; `symbol-info-qualified-name` and printed listings remain readable.
+`assembly-symbols-list` returns every
 symbol, optionally filtered to one `kind` (`:label`/`:equ`/`:set`) and/or one
 `scope` (pass `nil` for top-level symbols — globals and top-level assignments).
 `assembly-symbol-groups` is the grouped view a listing wants: a leading

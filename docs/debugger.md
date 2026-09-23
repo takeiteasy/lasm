@@ -57,8 +57,8 @@ creation, not re-resolved on every command.
 resolved through `assembly-symbol` (`listing.lisp`, #37) against the
 session's attached `assembly` — `scope`, when given, qualifies a local label
 the same way `assembly-symbol` itself does (e.g. `scope "count"`, `where
-".loop"` looks up `"count.loop"`; without `scope`, a name is looked up
-as-is, so an already-qualified name like `"count.loop"` works directly too).
+".loop"` looks up that local). Without `scope`, `"count.loop"` names a
+global with that spelling, if one exists.
 Breaking on a label:
 
 - Signals if the session has no attached `assembly`.

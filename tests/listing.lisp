@@ -262,6 +262,17 @@ nop" :machine 'instr-test-machine))
     (fiveam:is (null (assembly-symbol a ".missing" :scope "loop")))
     (fiveam:is (null (assembly-symbol a "nonexistent")))))
 
+(fiveam:test assembly-symbol-distinguishes-readable-name-collision
+  (let* ((a (assemble "loop: nop
+.next: nop
+loop.next: nop" :machine 'instr-test-machine))
+         (global (assembly-symbol a "loop.next"))
+         (local (assembly-symbol a ".next" :scope "loop")))
+    (fiveam:is (= 2 (symbol-info-value global)))
+    (fiveam:is (= 1 (symbol-info-value local)))
+    (fiveam:is (string= "loop.next" (symbol-info-qualified-name local)))
+    (fiveam:is (search ".next" (symbols-text a)))))
+
 (fiveam:test assembly-symbols-list-filters-by-kind-and-scope
   (let* ((a (assemble ".equ top, 1
 loop: nop

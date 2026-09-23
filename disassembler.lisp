@@ -181,14 +181,23 @@ decoded line's start.
 
 Several names sharing one address (unusual, but not prevented by the
 assembler) break ties by STRING< for a deterministic choice."
-  (let ((by-value (make-hash-table)))
+  (let ((by-value (make-hash-table))
+        (globals (make-hash-table :test 'equal)))
     (if symbol-info
-        (maphash (lambda (name info)
-                   (declare (ignore name))
-                   (when (eq :label (symbol-info-kind info))
-                     (cl:push (symbol-info-qualified-name info)
-                              (gethash (symbol-info-value info) by-value))))
-                 symbol-info)
+        (progn
+          (maphash (lambda (name info)
+                     (declare (ignore name))
+                     (unless (symbol-info-localp info)
+                       (setf (gethash (symbol-info-name info) globals) t)))
+                   symbol-info)
+          (maphash (lambda (name info)
+                     (declare (ignore name))
+                     (when (and (eq :label (symbol-info-kind info))
+                                (not (and (symbol-info-localp info)
+                                          (gethash (symbol-info-qualified-name info) globals))))
+                       (cl:push (symbol-info-qualified-name info)
+                                (gethash (symbol-info-value info) by-value))))
+                   symbol-info))
         (when symbols
           (maphash (lambda (name value)
                      (when (and (integerp value) (gethash value line-starts))

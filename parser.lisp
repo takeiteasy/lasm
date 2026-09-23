@@ -135,6 +135,8 @@
        (values (make-expr-label :name (token-value tok) :localp (token-localp tok)
                                 :line (token-line tok) :column (token-column tok))
                (1+ i)))
+      ((eq (token-type tok) :location-counter)
+       (values (make-expr-location) (1+ i)))
       ((eq (%punct-value tok) :star)
        ;; The location-counter symbol (#15): "*" in operand/primary position
        ;; is the current address, not multiplication -- precedence climbing

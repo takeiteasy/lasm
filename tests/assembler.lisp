@@ -481,6 +481,16 @@ next: nop" :machine 'instr-test-machine)))
 .word *" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 1 0) (assembly-cells a)))))
 
+(fiveam:test configured-location-counters-assemble-with-existing-tokens
+  (let ((dollar (assemble ".byte $, $FF, *" :machine 'instr-test-machine
+                          :lexer 'dollar-counter-syntax))
+        (dot (assemble "loop: nop
+.loop: nop
+.byte ., .loop" :machine 'instr-test-machine
+                       :lexer 'dot-counter-syntax)))
+    (fiveam:is (equalp #(0 255 2) (assembly-cells dollar)))
+    (fiveam:is (equalp #(234 234 2 1) (assembly-cells dot)))))
+
 (fiveam:test byte-directive-with-two-location-counters-emits-two-different-values
   ;; Each "*" resolves to its own element's address, not the directive
   ;; statement's -- ".byte *, *" at address 0 emits 0 then 1.
@@ -529,9 +539,9 @@ b: nop
 .loop: nop
 bra .loop" :machine 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "a" (assembly-symbols a))))
-    (fiveam:is (= 1 (gethash "a.loop" (assembly-symbols a))))
+    (fiveam:is (= 1 (gethash (%qualify-local "a" ".loop" 0) (assembly-symbols a))))
     (fiveam:is (= 4 (gethash "b" (assembly-symbols a))))
-    (fiveam:is (= 5 (gethash "b.loop" (assembly-symbols a))))
+    (fiveam:is (= 5 (gethash (%qualify-local "b" ".loop" 0) (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA #xEA #x90 #xFD #xEA #xEA #x90 #xFD) (assembly-cells a)))))
 
 (fiveam:test duplicate-local-label-within-the-same-scope-still-signals-assembly-error
@@ -622,7 +632,7 @@ foo: nop" :machine 'instr-test-machine)))
   (let ((a (assemble "loop: nop
 .equ .n, 3
 .byte .n" :machine 'instr-test-machine)))
-    (fiveam:is (= 3 (gethash "loop.n" (assembly-symbols a))))
+    (fiveam:is (= 3 (gethash (%qualify-local "loop" ".n" 0) (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA 3) (assembly-cells a)))))
 
 (fiveam:test equ-used-as-instruction-operand-narrows-to-zero-page
@@ -730,8 +740,8 @@ second: nop
 .set .n, 4
 .byte .n" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 2 3 #xEA 4) (assembly-cells a)))
-    (fiveam:is (= 3 (gethash "first.n" (assembly-symbols a))))
-    (fiveam:is (= 4 (gethash "second.n" (assembly-symbols a))))))
+    (fiveam:is (= 3 (gethash (%qualify-local "first" ".n" 0) (assembly-symbols a))))
+    (fiveam:is (= 4 (gethash (%qualify-local "second" ".n" 0) (assembly-symbols a))))))
 
 (fiveam:test set-value-changes-mode-choice-at-each-instruction
   (let ((a (assemble ".set addr, $10
@@ -779,7 +789,7 @@ last: nop" :machine 'instr-test-machine)))
 (fiveam:test local-label-may-feed-res
   (let ((a (assemble (format nil "start: nop~%.loop: nop~%.res .loop~%next: nop")
                      :machine 'instr-test-machine)))
-    (fiveam:is (= 1 (gethash "start.loop" (assembly-symbols a))))
+    (fiveam:is (= 1 (gethash (%qualify-local "start" ".loop" 0) (assembly-symbols a))))
     (fiveam:is (= 3 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test pure-equ-chain-feeds-a-layout-directive
@@ -819,7 +829,7 @@ last: nop" :machine 'instr-test-machine)))
 (fiveam:test symbol-info-tags-a-local-label-with-its-enclosing-scope
   (let* ((a (assemble "loop: nop
 .next: nop" :machine 'instr-test-machine))
-         (info (gethash "loop.next" (assembly-symbol-info a))))
+         (info (gethash (%qualify-local "loop" ".next" 0) (assembly-symbol-info a))))
     (fiveam:is (string= ".next" (symbol-info-name info)))
     (fiveam:is (string= "loop.next" (symbol-info-qualified-name info)))
     (fiveam:is (string= "loop" (symbol-info-scope info)))
@@ -839,7 +849,7 @@ last: nop" :machine 'instr-test-machine)))
 (fiveam:test symbol-info-tags-a-local-equ-with-its-enclosing-scope
   (let* ((a (assemble "loop: nop
 .equ .n, 3" :machine 'instr-test-machine))
-         (info (gethash "loop.n" (assembly-symbol-info a))))
+         (info (gethash (%qualify-local "loop" ".n" 0) (assembly-symbol-info a))))
     (fiveam:is (string= ".n" (symbol-info-name info)))
     (fiveam:is (string= "loop" (symbol-info-scope info)))
     (fiveam:is (eq :equ (symbol-info-kind info)))
@@ -854,24 +864,41 @@ last: nop" :machine 'instr-test-machine)))
 .loop: nop" :machine 'instr-test-machine)))
 
 (fiveam:test symbol-info-distinguishes-a-same-spelled-global-from-a-qualified-local
-  ;; #36's hazard: a global literally named "loop.next" and a local ".next"
-  ;; under a *different* global "loop" both produce the ASSEMBLY-SYMBOLS key
-  ;; "loop.next" -- but they must remain distinguishable via SYMBOL-INFO's
-  ;; SCOPE, which string-splitting the key alone could never recover (the
-  ;; global's own SCOPE is NIL; the local's is "loop").
-  (fiveam:signals assembly-error
-    ;; Both would bind the literal key "loop.next" -- this is the pre-
-    ;; existing #36 collision, still a duplicate-symbol error today.
-    (assemble "loop: nop
+  (let* ((a (assemble "loop: nop
 .next: nop
+.byte .next, loop.next
 loop.next: nop" :machine 'instr-test-machine))
-  ;; With no collision, the discriminator works as intended: a real global
-  ;; spelled with a dot in it is recorded with SCOPE NIL, not confused for
-  ;; anyone's local.
-  (let* ((a (assemble "loop.next: nop" :machine 'instr-test-machine))
-         (info (gethash "loop.next" (assembly-symbol-info a))))
-    (fiveam:is (null (symbol-info-scope info)))
-    (fiveam:is (not (symbol-info-localp info)))))
+         (global (gethash "loop.next" (assembly-symbol-info a)))
+         (local (gethash (%qualify-local "loop" ".next" 0)
+                         (assembly-symbol-info a))))
+    (fiveam:is (= 4 (symbol-info-value global)))
+    (fiveam:is (= 1 (symbol-info-value local)))
+    (fiveam:is (null (symbol-info-scope global)))
+    (fiveam:is (string= "loop" (symbol-info-scope local)))
+    (fiveam:is (string= "loop.next" (symbol-info-qualified-name local)))
+    (fiveam:is (equalp #(234 234 1 4 234) (assembly-cells a)))))
+
+(fiveam:test local-assignments-coexist-with-same-spelled-globals
+  (let ((a (assemble "loop:
+.equ .size, 2
+.set .count, 3
+.set .count, .count + 1
+.byte .size, .count, loop.size
+loop.size: .byte 0
+loop.count: .byte 0" :machine 'instr-test-machine)))
+    (fiveam:is (= 4 (symbol-info-value (assembly-symbol a ".count" :scope "loop"))))
+    (fiveam:is (= 3 (symbol-info-value (assembly-symbol a "loop.size"))))
+    (fiveam:is (= 4 (symbol-info-value (assembly-symbol a "loop.count"))))
+    (fiveam:is (equalp #(2 4 3 0 0) (assembly-cells a)))))
+
+(fiveam:test scoped-symbol-errors-display-readable-names
+  (handler-case
+      (assemble "loop:
+.next: nop
+.next: nop" :machine 'instr-test-machine)
+    (assembly-error (condition)
+      (fiveam:is (search "loop.next" (princ-to-string condition)))
+      (fiveam:is (not (find #\Null (princ-to-string condition)))))))
 
 (fiveam:test assembly-symbols-shape-is-unchanged-by-symbol-info
   ;; ASSEMBLY-SYMBOLS itself stays a flat string -> integer table -- adding

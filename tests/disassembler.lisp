@@ -500,6 +500,14 @@ bra start" :machine 'disasm-test-machine))
     (fiveam:is (string= "start" (disassembly-line-label (first lines))))
     (fiveam:is (string= "bra start" (disassembly-line-text (first lines))))))
 
+(fiveam:test disassemble-ambiguous-local-name-uses-numeric-operand
+  (let* ((a (assemble "loop: hlt
+.next: hlt
+bra .next
+loop.next: hlt" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :data-regions nil)))
+    (fiveam:is (search "$" (disassembly-line-text (third lines))))))
+
 ;;; Failure and bounds
 
 (fiveam:test disassemble-unknown-opcode-emits-data

@@ -28,6 +28,12 @@
   ((name :initarg :name :reader unresolved-label-name))
   (:report (lambda (c s) (write-string (diagnostic-text c) s))))
 
+(defun %display-symbol-key (name)
+  (let ((separator (position #\Null name)))
+    (if separator
+        (concatenate 'string (subseq name 0 separator) (subseq name (1+ separator)))
+        name)))
+
 (define-condition unresolved-location (lasm-error) ()
   (:documentation "Signalled by EVAL-EXPR on an EXPR-LOCATION node (the \"*\"
 location-counter symbol, #15) when no PC is given to resolve it against --
@@ -332,7 +338,7 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
        (unless foundp
          (error 'unresolved-label :name (expr-label-name ast)
                 :message (format nil "Cannot fold constant expression: unresolved label ~S"
-                                 (expr-label-name ast))
+                                 (%display-symbol-key (expr-label-name ast)))
                 :line (expr-label-line ast) :column (expr-label-column ast)))
        value))
     (expr-location

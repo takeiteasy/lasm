@@ -104,7 +104,7 @@ doesn't recognize as an operator).
 | 5 | `+` `-` |
 | 6 | `*` `/` `%` |
 | 7 | prefix `-` `+` `~` `<` `>` |
-| 8 | primary: number, label, `*` (location counter), `( expr )` |
+| 8 | primary: number, label, location counter, `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
 the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
@@ -118,6 +118,10 @@ position where an operand is expected, so `lda *+2` (location counter plus 2)
 and `lda 2*3` (still multiplication, since `2` is already a complete left
 operand by the time `*` is seen) both parse as intended with no lexer
 change.
+
+A lexer's `(location-counter string)` clause adds a dedicated token that
+parses to the same `expr-location` node. For example, a configured standalone
+`$` denotes the current address while `$FF` remains a hex number.
 
 `%` returns the remainder after truncating division, including for negative
 operands (`-5 % 3` is `-2`). With the default lexer, `%101` is a binary

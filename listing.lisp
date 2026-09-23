@@ -222,12 +222,7 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; ASSEMBLY-SYMBOL-INFO, built alongside ASSEMBLY-SYMBOLS by the assembler
 ;;; (assembler.lisp) to answer "what's defined in this scope, and is it a
 ;;; label or an .EQU" without ASSEMBLY-SYMBOLS itself having to stop being a
-;;; flat string -> value table (EVAL-EXPR's documented contract). See
-;;; SYMBOL-INFO's docstring (assembler.lisp) for why this metadata is
-;;; captured at bind time rather than recovered from a qualified name by
-;;; splitting on LOCAL-LABEL-PREFIX (#36: a global literally spelled
-;;; "loop.next" is otherwise indistinguishable from local ".next" under
-;;; scope "loop").
+;;; flat string -> value table. Local keys contain a reserved separator.
 ;;;
 ;;; Every function below degrades gracefully (returns NIL or an empty
 ;;; result) when ASSEMBLY-SYMBOL-INFO is itself NIL -- callers assembling by
@@ -244,14 +239,10 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; address/scope-indexed structure if either ever shows up as a hot path.
 
 (defun assembly-symbol (assembly name &key scope)
-  "The SYMBOL-INFO for NAME in ASSEMBLY, or NIL if unbound. With SCOPE (an
-enclosing global label's name), NAME is qualified against it first exactly
-as the assembler would (%QUALIFY-LOCAL, assembler.lisp) -- e.g. SCOPE
-\"loop\" and NAME \".next\" look up \"loop.next\". Without SCOPE, NAME is
-looked up as-is, so a global name or an already-qualified name both work
-directly."
+  "Return SYMBOL-INFO for NAME. SCOPE selects a local under that global;
+without it, NAME identifies a global or top-level assignment."
   (let ((info (assembly-symbol-info assembly)))
-    (and info (gethash (if scope (concatenate 'string scope name) name) info))))
+    (and info (gethash (if scope (%qualify-local scope name 0) name) info))))
 
 (defun assembly-symbols-list (assembly &key kind (scope :any scope-given-p))
   "Every SYMBOL-INFO in ASSEMBLY, in SYMBOL-INFO-LINE order (see this file's

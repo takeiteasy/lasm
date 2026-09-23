@@ -17,6 +17,34 @@
     (fiveam:is (equal '(255 16 5 3 42 65) (mapcar #'token-value toks)))
     (fiveam:is (every (lambda (tok) (eq :number (token-type tok))) toks))))
 
+(deflexer dollar-counter-syntax
+  (number-formats (:hex "$" "0x") (:dec :default))
+  (label-suffix ":")
+  (local-label-prefix ".")
+  (ident-chars :alnum "_.")
+  (location-counter "$"))
+
+(deflexer dot-counter-syntax
+  (number-formats (:dec :default))
+  (label-suffix ":")
+  (local-label-prefix ".")
+  (ident-chars :alnum "_.")
+  (location-counter "."))
+
+(fiveam:test location-counter-alias-preserves-number-and-identifier-tokens
+  (let ((dollar (%non-eof (tokenize "$ $FF *" :lexer 'dollar-counter-syntax)))
+        (dot (%non-eof (tokenize ". .loop" :lexer 'dot-counter-syntax))))
+    (fiveam:is (equal '(:location-counter :number :punctuation) (%types dollar)))
+    (fiveam:is (= 255 (token-value (second dollar))))
+    (fiveam:is (equal '(:location-counter :identifier) (%types dot)))
+    (fiveam:is (string= ".loop" (token-value (second dot))))))
+
+(fiveam:test location-counter-alias-rejects-operators
+  (fiveam:signals error
+    (eval '(deflexer invalid-counter-syntax (location-counter "+"))))
+  (fiveam:signals error
+    (eval '(deflexer missing-counter-syntax (location-counter nil)))))
+
 (fiveam:test percent-literal-and-operator-tokens
   (let ((toks (%non-eof (tokenize "%101 13 % 5 13%2 %"))))
     (fiveam:is (equal '(5 13 :percent 5 13 :percent 2 :percent)

@@ -49,6 +49,7 @@
   string-delim          ; string, or nil to disable string literals
   ident-extra-chars     ; string of non-alphanumeric chars allowed in identifiers
   line-continuation     ; string, or nil to disable line continuation
+  location-counter     ; optional standalone spelling of the location counter
   mode-suffix-separator); string, or nil to disable mode-suffix syntax (#40)
                         ; -- separates a mnemonic from a forced addressing-
                         ; mode suffix, e.g. the "." in "lda.w" (mode.lisp's
@@ -98,7 +99,8 @@
 
 (defun build-lexer-descriptor (name clauses)
   (let (comment-styles number-formats label-suffix local-label-prefix
-        string-delim (ident-extra-chars "") line-continuation mode-suffix-separator)
+        string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
+        location-counter location-counter-clause-p)
     (dolist (clause clauses)
       (case (first clause)
         (comment-styles (setf comment-styles (parse-comment-styles-clause (rest clause))))
@@ -109,6 +111,10 @@
         (ident-chars (setf ident-extra-chars (parse-ident-chars-clause (rest clause))))
         (line-continuation (setf line-continuation (second clause)))
         (mode-suffix-separator (setf mode-suffix-separator (second clause)))
+        (location-counter
+         (setf location-counter-clause-p t location-counter (second clause))
+         (unless (= 2 (length clause))
+           (error "DEFLEXER ~S: location-counter expects one spelling" name)))
         (t (error "Unknown DEFLEXER clause head ~S in ~S" (first clause) clause))))
     ;; MODE-SUFFIX-SEPARATOR must already lex as part of an identifier, or
     ;; "lda.w" would split into two tokens at the lexer level and never
@@ -119,6 +125,21 @@
                (notevery (lambda (c) (find c ident-extra-chars)) mode-suffix-separator))
       (error "DEFLEXER ~S: mode-suffix-separator ~S must consist only of ~
 characters already listed in ident-chars" name mode-suffix-separator))
+    (when (find #\Null ident-extra-chars)
+      (error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
+    (when location-counter-clause-p
+      (unless (and (stringp location-counter) (plusp (length location-counter))
+                   (every (lambda (c) (and (graphic-char-p c) (not (alphanumericp c))))
+                          location-counter)
+                   (not (member location-counter
+                                '("+" "-" "*" "/" "%" "&" "|" "^" "~"
+                                  "<" ">" "<<" ">>" "(" ")" "[" "]" "," "#" "=")
+                                :test #'string=))
+                   (not (equal location-counter label-suffix))
+                   (not (equal location-counter string-delim))
+                   (not (equal location-counter line-continuation))
+                   (not (find location-counter comment-styles :key #'first :test #'equal)))
+        (error "DEFLEXER ~S: invalid location-counter spelling ~S" name location-counter)))
     (make-lexer-descriptor :name name :comment-styles comment-styles
                             :number-formats number-formats
                             :label-suffix label-suffix
@@ -126,6 +147,7 @@ characters already listed in ident-chars" name mode-suffix-separator))
                             :string-delim string-delim
                             :ident-extra-chars ident-extra-chars
                             :line-continuation line-continuation
+                            :location-counter location-counter
                             :mode-suffix-separator mode-suffix-separator)))
 
 (defmacro deflexer (name &body clauses)
@@ -137,6 +159,7 @@ characters already listed in ident-chars" name mode-suffix-separator))
      (string-delim string)
      (ident-chars :alnum extra-chars-string)
      (line-continuation string)
+     (location-counter string)
      (mode-suffix-separator string)
 
 MODE-SUFFIX-SEPARATOR (#40) separates a mnemonic from a forced addressing-
@@ -320,6 +343,16 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
                                    (>= (length text) (length prefix))
                                    (string= prefix text :end2 (length prefix)))))))))
 
+(defun %match-location-counter (state descriptor)
+  (let ((spelling (lexer-descriptor-location-counter descriptor)))
+    (when (and spelling (%looking-at state spelling)
+               (let ((next (%peek state (length spelling))))
+                 (not (and next (%ident-char-p next descriptor)))))
+      (let ((line (lex-state-line state)) (col (lex-state-col state)))
+        (%advance state (length spelling))
+        (make-token :type :location-counter :value :location-counter
+                    :text spelling :line line :column col)))))
+
 (defun %match-label-suffix (state descriptor)
   (let ((suf (lexer-descriptor-label-suffix descriptor)))
     (when (and suf (%looking-at state suf))
@@ -378,6 +411,7 @@ WITH-SOURCE-CONTEXT) so DIAGNOSTIC-TEXT can render the offending line."
                          (%match-comment state descriptor)
                          (%match-newline state descriptor)
                          (%match-string state descriptor)
+                         (%match-location-counter state descriptor)
                          (%match-number state descriptor)
                          (%match-identifier state descriptor)
                          (%match-label-suffix state descriptor)

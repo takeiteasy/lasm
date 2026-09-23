@@ -209,6 +209,14 @@ jmp start")))
 (fiveam:test star-parses-to-expr-location
   (fiveam:is (expr-location-p (%expr "*"))))
 
+(fiveam:test configured-counter-parses-to-expr-location
+  (dolist (pair '(("$+2" dollar-counter-syntax)
+                  (".+2" dot-counter-syntax)))
+    (let ((tokens (tokenize (first pair) :lexer (second pair))))
+      (multiple-value-bind (ast next) (parse-expression tokens)
+        (fiveam:is (= next (1- (length tokens))))
+        (fiveam:is (expr-location-p (expr-binary-left ast)))))))
+
 (fiveam:test star-plus-offset-parses-as-location-plus-number
   (let ((ast (%expr "*+2")))
     (fiveam:is (expr-binary-p ast))
