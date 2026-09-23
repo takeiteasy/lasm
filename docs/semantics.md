@@ -62,6 +62,7 @@ error when the `push`/`pop` form is macroexpanded (not merely when it runs)
 if the name is left out — name one explicitly in that case.
 - `(set-flags! (flag-name form)...)` — set each named flag to the result of
   evaluating `form`, e.g. `(set-flags! (c (> r 255)) (z (zero? a)))`.
+  Integer `0` clears a flag; nonzero integers set it.
 - `(trap tag &optional data)` — signal a `lasm-trap` condition carrying
   `tag`/`data`. Unchanged by #109's interrupt delivery (below) — the two
   remain separate mechanisms; a model unifying them is future M6 work.

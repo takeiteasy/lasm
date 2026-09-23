@@ -348,14 +348,6 @@ return (not on a trap); a machine that never calls `extra-cycles` is ticked
 once per step, as before. `machine-extra-cycles` holds the running
 instruction's extra and is zeroed at the start of each step and by `reset`.
 
-## Note on flags in your own semantics (#22)
-
-`(setf flag)` treats its value as a Lisp boolean, not an integer 0/1 — `0`
-is non-`nil`, so `(setf (flag m 'z) 0)` sets the flag, not clears it. Write
-new instruction semantics to pass an actual boolean (e.g. `(zero? x)`,
-`(bit-set? a 7)`), not a raw comparison result that happens to be an
-integer.
-
 ## Scope
 
 This covers fetch/decode/execute over already-encoded cells and a single

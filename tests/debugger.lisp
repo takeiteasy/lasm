@@ -175,8 +175,7 @@ loop.next: hlt" :machine 'emu-test-machine))
       (fiveam:is (search "1 0 0 4" text)))))
 
 (fiveam:test debug-memory-text-hex-width-follows-cell-width
-  ;; #87 regression guard -- a 16-bit-cell machine's dump must not truncate
-  ;; to 2 hex digits.
+  ;; A 16-bit-cell machine's dump uses four hex digits.
   (let* ((m (make-machine 'test-machine)) ; tests/suites.lisp: wram is 16-bit-cell
          ;; TEST-MACHINE declares no PC register -- pass one explicitly
          ;; (:PC 'A) since this test never steps/continues, only inspects.

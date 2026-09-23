@@ -78,9 +78,7 @@ DISASSEMBLE-ASSEMBLY passes by default. Empty when ASSEMBLY-LISTING is NIL."
 ;;; Rendering
 
 (defun %listing-hex-digits (cell-width)
-  "Hex digits needed to render one CELL-WIDTH-bit cell -- (CEILING
-CELL-WIDTH 4), so an 8-bit cell prints 2 digits and a 16-bit cell (dcpu16)
-prints 4, rather than hardcoding 2 the way PRINT-DISASSEMBLY does."
+  "Hex digits needed to render one CELL-WIDTH-bit cell."
   (ceiling cell-width 4))
 
 (defparameter *listing-max-cells-shown* 8

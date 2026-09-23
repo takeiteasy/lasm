@@ -406,6 +406,7 @@
    #:disassembly-line-address
    #:disassembly-line-size
    #:disassembly-line-cells
+   #:disassembly-line-cell-width
    #:disassembly-line-descriptor
    #:disassembly-line-values
    #:disassembly-line-choices

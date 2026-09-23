@@ -409,6 +409,25 @@ hlt" :machine 'disasm-word-machine))
     (fiveam:is (equal (list 1 1000) (disassembly-line-values (second lines))))
     (fiveam:is (string= "set $1,$3E8" (disassembly-line-text (second lines))))))
 
+(fiveam:test print-disassembly-pads-cells-to-machine-width
+  (let* ((byte-lines (disassemble-cells (list #xFF) :machine 'disasm-test-machine :labels nil))
+         (word-cells (disassemble-cells (list #x3E8) :machine 'disasm-word-machine
+                                        :labels nil :data-regions (list (cons 0 1))))
+         (word-assembly (assemble "set 1,1000" :machine 'disasm-word-machine))
+         (word-lines (disassemble-assembly word-assembly :machine 'disasm-word-machine :labels nil))
+         (machine (make-machine 'disasm-word-machine)))
+    (setf (mref machine 'ram 0) #x3E8)
+    (let ((word-memory (disassemble-memory machine :memory 'ram :start 0 :count 1
+                                           :labels nil :data-regions (list (cons 0 1)))))
+      (fiveam:is (= 8 (disassembly-line-cell-width (first byte-lines))))
+      (fiveam:is (= 16 (disassembly-line-cell-width (first word-cells))))
+      (fiveam:is (= 16 (disassembly-line-cell-width (first word-lines))))
+      (fiveam:is (= 16 (disassembly-line-cell-width (first word-memory))))
+      (fiveam:is (search "  FF" (with-output-to-string (s) (print-disassembly byte-lines :stream s))))
+      (fiveam:is (search "  03E8" (with-output-to-string (s) (print-disassembly word-cells :stream s))))
+      (fiveam:is (search " 03E8" (with-output-to-string (s) (print-disassembly word-lines :stream s))))
+      (fiveam:is (search "  03E8" (with-output-to-string (s) (print-disassembly word-memory :stream s)))))))
+
 (fiveam:test disassemble-word-two-extra-words
   (let* ((a (assemble "movx 20,1000" :machine 'disasm-word-machine))
          (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil)))

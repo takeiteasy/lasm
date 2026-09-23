@@ -18,6 +18,12 @@
     (fiveam:is (= 0 (flag m 'z)))
     (fiveam:is (= 1 (flag m 'n)))))
 
+(fiveam:test set-flags-accepts-integer-results
+  (with-machine (m test-machine)
+    (set-flags! (z 1) (n 0))
+    (fiveam:is (= 1 (flag m 'z)))
+    (fiveam:is (= 0 (flag m 'n)))))
+
 (fiveam:test trap-signals-lasm-trap
   (with-machine (m test-machine)
     (fiveam:is (eq 'test-machine (machine-descriptor-name (machine-descriptor m))))

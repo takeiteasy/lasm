@@ -28,7 +28,13 @@
     (setf (flag m 'z) t)
     (fiveam:is (= 1 (flag m 'z)))
     (setf (flag m 'z) nil)
-    (fiveam:is (= 0 (flag m 'z)))))
+    (fiveam:is (= 0 (flag m 'z)))
+    (setf (flag m 'z) 0)
+    (fiveam:is (= 0 (flag m 'z)))
+    (setf (flag m 'z) 1)
+    (fiveam:is (= 1 (flag m 'z)))
+    (setf (flag m 'z) -2)
+    (fiveam:is (= 1 (flag m 'z)))))
 
 (fiveam:test stack-lifo
   (let ((m (make-machine 'test-machine)))

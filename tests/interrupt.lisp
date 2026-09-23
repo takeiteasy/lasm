@@ -359,13 +359,9 @@
     (step-machine m) ; delivers (cost 5), then executes the implicit nop at the vector (cost 1)
     (fiveam:is (equal '(1 5) *cost-log*)))) ; delivery's own tick, then the fetched instruction's
 
-;;; INTERRUPT-RETURN restoring a saved flag (#22's boolean-coercion gotcha)
+;;; INTERRUPT-RETURN restoring a saved flag
 
-;; A separate fixture purely to exercise a FLAG in :SAVE -- INTERRUPT-TEST-
-;; MACHINE above only saves PC/B (both registers). #22: (SETF FLAG) treats
-;; its VALUE as a Lisp boolean, so a naive (SETF PLACE (STACK-POP ...))
-;; would set a saved flag whose popped word happens to be 0 back to true
-;; (0 is non-NIL) -- INTERRUPT-RETURN must special-case a :SAVE flag place.
+;; INTERRUPT-TEST-MACHINE saves only registers; this fixture saves a flag.
 (defmachine interrupt-flag-save-test-machine
   (register pc :width 8) (register ia :width 8) (register a :width 8)
   (stack sp :width 8 :depth 4)
@@ -378,7 +374,7 @@
 (definstruction interrupt-flag-save-test-machine nop
   (encoding (opcode #x00)) (semantics nil))
 
-(fiveam:test interrupt-return-restores-a-saved-flag-as-a-boolean-not-the-raw-word
+(fiveam:test interrupt-return-restores-a-saved-flag-from-stack
   (let ((m (make-machine 'interrupt-flag-save-test-machine)))
     (setf (sref m 'ia) #x10 (flag m 'z) nil) ; Z starts false -- pushes as 0
     (load-program m (list #x00) :origin 0) ; nop
@@ -386,7 +382,7 @@
     (step-machine m) ; delivers: pushes z(=0); a<-0; pc<-#x10
     (load-program m (list #x01) :origin #x10) ; rfi
     (step-machine m)
-    (fiveam:is (zerop (flag m 'z))) ; restored to false, not clobbered true by a bare SETF FLAG
+    (fiveam:is (zerop (flag m 'z)))
     (fiveam:is (zerop (stack-depth m 'sp)))))
 
 ;;; INT-style software interrupt end-to-end
@@ -554,9 +550,7 @@
       (fiveam:is (= 7 popped))
       (fiveam:is (zerop (sref m 'sp)))))) ; back to 0
 
-;; A flag in :SAVE on a pointer stack -- the same #22 boolean-coercion guard
-;; INTERRUPT-RETURN-RESTORES-A-SAVED-FLAG-AS-A-BOOLEAN-NOT-THE-RAW-WORD above
-;; checks for a :stack element, exercised here through SP-POP instead.
+;; A flag in :SAVE on a pointer stack exercises restoration through SP-POP.
 (defmachine interrupt-pointer-stack-flag-save-test-machine
   (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
   (flags z)
@@ -569,14 +563,14 @@
 (definstruction interrupt-pointer-stack-flag-save-test-machine nop
   (encoding (opcode #x00)) (semantics nil))
 
-(fiveam:test interrupt-return-restores-a-saved-flag-as-a-boolean-on-a-pointer-stack
+(fiveam:test interrupt-return-restores-a-saved-flag-from-pointer-stack
   (let ((m (make-machine 'interrupt-pointer-stack-flag-save-test-machine)))
     (setf (sref m 'ia) #x10 (flag m 'z) nil (sref m 'sp) 0)
     (signal-interrupt m 0)
     (step-machine m) ; delivers: pushes z(=0)
     (load-program m (list #x01) :origin #x10) ; rfi
     (step-machine m)
-    (fiveam:is (zerop (flag m 'z))) ; restored false, not clobbered true
+    (fiveam:is (zerop (flag m 'z)))
     (fiveam:is (zerop (sref m 'sp)))))
 
 ;; Masking, :CYCLES > 0 device-tick cost, and queue overflow all compose with

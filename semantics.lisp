@@ -131,23 +131,10 @@ clause declared" machine-name)))
              (interrupt-form (when interrupts
                                 `(progn ,@(mapcar
                                            (lambda (place)
-                                             ;; #22: (setf flag) treats its VALUE as a Lisp
-                                             ;; boolean, not an integer 0/1 -- a bare (setf
-                                             ;; ,place (stack-pop ...)) would set a saved flag
-                                             ;; to 1 whenever the popped word happens to be 0,
-                                             ;; since 0 is non-NIL. Every :SAVE place popped
-                                             ;; here through SETF's ordinary symbol-macro
-                                             ;; expansion, a :FLAG place alone needs its popped
-                                             ;; integer explicitly rebuilt into a boolean first.
-                                             (cond
-                                               ;; #163: one cell of a banked register.
-                                               ((consp place)
-                                                `(setf (regref ,machine-var ',(first place) ,(second place))
-                                                       ,interrupt-pop-form))
-                                               ((eq (storage-element-kind (gethash place (machine-descriptor-table descriptor)))
-                                                    :flag)
-                                                `(setf ,place (plusp ,interrupt-pop-form)))
-                                               (t `(setf ,place ,interrupt-pop-form))))
+                                             (if (consp place)
+                                                 `(setf (regref ,machine-var ',(first place) ,(second place))
+                                                        ,interrupt-pop-form)
+                                                 `(setf ,place ,interrupt-pop-form)))
                                            (reverse (interrupt-descriptor-save interrupts)))))))
         `(symbol-macrolet ,(nreverse symbol-macros)
            (macrolet (,@(mapcar (lambda (name)

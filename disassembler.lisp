@@ -73,6 +73,7 @@
   (address 0 :type (integer 0))
   (size 1 :type (integer 1))
   (cells nil :type list)                                   ; raw cells consumed, in address order
+  (cell-width 8 :type (integer 1))
   (descriptor nil :type (or null instruction-descriptor))   ; NIL = undecodable data
   (values nil :type list)                                  ; decoded operand values, hole order
   ;; DECODE-INSTRUCTION-AT's matched per-hole record, hole order -- a
@@ -108,7 +109,7 @@ returned sorted by START with overlapping or adjacent ranges merged."
           (cl:push r merged)))
     (nreverse merged)))
 
-(defun %disassemble-raw-lines (read-cell origin end machine-name memory &optional data-regions)
+(defun %disassemble-raw-lines (read-cell origin end machine-name memory cell-width &optional data-regions)
   "Walk READ-CELL from ORIGIN to END (exclusive), decoding one instruction
 at a time via DECODE-INSTRUCTION-AT (decoder.lisp) and collecting one
 DISASSEMBLY-LINE per instruction or undecodable cell -- see this file's
@@ -123,7 +124,8 @@ address is known."
                  (handler-case (values (funcall read-cell address) t)
                    (address-out-of-range () (values nil nil)))
                (when okp
-                 (cl:push (make-disassembly-line :address address :size 1 :cells (list cell)) lines))
+                 (cl:push (make-disassembly-line :address address :size 1 :cells (list cell)
+                                                 :cell-width cell-width) lines))
                okp)))
       (loop with address = origin
             while (< address end)
@@ -145,6 +147,7 @@ address is known."
                          (t
                           (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
                             (cl:push (make-disassembly-line :address address :size size :cells cells
+                                                              :cell-width cell-width
                                                               :descriptor descriptor :values values :choices choices
                                                               :choice-selections choice-selections)
                                      lines)
@@ -420,7 +423,8 @@ of round-trip fidelity."
   (unless machine (error "DISASSEMBLE-CELLS: :MACHINE is required"))
   (let* ((end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
-         (lines (%disassemble-raw-lines read-cell origin end machine memory data-regions)))
+         (lines (%disassemble-raw-lines read-cell origin end machine memory
+                                        (%machine-cell-width machine memory) data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
 (defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
@@ -470,7 +474,8 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))
-         (lines (%disassemble-raw-lines read-cell start end machine-name memory data-regions)))
+         (lines (%disassemble-raw-lines read-cell start end machine-name memory
+                                        (%machine-cell-width machine-name memory) data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
 ;;; Text output
@@ -494,17 +499,14 @@ indented by INDENT. Returns the text as a string when STREAM is NIL
   "Print LINES (DISASSEMBLY-LINE list) as an address/cells/text listing for
 human reading -- not re-assemblable source (see DISASSEMBLY-TEXT for that).
 ORIGIN is accepted, unused, to keep the same call shape as DISASSEMBLY-TEXT
-convenient at a call site that has one on hand. Returns LINES.
-
-KNOWN ISSUE: the cell field below is hardcoded to 2 hex digits (~2,'0X),
-right for an 8-bit cell but too narrow for a wider one -- on a word-encoded
-machine (e.g. dcpu16, 16-bit cells) a cell needing fewer than 4 digits
-prints unpadded (\"3E8\", not \"03E8\") instead of a fixed width. LISTING-TEXT
-(listing.lisp, #25) gets this right, sizing its own hex field from
-ASSEMBLY-CELL-WIDTH -- (CEILING CELL-WIDTH 4) digits -- but this predates it
-and hasn't been fixed to match; tracked as a follow-up ticket."
+convenient at a call site that has one on hand. Cells use the width stored
+on each line. Returns LINES."
   (declare (ignore origin))
   (dolist (l lines)
-    (format stream "~4,'0X  ~{~2,'0X~^ ~}~24T~A~%"
-            (disassembly-line-address l) (disassembly-line-cells l) (disassembly-line-text l)))
+    (format stream "~4,'0X  ~{~A~^ ~}~24T~A~%"
+            (disassembly-line-address l)
+            (mapcar (lambda (cell)
+                      (format nil "~V,'0X" (ceiling (disassembly-line-cell-width l) 4) cell))
+                    (disassembly-line-cells l))
+            (disassembly-line-text l)))
   lines)

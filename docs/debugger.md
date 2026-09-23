@@ -127,8 +127,7 @@ instead — there is no sane default range for "the whole address space").
 `debug-memory-text` pads each address to a fixed 4 hex digits (matching
 `listing-text`/`print-disassembly`'s own address column) and each cell value
 to the memory's own cell width in hex digits — sized from the machine's
-actual cell width rather than hardcoded to 2, the mistake tracked as a
-separate open bug against `print-disassembly`. It reads via `mpeek`, not
+actual cell width. It reads via `mpeek`, not
 `mref` — a hex dump is inspection, not a CPU access, so it must not trigger
 a [`:device` region](machine-model.md#memory-regions)'s `:read` side effects
 merely by displaying memory.

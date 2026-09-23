@@ -98,6 +98,7 @@ memory's contents), gets the same fix described under "Rendering" below.
 | `address` | This line's starting address. |
 | `size` | Cells consumed, always ≥ 1. |
 | `cells` | The raw cells consumed, in address order. |
+| `cell-width` | Width of each cell in bits, taken from the selected machine memory. |
 | `descriptor` | The matched `instruction-descriptor`, or `nil` for an undecodable data line. |
 | `values` | Decoded operand values, in the mode's hole order. |
 | `label` | A symbol name bound to this line's own address (only when `:symbols`/`:symbol-info` names it and `:labels` is true), or `nil`. |
@@ -274,7 +275,8 @@ the lexer declares a `mode-suffix-separator` — needed for fidelity, since
 on its own line immediately before it, and each line's rendered text
 indented. Returns a string when `stream` is `nil` (the default); otherwise
 writes to `stream`. `print-disassembly` instead renders an
-address/cells/text listing for humans — *not* re-assemblable source.
+address/cells/text listing for humans — *not* re-assemblable source. It pads
+each cell to the line's `cell-width` in hex digits.
 
 When a local label and a global share the readable spelling `loop.next`,
 label substitution omits the local name and renders its address numerically.

@@ -26,10 +26,8 @@
 ;;;; gdb's `continue` has when already stopped on a breakpoint.
 ;;;;
 ;;;; SCOPE -- read-only inspection only; no poke/`set register` command.
-;;;; Writing a register would run straight into open bug #22 ((SETF FLAG)
-;;;; treats any non-NIL value, including 0, as true) -- staying read-only
-;;;; sidesteps that rather than inheriting it. Watchpoints, reverse/step-back
-;;;; execution, conditional breakpoints, and cycle-budgeted stepping are all
+;;;; Watchpoints, reverse/step-back execution, conditional breakpoints, and
+;;;; cycle-budgeted stepping are all
 ;;;; explicitly out of scope for this ticket; see the follow-up tickets filed
 ;;;; alongside this file's landing.
 
@@ -259,9 +257,8 @@ TEXT/DISASSEMBLY-TEXT."
 (defun debug-memory-text (session address count &key stream)
   "Render COUNT cells of SESSION's machine's memory starting at ADDRESS, in
 rows of 8, each row labelled by address (ADDR-DIGITS) with each cell padded
-to SESSION's own HEX-DIGITS -- sized from the memory's actual cell width
-(%LISTING-HEX-DIGITS) rather than hardcoded to 2, the mistake open bug #87
-tracks against PRINT-DISASSEMBLY. Returns a string when STREAM is NIL
+to SESSION's own HEX-DIGITS, sized from the memory's actual cell width.
+Returns a string when STREAM is NIL
 (default); otherwise writes to STREAM and returns NIL.
 
 #107: reads via MPEEK, not MREF -- a hex dump is inspection, not an actual

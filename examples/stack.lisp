@@ -30,10 +30,7 @@
 
 (in-package #:lasm)
 
-;;; Machine: PC (convention, see above), one data stack, one RAM. No
-;;; general-purpose registers, no flags -- nothing below needs them, and
-;;; flags carry a live wrap-value/boolean gotcha (#22) not worth walking
-;;; into here.
+;;; Machine: PC (convention, see above), one data stack, one RAM.
 
 (defmachine stackfoo
   (register pc :width 16)

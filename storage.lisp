@@ -739,14 +739,9 @@ declares no NAMES or INDEX is outside them."
     (aref slot 0)))
 
 (defun (setf flag) (value machine name)
-  ;; BUG (#22): VALUE is treated as a Lisp boolean here, not as an integer
-  ;; 0/1 -- (setf (flag m 'z) 0) sets the flag to 1, since 0 is non-NIL.
-  ;; Callers setting a flag from an integer (e.g. semantics reusing a
-  ;; comparison result that happens to be 0 or 1) must pass an actual
-  ;; boolean, e.g. (plusp n) rather than n itself.
   (multiple-value-bind (slot element) (%slot machine name :flag)
     (declare (ignore element))
-    (setf (aref slot 0) (if value 1 0))))
+    (setf (aref slot 0) (if (or (null value) (and (integerp value) (zerop value))) 0 1))))
 
 ;; #107: shared bounds-checked lookup for MREF/(SETF MREF)/MPEEK/%POKE --
 ;; keeps the ADDRESS-OUT-OF-RANGE check and %SLOT call in one place so the

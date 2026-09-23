@@ -281,8 +281,8 @@ the call site — see [Semantics vocabulary, `push`/`pop`](semantics.md).
 `mpeek` is `mref`'s inspection-only sibling — see "Memory regions" above for
 what it bypasses and why.
 
-`flag` treats any non-`nil` value as 1 and `nil` as 0 on write, and reads
-back as `0`/`1`.
+`flag` writes `0` for `nil` or integer `0`, and `1` for `t` or any nonzero
+integer. Other values follow Lisp truthiness. It reads back as `0` or `1`.
 
 ## Conditions
 
