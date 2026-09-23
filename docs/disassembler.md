@@ -265,8 +265,9 @@ the lexer declares a `mode-suffix-separator` — needed for fidelity, since
 
 Under `:suffixes t` the disassembler also renders a hole's forcing prefix
 ([Addressing modes, "Forcing one hole with a prefix"](modes.md#forcing-one-hole-with-a-prefix)),
-e.g. `seta #w:$5`, whenever the decoded variant or `one-of` alternative
-declares a `:suffix` and the lexer declares a `hole-prefix-separator`.
+e.g. `seta #w:$5`, only where unprefixed source would select a different
+variant or `one-of` alternative, and the lexer declares a
+`hole-prefix-separator`. `seta #$1000` renders bare.
 
 ## `disassembly-text` / `print-disassembly`
 

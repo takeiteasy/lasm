@@ -679,6 +679,8 @@
 (fiveam:test hole-prefix-round-trips-through-disassembler
   (fiveam:is (string= "one #w:$5" (%prefix-round-trip "one #w:5")))
   (fiveam:is (string= "one #$5" (%prefix-round-trip "one #5")))
+  (fiveam:is (string= "one #$64" (%prefix-round-trip "one #100")))
+  (fiveam:is (string= "oneinline #$5" (%prefix-round-trip "oneinline #s:5")))
   (fiveam:is (string= "two w:$1,$2" (%prefix-round-trip "two w:1, 2")))
   (fiveam:is (string= "two $1,w:$2" (%prefix-round-trip "two 1, w:2")))
   (fiveam:is (string= "pick rb:$3" (%prefix-round-trip "pick rb:3"))))
@@ -692,4 +694,19 @@
         (operand v :field x
           (variant (range 0 7) inline :suffix "w")
           (variant :else (extra-word :escape 15) :suffix "w")))
+       (semantics (set! a v))))))
+
+(defmode shadow-alt-a expr :suffix "sh")
+(defmode shadow-alt-b expr :suffix "sk")
+(defmode shadow-pick (one-of shadow-alt-a shadow-alt-b))
+
+(fiveam:test hole-prefix-variant-suffix-shadowed-by-alternative-rejected
+  (fiveam:signals error
+    (macroexpand-1
+     '(definstruction prefix-machine shadowed
+       (modes shadow-pick)
+       (encoding (opcode 6)
+        (operand v :field x
+          (variant (choice shadow-alt-a) inline :range (0 7) :suffix "sk")
+          (variant (choice shadow-alt-b) inline :range (0 7) :bias 8)))
        (semantics (set! a v))))))

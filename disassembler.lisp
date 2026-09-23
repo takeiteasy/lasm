@@ -243,7 +243,7 @@ hex format."
         values)))
 
 (defun %render-operand-text (mode render-values lexer reverse-symbols &optional hole-choices hole-elements alias-elements
-                               choice-selections prefix-separator)
+                               choice-selections prefix-separator (prefix-policy t))
   "Walk MODE's PATTERN (mode.lisp) in declaration order, emitting each
 :LITERAL element verbatim and consuming one of RENDER-VALUES per :EXPR
 hole -- concatenated with no separator, since a mode's own literals already
@@ -299,19 +299,29 @@ PREFIX-SEPARATOR, when non-NIL, is the lexer's hole-prefix separator: a hole
 whose matched word-field choice declares a :SUFFIX renders as \"suffix:value\",
 and a ONE-OF alternative declaring a mode :SUFFIX renders its own
 \"suffix:\" ahead of the alternative, so the text re-assembles to the same
-encoding."
-  (with-output-to-string (s)
-    (let ((vals render-values) (choices hole-choices) (elements hole-elements))
+encoding.
+
+PREFIX-POLICY selects which prefixes are written: T for all, NIL for none, or
+a list of sites, (:HOLE index) and (:ALT alternative-name). The second value
+lists every site that declares a prefix, whatever the policy."
+  (let ((sites nil) (hole-index 0))
+   (values
+    (with-output-to-string (s)
+     (let ((vals render-values) (choices hole-choices) (elements hole-elements))
       (labels ((render-pattern (pattern)
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
                       (:expr (let ((register (second el))
-                                   (hole-choice (cl:pop choices)))
+                                   (hole-choice (cl:pop choices))
+                                   (site (list :hole hole-index)))
+                               (incf hole-index)
                                (when (and prefix-separator (word-field-choice-p hole-choice)
                                           (word-field-choice-suffix hole-choice))
-                                 (write-string (word-field-choice-suffix hole-choice) s)
-                                 (write-string prefix-separator s))
+                                 (cl:push (list site hole-choice) sites)
+                                 (when (or (eq prefix-policy t) (member site prefix-policy :test #'equal))
+                                   (write-string (word-field-choice-suffix hole-choice) s)
+                                   (write-string prefix-separator s)))
                              (let* ((v (cl:pop vals))
                                     (element (cl:pop elements))
                                     (alias (if register
@@ -332,10 +342,14 @@ encoding."
                               (alt (find-mode-descriptor alt-name)))
                          (when (and prefix-separator (mode-descriptor-suffix alt)
                                     (eq alt-name matched))
-                           (write-string (mode-descriptor-suffix alt) s)
-                           (write-string prefix-separator s))
+                           (let ((site (list :alt alt-name)))
+                             (cl:push (list site) sites)
+                             (when (or (eq prefix-policy t) (member site prefix-policy :test #'equal))
+                               (write-string (mode-descriptor-suffix alt) s)
+                               (write-string prefix-separator s))))
                          (render-pattern (mode-descriptor-pattern alt))))))))
-        (render-pattern (mode-descriptor-pattern mode))))))
+        (render-pattern (mode-descriptor-pattern mode)))))
+    (nreverse sites))))
 
 ;; TODO: this does a FIND-MACHINE-DESCRIPTOR/GETHASH pair per rendered line
 ;; even when OPERAND-REGISTERS is entirely NIL (the common case, every
@@ -370,19 +384,68 @@ MODE-SUFFIX-SEPARATOR to write it with."
         (format nil "~A~A~A" name (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer)) suffix)
         name)))
 
-(defun %render-line (descriptor values address size lexer suffixes reverse-symbols choices choice-selections)
+(defun %reselected-prefix-sites (descriptor sites text address cell-width lexer)
+  "The subset of SITES whose forcing prefix TEXT needs: those where
+re-assembling TEXT selects a different word field or ONE-OF alternative than
+DESCRIPTOR's decoded one. T when TEXT cannot be re-assembled."
+  (handler-case
+      (let ((*register-alias-elements*
+              (machine-descriptor-register-alias-elements
+               (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+        (multiple-value-bind (chosen asts choices selections)
+            (%choose-variant (first (parse text :lexer lexer))
+                             (find-instruction-variants (instruction-descriptor-machine descriptor)
+                                                        (instruction-descriptor-name descriptor))
+                             address :cell-width cell-width)
+          (declare (ignore asts))
+          (loop for (site field) in sites
+                unless (ecase (first site)
+                         (:hole (equalp field (nth (second site) (instruction-descriptor-word-fields chosen))))
+                         (:alt (or (some (lambda (c) (and c (eq (mode-descriptor-name c) (second site)))) choices)
+                                   (rassoc (second site) selections))))
+                  collect site)))
+    (error () t)))
+
+(defun %needed-prefix-policy (descriptor values address size cell-width lexer mnemonic reverse-symbols
+                              choices choice-selections separator)
+  "The PREFIX-POLICY (%RENDER-OPERAND-TEXT) that lets the rendered operands
+re-assemble to DESCRIPTOR's own encoding: NIL when unprefixed source already
+selects it. Each line declaring a prefix is re-parsed and re-selected."
+  (flet ((render (policy)
+           (%render-operand-text (instruction-descriptor-mode descriptor)
+                                 (%operand-render-values descriptor values address size)
+                                 lexer reverse-symbols choices (%hole-elements descriptor)
+                                 (machine-descriptor-register-alias-elements
+                                  (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+                                 choice-selections separator policy)))
+    (let ((sites (nth-value 1 (render nil))) (policy nil))
+      (when sites
+        (loop repeat (1+ (length sites))
+              do (let ((needed (%reselected-prefix-sites
+                                descriptor sites (format nil "~A ~A" mnemonic (render policy))
+                                address cell-width lexer)))
+                   (when (eq needed t) (return (setf policy t)))
+                   (let ((next (union policy needed :test #'equal)))
+                     (when (= (length next) (length policy)) (return))
+                     (setf policy next)))))
+      policy)))
+
+(defun %render-line (descriptor values address size lexer suffixes reverse-symbols choices choice-selections
+                     &optional (cell-width 8))
   (let ((mnemonic (%render-mnemonic descriptor lexer suffixes))
-        (mode (instruction-descriptor-mode descriptor)))
+        (mode (instruction-descriptor-mode descriptor))
+        (separator (and suffixes (lexer-descriptor-hole-prefix-separator (find-lexer-descriptor lexer)))))
     (if mode
         (format nil "~A ~A" mnemonic
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
                                        lexer reverse-symbols choices (%hole-elements descriptor)
-                                        (machine-descriptor-register-alias-elements
-                                         (find-machine-descriptor (instruction-descriptor-machine descriptor)))
-                                        choice-selections
-                                        (and suffixes
-                                             (lexer-descriptor-hole-prefix-separator
-                                              (find-lexer-descriptor lexer)))))
+                                       (machine-descriptor-register-alias-elements
+                                        (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+                                       choice-selections separator
+                                       (and separator
+                                            (%needed-prefix-policy descriptor values address size cell-width lexer
+                                                                   mnemonic (make-hash-table) choices
+                                                                   choice-selections separator))))
         mnemonic)))
 
 (defun %data-line-text (cell lexer)
@@ -406,7 +469,8 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
                 (%render-line (disassembly-line-descriptor l) (disassembly-line-values l)
                                (disassembly-line-address l) (disassembly-line-size l)
                                 lexer suffixes reverse-symbols (disassembly-line-choices l)
-                                (disassembly-line-choice-selections l))
+                                (disassembly-line-choice-selections l)
+                                (disassembly-line-cell-width l))
                 (%data-line-text (first (disassembly-line-cells l)) lexer))))
     lines))
 
