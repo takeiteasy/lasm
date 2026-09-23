@@ -154,7 +154,8 @@ name). At `defmode` time, every alternative:
   matches that way) — nothing could ever choose between two alternatives
   that read the same — unless every alternative sharing that syntax declares
   a `:suffix`, which then selects between them. Without a prefix, the first
-  declared alternative wins.
+  declared alternative wins, whatever the value; it never relaxes to a later
+  twin.
 
 A `one-of` needs at least two alternatives; one alternative would just be
 the same as writing that mode's pattern directly.

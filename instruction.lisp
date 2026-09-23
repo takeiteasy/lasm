@@ -1897,6 +1897,20 @@ a CHOICE selector -- a hole prefix could not tell them apart."
           do (error "DEFINSTRUCTION: field ~S: more than one variant declares :suffix ~S"
                     field-name (word-variant-suffix v))))
 
+(defun %check-word-variant-suffix-shadows! (variants field-name hole-alternatives)
+  "Signal a DEFINSTRUCTION-time error when a variant :SUFFIX equals the mode
+:SUFFIX of one of HOLE-ALTERNATIVES: the ONE-OF consumes that prefix first,
+so the variant could never be forced."
+  (dolist (v variants)
+    (let ((suffix (word-variant-suffix v)))
+      (when suffix
+        (dolist (alt hole-alternatives)
+          (let ((alt-suffix (mode-descriptor-suffix (find-mode-descriptor alt))))
+            (when (and alt-suffix (string-equal alt-suffix suffix))
+              (error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
+alternative ~S, which declares the same mode :suffix"
+                     field-name suffix alt))))))))
+
 (defun %check-word-variants (variants field-width field-name hole-signedp &optional mode source)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
 variant list, already parsed) doesn't fit FIELD-WIDTH bits; if an
@@ -2228,6 +2242,7 @@ layout~;instruction-word layout ~:*~S~] on machine ~S" field-name layout-name ma
                   (setf (word-variant-extra-cells v) (instruction-word-layout-width-cells layout))))
               (%check-word-variants variants fwidth field-name hole-signedp mode source)
               (%check-word-variant-choices! variants field-name hole-alternatives)
+              (%check-word-variant-suffix-shadows! variants field-name hole-alternatives)
               (make-word-operand-spec :name name :field field-name :width fwidth :shift fshift
                                        :register register :variants variants)))))))
 

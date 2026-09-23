@@ -1046,6 +1046,9 @@ hole with a prefix"](modes.md#forcing-one-hole-with-a-prefix)):
 forced inline variant whose value does not fit is an `assembly-error`.
 Two variants of one field with the same `:suffix` and `choice` selector are
 a `definstruction`-time error.
+A variant `:suffix` equal to the mode `:suffix` of an alternative in the
+`one-of` governing that hole is also an error: the alternative consumes the
+prefix first.
 
 #### Aliased escapes
 
