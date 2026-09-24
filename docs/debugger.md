@@ -131,7 +131,9 @@ Step back restores the nearest earlier snapshot and replays forward.
 These return text, or write to `:stream`. State includes registers, flags,
 and stacks; banked register aliases render by name. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC, nearby decoded
-instructions, and an attached source line.
+instructions, and an attached source line. With an attached assembly,
+declared data renders as `.byte` and labels come from the main image and
+the mapped bank.
 
 ## Writing state
 
@@ -193,4 +195,7 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-The debugger has no reverse continue.
+- The debugger has no reverse continue.
+- `where` applies main-image data regions and labels inside a banked window
+  whose mapped bank has no image, even if the main image was loaded into a
+  different bank. ([#250](https://todo.sr.ht/~takeiteasy/lasm/250))

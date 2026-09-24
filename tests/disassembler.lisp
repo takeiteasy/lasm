@@ -921,3 +921,19 @@ hlt" :machine 'disasm-test-machine))
     (load-program m (list #xA2 #x0A #xA2 #x0B))
     (let ((lines (disassemble-memory m :start 0 :count 4 :labels nil :data-regions '((0 . 2)))))
       (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines))))))
+
+(fiveam:test disassemble-memory-derives-data-regions-from-assembly
+  (let* ((a (assemble "ldx #10
+table: .byte $A2, $0A
+hlt" :machine 'disasm-test-machine))
+         (m (make-machine 'disasm-test-machine)))
+    (load-program m a)
+    (flet ((texts (&rest args)
+             (mapcar #'disassembly-line-text
+                     (apply #'disassemble-memory m :start 0 :count (length (assembly-cells a))
+                                                   :labels nil args))))
+      (fiveam:is (equal '("ldx #$A" ".byte $A2" ".byte $A" "hlt") (texts :assembly a)))
+      (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (texts :assembly a :data-regions nil)))
+      (fiveam:is (equal '(".byte $A2" ".byte $A" ".byte $A2" ".byte $A" "hlt")
+                        (texts :assembly a :data-regions '((0 . 4)))))
+      (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (texts))))))

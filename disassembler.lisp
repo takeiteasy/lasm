@@ -532,6 +532,45 @@ is NIL), as a fresh table like ASSEMBLY-SYMBOL-INFO."
              (assembly-symbol-info assembly))
     result))
 
+(defun %mapped-bank-images (assembly machine memory)
+  "(REGION . BANK) for each banked region of MEMORY whose mapped bank has an
+image in ASSEMBLY."
+  (let ((element (descriptor-element (machine-descriptor machine) memory)))
+    (loop for (owner . region) in (%banked-regions (machine-descriptor machine))
+          for name = (memory-region-name region)
+          for bank = (current-bank machine name)
+          when (and (eq owner element) (assembly-bank-image assembly name bank))
+            collect (cons region bank))))
+
+(defun %subtract-range (ranges start end)
+  "RANGES, (START . END) pairs with exclusive ends, minus [START, END)."
+  (loop for (lo . hi) in ranges
+        when (< lo (min hi start)) collect (cons lo (min hi start))
+        when (< (max lo end) hi) collect (cons (max lo end) hi)))
+
+(defun %live-data-regions (assembly machine memory)
+  "ASSEMBLY's data regions as laid out in MACHINE's MEMORY: the main image's,
+with each banked region's window replaced by its mapped bank's."
+  (let ((regions (assembly-data-regions assembly))
+        (mapped (%mapped-bank-images assembly machine memory)))
+    (loop for (region . nil) in mapped
+          do (setf regions (%subtract-range regions (memory-region-start region)
+                                            (1+ (memory-region-end region)))))
+    (loop for (region . bank) in mapped
+          do (setf regions (append regions
+                                   (assembly-data-regions assembly :region (memory-region-name region)
+                                                                   :bank bank))))
+    regions))
+
+(defun %live-symbol-info (assembly machine memory)
+  "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's and
+those of each mapped bank."
+  (let ((result (%image-symbol-info assembly nil nil)))
+    (loop for (region . bank) in (%mapped-bank-images assembly machine memory)
+          do (maphash (lambda (name info) (setf (gethash name result) info))
+                      (%image-symbol-info assembly (memory-region-name region) bank)))
+    result))
+
 (defun %bank-image-extent (assembly image)
   "The (VALUES START END) addresses, END exclusive, covered by IMAGE's listing
 entries; the whole window when ASSEMBLY has none for it."
@@ -610,7 +649,7 @@ match the machine's cell width (~D)" machine source-width target-width)))
       (t (image-lines nil)))))
 
 (defun disassemble-memory (machine &key memory start count symbols symbol-info (lexer 'default)
-                                        (labels t) (suffixes t) data-regions)
+                                        (labels t) (suffixes t) assembly (data-regions :auto))
   "DISASSEMBLE-CELLS over MACHINE's live MEMORY (a MACHINE runtime instance,
 storage.lisp) from address START through START + COUNT (exclusive). START
 and COUNT are both required -- unlike DISASSEMBLE-CELLS' END, there is no
@@ -618,7 +657,12 @@ sane default for \"the whole address space\" of a live machine. MEMORY
 defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE.
 SYMBOL-INFO (#37), when available (e.g. from the ASSEMBLY that produced this
 memory's contents), resolves the label/.EQU ambiguity and works standalone,
-without SYMBOLS -- see DISASSEMBLE-CELLS. DATA-REGIONS (#82) is as there.
+without SYMBOLS -- see DISASSEMBLE-CELLS.
+
+ASSEMBLY (#181) supplies SYMBOL-INFO and DATA-REGIONS (#82) when those are
+not given: the main image's, except that inside a banked region whose mapped
+bank has an image in ASSEMBLY, that bank's (#234). DATA-REGIONS defaults to
+:AUTO, which is NIL without ASSEMBLY; pass NIL to decode everything.
 
 #107: reads via MACHINE-PEEK-READER, not MACHINE-CELL-READER -- disassembly
 is inspection, not execution, so it must not trigger a :DEVICE region's
@@ -629,6 +673,11 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))
+         (data-regions (if (eq data-regions :auto)
+                           (and assembly (%live-data-regions assembly machine memory))
+                           data-regions))
+         (symbol-info (or symbol-info
+                          (and assembly (%live-symbol-info assembly machine memory))))
          (lines (%disassemble-raw-lines read-cell start end machine-name memory
                                         (%machine-cell-width machine-name memory) data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))

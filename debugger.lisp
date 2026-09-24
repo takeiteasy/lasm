@@ -819,8 +819,8 @@ banked region, else (or failing that) the main image's."
 
 (defun debug-where-text (session &key (context 4) (stream nil))
   "Render SESSION's current stop point: the PC, its disassembled instruction
-via DISASSEMBLE-MEMORY (disassembler.lisp, passing the attached ASSEMBLY's
-SYMBOL-INFO when present so labels resolve), and -- when an ASSEMBLY is
+via DISASSEMBLE-MEMORY (disassembler.lisp, passing the attached ASSEMBLY so
+data renders as data and labels resolve), and -- when an ASSEMBLY is
 attached -- the originating source line via LISTING-LINE-AT/ASSEMBLY-SOURCE.
 CONTEXT bounds how many disassembled instructions are shown. Returns a
 string when STREAM is NIL (default); otherwise writes to STREAM and returns
@@ -828,11 +828,9 @@ NIL."
   (let* ((session-assembly (debug-session-assembly session))
          (machine (debug-session-machine session))
          (pc (%pc session))
-         ;; TODO: labels from every bank are substituted, not just the mapped one (#234)
          (lines (disassemble-memory machine :memory (debug-session-memory session)
                                              :start pc :count context
-                                             :symbol-info (and session-assembly
-                                                                (assembly-symbol-info session-assembly))))
+                                             :assembly session-assembly))
          (body (with-output-to-string (s)
                  (format s "pc = ~V,'0X~%" (debug-session-addr-digits session) pc)
                  (when session-assembly

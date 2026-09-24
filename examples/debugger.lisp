@@ -27,7 +27,8 @@
 .loop:  dex             ; x -= 1
         bne .loop       ; loop while x != 0
         sta $1000
-        hlt             ; stop the emulator loop (see docs/emulator.md)")
+        hlt             ; stop the emulator loop (see docs/emulator.md)
+table:  .byte $A2, $03  ; data whose bits decode as `ldx #3`")
 
 (defmachine sixtyfoo
   (register x :width 8)
@@ -85,4 +86,9 @@
                         "where" "step 4 cycles" "where" "back 2" "where"
                         "delete 1" "watch x" "continue" "info break"
                         "delete 2" "set x = 2" "continue" "info reg" "x/4 $1000" "print x"))
-      (format t "(lasm-dbg) ~A~%~A" command (debug-command session command)))))
+      (format t "(lasm-dbg) ~A~%~A" command (debug-command session command)))
+
+    ;; The attached assembly also tells disassembly which cells are data.
+    (format t "~&== Live memory, decoded with the assembly's data regions ==~%")
+    (dolist (line (disassemble-memory machine :start 9 :count 2 :assembly assembly))
+      (format t "~4,'0X  ~A~%" (disassembly-line-address line) (disassembly-line-text line)))))

@@ -43,14 +43,14 @@ The emulator uses the same decoder; see [Emulator](emulator.md#step-machine).
                                     bank region)
 (disassemble-memory machine &key memory start count symbols symbol-info
                                  (lexer 'default) (labels t) (suffixes t)
-                                 data-regions)
+                                 assembly (data-regions :auto))
 ```
 
 | Entry point | Input | Range |
 | --- | --- | --- |
 | `disassemble-cells` | Cell sequence | `origin` to `end`, exclusive. |
 | `disassemble-assembly` | Assembly and its symbols | Assembly cells; detects declared data automatically. |
-| `disassemble-memory` | Live machine | Required `start` and `count`. |
+| `disassemble-memory` | Live machine, optional assembly | Required `start` and `count`; with `:assembly`, detects declared data automatically. |
 
 All return `disassembly-line` values in address order. Assembly cell width
 must match the selected machine memory. `:bank n` selects a bank image;
@@ -80,7 +80,11 @@ instruction. Overlapping and adjacent ranges merge. An instruction cannot
 cross a data boundary.
 
 `disassemble-assembly` uses [assembly data regions](listing.md#assembly-data-regions)
-by default. Pass `nil` to decode everything or a range list to override.
+by default. `disassemble-memory` does the same when given `:assembly`, and
+also takes its labels from it. Inside a banked region, the mapped bank's
+regions and labels apply when the assembly has an image for it; otherwise
+the main image's do. Pass `nil` to decode everything or a range list to
+override. Without `:assembly`, no regions apply.
 
 ### Rendering
 

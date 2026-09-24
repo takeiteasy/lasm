@@ -523,3 +523,51 @@ near:   nop
     (fiveam:signals error
       (disassembly-text (append (disassemble-assembly a :machine 'bank-asm-machine :bank 2)
                                 (disassemble-assembly a :machine 'bank-asm-machine))))))
+
+;;; Live memory disassembly follows the mapped bank
+
+(defparameter *bank-live-source*
+  "        nop
+        .bank 2
+        .org $4000
+far:    .byte 1
+        .bank 1
+        .org $4000
+        hlt
+        .bank 0
+        .org $0010
+        .byte 1")
+
+(defun %bank-live-session ()
+  (let* ((a (%bank-assembly *bank-live-source*))
+         (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (make-debug-session m :assembly a)))
+
+(defun %where-instruction-lines (session pc)
+  (setf (sref (debug-session-machine session) 'pc) pc)
+  (debug-where-text session :context 1))
+
+(fiveam:test debug-where-renders-data-only-in-the-mapped-bank
+  (let ((session (%bank-live-session)))
+    (debug-command session "bank romx 2")
+    (fiveam:is (search ".byte $1" (%where-instruction-lines session #x4000)))
+    (debug-command session "bank romx 1")
+    (let ((text (%where-instruction-lines session #x4000)))
+      (fiveam:is (search "hlt" text))
+      (fiveam:is (not (search ".byte" text))))))
+
+(fiveam:test debug-where-renders-main-image-data-outside-banks
+  (let ((session (%bank-live-session)))
+    (fiveam:is (search ".byte $1" (%where-instruction-lines session #x0010)))))
+
+(fiveam:test debug-where-substitutes-only-mapped-bank-labels
+  (let ((session (%bank-live-session)))
+    (debug-command session "bank romx 1")
+    (let ((lines (disassemble-memory (debug-session-machine session) :start #x4000 :count 1
+                                     :assembly (debug-session-assembly session))))
+      (fiveam:is (null (disassembly-line-label (first lines)))))
+    (debug-command session "bank romx 2")
+    (let ((lines (disassemble-memory (debug-session-machine session) :start #x4000 :count 1
+                                     :assembly (debug-session-assembly session))))
+      (fiveam:is (equal "far" (disassembly-line-label (first lines)))))))
