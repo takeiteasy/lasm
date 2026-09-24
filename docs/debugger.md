@@ -1,7 +1,7 @@
 # Debugger
 
-A `debug-session` adds breakpoints, watchpoints, stepping, and read-only
-inspection to a live machine. Attach an assembly for symbols and source
+A `debug-session` adds breakpoints, watchpoints, stepping, and inspection
+and editing of state to a live machine. Attach an assembly for symbols and source
 locations.
 
 ```lisp
@@ -117,10 +117,10 @@ Step back restores the nearest earlier snapshot and replays forward.
   stale.
 - Replay runs device side effects again and assumes deterministic
   semantics.
-- Change machine state between commands, not during them: `debug-set-bank`
-  or `signal-interrupt` before the next command is captured.
+- Change machine state between commands, not during them: `debug-set`,
+  `debug-set-bank`, or `signal-interrupt` before the next command is captured.
 
-## Inspection (read-only)
+## Inspection
 
 ```lisp
 (debug-state-text session &key stream)
@@ -132,6 +132,21 @@ These return text, or write to `:stream`. State includes registers, flags,
 and stacks; banked register aliases render by name. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC, nearby decoded
 instructions, and an attached source line.
+
+## Writing state
+
+```lisp
+(debug-set session target value &key index scope bank)
+```
+
+`target` is a register, flag, or alias name (`:index` picks a banked
+register cell), a fixed stack name with `:index` as a live bottom-relative
+slot, a label, or an address. `value` is an integer, wrapped to the target's
+width; `debug-set` returns the stored value.
+
+Memory is poked directly: a `:rom` region is writable, and a `:device`
+region signals. A write never notifies the access hook, so watchpoints do not
+fire.
 
 ## Banks
 
@@ -166,12 +181,16 @@ and prints until `quit` or end of input.
 | `back [N]` | Undo steps. |
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
+| `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
 | `bank REGION N` | Map a bank. |
 | `help`, `quit` | Show commands or end the session. |
+
+`set` evaluates `EXPR` like a breakpoint condition, so `set x = x + 1` and
+`set pc = count.loop` work.
 
 Addresses accept decimal, `$` or `0x` hexadecimal, and `0b` binary. A bank
 address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-The debugger has no reverse continue or writable inspection command.
+The debugger has no reverse continue.

@@ -80,8 +80,9 @@
     ;; `if` makes the breakpoint conditional; `watch` stops after an
     ;; instruction reads or writes a register, flag or memory address.
     ;; `step N cycles` runs until N cycles are spent; `back N` undoes N steps.
+    ;; `set` stores an expression in a register, flag, stack slot or memory.
     (dolist (command '("break count.loop if x == 1" "info break" "continue"
                         "where" "step 4 cycles" "where" "back 2" "where"
                         "delete 1" "watch x" "continue" "info break"
-                        "delete 2" "continue" "info reg" "x/4 $1000" "print x"))
+                        "delete 2" "set x = 2" "continue" "info reg" "x/4 $1000" "print x"))
       (format t "(lasm-dbg) ~A~%~A" command (debug-command session command)))))
