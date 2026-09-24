@@ -306,3 +306,61 @@ nop" :machine 'bank-two-region-machine)))
 
 (fiveam:test cli-bank-needs-an-integer
   (fiveam:is (= 2 (%run-cli (append (%banked-cli-args "assemble") (list "--bank" "x"))))))
+
+;;; bank(label)
+
+(defmachine bank-op-machine
+  (register a :width 8)
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region romx #x4000 #x40FF :kind :rom :banks 4)))
+
+(definstruction bank-op-machine bnk
+  (modes immediate)
+  (encoding (opcode #x10) (operand :mode))
+  (semantics (set-bank! romx operand)))
+
+(defun %bank-op-assembly (source)
+  (assemble source :machine 'bank-op-machine))
+
+(fiveam:test bank-operator-folds-to-a-label-bank
+  (let ((a (%bank-op-assembly "        bnk #bank(far)
+        .byte bank(far), bank(back)
+        .bank 1
+        .org $4000
+back:   .byte 0
+        .bank 3
+        .org $4000
+far:    .byte 0")))
+    (fiveam:is (equalp #(#x10 3 3 1) (subseq (assembly-cells a) 0 4)))))
+
+(fiveam:test bank-operator-accepts-local-labels-and-equ
+  (let ((a (%bank-op-assembly "        .bank 2
+        .org $4000
+main:   .byte 0
+.loc:   .byte 0
+        .bank 0
+        .byte bank(.loc), bank(main)
+here    = bank(main)
+        .byte here")))
+    (fiveam:is (equalp #(2 2 2) (subseq (bank-image-cells (assembly-bank-image a 'romx 0)) 2 5)))))
+
+(fiveam:test bank-operator-errors
+  (fiveam:signals assembly-error
+    (%bank-op-assembly "main:   .byte 0
+        .byte bank(main)"))
+  (fiveam:signals assembly-error
+    (%bank-op-assembly "n = 2
+        .byte bank(n)"))
+  (fiveam:signals unresolved-label
+    (%bank-op-assembly "        .byte bank(nowhere)"))
+  (fiveam:signals assembly-error
+    (%bank-op-assembly "        .bank 1
+        .org $4000
+x:      .byte 0
+        .set y, x
+        .byte bank(y)")))
+
+(fiveam:test bank-operator-is-unresolved-outside-the-assembler
+  (fiveam:signals unresolved-label
+    (eval-expr-constant (%expr "bank(x)"))))

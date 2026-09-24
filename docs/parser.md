@@ -104,13 +104,28 @@ doesn't recognize as an operator).
 | 5 | `+` `-` |
 | 6 | `*` `/` `%` |
 | 7 | prefix `-` `+` `~` `<` `>` |
-| 8 | primary: number, label, location counter, `( expr )` |
+| 8 | primary: number, label, location counter, `bank( label )`, `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
 the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
 regardless of the target machine's `:cell-width` — they're a byte-packing
 convenience, not an encoding-width-relative operator. On a wide-cell
 machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`.
+
+### `bank(label)`
+
+`bank(label)` folds to the bank a label was defined in under
+[`.bank`](banked-output.md#bank). The spelling comes from the lexer's
+[`bank-operator`](lexer.md#clauses) clause. The operand must be a label
+(local labels included). Forward references work like any other label.
+
+```
+        bnk #bank(far)      ; select the bank far lives in
+        jsr far
+```
+
+A label outside any banked region, or a name defined by `.equ`/`.set`,
+signals `assembly-error`.
 
 A bare `*` in primary position is the location-counter symbol (`expr-location`
 below, #15) rather than multiplication: `%parse-primary` only reaches that
@@ -135,7 +150,7 @@ or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
 (defstruct expr-label name localp)    ; NAME unresolved
 (defstruct expr-location)             ; the "*" location-counter symbol (#15)
                                        ; -- no slots; it IS the value
-(defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi
+(defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi :bank
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash :percent
 ```

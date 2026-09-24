@@ -249,3 +249,22 @@ jmp start")))
 
 (fiveam:test trailing-binary-operator-signals-parse-failure
   (fiveam:signals parse-failure (parse-expression (tokenize "1+"))))
+
+(fiveam:test bank-operator-parses-to-a-unary-on-a-label
+  (let ((ast (%expr "bank(foo)")))
+    (fiveam:is (eq :bank (expr-unary-op ast)))
+    (fiveam:is (equal "foo" (expr-label-name (expr-unary-operand ast)))))
+  (let ((ast (%expr "<bank(.far)")))
+    (fiveam:is (eq :lo (expr-unary-op ast)))
+    (fiveam:is (eq :bank (expr-unary-op (expr-unary-operand ast)))))
+  (fiveam:is (expr-binary-p (%expr "bank(a) + 1"))))
+
+(fiveam:test bank-operator-rejects-non-labels
+  (fiveam:signals parse-failure (%expr "bank(1)"))
+  (fiveam:signals parse-failure (%expr "bank(a + 1)"))
+  (fiveam:signals parse-failure (%expr "bank(a")))
+
+(fiveam:test bank-operator-spelling-is-still-a-mnemonic
+  (let ((statement (first (parse "bank (x)"))))
+    (fiveam:is (equal "bank" (statement-mnemonic statement)))
+    (fiveam:is (= 1 (length (statement-operands statement))))))

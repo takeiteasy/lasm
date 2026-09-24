@@ -874,6 +874,8 @@ call made idempotent some other way."
                                  '(:equ :set)))
       (%assembly-error line "Duplicate symbol ~S" (%display-symbol-key qualified-name))))
   (setf (gethash qualified-name symbols) value)
+  (when (and *label-banks* (eq kind :label))
+    (setf (gethash qualified-name *label-banks*) (and (%bank-region-name value) *layout-bank*)))
   (when directive-symbols
     (setf (gethash qualified-name directive-symbols) value))
   (setf (gethash qualified-name info)
@@ -1111,9 +1113,9 @@ symbol ~S is not yet defined"
              always (multiple-value-bind (other foundp) (gethash name right)
                       (and foundp (eql value other))))))
 
-(defun %layout-pass (statements machine origin prev-symbols set-names floors finalp cell-width labels)
+(defun %layout-pass (statements machine origin prev-symbols set-names floors finalp cell-width labels prev-banks)
   "Run one layout pass over STATEMENTS. Returns (VALUES symbols sized-entries
-final-address asm-origin new-floors widths info effects). SYMBOLS is a fresh string ->
+final-address asm-origin new-floors widths info effects banks). SYMBOLS is a fresh string ->
 value hash table built by this pass alone (a label's address or an
 assignment's current value). INFO is a fresh, parallel qualified-name -> SYMBOL-INFO
 table (#37), built and keyed the same way, carrying the scope/kind metadata
@@ -1172,10 +1174,13 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
         (asm-origin origin)
         (main-end origin)
         (*layout-bank* nil)
+        (*label-banks* (make-hash-table :test 'equal))
         (emitted-p nil)
         (scope nil)
         sized
         widths)
+    (when prev-banks
+      (maphash (lambda (name bank) (setf (gethash name *label-banks*) bank)) prev-banks))
     (when prev-symbols
       (maphash (lambda (name value)
                  (when (gethash name labels)
@@ -1292,7 +1297,8 @@ EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                              (cl:push size widths)
                              (incf address size)
                              (unless region (setf emitted-p t main-end address))))))))))))
-    (values symbols (nreverse sized) main-end asm-origin new-floors (nreverse widths) info effects)))
+    (values symbols (nreverse sized) main-end asm-origin new-floors (nreverse widths) info effects
+            *label-banks*)))
 
 (defun %layout (statements machine origin cell-width)
   "Returns (VALUES symbols sized-entries final-address asm-origin info) --
@@ -1311,12 +1317,13 @@ threaded through every pass."
     (let ((floors (make-array (length statements) :initial-element 0))
           (widths :none)
           (effects nil)
+          (banks nil)
           (symbols nil)
           (set-names (make-hash-table :test 'equal))
           (iteration-bound (%layout-iteration-bound statements machine)))
     (loop repeat iteration-bound do
-      (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths new-info new-effects)
-          (%layout-pass statements machine origin symbols set-names floors nil cell-width labels)
+      (multiple-value-bind (new-symbols sized final-address asm-origin new-floors new-widths new-info new-effects new-banks)
+          (%layout-pass statements machine origin symbols set-names floors nil cell-width labels banks)
         (declare (ignore sized final-address asm-origin))
         (maphash (lambda (name info)
                    (when (eq :set (symbol-info-kind info))
@@ -1324,18 +1331,21 @@ threaded through every pass."
                  new-info)
         (when (and (equal new-widths widths)
                    (equalp new-effects effects)
-                   (%same-symbols-p new-symbols symbols))
+                   (%same-symbols-p new-symbols symbols)
+                   (%same-symbols-p new-banks banks))
           (return-from %layout
             (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
-                                   final-floors final-widths final-info final-effects)
-                (%layout-pass statements machine origin new-symbols set-names new-floors t cell-width labels)
+                                   final-floors final-widths final-info final-effects final-banks)
+                (%layout-pass statements machine origin new-symbols set-names new-floors t cell-width labels new-banks)
               (declare (ignore final-floors))
               (unless (and (equal final-widths new-widths)
                            (equalp final-effects new-effects)
-                           (%same-symbols-p final-symbols new-symbols))
+                           (%same-symbols-p final-symbols new-symbols)
+                           (%same-symbols-p final-banks new-banks))
                 (%assembly-error nil "layout did not converge in the final pass"))
-              (values final-symbols final-sized final-address final-asm-origin final-info))))
-        (setf symbols new-symbols floors new-floors widths new-widths effects new-effects)))
+              (values final-symbols final-sized final-address final-asm-origin final-info final-banks))))
+        (setf symbols new-symbols floors new-floors widths new-widths effects new-effects
+              banks new-banks)))
     (%assembly-error nil "addressing-mode layout failed to converge after ~D iterations"
                       iteration-bound))))
 
@@ -1674,10 +1684,11 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                                    (source-unit-file *current-definition-unit*)
                                    (lasm-syntax-error-definition-source condition)
                                    (source-unit-text *current-definition-unit*)))))))
-        (multiple-value-bind (symbols sized final-address asm-origin info)
+        (multiple-value-bind (symbols sized final-address asm-origin info label-banks)
             (%layout (expand-macros statements machine) machine origin cell-width)
           (multiple-value-bind (cells bank-images)
-              (%encode sized symbols asm-origin final-address cell-width endian)
+              (let ((*label-banks* label-banks))
+                (%encode sized symbols asm-origin final-address cell-width endian))
            (make-assembly :cells cells :banks bank-images
                          :cell-width cell-width
                          :origin asm-origin :symbols symbols :symbol-info info

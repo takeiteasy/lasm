@@ -316,6 +316,26 @@ than each caller assuming a byte opcode."
 (defvar *register-aliases* nil)
 (defvar *register-alias-elements* nil)
 
+;; Label key -> bank (NIL for a label in the main image), bound by the
+;; assembler for bank(label). NIL outside of ASSEMBLE-STATEMENTS.
+(defvar *label-banks* nil)
+
+(defun %eval-bank (label symbols)
+  (unless (expr-label-p label)
+    (error 'assembly-error :message "bank() takes a label"))
+  (let ((name (expr-label-name label)))
+    (flet ((fail (condition fmt &rest args)
+             (error condition :name name
+                              :message (apply #'format nil fmt (%display-symbol-key name) args)
+                              :line (expr-label-line label) :column (expr-label-column label))))
+      (multiple-value-bind (bank foundp) (and *label-banks* (gethash name *label-banks*))
+        (cond
+          ((and foundp bank) bank)
+          (foundp (fail 'assembly-error "Label ~S is not in a banked region"))
+          ((and symbols (nth-value 1 (gethash name symbols)))
+           (fail 'assembly-error "bank(): ~S is not a label"))
+          (t (fail 'unresolved-label "Cannot fold constant expression: unresolved label ~S")))))))
+
 (defun eval-expr (ast &key symbols pc)
   "Fold the EXPR-* AST node AST (parser.lisp) to an integer. SYMBOLS, when
 given, is a hash table (string -> value -- a label's address, or an .EQU's
@@ -349,6 +369,8 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
      (unless pc (error 'unresolved-location))
      pc)
     (expr-unary
+     (when (eq (expr-unary-op ast) :bank)
+       (return-from eval-expr (%eval-bank (expr-unary-operand ast) symbols)))
      (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols :pc pc)))
        (ecase (expr-unary-op ast)
          (:neg (- v))

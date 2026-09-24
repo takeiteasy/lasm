@@ -28,6 +28,23 @@ everything else stays in the main image. There is no closing directive.
   in one bank signals `assembly-error`.
 - Signals `assembly-error` on a memory with no banked region.
 
+## `bank(label)`
+
+`bank(label)` is an expression operator that folds to the bank a label was
+defined in.
+
+```
+        bnk #bank(far)      ; switch to the bank holding far
+        jmp far
+        .bank 2
+        .org $4000
+far:    hlt
+```
+
+The label must lie in a banked region; a main-image label or an
+`.equ`/`.set` name signals `assembly-error`. The operator's spelling is the
+lexer's [`bank-operator`](lexer.md#clauses) clause.
+
 ## Bank images
 
 ```lisp

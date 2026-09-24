@@ -25,7 +25,7 @@
   (semantics (trap :halt)))
 
 (defparameter *source*
-  "        bnk #2
+  "        bnk #bank(two)
         hlt
         .bank 1
         .org $4000

@@ -69,6 +69,12 @@ their own for a conventional dialect.
   prefix"](modes.md#forcing-one-hole-with-a-prefix)). It must be the
   `label-suffix`, `"#"`, or `"="`; `deflexer` rejects any other spelling. A
   `nil`/omitted clause disables hole prefixes.
+- `(bank-operator string)` — e.g. `"bank"` (the `default` lexer's setting).
+  The identifier spelling of the [`bank(label)`](parser.md#banklabel)
+  operator. An identifier matching it (any case) and followed by `(` lexes
+  as a `:bank-operator` token; otherwise it is an ordinary identifier. It
+  must be a valid identifier under `ident-chars`. A `nil`/omitted clause
+  disables the operator.
 - `(location-counter string)` — one optional nonempty punctuation spelling,
   such as `"$"` or `"."`. It denotes the current address when it is a
   complete token. `$FF` remains a hex number and `.loop` remains an

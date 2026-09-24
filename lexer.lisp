@@ -18,6 +18,7 @@
 
 (defstruct token
   type    ; :identifier :number :string :punctuation :label-suffix :newline :eof
+          ; :bank-operator (the bank-operator spelling followed by "(")
           ; :hole-prefix (built by the parser from NAME + hole-prefix-separator)
   value   ; parsed value: string (identifier/string), integer (number),
           ; keyword (punctuation/label-suffix)
@@ -51,6 +52,7 @@
   ident-extra-chars     ; string of non-alphanumeric chars allowed in identifiers
   line-continuation     ; string, or nil to disable line continuation
   location-counter     ; optional standalone spelling of the location counter
+  bank-operator         ; identifier spelling of the bank(label) operator, or nil
   hole-prefix-separator ; string, or nil to disable per-hole forcing prefixes
                         ; -- separates a suffix name from the operand it
                         ; forces, e.g. the ":" in "#w:5". Must lex as its
@@ -105,7 +107,7 @@
 (defun build-lexer-descriptor (name clauses)
   (let (comment-styles number-formats label-suffix local-label-prefix
         string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
-        hole-prefix-separator
+        hole-prefix-separator bank-operator
         location-counter location-counter-clause-p)
     (dolist (clause clauses)
       (case (first clause)
@@ -118,6 +120,7 @@
         (line-continuation (setf line-continuation (second clause)))
         (mode-suffix-separator (setf mode-suffix-separator (second clause)))
         (hole-prefix-separator (setf hole-prefix-separator (second clause)))
+        (bank-operator (setf bank-operator (second clause)))
         (location-counter
          (setf location-counter-clause-p t location-counter (second clause))
          (unless (= 2 (length clause))
@@ -140,6 +143,13 @@ characters already listed in ident-chars" name mode-suffix-separator))
                    (or (equal hole-prefix-separator label-suffix)
                        (find hole-prefix-separator '("#" "=") :test #'string=)))
         (error "DEFLEXER ~S: hole-prefix-separator ~S must be the label-suffix, \"#\" or \"=\"" name hole-prefix-separator)))
+    (when bank-operator
+      (unless (and (stringp bank-operator) (plusp (length bank-operator))
+                   (or (alpha-char-p (char bank-operator 0))
+                       (find (char bank-operator 0) ident-extra-chars))
+                   (every (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)))
+                          bank-operator))
+        (error "DEFLEXER ~S: bank-operator ~S must be a valid identifier" name bank-operator)))
     (when (find #\Null ident-extra-chars)
       (error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
     (when location-counter-clause-p
@@ -163,6 +173,7 @@ characters already listed in ident-chars" name mode-suffix-separator))
                             :ident-extra-chars ident-extra-chars
                             :line-continuation line-continuation
                             :location-counter location-counter
+                            :bank-operator bank-operator
                             :mode-suffix-separator mode-suffix-separator
                             :hole-prefix-separator hole-prefix-separator)))
 
@@ -176,8 +187,13 @@ characters already listed in ident-chars" name mode-suffix-separator))
      (ident-chars :alnum extra-chars-string)
      (line-continuation string)
      (location-counter string)
+     (bank-operator string)
      (mode-suffix-separator string)
      (hole-prefix-separator string)
+
+BANK-OPERATOR is the identifier spelling of the bank(label) operator. An
+identifier matching it (case-insensitively) and followed by \"(\" lexes as a
+:BANK-OPERATOR token. NIL or omitted disables the operator.
 
 HOLE-PREFIX-SEPARATOR separates a suffix name from the operand hole it
 forces, e.g. the \":\" in \"#w:5\". It must be the label-suffix, \"#\" or \"=\".
@@ -204,7 +220,8 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   (ident-chars :alnum "_.")
   (line-continuation "\\")
   (mode-suffix-separator ".")
-  (hole-prefix-separator ":"))
+  (hole-prefix-separator ":")
+  (bank-operator "bank"))
 
 ;;; Tokenizer
 
@@ -358,8 +375,16 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
               while (and ch (%ident-char-p ch descriptor))
               do (vector-push-extend ch chars) (%advance state))
         (let* ((text (coerce chars 'simple-string))
-               (prefix (lexer-descriptor-local-label-prefix descriptor)))
-          (make-token :type :identifier :value text :text text :line line :column col
+               (prefix (lexer-descriptor-local-label-prefix descriptor))
+               (operator (lexer-descriptor-bank-operator descriptor)))
+          (make-token :type (if (and operator (string-equal text operator)
+                                     (eql #\( (loop for k from 0
+                                                    for ch = (%peek state k)
+                                                    unless (member ch '(#\Space #\Tab))
+                                                      return ch)))
+                                :bank-operator
+                                :identifier)
+                      :value text :text text :line line :column col
                       :localp (and prefix (plusp (length prefix))
                                    (>= (length text) (length prefix))
                                    (string= prefix text :end2 (length prefix)))))))))

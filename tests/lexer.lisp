@@ -193,3 +193,36 @@ sta b"))))
     (build-lexer-descriptor 'bad-prefix '((label-suffix ":") (hole-prefix-separator "@"))))
   (fiveam:is (null (lexer-descriptor-hole-prefix-separator
                     (build-lexer-descriptor 'no-prefix '((label-suffix ":")))))))
+
+(fiveam:test bank-operator-lexes-only-before-a-paren
+  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "bank(x)")))))
+  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "BANK (x)")))))
+  (fiveam:is (equal '(:identifier :punctuation)
+                    (%types (%non-eof (tokenize "bank +")))))
+  (fiveam:is (equal '(:identifier :label-suffix)
+                    (%types (%non-eof (tokenize "bank:")))))
+  (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "banks(x)"))))))
+
+(fiveam:test bank-operator-clause
+  (fiveam:is (equal "bank" (lexer-descriptor-bank-operator (find-lexer-descriptor 'default))))
+  (deflexer far-syntax
+    (number-formats (:dec :default))
+    (ident-chars :alnum "_")
+    (bank-operator "far"))
+  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "far(x)" :lexer 'far-syntax)))))
+  (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "bank(x)" :lexer 'far-syntax)))))
+  (deflexer no-bank-syntax
+    (number-formats (:dec :default))
+    (ident-chars :alnum "_"))
+  (fiveam:is (null (lexer-descriptor-bank-operator (find-lexer-descriptor 'no-bank-syntax))))
+  (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
+                    (%types (%non-eof (tokenize "bank(x)" :lexer 'no-bank-syntax)))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-bank '((ident-chars :alnum "_") (bank-operator "1st"))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-bank '((ident-chars :alnum "_") (bank-operator "a-b")))))

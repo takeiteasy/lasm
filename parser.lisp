@@ -97,7 +97,8 @@
                                              ; (#15). No slots; it IS the
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
-(defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi
+(defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi :bank
+                                             ; (:bank's operand is an EXPR-LABEL)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
 
@@ -137,6 +138,17 @@
                (1+ i)))
       ((eq (token-type tok) :location-counter)
        (values (make-expr-location) (1+ i)))
+      ((eq (token-type tok) :bank-operator)
+       (unless (eq (%punct-value (%tok tokens (1+ i) end)) :lparen)
+         (%parse-error tok "Expected \"(\" after ~A" (token-text tok)))
+       (multiple-value-bind (inner next-i) (%parse-binary tokens (+ i 2) end 0)
+         (unless (expr-label-p inner)
+           (%parse-error tok "~A() takes a label" (token-text tok)))
+         (let ((close (%tok tokens next-i end)))
+           (unless (eq (%punct-value close) :rparen)
+             (%parse-error close "Expected closing parenthesis, found ~:[end of expression~;~:*~S~]"
+                            (and close (token-text close))))
+           (values (make-expr-unary :op :bank :operand inner) (1+ next-i)))))
       ((eq (%punct-value tok) :star)
        ;; The location-counter symbol (#15): "*" in operand/primary position
        ;; is the current address, not multiplication -- precedence climbing
@@ -255,6 +267,8 @@ from START on, with one :HOLE-PREFIX token whose value is the identifier."
       (setf label (token-value (aref tokens pos))
             label-localp (token-localp (aref tokens pos)))
       (incf pos 2))
+    (when (and (< pos len) (eq (token-type (aref tokens pos)) :bank-operator))
+      (setf (token-type (aref tokens pos)) :identifier))
     (setf tokens (%collapse-hole-prefixes tokens pos hole-prefix-separator)
           len (length tokens))
     (cond
