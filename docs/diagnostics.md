@@ -126,6 +126,24 @@ first execution of the instruction.[^definition] Under `compile-file`, SBCL
 reports them as `compiled-program-error`; see
 [Limitations](#limitations).
 
+## Usage errors
+
+Misusing the library API, rather than a definition or a program's source,
+signals a `usage-error`. `usage-error-message` holds the text.
+
+| Condition | Signalled by |
+| --- | --- |
+| `debugger-usage-error` | Debugger commands and API: bad targets, indices, counts, banks |
+| `disassembler-usage-error` | Missing `:machine`, `:start` or `:count`, bad data regions |
+| `output-usage-error` | Cell widths, byte counts and ranges that a format cannot hold |
+| `emulator-usage-error` | `load-program`, `run*`, clock speed, devices, memory resolution |
+| `lookup-error` | `unknown-machine`, `unknown-mode`, `unknown-lexer`; `lookup-error-name` names the missing definition |
+
+`debug-command` reports any `lasm-error` as `Error: ...` text. A definer
+that names an unregistered machine or mode signals its own
+`*-definition-error` instead of the lookup error. A lambda-list mismatch in a
+definer form, such as an unknown keyword, is a definition error too.
+
 ## Opcode conflicts
 
 `definstruction` signals `opcode-conflict` when two descriptors at one
@@ -138,9 +156,6 @@ declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
 
 - `compile-file` of a malformed definition loses the condition type; it is
   tracked in [ticket 258](https://todo.sr.ht/~takeiteasy/lasm/258).
-- Runtime-API and lookup errors (debugger, disassembler, `find-mode-descriptor`)
-  remain plain errors; see
-  [ticket 257](https://todo.sr.ht/~takeiteasy/lasm/257).
 
 [^definition]: Word-encoded semantics compile lazily on first use. The
   compile step re-signals the typed condition, so the caller sees the same

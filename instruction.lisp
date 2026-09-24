@@ -866,7 +866,7 @@ declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode
   ;; SPEC is the tail of an (operand ...) encoding subclause, with any
   ;; leading field name already stripped off by %PARSE-OPERAND-SUBCLAUSE:
   ;; (:mode) or (:width n).
-  (destructuring-bind (spec-head &optional spec-arg) spec
+  (%definition-bind (spec-head &optional spec-arg) spec
     (cond
       ((eq spec-head :mode) (%mode-operand-width mode machine-name))
       ((eq spec-head :width) spec-arg)
@@ -911,7 +911,7 @@ off any leading :REGISTER ELEM (#143) and trailing (variant (choice m)
 VARIANT-FORMS, so a bare :MODE (which takes no arg) and a :WIDTH N (which
 does) are told apart correctly."
   (multiple-value-bind (name rest) (%parse-operand-subclause subclause)
-    (destructuring-bind (spec-head &rest spec-tail) rest
+    (%definition-bind (spec-head &rest spec-tail) rest
       (multiple-value-bind (spec after-spec)
           (case spec-head
             (:mode (values (list :mode) spec-tail))
@@ -1025,7 +1025,7 @@ counterpart of a word field's (variant (choice m) ...) form
 hole in diagnostics (its own field name, or a synthetic \"hole N\" for an
 unnamed one -- see %CHECK-BYTE-SUB-VARIANTS!). Returns (VALUES mode-name
 sub)."
-  (destructuring-bind (head selector &rest tail) form
+  (%definition-bind (head selector &rest tail) form
     (unless (eq head 'variant)
       (%definstruction-error "DEFINSTRUCTION: operand ~A: malformed variant form ~S -- expected ~
 (variant (choice m) (sub s))" hole-name form))
@@ -1094,7 +1094,7 @@ machine ~S's ~D-bit code cell" machine name hole-name (cdr p) (car p) machine wi
 per-hole sugar instead. Returns (VALUES name-list sub), NAME-LIST one
 mode-name symbol per participating ONE-OF hole, in the table's own hole
 order."
-  (destructuring-bind (head selector &rest tail) form
+  (%definition-bind (head selector &rest tail) form
     (unless (eq head 'variant)
       (%definstruction-error "DEFINSTRUCTION: (sub-opcode ...): malformed variant form ~S -- expected ~
 (variant (choice m1 m2 ...) (sub s))" form))
@@ -1513,7 +1513,7 @@ this does not descend into: quoted data merely containing the symbols
 CHOICE-CASE is not a use of the macro and has nothing to validate."
   (when (and (consp form) (not (eq (first form) 'quote)))
     (if (eq (first form) 'choice-case)
-        (destructuring-bind (op-name &rest clauses) (rest form)
+        (%definition-bind (op-name &rest clauses) (rest form)
           (%choice-case-form op-name clauses machine name operand-names hole-alternatives-list mode-operand-names
                               named-slot-alternatives))
         (progn
@@ -2374,25 +2374,25 @@ value-triggered fallback.
 always the instruction word's own WIDTH-CELLS -- left NIL here (parsed raw)
 when omitted; %PARSE-WORD-OPERAND-SUBCLAUSE defaults it to the layout's
 WIDTH-CELLS once it has a LAYOUT to default against."
-  (destructuring-bind (head selector &rest tail) form
+  (%definition-bind (head selector &rest tail) form
     (unless (eq head 'variant)
       (%definstruction-error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
 (variant selector kind)" field-name form))
     (cond
       ((and (consp selector) (eq (first selector) 'range))
-       (destructuring-bind (range-kw lo hi) selector
+       (%definition-bind (range-kw lo hi) selector
          (declare (ignore range-kw))
          (unless (eq (first tail) 'inline)
            (%definstruction-error "DEFINSTRUCTION: field ~S: a (range ...) variant must be ~
 INLINE, got ~S" field-name tail))
-         (destructuring-bind (inline-sym &key (bias 0)) tail
+         (%definition-bind (inline-sym &key (bias 0)) tail
            (declare (ignore inline-sym))
            (make-word-variant :kind :inline :bias bias :range (cons lo hi)))))
       ((eq selector :else)
        (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
          (%definstruction-error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
 (extra-word :escape n), got ~S" field-name tail))
-       (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
+       (%definition-bind (extra-word-kw &key escape cells alias) (first tail)
          (declare (ignore extra-word-kw))
          (when alias
            (%definstruction-error "DEFINSTRUCTION: field ~S: :alias applies only to a (choice ...) variant"
@@ -2401,25 +2401,25 @@ INLINE, got ~S" field-name tail))
            (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
          (make-word-variant :kind :extra-word :escape escape :extra-cells cells)))
       ((and (consp selector) (eq (first selector) 'choice))
-       (destructuring-bind (choice-kw choice-name) selector
+       (%definition-bind (choice-kw choice-name) selector
          (declare (ignore choice-kw))
          (setf choice-name (%parse-choice-key choice-name (format nil "field ~S" field-name)))
          (cond
            ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
-            (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
+            (%definition-bind (extra-word-kw &key escape cells alias) (first tail)
               (declare (ignore extra-word-kw))
               (unless escape
                 (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
               (make-word-variant :kind :extra-word :escape escape :choice choice-name
                                  :extra-cells cells :alias (and alias t))))
            ((eq (first tail) 'inline)
-            (destructuring-bind (inline-sym &key range (bias 0) alias) tail
+            (%definition-bind (inline-sym &key range (bias 0) alias) tail
               (declare (ignore inline-sym))
               (unless range
                 (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
 own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range of its own"
                        field-name choice-name))
-              (destructuring-bind (lo hi) range
+              (%definition-bind (lo hi) range
                 (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name :alias (and alias t)))))
            (t (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
 :range) or (extra-word :escape n), got ~S" field-name choice-name tail)))))
@@ -2792,7 +2792,7 @@ ALT afterwards, since there is no (choice m) syntax on a fieldless hole to
 carry it."
   (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
     (if (eq (first spec) :trailing-word)
-        (destructuring-bind (trailing-kw &key cells register) spec
+        (%definition-bind (trailing-kw &key cells register) spec
           (declare (ignore trailing-kw))
           (when (and cells (not (and (integerp cells) (plusp cells))))
             (%definstruction-error "DEFINSTRUCTION: (operand ~@[~S ~]:trailing-word :cells ~S): :CELLS must be ~
@@ -2811,7 +2811,7 @@ a positive integer" name cells))
 #120 :TRAILING-WORD case above doesn't have to thread LAYOUT/FWIDTH through
 a branch that never uses them. NAME/SPEC are %PARSE-OPERAND-SUBCLAUSE's own
 split of SUBCLAUSE."
-  (destructuring-bind (field-kw field-name &rest after-field) spec
+  (%definition-bind (field-kw field-name &rest after-field) spec
       (unless (eq field-kw :field)
         (%definstruction-error "DEFINSTRUCTION: malformed word operand spec ~S -- expected ~
 (operand [name] :field f ...) or (operand [name] :trailing-word [:cells k])" subclause))
@@ -3047,7 +3047,7 @@ nested varying alternative; short selectors must be unique."
         (names (mapcar #'%parse-operand-subclause operand-subclauses))
         entries)
     (dolist (subclause subclauses)
-      (destructuring-bind (head selector &rest extras) subclause
+      (%definition-bind (head selector &rest extras) subclause
         (declare (ignore head))
         (let* ((qualified (consp selector))
                (alt (if qualified (%collapse-key (rest selector)) selector))
@@ -3566,7 +3566,7 @@ declare (INSTRUCTION-WORD-LAYOUT-NAMED)."
       (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (layout ...) is only meaningful on a ~
 word-encoded machine (#64) -- ~S declares no instruction-word clause"
              machine name context machine))
-    (destructuring-bind (layout-name) (rest layout-subclause)
+    (%definition-bind (layout-name) (rest layout-subclause)
       (unless (instruction-word-layout-named
                (machine-descriptor-instruction-word (find-machine-descriptor machine))
                layout-name)
@@ -3606,7 +3606,7 @@ this declared VALUE while %ENCODE-WORD-INSTRUCTION writes it through
 WRAP-VALUE, so an over-wide constant would register under one value and
 encode a different, silently wrapped one -- the same rationale as
 %CHECK-WORD-OPCODE for the OPCODE field itself."
-  (destructuring-bind (field-value-kw field-name value) subclause
+  (%definition-bind (field-value-kw field-name value) subclause
     (declare (ignore field-value-kw))
     (when (eq field-name 'opcode)
       (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value opcode ...) is not allowed -- the ~
@@ -3671,7 +3671,7 @@ field itself. Also signals an error when :SUB is given on a word-encoded
 machine (%WORD-MACHINE-P) -- #125's sub-opcode cell is a byte-machine-only
 mechanism; a word-encoded machine already has %CHECK-OPCODE-DECODABLE!'s
 per-field discrimination and has no use for a second, separate cell."
-  (destructuring-bind (opcode &rest plist) (rest opcode-subclause)
+  (%definition-bind (opcode &rest plist) (rest opcode-subclause)
     (loop for key in plist by #'cddr
           unless (eq key :sub)
             do (%definstruction-error "DEFINSTRUCTION ~S ~S: unknown (opcode ...) option ~S" machine name key))
@@ -3723,7 +3723,7 @@ may not be combined with a hole-selected selector on the same variant
 #75: a variant's own (cycles n) subclause overrides the shared top-level
 CYCLES-FORM for this mode alone -- e.g. a zero-page mode costing less than
 its absolute-mode sibling."
-  (destructuring-bind (mode-sym &rest body) variant-form
+  (%definition-bind (mode-sym &rest body) variant-form
     (%check-instruction-subclauses
      body machine name `(modes ,mode-sym)
      '(opcode operand field-value for-choice sub-opcode layout semantics cycles)
@@ -3963,7 +3963,7 @@ a hole matching none of the given keys -- including a hole with no recorded
 choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own (#126) -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
-  (let ((*definition-name* name))
+  (%with-definition (name instruction-definition-error)
     (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads fallbackp)
       (dolist (clause clauses)
         (when (member (first clause) seen-heads)

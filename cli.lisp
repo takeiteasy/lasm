@@ -108,7 +108,7 @@ options:
 (defun %cli-named (text table what file)
   (let ((symbol (find-symbol (string-upcase text) '#:lasm)))
     (unless (and symbol (nth-value 1 (gethash symbol table)))
-      (error "~A defines no ~A named ~A" file what text))
+      (%signal-usage-error 'usage-error "~A defines no ~A named ~A" file what text))
     symbol))
 
 (defun %cli-pick-machine (file explicit)
@@ -116,9 +116,9 @@ options:
       (%cli-named explicit *machines* "machine" file)
       (let ((names (%table-keys *machines*)))
         (case (length names)
-          (0 (error "~A defines no machine" file))
+          (0 (%signal-usage-error 'usage-error "~A defines no machine" file))
           (1 (first names))
-          (t (error "~A defines several machines (~{~(~A~)~^, ~}): pass --machine-name"
+          (t (%signal-usage-error 'usage-error "~A defines several machines (~{~(~A~)~^, ~}): pass --machine-name"
                     file names))))))
 
 (defun %cli-pick-lexer (file explicit before)
@@ -128,7 +128,7 @@ options:
         (case (length names)
           (0 'default)
           (1 (first names))
-          (t (error "~A defines several lexers (~{~(~A~)~^, ~}): pass --lexer" file names))))))
+          (t (%signal-usage-error 'usage-error "~A defines several lexers (~{~(~A~)~^, ~}): pass --lexer" file names))))))
 
 (defun %cli-call-with-definitions (options function)
   "Load OPTIONS' machine file into a private machine table and call FUNCTION

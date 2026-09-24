@@ -42,6 +42,15 @@ For context, see [Machine model](machine-model.md#conditions),
 | `mode-definition-error` | `definition-error` | — |
 | `lexer-definition-error` | `definition-error` | — |
 | `directive-definition-error` | `definition-error` | — |
+| `usage-error` | `lasm-error` | `usage-error-message` |
+| `debugger-usage-error` | `usage-error` | — |
+| `disassembler-usage-error` | `usage-error` | — |
+| `output-usage-error` | `usage-error` | — |
+| `emulator-usage-error` | `usage-error` | — |
+| `lookup-error` | `usage-error` | `lookup-error-name` |
+| `unknown-machine` | `lookup-error` | — |
+| `unknown-mode` | `lookup-error` | — |
+| `unknown-lexer` | `lookup-error` | — |
 | `opcode-conflict` | `instruction-definition-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |
 | `macro-error` | `lasm-syntax-error` | — |
 | `include-error` | `lasm-syntax-error` | — |

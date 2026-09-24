@@ -39,6 +39,17 @@
    #:interrupt-queue-full-machine
    #:lasm-trap
    #:lasm-trap-tag
+   #:usage-error
+   #:usage-error-message
+   #:debugger-usage-error
+   #:disassembler-usage-error
+   #:output-usage-error
+   #:emulator-usage-error
+   #:lookup-error
+   #:lookup-error-name
+   #:unknown-machine
+   #:unknown-mode
+   #:unknown-lexer
    #:definition-error
    #:definition-error-message
    #:definition-error-name

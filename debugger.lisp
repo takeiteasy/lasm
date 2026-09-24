@@ -137,24 +137,24 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
     (integer
      (if bank
          (let ((region (or (%session-banked-region session where)
-                           (error "address ~D is not in a banked region" where))))
+                           (%debugger-usage-error "address ~D is not in a banked region" where))))
            (unless (< bank (memory-region-banks region))
-             (error "bank ~D is out of range for region ~(~A~) (~D bank~:P)"
+             (%debugger-usage-error "bank ~D is out of range for region ~(~A~) (~D bank~:P)"
                     bank (memory-region-name region) (memory-region-banks region)))
            (values where (memory-region-name region) bank))
          (values where nil nil)))
     (string
      (let ((assembly (debug-session-assembly session)))
        (unless assembly
-         (error "no assembly attached to this session -- cannot resolve label ~S" where))
+         (%debugger-usage-error "no assembly attached to this session -- cannot resolve label ~S" where))
        (let ((info (%session-symbol session where scope)))
          (unless info
-           (error "no symbol named ~S~@[ in scope ~S~]" where scope))
+           (%debugger-usage-error "no symbol named ~S~@[ in scope ~S~]" where scope))
          (unless (eq (symbol-info-kind info) :label)
-           (error "~S is a ~(~A~), not a label -- its value is not an address"
+           (%debugger-usage-error "~S is a ~(~A~), not a label -- its value is not an address"
                   where (symbol-info-kind info)))
          (when (and bank (not (eql bank (symbol-info-bank info))))
-           (error "~S is not in bank ~D" where bank))
+           (%debugger-usage-error "~S is not in bank ~D" where bank))
          (values (symbol-info-value info) (symbol-info-region info) (symbol-info-bank info)))))))
 
 ;;; Conditions
@@ -172,7 +172,7 @@ never notify it."
   "The fixed stack NAME as (VALUES STACK :POINTER). Signals when NAME is not one."
   (let ((stack (%resolve-storage session name nil t)))
     (unless (and stack (%stack-name-p (debug-session-machine session) stack))
-      (error "~A is not a fixed stack" name))
+      (%debugger-usage-error "~A is not a fixed stack" name))
     (values stack :pointer)))
 
 (defun %resolve-storage (session name &optional index stacks)
@@ -187,7 +187,7 @@ be read as a single value."
       ((eq index :depth)
        (return-from %resolve-storage (%resolve-depth session name)))
       ((and dot (string-equal (subseq name (1+ dot)) "depth"))
-       (when index (error "~A takes no index" name))
+       (when index (%debugger-usage-error "~A takes no index" name))
        (let ((base (subseq name 0 dot)))
          (return-from %resolve-storage
            (and (%resolve-storage session base nil t) (%resolve-depth session base)))))))
@@ -197,26 +197,26 @@ be read as a single value."
          (element (and symbol (gethash symbol (machine-descriptor-table descriptor)))))
     (cond
       (alias-element
-       (when index (error "~A is a register alias and takes no index" name))
+       (when index (%debugger-usage-error "~A is a register alias and takes no index" name))
        (values (storage-element-name alias-element)
                (gethash name (machine-descriptor-register-aliases descriptor))))
       ((null element) nil)
       ((and stacks (eq (storage-element-kind element) :stack))
        (cond ((null index) (values symbol :any))
              ((< -1 index (storage-element-depth element)) (values symbol index))
-             (t (error "slot ~D is out of range for stack ~A" index name))))
+             (t (%debugger-usage-error "slot ~D is out of range for stack ~A" index name))))
       ((eq (storage-element-kind element) :flag)
-       (when index (error "~A is a flag and takes no index" name))
+       (when index (%debugger-usage-error "~A is a flag and takes no index" name))
        (values symbol nil))
       ((not (eq (storage-element-kind element) :register))
-       (error "~A is not a register or flag" name))
+       (%debugger-usage-error "~A is not a register or flag" name))
       ((= (storage-element-count element) 1)
-       (when index (error "~A is not a banked register" name))
+       (when index (%debugger-usage-error "~A is not a banked register" name))
        (values symbol nil))
       ((null index)
-       (error "~A is a banked register -- name a cell as ~A[N] or use an alias" name name))
+       (%debugger-usage-error "~A is a banked register -- name a cell as ~A[N] or use an alias" name name))
       ((not (< -1 index (storage-element-count element)))
-       (error "index ~D is out of range for register ~A" index name))
+       (%debugger-usage-error "index ~D is out of range for register ~A" index name))
       (t (values symbol index)))))
 
 (defun %read-storage (machine name index)
@@ -241,7 +241,7 @@ lowcell, highcell)."
                              (walk (expr-index-operand node)))
                  (expr-unary
                   (when (member (expr-unary-op node) '(:bank :defined :lowcell :highcell))
-                    (error "~(~A~)() is not available in a condition" (expr-unary-op node)))
+                    (%debugger-usage-error "~(~A~)() is not available in a condition" (expr-unary-op node)))
                   (walk (expr-unary-operand node)))
                  (expr-binary (walk (expr-binary-left node))
                               (walk (expr-binary-right node))))))
@@ -253,16 +253,16 @@ lowcell, highcell)."
   (let ((operand (expr-index-operand node))
         (name (expr-index-name node)))
     (unless (%resolve-storage session name (if (expr-number-p operand) (expr-number-value operand) 0) t)
-      (error "~A is not a register or stack" name))))
+      (%debugger-usage-error "~A is not a register or stack" name))))
 
 (defun %read-indexed (session name index)
   "The cell of banked register or live slot of the fixed stack NAME at INDEX."
   (multiple-value-bind (storage slot) (%resolve-storage session name index t)
     (let ((machine (debug-session-machine session)))
-      (unless storage (error "~A is not a register or stack" name))
+      (unless storage (%debugger-usage-error "~A is not a register or stack" name))
       (if (%stack-name-p machine storage)
           (or (%stack-slot-value machine storage slot)
-              (error "stack ~A has no live slot ~D" name slot))
+              (%debugger-usage-error "stack ~A has no live slot ~D" name slot))
           (%read-storage machine storage slot)))))
 
 (defun %compile-condition (session text scope)
@@ -276,7 +276,7 @@ on a syntax error or an unknown name."
          readers)
     (multiple-value-bind (ast next) (let ((*indexed-names* t)) (parse-expression tokens :end end))
       (when (< next end)
-        (error "unexpected ~S in condition" (token-text (aref tokens next))))
+        (%debugger-usage-error "unexpected ~S in condition" (token-text (aref tokens next))))
       (multiple-value-bind (names indexed) (%condition-names ast)
         (dolist (node indexed) (%check-indexed session node))
         (dolist (name names)
@@ -288,7 +288,7 @@ on a syntax error or an unknown name."
                  (let ((machine (debug-session-machine session)))
                    (cl:push (cons name (lambda () (%read-storage machine storage index))) readers)))
                 (info (setf (gethash name values) (symbol-info-value info)))
-                (t (error "unknown name ~S in condition" name)))))))
+                (t (%debugger-usage-error "unknown name ~S in condition" name)))))))
       (values ast values readers))))
 
 (defun %memory-reader (session)
@@ -394,13 +394,13 @@ stack), a label, or a memory address; a name that is
 both storage and a label is storage. ACCESS is :READ, :WRITE or :READ-WRITE. SCOPE and BANK
 qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
   (unless (member access '(:read :write :read-write))
-    (error "bad watch access ~S -- expected :READ, :WRITE or :READ-WRITE" access))
+    (%debugger-usage-error "bad watch access ~S -- expected :READ, :WRITE or :READ-WRITE" access))
   (when (and (eq index :depth) (not (stringp target)))
-    (error "depth watches need a fixed stack name, not ~S" target))
+    (%debugger-usage-error "depth watches need a fixed stack name, not ~S" target))
   (multiple-value-bind (name register-index)
       (and (stringp target) (%resolve-storage session target index t))
     (when (and (eq register-index :pointer) (eq access :read))
-      (error "a depth changes only by writes -- watch ~A with w or rw" target))
+      (%debugger-usage-error "a depth changes only by writes -- watch ~A with w or rw" target))
     (let ((wp (if name
                   (make-watchpoint :id (debug-session-next-id session) :name name :index register-index :access access
                                    :label (cond ((eq register-index :pointer) (format nil "~(~A~).depth" name))
@@ -425,7 +425,7 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
          (memory (debug-session-memory session))
          (region (%region-at (descriptor-element (machine-descriptor machine) memory) address)))
     (when (and region (eq (memory-region-kind region) :device))
-      (error "address ~D is in device region ~(~A~) -- it has no cell to write"
+      (%debugger-usage-error "address ~D is in device region ~(~A~) -- it has no cell to write"
              address (memory-region-name region)))
     (if bank
         (setf (bank-peek machine (memory-region-name region) bank address) value)
@@ -436,7 +436,7 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
   "The name of the fixed stack TARGET on SESSION, or signals."
   (multiple-value-bind (name index) (and (stringp target) (%resolve-storage session target nil t))
     (unless (and name (not (eq index :pointer)) (%stack-name-p (debug-session-machine session) name))
-      (error "~A is not a fixed stack" target))
+      (%debugger-usage-error "~A is not a fixed stack" target))
     name))
 
 (defun %set-stack-contents (machine name values)
@@ -445,9 +445,9 @@ the stack untouched, unless VALUES are integers that fit its depth."
   (let ((depth (storage-element-depth (descriptor-element (machine-descriptor machine) name)))
         (count (length values)))
     (unless (every #'integerp values)
-      (error "cannot store ~S -- expected integers" values))
+      (%debugger-usage-error "cannot store ~S -- expected integers" values))
     (when (> count depth)
-      (error "~D values do not fit stack ~(~A~) (depth ~D)" count name depth))
+      (%debugger-usage-error "~D values do not fit stack ~(~A~) (depth ~D)" count name depth))
     (setf (stack-pointer machine name) count)
     (loop for value in values
           for offset downfrom (1- count)
@@ -469,15 +469,15 @@ notifies the access hook, so watchpoints do not fire."
     (cond
       ((eq index :depth)
        (unless (integerp value)
-         (error "cannot set depth to ~S -- expected an integer" value))
+         (%debugger-usage-error "cannot set depth to ~S -- expected an integer" value))
        (let ((name (%stack-target session target)))
          (%without-hook (machine) (setf (stack-pointer machine name) value))))
       ((listp value)
-       (when index (error "cannot store a list in ~A[~A]" target index))
+       (when index (%debugger-usage-error "cannot store a list in ~A[~A]" target index))
        (let ((name (%stack-target session target)))
          (%without-hook (machine) (%set-stack-contents machine name value))))
       ((not (integerp value))
-       (error "cannot store ~S -- expected an integer" value))
+       (%debugger-usage-error "cannot store ~S -- expected an integer" value))
       (t
        (multiple-value-bind (name slot) (and (stringp target) (%resolve-storage session target index t))
          (%without-hook (machine)
@@ -491,7 +491,7 @@ notifies the access hook, so watchpoints do not fire."
              ((%stack-name-p machine name)
               (let ((depth (stack-depth machine name)))
                 (unless (and (integerp slot) (< slot depth))
-                  (error "stack ~A has no live slot ~A" target (if (integerp slot) slot "-- name one as NAME[N]")))
+                  (%debugger-usage-error "stack ~A has no live slot ~A" target (if (integerp slot) slot "-- name one as NAME[N]")))
                 (setf (stack-ref machine name (- depth 1 slot)) value)))
              (slot (setf (regref machine name slot) value))
              ((eq (storage-element-kind (descriptor-element (machine-descriptor machine) name)) :flag)
@@ -506,16 +506,16 @@ WHERE as in DEBUG-BREAK; a BANK other than the mapped one signals. Returns
 (VALUES CELL STORED-P): the cell now at WHERE (for a device region, the wrapped
 value written) and whether it holds VALUE. Never notifies the access hook."
   (unless (integerp value)
-    (error "cannot store ~S -- expected an integer" value))
+    (%debugger-usage-error "cannot store ~S -- expected an integer" value))
   (when (and (stringp where) (%resolve-storage session where nil t))
-    (error "write only targets memory -- use set for ~A" where))
+    (%debugger-usage-error "write only targets memory -- use set for ~A" where))
   (let ((machine (debug-session-machine session))
         (memory (debug-session-memory session)))
     (multiple-value-bind (address region-name bank)
         (%resolve-breakpoint-address session where :scope scope :bank bank)
       (declare (ignore region-name))
       (when (and bank (/= bank (%mapped-bank session address)))
-        (error "bank ~D is not mapped at address ~D" bank address))
+        (%debugger-usage-error "bank ~D is not mapped at address ~D" bank address))
       (%without-hook (machine)
         (setf (mref machine memory address) value)
         (let* ((element (descriptor-element (machine-descriptor machine) memory))
@@ -726,7 +726,7 @@ or :WATCHPOINT; STEPS is the number of instructions actually executed."
   (let ((descriptor (machine-descriptor (debug-session-machine session))))
     (unless (loop for variants being the hash-values of (machine-descriptor-instructions descriptor)
                     thereis (some #'instruction-descriptor-cycles variants))
-      (error "machine ~(~A~) declares no (cycles n) -- cycle budgets need per-instruction costs"
+      (%debugger-usage-error "machine ~(~A~) declares no (cycles n) -- cycle budgets need per-instruction costs"
              (machine-descriptor-name descriptor)))))
 
 (defun debug-step-cycles (session cycles &key (max-steps (max 10000 cycles)))
@@ -748,10 +748,10 @@ machine declares no (cycles n)."
 (defun %require-replayable (session)
   "Signal unless SESSION keeps history and every device on its bus can be saved."
   (unless (debug-session-history session)
-    (error "step-back history is off -- create the session with :history N"))
+    (%debugger-usage-error "step-back history is off -- create the session with :history N"))
   (loop for device across (machine-devices (debug-session-machine session))
         when (and device (null (device-descriptor-save (device-descriptor device))))
-          do (error "device ~(~A~) has no :save hook, so it cannot be stepped back over"
+          do (%debugger-usage-error "device ~(~A~) has no :save hook, so it cannot be stepped back over"
                     (device-descriptor-name (device-descriptor device)))))
 
 (defun %restore-checkpoint (session checkpoint)
@@ -809,7 +809,7 @@ keeps no history, or a device on the bus has no :SAVE hook -- restoring would
 reset it and replay could not reproduce its state."
   (%require-replayable session)
   (unless (typep n '(integer 1))
-    (error "bad step count ~S" n))
+    (%debugger-usage-error "bad step count ~S" n))
   (let ((checkpoints (debug-session-checkpoints session))
         (now (debug-session-step-count session)))
     (when (null checkpoints)
@@ -1063,11 +1063,11 @@ banked region or the range runs past its end."
   (let* ((machine (debug-session-machine session))
          (region (and bank
                       (or (%session-banked-region session address)
-                          (error "address ~D is not in a banked region" address))))
+                          (%debugger-usage-error "address ~D is not in a banked region" address))))
          (peek (if bank
                    (progn
                      (when (> (+ address count -1) (memory-region-end region))
-                       (error "~D cells at ~D run past the end of region ~(~A~)"
+                       (%debugger-usage-error "~D cells at ~D run past the end of region ~(~A~)"
                               count address (memory-region-name region)))
                      (lambda (a) (bank-peek machine (memory-region-name region) bank a)))
                    (lambda (a) (mpeek machine (debug-session-memory session) a))))
@@ -1138,7 +1138,7 @@ address if it parses as one (%PARSE-INTEGER-MAYBE), otherwise the raw string
 as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   (let* ((colon (position #\: text))
          (bank (and colon (or (%parse-integer-maybe (subseq text 0 colon))
-                              (error "bad bank ~S" (subseq text 0 colon)))))
+                              (%debugger-usage-error "bad bank ~S" (subseq text 0 colon)))))
          (target (string-trim " " (if colon (subseq text (1+ colon)) text))))
     (values (or (%parse-integer-maybe target) target) bank)))
 
@@ -1149,7 +1149,7 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
     (let ((count (if (zerop (length text)) 1 (%parse-integer-maybe number))))
       (unless (and count (plusp count)
                    (or (zerop (length word)) (string-equal word "cycles")))
-        (error "~A: bad count ~S" command text))
+        (%debugger-usage-error "~A: bad count ~S" command text))
       (values count (plusp (length word))))))
 
 (defun %breakpoint-address-text (session address bank)
@@ -1272,7 +1272,7 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   (multiple-value-bind (target scope text) (%split-assignment rest)
     (cond
       ((null target) "write: usage: write TARGET = EXPR")
-      ((listp (%list-items text)) (error "write only targets memory -- use set for a stack"))
+      ((listp (%list-items text)) (%debugger-usage-error "write only targets memory -- use set for a stack"))
       (t
        (let ((value (%eval-text session text scope)))
          (multiple-value-bind (where bank) (%where-arg target)
@@ -1402,7 +1402,7 @@ this call."
                        (%stop-text session reason steps condition))))
                   ((string-equal cmd "back")
                    (multiple-value-bind (n cycles-p) (%count-arg rest "back")
-                     (when cycles-p (error "back: bad count ~S" rest))
+                     (when cycles-p (%debugger-usage-error "back: bad count ~S" rest))
                      (multiple-value-bind (reason undone) (debug-step-back session n)
                        (%stop-text session reason undone nil))))
                   ((or (string-equal cmd "reverse-continue") (string-equal cmd "rc"))
@@ -1421,7 +1421,7 @@ this call."
                        (if (zerop (length rest))
                            (debug-continue session)
                            (multiple-value-bind (n cycles-p) (%count-arg rest "continue")
-                             (unless cycles-p (error "continue: bad count ~S" rest))
+                             (unless cycles-p (%debugger-usage-error "continue: bad count ~S" rest))
                              (debug-continue session :cycles n)))
                      (%stop-text session reason steps condition)))
                   ((string-equal cmd "until")
@@ -1477,7 +1477,7 @@ this call."
                   ((string-equal cmd "where") (debug-where-text session))
                   ((string-equal cmd "quit") :quit)
                   (t (format nil "Unknown command ~S -- try \"help\"" cmd))))
-            (error (c) (format nil "Error: ~A~%" c)))))
+            (lasm-error (c) (format nil "Error: ~A~%" c)))))
     (let ((quit-p (eq body :quit))
           (text (if (eq body :quit) (format nil "Bye.~%") body)))
       (values (if stream (progn (write-string text stream) nil) text) quit-p))))

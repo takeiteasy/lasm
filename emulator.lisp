@@ -65,7 +65,7 @@ way such a machine wakes back up."
              (element (gethash 'pc (machine-descriptor-table descriptor))))
         (if (and element (eq (storage-element-kind element) :register))
             'pc
-            (error "RUN/STEP-MACHINE on machine ~S: no register named PC -- ~
+            (%emulator-usage-error "RUN/STEP-MACHINE on machine ~S: no register named PC -- ~
 pass :PC explicitly" machine-name)))))
 
 ;;; Loading
@@ -108,7 +108,7 @@ also has an image for, since that image would replace it."
       (let ((target-width (%machine-cell-width machine-name memory))
             (source-width (assembly-cell-width cells)))
         (unless (= target-width source-width)
-          (error "LOAD-PROGRAM on machine ~S: assembly's cell width (~D) does not ~
+          (%emulator-usage-error "LOAD-PROGRAM on machine ~S: assembly's cell width (~D) does not ~
 match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
     (when (and assembly-p (not bank))
       (%check-main-image-banks machine memory cells))
@@ -147,7 +147,7 @@ whose mapped bank ASSEMBLY also has an image for."
                             (<= (listing-line-address l) (memory-region-end region))
                             (< (memory-region-start region)
                                (+ (listing-line-address l) (listing-line-size l))))
-                   (error "LOAD-PROGRAM: main-image output at ~D lands in bank ~D of ~(~A~), ~
+                   (%emulator-usage-error "LOAD-PROGRAM: main-image output at ~D lands in bank ~D of ~(~A~), ~
 which the assembly's bank image replaces"
                           (listing-line-address l) bank name))))))
 
@@ -169,10 +169,10 @@ loaded at ORIGIN overlap."
                                  (<= (memory-region-start r) origin (memory-region-end r))))
                           (storage-element-regions element))))
     (unless region
-      (error "LOAD-PROGRAM :BANK ~S: address ~S of memory ~S is not in a banked region"
+      (%emulator-usage-error "LOAD-PROGRAM :BANK ~S: address ~S of memory ~S is not in a banked region"
              bank origin memory))
     (when (> (+ origin (length data) -1) (memory-region-end region))
-      (error "LOAD-PROGRAM :BANK ~S: ~D cells at ~S run past the end of region ~S"
+      (%emulator-usage-error "LOAD-PROGRAM :BANK ~S: ~D cells at ~S run past the end of region ~S"
              bank (length data) origin (memory-region-name region)))
     (loop for cell across (coerce data 'vector)
           for address from origin
@@ -440,7 +440,7 @@ CLOCK-SPEED, since there is then no rate to convert against."
   (let* ((descriptor (machine-descriptor machine))
          (clock-speed (machine-descriptor-clock-speed descriptor)))
     (unless clock-speed
-      (error "MACHINE-ELAPSED-SECONDS on machine ~S: no (clock-speed n) clause ~
+      (%emulator-usage-error "MACHINE-ELAPSED-SECONDS on machine ~S: no (clock-speed n) clause ~
 declared -- cycles cannot be converted to seconds without one"
              (machine-descriptor-name descriptor)))
     (/ (machine-cycles machine) (float clock-speed 1.0d0))))
@@ -463,7 +463,7 @@ budget expressed in simulated seconds -- no timer is touched at all."
   (let* ((descriptor (machine-descriptor machine))
          (clock-speed (machine-descriptor-clock-speed descriptor)))
     (unless clock-speed
-      (error "RUN-FOR-DURATION on machine ~S: no (clock-speed n) clause ~
+      (%emulator-usage-error "RUN-FOR-DURATION on machine ~S: no (clock-speed n) clause ~
 declared -- cycles cannot be converted to seconds without one"
              (machine-descriptor-name descriptor)))
     (let* ((start (machine-cycles machine))

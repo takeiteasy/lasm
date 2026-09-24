@@ -57,7 +57,7 @@ an index returned here stays valid until this device itself is detached."
            (or declared
                (progn
                  (when (%device-name-taken-p machine name)
-                   (error "attach-device ~S on machine ~S: name already in use"
+                   (%emulator-usage-error "attach-device ~S on machine ~S: name already in use"
                           name (machine-descriptor-name descriptor)))
                  (make-device-descriptor :name name :id (or id 0) :version (or version 0)
                                           :manufacturer (or manufacturer 0)

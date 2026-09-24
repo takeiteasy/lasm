@@ -391,7 +391,7 @@ looks like."
     (eval '(defmode oo-bad-single (one-of oo-reg)))))
 
 (fiveam:test one-of-unknown-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-unknown (one-of oo-reg no-such-mode)))))
 
 (defmode oo-two-hole expr "," expr)

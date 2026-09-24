@@ -495,7 +495,7 @@ machine's default layout -- callers hold no other kind (#64)."
 
 (defun find-machine-descriptor (name)
   (or (gethash name *machines*)
-      (error "No machine named ~S has been defined with DEFMACHINE" name)))
+      (%lookup-error 'unknown-machine name "No machine named ~S has been defined with DEFMACHINE" name)))
 
 (defun %machine-children (name)
   "Descriptors of every machine registered with parent NAME."
@@ -646,7 +646,7 @@ machine's default layout -- callers hold no other kind (#64)."
 (defun %enqueue-interrupt (machine entry)
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (unless interrupts
-      (error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
+      (%emulator-usage-error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
              (machine-descriptor-name (machine-descriptor machine))))
     (when (and (interrupt-descriptor-drop-on-zero-vector interrupts)
                (zerop (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
@@ -998,7 +998,7 @@ is burned in, not stored by the CPU."
   "The (REGION-STRUCT . BANK-STATE) for banked region name REGION on MACHINE."
   (let ((state (gethash region (machine-banks machine))))
     (unless state
-      (error "~S is not a banked region on machine ~S"
+      (%emulator-usage-error "~S is not a banked region on machine ~S"
              region (machine-descriptor-name (machine-descriptor machine))))
     (cons (cdr (find region (%banked-regions (machine-descriptor machine))
                      :key (lambda (entry) (memory-region-name (cdr entry)))))

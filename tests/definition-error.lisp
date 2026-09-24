@@ -51,3 +51,22 @@
     (eval '(definstruction instr-test-machine baddef-sem
              (encoding (opcode #xFE))
              (semantics (interrupt-return))))))
+
+(fiveam:test lambda-list-mismatch-in-a-definer-is-a-definition-error
+  (let ((c (%definition-error-of
+            '(definstruction word-test-machine bogus-keys
+              (modes wc-two)
+              (encoding (opcode 5)
+                        (operand value :field src
+                          (variant (range 0 7) inline :alias t)))
+              (semantics nil)))))
+    (fiveam:is (typep c 'instruction-definition-error))
+    (fiveam:is (search "Malformed" (definition-error-message c)))))
+
+(fiveam:test definition-bind-outside-a-definer-stays-a-lisp-error
+  (fiveam:signals error (%definition-bind (a &key b) '(1 :c 2) (list a b))))
+
+(fiveam:test definition-bind-lets-body-errors-through
+  (let ((*definition-type* 'mode-definition-error))
+    (fiveam:signals type-error
+      (%definition-bind (a) '(1) (+ a :not-a-number)))))

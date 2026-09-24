@@ -74,7 +74,7 @@
 
 (defun find-lexer-descriptor (name)
   (or (gethash name *lexers*)
-      (error "No lexer named ~S has been defined with DEFLEXER" name)))
+      (%lookup-error 'unknown-lexer name "No lexer named ~S has been defined with DEFLEXER" name)))
 
 ;;; DEFLEXER clause parsing
 
@@ -90,7 +90,7 @@
 
 (defun parse-number-format-clause (clause)
   ;; (name prefix...) or (name :default)
-  (destructuring-bind (name &rest specs) clause
+  (%definition-bind (name &rest specs) clause
     (if (equal specs '(:default))
         (make-number-format :name name :defaultp t
                              :radix (or (cdr (assoc name *number-format-radixes*)) 10))
@@ -100,7 +100,7 @@
 (defun parse-ident-chars-clause (args)
   ;; (ident-chars :alnum "_.") -- :alnum is currently the only supported
   ;; base class; the string lists additional allowed characters.
-  (destructuring-bind (class extra) args
+  (%definition-bind (class extra) args
     (unless (eq class :alnum)
       (%deflexer-error "Unsupported ident-chars class ~S (only :alnum is implemented)" class))
     extra))
@@ -145,7 +145,7 @@
             entries)))
 
 (defun build-lexer-descriptor (name clauses)
-  (let ((*definition-name* name))
+  (%with-definition (name lexer-definition-error)
     (let (comment-styles number-formats label-suffix local-label-prefix
           string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
           hole-prefix-separator function-operators

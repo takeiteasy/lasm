@@ -107,6 +107,69 @@ SBCL turned into a COMPILED-PROGRAM-ERROR.")
 (defun %defdirective-error (control &rest args)
   (apply #'%definition-error 'directive-definition-error control args))
 
+;;; Usage errors: a caller misusing the library API or a tool's input, as
+;;; opposed to a malformed definition (DEFINITION-ERROR) or program source.
+
+(define-condition usage-error (lasm-error)
+  ((message :initarg :message :initform nil :reader usage-error-message))
+  (:report (lambda (c s) (write-string (usage-error-message c) s))))
+
+(define-condition debugger-usage-error (usage-error) ())
+(define-condition disassembler-usage-error (usage-error) ())
+(define-condition output-usage-error (usage-error) ())
+(define-condition emulator-usage-error (usage-error) ())
+
+(define-condition lookup-error (usage-error)
+  ((name :initarg :name :reader lookup-error-name)))
+(define-condition unknown-machine (lookup-error) ())
+(define-condition unknown-mode (lookup-error) ())
+(define-condition unknown-lexer (lookup-error) ())
+
+(defun %signal-usage-error (type control &rest args)
+  (error type :message (apply #'format nil control args)))
+
+(defun %lookup-error (type name control &rest args)
+  (error type :name name :message (apply #'format nil control args)))
+
+(defun %debugger-usage-error (control &rest args)
+  (apply #'%signal-usage-error 'debugger-usage-error control args))
+(defun %disassembler-usage-error (control &rest args)
+  (apply #'%signal-usage-error 'disassembler-usage-error control args))
+(defun %output-usage-error (control &rest args)
+  (apply #'%signal-usage-error 'output-usage-error control args))
+(defun %emulator-usage-error (control &rest args)
+  (apply #'%signal-usage-error 'emulator-usage-error control args))
+
+(defvar *definition-type* nil
+  "Condition type of the definer being expanded, for %DEFINITION-BIND.")
+
+(defmacro %with-definition ((name type) &body body)
+  "Run BODY as the definition NAME: DEFINITION-ERRORs record NAME, and a
+LOOKUP-ERROR (an unregistered machine, mode or lexer) becomes a TYPE."
+  `(let ((*definition-name* ,name)
+         (*definition-type* ',type))
+     (handler-bind ((lookup-error
+                      (lambda (c) (%definition-error ',type "~A" (usage-error-message c)))))
+       ,@body)))
+
+(defmacro %definition-bind (lambda-list form &body body)
+  "DESTRUCTURING-BIND, but a lambda-list mismatch of FORM inside a definer is
+a DEFINITION-ERROR rather than a raw Lisp error. Errors raised by BODY pass
+through untouched."
+  (let ((binding (gensym "BINDING")) (value (gensym "FORM")) (c (gensym "C"))
+        (declarations (loop while (and (consp (first body)) (eq (first (first body)) 'declare))
+                            collect (cl:pop body))))
+    `(let ((,binding t) (,value ,form))
+       (handler-bind ((error (lambda (,c)
+                               (when (and ,binding *definition-type*
+                                          (not (typep ,c 'lasm-error)))
+                                 (%definition-error *definition-type* "Malformed ~S: ~A"
+                                                    ,value ,c)))))
+         (destructuring-bind ,lambda-list ,value
+           ,@declarations
+           (setf ,binding nil)
+           ,@body)))))
+
 (define-condition lasm-syntax-error (lasm-error)
   ((message :initarg :message :initform nil :reader lasm-syntax-error-message)
    (line :initarg :line :initform nil :accessor lasm-syntax-error-line)

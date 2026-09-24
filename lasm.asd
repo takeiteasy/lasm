@@ -67,6 +67,7 @@
                (:file "parser")
                (:file "mode")
                (:file "definition-error")
+               (:file "usage-error")
                (:file "instruction")
                (:file "word-choices")
                (:file "inheritance")

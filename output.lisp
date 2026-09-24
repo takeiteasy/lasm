@@ -9,7 +9,7 @@
 (defun %output-cell-bytes (cell-width)
   (multiple-value-bind (bytes rest) (floor cell-width 8)
     (when (or (zerop bytes) (plusp rest))
-      (error "cannot write a ~D-bit cell as bytes: cell width must be a multiple of 8"
+      (%output-usage-error "cannot write a ~D-bit cell as bytes: cell width must be a multiple of 8"
              cell-width))
     bytes))
 
@@ -17,7 +17,7 @@
   (cond ((= cell-bytes 1) :little)
         (endian (%check-endian endian 'output))
         (machine (%endian-byte-order (%machine-endian machine memory)))
-        (t (error "a ~D-bit cell needs :MACHINE or :ENDIAN to order its bytes"
+        (t (%output-usage-error "a ~D-bit cell needs :MACHINE or :ENDIAN to order its bytes"
                   (* 8 cell-bytes)))))
 
 (defun %bank-image-region (assembly region)
@@ -25,7 +25,7 @@
   (or region
       (let ((regions (remove-duplicates (mapcar #'bank-image-region (assembly-banks assembly)))))
         (when (rest regions)
-          (error "assembly has output in several banked regions (~{~(~A~)~^, ~}): pass :REGION"
+          (%output-usage-error "assembly has output in several banked regions (~{~(~A~)~^, ~}): pass :REGION"
                  regions))
         (first regions))))
 
@@ -83,7 +83,7 @@ of 8 or the byte count is not a whole number of cells."
   (let ((n (%output-cell-bytes cell-width))
         (endian (%check-endian endian 'output)))
     (unless (zerop (mod (length bytes) n))
-      (error "~D bytes is not a whole number of ~D-bit cells" (length bytes) cell-width))
+      (%output-usage-error "~D bytes is not a whole number of ~D-bit cells" (length bytes) cell-width))
     (let ((cells (make-array (floor (length bytes) n) :element-type `(unsigned-byte ,cell-width))))
       (dotimes (c (length cells) cells)
         (let ((v 0))
@@ -127,7 +127,7 @@ NIL (default); otherwise writes to STREAM and returns NIL."
          (start (* n (if image (bank-image-origin image) (assembly-origin assembly))))
          (body (with-output-to-string (s)
                  (unless (< (+ start (length bytes)) (ash 1 32))
-                   (error "program ends at byte address ~D, past the 32-bit Intel HEX range"
+                   (%output-usage-error "program ends at byte address ~D, past the 32-bit Intel HEX range"
                           (+ start (length bytes))))
                  (let ((upper 0) (i 0))
                    (loop while (< i (length bytes))

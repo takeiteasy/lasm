@@ -81,7 +81,7 @@
   "Look up the MODE-DESCRIPTOR registered under NAME (a symbol) with DEFMODE.
 Signals an error if none is registered."
   (or (gethash name *modes*)
-      (error "No addressing mode named ~S has been defined with DEFMODE" name)))
+      (%lookup-error 'unknown-mode name "No addressing mode named ~S has been defined with DEFMODE" name)))
 
 ;; Both wrapped in an EVAL-WHEN, like BUILD-MODE-DESCRIPTOR itself (below) --
 ;; BUILD-MODE-DESCRIPTOR calls %CHECK-SUFFIX-COLLISION, which calls
@@ -159,7 +159,7 @@ those off first)."
                 ((and (symbolp el) (string-equal (symbol-name el) "EXPR")) (list :expr))
                 ((and (consp el) (symbolp (first el))
                       (string-equal (symbol-name (first el)) "EXPR"))
-                 (destructuring-bind (expr &key register (relative nil relative-given-p)
+                 (%definition-bind (expr &key register (relative nil relative-given-p)
                                              (signed nil signed-given-p)) el
                    (declare (ignore expr))
                    (when (and register (not (symbolp register)))
@@ -535,7 +535,7 @@ a mode with no varying :ONE-OF element."
       (values (reduce #'min counts) (reduce #'max counts))))
 
   (defun build-mode-descriptor (name body)
-  (let ((*definition-name* name))
+  (%with-definition (name mode-definition-error)
       (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
         (when (null pattern-elements)
           (%defmode-error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
@@ -544,7 +544,7 @@ a mode with no varying :ONE-OF element."
           ;; A literal-only mode is useful as a fixed alternative in a ONE-OF.
           ;; It contributes no operand value; the enclosing instruction can
           ;; attach its encoding with a named choice slot.
-          (destructuring-bind (&key width relative signed suffix strict) options
+          (%definition-bind (&key width relative signed suffix strict) options
             (when (and relative (not (eq signed t)) (member :signed options))
               (%defmode-error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))

@@ -100,7 +100,7 @@ returned sorted by START with overlapping or adjacent ranges merged."
   (let ((sorted (sort (mapcar (lambda (r)
                                 (unless (and (consp r) (typep (car r) '(integer 0)) (typep (cdr r) '(integer 0))
                                              (< (car r) (cdr r)))
-                                  (error "DISASSEMBLE: data region ~S is not (START . END) with 0 <= START < END" r))
+                                  (%disassembler-usage-error "DISASSEMBLE: data region ~S is not (START . END) with 0 <= START < END" r))
                                 (cons (car r) (cdr r)))
                               regions)
                       #'< :key #'car))
@@ -509,7 +509,7 @@ exclusive, are rendered as \".byte\" lines without decoding.
 Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
 of round-trip fidelity."
-  (unless machine (error "DISASSEMBLE-CELLS: :MACHINE is required"))
+  (unless machine (%disassembler-usage-error "DISASSEMBLE-CELLS: :MACHINE is required"))
   (let* ((end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
          (lines (%disassemble-raw-lines read-cell origin end machine memory
@@ -518,7 +518,7 @@ of round-trip fidelity."
 
 (defun %required-bank-image (assembly region bank)
   (or (assembly-bank-image assembly region bank)
-      (error "assembly has no output in bank ~D of ~(~A~)" bank region)))
+      (%disassembler-usage-error "assembly has no output in bank ~D of ~(~A~)" bank region)))
 
 (defun %image-symbol-info (assembly region bank)
   "ASSEMBLY's label entries defined in one image (the main one when REGION
@@ -646,11 +646,11 @@ disassembles that bank's image, placed at the region's addresses, over the
 addresses its listing entries cover. BANK :ALL returns the main image's lines
 followed by every bank image's, each line tagged with its REGION and BANK for
 DISASSEMBLY-TEXT."
-  (unless machine (error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
+  (unless machine (%disassembler-usage-error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
   (let ((target-width (%machine-cell-width machine memory))
         (source-width (assembly-cell-width assembly)))
     (unless (= target-width source-width)
-      (error "DISASSEMBLE-ASSEMBLY on machine ~S: assembly's cell width (~D) does not ~
+      (%disassembler-usage-error "DISASSEMBLE-ASSEMBLY on machine ~S: assembly's cell width (~D) does not ~
 match the machine's cell width (~D)" machine source-width target-width)))
   (flet ((image-lines (image)
            (%disassemble-image assembly image :machine machine :lexer lexer :labels labels
@@ -684,7 +684,7 @@ bank has an image in ASSEMBLY, that bank's (#234). DATA-REGIONS defaults to
 is inspection, not execution, so it must not trigger a :DEVICE region's
 :READ side effects merely by disassembling across it."
   (unless (and start count)
-    (error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
+    (%disassembler-usage-error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
@@ -716,7 +716,7 @@ is NIL (default); otherwise writes to STREAM and returns NIL."
                     (let ((key (cons (disassembly-line-region l) (disassembly-line-bank l))))
                       (unless (equal key image)
                         (cond ((null (car key))
-                               (error "DISASSEMBLY-TEXT: a main-image line follows bank output"))
+                               (%disassembler-usage-error "DISASSEMBLY-TEXT: a main-image line follows bank output"))
                               (t (unless (eql (cdr key) bank)
                                    (format s ".bank ~D~%" (cdr key)))
                                  (format s ".org ~D~%" (disassembly-line-address l))

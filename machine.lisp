@@ -31,7 +31,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
   ;; NAMES) when NAMES is given and COUNT is not; when both are given they
   ;; must agree, since a mismatched pair almost certainly indicates a typo
   ;; in one or the other rather than an intentional partial naming.
-  (destructuring-bind (name &key width count names) name-form
+  (%definition-bind (name &key width count names) name-form
     (unless width (%defmachine-error "register ~S requires :width" name))
     (when names
       (unless (every #'symbolp names)
@@ -53,7 +53,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 
 (defun parse-stack-clause (form)
   ;; (stack NAME :width n :depth n)
-  (destructuring-bind (name &key width depth) form
+  (%definition-bind (name &key width depth) form
     (unless width (%defmachine-error "stack ~S requires :width" name))
     (unless depth (%defmachine-error "stack ~S requires :depth" name))
     (make-storage-element :name name :kind :stack
@@ -69,7 +69,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 ;; REGISTER/MEMORY actually name the right kind of element can't be checked
 ;; until every other clause is known (%FINISH-STACK-POINTERS, below).
 (defun parse-stack-pointer-clause (form)
-  (destructuring-bind (register &key memory (grows :down)) form
+  (%definition-bind (register &key memory (grows :down)) form
     (unless (symbolp register)
       (%defmachine-error "stack-pointer ~S must be a symbol" register))
     (when (and memory (not (symbolp memory)))
@@ -125,7 +125,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
 ;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
 ;; alone knows the element's address range.
 (defun %parse-memory-region-form (form context)
-  (destructuring-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write) form
+  (%definition-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write) form
     (unless (eq head 'region)
       (%defmachine-error "~A: expected (region name start end ...), got ~S" context form))
     (unless (symbolp name)
@@ -183,7 +183,7 @@ function), got ~S" context name (car fn) (cdr fn))))
   ;; CLAUSE splitting out (layout ...) forms.
   (let* ((region-forms (remove-if-not (lambda (f) (and (consp f) (eq (first f) 'region))) form))
          (plist-forms (remove-if (lambda (f) (and (consp f) (eq (first f) 'region))) form)))
-    (destructuring-bind (name &key width addr-width cell-width (endian :little)) plist-forms
+    (%definition-bind (name &key width addr-width cell-width (endian :little)) plist-forms
       (unless width (%defmachine-error "memory ~S requires :width" name))
       (unless addr-width (%defmachine-error "memory ~S requires :addr-width" name))
       (%check-positive width ":width" name)
@@ -216,7 +216,7 @@ function), got ~S" context name (car fn) (cdr fn))))
 ;; forcing every machine to declare a rate it doesn't care about.
 (defun parse-clock-speed-clause (form)
   ;; (clock-speed n)
-  (destructuring-bind (hz) form
+  (%definition-bind (hz) form
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
 ;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
@@ -226,7 +226,7 @@ function), got ~S" context name (car fn) (cdr fn))))
 ;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
 ;; machine's namespace, same as a region's or a register alias's name.
 (defun parse-device-clause (form)
-  (destructuring-bind (name &key (id 0) (version 0) (manufacturer 0)
+  (%definition-bind (name &key (id 0) (version 0) (manufacturer 0)
                              init tick receive detach save load)
       form
     (unless (symbolp name)
@@ -265,7 +265,7 @@ register (#163)."
            (symbolp (first place)) (integerp (second place)))))
 
 (defun parse-interrupts-clause (form)
-  (destructuring-bind (&key vector message save stack (queue 256) (on-overflow :error)
+  (%definition-bind (&key vector message save stack (queue 256) (on-overflow :error)
                              mask-when mask-flag (cycles 0) (drop-on-zero-vector t)
                              mask-on-deliver)
       form
@@ -439,7 +439,7 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
         (total 0)
         fields)
     (dolist (field-form field-forms)
-      (destructuring-bind (head name field-width) field-form
+      (%definition-bind (head name field-width) field-form
         (unless (eq head 'field)
           (%defmachine-error "~A: expected (field name width), got ~S" context field-form))
         (when (gethash name seen)
@@ -459,7 +459,7 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
     (setf fields (nreverse fields))
     (let ((shift width))
       (mapcar (lambda (f)
-                (destructuring-bind (name field-width) f
+                (%definition-bind (name field-width) f
                   (decf shift field-width)
                   (list name field-width shift)))
               fields))))
@@ -472,7 +472,7 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
 ;; the default (shared :WIDTH, identical OPCODE field) once every layout is
 ;; known.
 (defun %parse-instruction-word-layout-form (form width)
-  (destructuring-bind (head name &rest field-forms) form
+  (%definition-bind (head name &rest field-forms) form
     (unless (eq head 'layout)
       (%defmachine-error "instruction-word: expected (layout name (field ...)...), got ~S" form))
     (unless (symbolp name)
@@ -588,9 +588,9 @@ descriptor still being built, before it's registered in *MACHINES* --
       (let ((mem-elements (%descriptor-memory-elements descriptor)))
         (cond
           ((null mem-elements)
-           (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+           (%emulator-usage-error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
           ((> (length mem-elements) 1)
-           (error "Machine ~S: more than one memory element declared (~S) -- ~
+           (%emulator-usage-error "Machine ~S: more than one memory element declared (~S) -- ~
 pass :MEMORY explicitly" (machine-descriptor-name descriptor)
                   (mapcar #'storage-element-name mem-elements)))
           (t (storage-element-name (first mem-elements)))))))
@@ -603,13 +603,13 @@ memoizes below."
   (let ((mem-elements (%descriptor-memory-elements descriptor)))
     (cond
       ((null mem-elements)
-       (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+       (%emulator-usage-error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
       ((null (rest mem-elements))
        (storage-element-cell-width (first mem-elements)))
       (t (let ((widths (remove-duplicates (mapcar #'storage-element-cell-width mem-elements))))
            (if (null (rest widths))
                (first widths)
-               (error "Machine ~S: more than one memory element declared with ~
+               (%emulator-usage-error "Machine ~S: more than one memory element declared with ~
 different cell widths (~{~S~^, ~}) -- pass :MEMORY explicitly"
                       (machine-descriptor-name descriptor)
                       (mapcar (lambda (e) (list (storage-element-name e)
@@ -667,14 +667,14 @@ memoizes below."
   (let ((mem-elements (%descriptor-memory-elements descriptor)))
     (cond
       ((null mem-elements)
-       (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
+       (%emulator-usage-error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
       ((null (rest mem-elements))
        (storage-element-endian (first mem-elements)))
       (t (let ((endians (remove-duplicates (mapcar #'storage-element-endian mem-elements)
                                             :test #'equal)))
            (if (null (rest endians))
                (first endians)
-               (error "Machine ~S: more than one memory element declared with ~
+               (%emulator-usage-error "Machine ~S: more than one memory element declared with ~
 different endianness (~{~S~^, ~}) -- pass :MEMORY explicitly"
                       (machine-descriptor-name descriptor)
                       (mapcar (lambda (e) (list (storage-element-name e)
@@ -702,7 +702,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
 (defun parse-undefined-opcode-clause (form)
-  (destructuring-bind (policy) form
+  (%definition-bind (policy) form
     (unless (member policy '(:fault :nop :trap))
       (%defmachine-error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
     policy))
@@ -846,7 +846,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
 (defun %merge-keyed-clause (parent child)
   "Merge CHILD's (HEAD NAME ...) clause over PARENT's. A memory clause's
 nested (region ...) forms are replaced wholesale when CHILD gives any."
-  (destructuring-bind (head name &rest parent-body) parent
+  (%definition-bind (head name &rest parent-body) parent
     (let* ((child-body (cddr child))
            (regions (if (eq head 'memory)
                         (or (remove-if-not #'%region-form-p child-body)
@@ -953,7 +953,7 @@ instructions are compiled against the parent's" head))
 (defun %define-machine (name parent clauses)
   "Build and register machine NAME. With PARENT, CLAUSES merge over PARENT's
 and the parent's instructions are copied in."
-  (let ((*definition-name* name))
+  (%with-definition (name machine-definition-error)
     (if (null parent)
         (setf (gethash name *machines*) (build-machine-descriptor name clauses))
         (let ((parent-md (or (gethash parent *machines*)
@@ -964,7 +964,7 @@ and the parent's instructions are copied in."
                                  append (mapcar #'%mnemonic-key (rest c))))
                  (cycles (loop for c in clauses when (eq (first c) 'instruction-cycles)
                                append (mapcar (lambda (entry)
-                                                (destructuring-bind (mnemonic n) entry
+                                                (%definition-bind (mnemonic n) entry
                                                   (unless (and (integerp n) (>= n 0))
                                                     (%defmachine-error "instruction-cycles ~S must be a non-negative integer, got ~S"
                                                            mnemonic n))
@@ -993,10 +993,10 @@ and the parent's instructions are copied in."
 
 (defun %parse-machine-name (name-spec)
   "Values NAME and PARENT from a DEFMACHINE name or (NAME (:extends PARENT))."
-  (let ((*definition-name* (if (consp name-spec) (car name-spec) name-spec)))
+  (%with-definition ((if (consp name-spec) (car name-spec) name-spec) machine-definition-error)
     (if (symbolp name-spec)
         (values name-spec nil)
-        (destructuring-bind (name &rest options) name-spec
+        (%definition-bind (name &rest options) name-spec
           (let (parent parent-seen)
             (dolist (option options)
               (unless (and (consp option) (eq (first option) :extends) (= (length option) 2)

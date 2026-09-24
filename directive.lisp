@@ -83,7 +83,7 @@ by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
     (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected one of (set-origin! ~
 ~S), (select-bank! ~S), (reserve ~S) referencing this directive's own parameter"
            action-form (first param-names) (first param-names) (first param-names)))
-  (destructuring-bind (head arg) action-form
+  (%definition-bind (head arg) action-form
     (declare (ignore arg))
     (case head
       (set-origin! (values :set-origin nil))
@@ -97,7 +97,7 @@ SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
 then the variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's
 one-argument shape -- handled separately. An optional trailing :ENDIAN spec
 overrides the machine's endian order. Returns (VALUES :emit width endian)."
-  (destructuring-bind (head width-form values-sym &rest options) action-form
+  (%definition-bind (head width-form values-sym &rest options) action-form
     (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names)
                  (or (null options) (and (eq (first options) :endian) (= (length options) 2))))
       (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S [:endian ORDER])"
@@ -114,7 +114,7 @@ overrides the machine's endian order. Returns (VALUES :emit width endian)."
   (if (eq (first action-form) 'assign) :assign :reassign))
 
 (defun build-directive-descriptor (name params action-form)
-  (let ((*definition-name* name))
+  (%with-definition (name directive-definition-error)
     (multiple-value-bind (arity param-names) (%parse-directive-params params)
       (multiple-value-bind (action width endian)
           (cond
@@ -177,7 +177,7 @@ Registers the resulting DIRECTIVE-DESCRIPTOR under NAME (upcased) in
 to one recognized action (rather than arbitrary Lisp) is what lets the
 assembler compute a directive statement's layout size without evaluating
 anything -- see this file's header comment."
-  (let ((*definition-name* name))
+  (%with-definition (name directive-definition-error)
     (unless (= (length body) 1)
       (%defdirective-error "DEFDIRECTIVE ~S: body must be exactly one action form" name))
     `(progn

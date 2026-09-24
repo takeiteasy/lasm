@@ -1969,7 +1969,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test choice-naming-unregistered-mode-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
