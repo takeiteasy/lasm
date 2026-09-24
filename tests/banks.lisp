@@ -590,3 +590,19 @@ far:    .byte 1
       (fiveam:is (search ".byte" (first-text)))
       (reset m)
       (fiveam:is (not (search ".byte" (first-text)))))))
+
+(fiveam:test debug-step-back-keeps-the-loaded-bank
+  (let* ((a (%bank-assembly "        .org $4000
+        nop
+        nop
+        .byte 1"))
+         (m (make-machine 'bank-asm-machine)))
+    (setf (current-bank m 'romx) 2)
+    (load-program m a)
+    (let ((session (make-debug-session m :assembly a :history 10)))
+      (debug-step session)
+      (debug-step session)
+      (debug-step-back session 2)
+      (fiveam:is (eql 2 (gethash 'romx (machine-loaded-banks m))))
+      (setf (sref m 'pc) #x4002)
+      (fiveam:is (search ".byte" (debug-where-text session :context 1))))))
