@@ -49,6 +49,10 @@ two:    .byte 21, 22
   (assert (= 0 (current-bank m 'romx)))
   (assert (= 11 (bank-peek m 'romx 1 #x4000)))
 
+  ;; A label breakpoint in banked code carries its bank
+  (let ((bp (debug-break (make-debug-session m :assembly assembly) "two")))
+    (assert (= 2 (breakpoint-bank bp))))
+
   (run m)
   (assert (= 2 (current-bank m 'romx)))
   (assert (= 21 (mref m 'ram #x4000)))

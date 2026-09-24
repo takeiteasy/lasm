@@ -387,3 +387,77 @@ here    = bank(*)
 (fiveam:test bank-here-needs-a-pc
   (fiveam:signals unresolved-location
     (eval-expr-constant (%expr "bank(*)"))))
+
+;;; Bank-qualified breakpoints
+
+(defun %bp-session (&optional (mapped 0))
+  (let* ((a (assemble "        .org $3FFF
+        nop
+        .bank 1
+        .org $4000
+near:   nop
+        .bank 2
+        .org $4000
+far:    nop" :machine 'bank-asm-machine))
+         (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (setf (current-bank m 'romx) mapped)
+    (make-debug-session m :assembly a)))
+
+(defun %bp-run-from-entry (session)
+  (setf (sref (debug-session-machine session) 'pc) #x3FFF)
+  (debug-continue session :max-steps 1))
+
+(fiveam:test label-breakpoint-in-a-bank-stops-only-in-that-bank
+  (let ((session (%bp-session 1)))
+    (debug-break session "far")
+    (fiveam:is (eq :max-steps (%bp-run-from-entry session)))
+    (debug-set-bank session 'romx 2)
+    (fiveam:is (eq :breakpoint (%bp-run-from-entry session)))))
+
+(fiveam:test explicit-bank-breakpoint-matches-a-label-breakpoint
+  (let ((session (%bp-session 1)))
+    (fiveam:is (search "Breakpoint 1 at 02:4000" (debug-command session "break 2:$4000")))
+    (fiveam:is (search "1: 02:4000" (debug-command session "info break")))
+    (fiveam:is (eq :max-steps (%bp-run-from-entry session)))
+    (debug-set-bank session 'romx 2)
+    (fiveam:is (eq :breakpoint (%bp-run-from-entry session)))))
+
+(fiveam:test unqualified-breakpoint-stops-in-any-bank
+  (let ((session (%bp-session 1)))
+    (debug-break session #x4000)
+    (fiveam:is (eq :breakpoint (%bp-run-from-entry session)))))
+
+(fiveam:test bank-breakpoint-rejects-bad-targets
+  (let ((session (%bp-session)))
+    (fiveam:is (search "out of range" (debug-command session "break 9:$4000")))
+    (fiveam:is (search "not in a banked region" (debug-command session "break 2:$0100")))
+    (fiveam:is (search "not in bank 1" (debug-command session "break 1:far")))
+    (fiveam:is (search "bad bank" (debug-command session "break z:$4000")))
+    (fiveam:is (null (debug-breakpoints session)))))
+
+(fiveam:test bank-breakpoints-at-one-address-coexist
+  (let ((session (%bp-session)))
+    (debug-break session "near")
+    (debug-break session "far")
+    (fiveam:is (= 2 (length (debug-breakpoints session))))
+    (debug-break session "far")
+    (fiveam:is (= 2 (length (debug-breakpoints session))))))
+
+(fiveam:test delete-by-address-removes-every-bank
+  (let ((session (%bp-session)))
+    (debug-break session "near")
+    (debug-break session "far")
+    (fiveam:is (search "Deleted" (debug-command session "delete 2:$4000")))
+    (fiveam:is (= 1 (length (debug-breakpoints session))))
+    (debug-break session "far")
+    (fiveam:is (search "Deleted" (debug-command session "delete $4000")))
+    (fiveam:is (null (debug-breakpoints session)))))
+
+(fiveam:test until-waits-for-the-bank
+  (let ((session (%bp-session 1)))
+    (fiveam:is (eq :max-steps (progn (setf (sref (debug-session-machine session) 'pc) #x3FFF)
+                                     (debug-continue-to session "far" :max-steps 1))))
+    (debug-set-bank session 'romx 2)
+    (setf (sref (debug-session-machine session) 'pc) #x3FFF)
+    (fiveam:is (eq :until (debug-continue-to session "far" :max-steps 1)))))

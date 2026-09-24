@@ -39,7 +39,9 @@
 (defstruct breakpoint
   (id 0 :type (integer 1))
   (address 0 :type unsigned-byte)
-  (label nil :type (or null string))) ; the name it was set by, if any
+  (label nil :type (or null string))  ; the name it was set by, if any
+  (region nil :type (or null symbol)) ; banked region and bank it stops in;
+  (bank nil :type (or null (integer 0)))) ; NIL stops whichever bank is mapped
 
 (defstruct (debug-session (:constructor %make-debug-session))
   (machine nil :type machine)
@@ -51,7 +53,7 @@
   (addr-digits 4 :type (integer 1))    ; digits for an ADDRESS -- fixed at 4, matching
                                         ; LISTING-TEXT/PRINT-DISASSEMBLY's own address column
 
-  (breakpoints (make-hash-table) :type hash-table) ; address -> breakpoint
+  (breakpoints (make-hash-table :test 'equal) :type hash-table) ; (address . bank) -> breakpoint
   (next-id 1 :type (integer 1))
   (last-x-address nil))         ; so a bare `x` without an address continues from the last one
 
@@ -72,15 +74,25 @@ not on every command."
 
 ;;; Breakpoints
 
-(defun %resolve-breakpoint-address (session where &key scope)
-  "WHERE as an address: an integer as-is, or a label string resolved through
-ASSEMBLY-SYMBOL (listing.lisp, #37) against SESSION's attached ASSEMBLY.
+(defun %resolve-breakpoint-address (session where &key scope bank)
+  "WHERE as (VALUES ADDRESS REGION BANK): an integer as-is, or a label string
+resolved through ASSEMBLY-SYMBOL (listing.lisp, #37) against SESSION's attached
+ASSEMBLY. A label defined under .BANK carries its region and bank; BANK
+qualifies an integer address instead, and must agree with a label's own bank.
 Signals a plain error when SESSION has no ASSEMBLY, when the name is
 unbound, or when it names an assignment rather than a :LABEL -- its value is
 not an address (the #81 ambiguity SYMBOL-INFO's KIND already resolves; a
 bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
   (etypecase where
-    (integer where)
+    (integer
+     (if bank
+         (let ((region (or (%session-banked-region session where)
+                           (error "address ~D is not in a banked region" where))))
+           (unless (< bank (memory-region-banks region))
+             (error "bank ~D is out of range for region ~(~A~) (~D bank~:P)"
+                    bank (memory-region-name region) (memory-region-banks region)))
+           (values where (memory-region-name region) bank))
+         (values where nil nil)))
     (string
      (let ((assembly (debug-session-assembly session)))
        (unless assembly
@@ -91,23 +103,27 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
          (unless (eq (symbol-info-kind info) :label)
            (error "DEBUG-BREAK: ~S is a ~(~A~), not a label -- its value is not an address"
                   where (symbol-info-kind info)))
-         (symbol-info-value info))))))
+         (when (and bank (not (eql bank (symbol-info-bank info))))
+           (error "DEBUG-BREAK: ~S is not in bank ~D" where bank))
+         (values (symbol-info-value info) (symbol-info-region info) (symbol-info-bank info)))))))
 
-(defun debug-break (session where &key scope)
+(defun debug-break (session where &key scope bank)
   "Set a breakpoint at WHERE (an address, or a label name resolved via
-%RESOLVE-BREAKPOINT-ADDRESS) on SESSION. Returns the new BREAKPOINT. Setting
-a second breakpoint at an address that already has one replaces it (same
-id space, but the old entry is gone) rather than stacking duplicates --
-there is only ever one stop per address."
-  (let* ((address (%resolve-breakpoint-address session where :scope scope))
-         (bp (make-breakpoint :id (debug-session-next-id session)
-                               :address address
+%RESOLVE-BREAKPOINT-ADDRESS) on SESSION. A label in a banked region, or an
+address given with BANK, only stops while that bank is mapped. Returns the new
+BREAKPOINT. Setting a second breakpoint at the same address and bank replaces
+it (same id space, but the old entry is gone) rather than stacking
+duplicates."
+  (multiple-value-bind (address region bank)
+      (%resolve-breakpoint-address session where :scope scope :bank bank)
+    (let ((bp (make-breakpoint :id (debug-session-next-id session)
+                               :address address :region region :bank bank
                                :label (and (stringp where) where))))
-    (incf (debug-session-next-id session))
-    (setf (gethash address (debug-session-breakpoints session)) bp)
-    bp))
+      (incf (debug-session-next-id session))
+      (setf (gethash (cons address bank) (debug-session-breakpoints session)) bp)
+      bp)))
 
-(defun debug-unbreak (session id-or-address)
+(defun debug-unbreak (session id-or-address &key bank)
   "Remove a breakpoint from SESSION by its BREAKPOINT-ID or by address.
 Returns T if one was removed, NIL if ID-OR-ADDRESS named none.
 
@@ -117,23 +133,41 @@ what a caller almost always means), falling back to an address match only
 when no breakpoint has that id. Ids and addresses are both plain integers
 with no reserved ranges of their own, so the two CAN collide (breakpoint 1
 happens to sit at address 1) -- id takes priority in that case, matching
-what a human typing a small integer after `delete` almost certainly meant."
+what a human typing a small integer after `delete` almost certainly meant.
+An address match removes every breakpoint at that address, or only the one
+in BANK when given."
   (let ((table (debug-session-breakpoints session))
-        hit)
-    (maphash (lambda (addr bp)
-               (when (eql (breakpoint-id bp) id-or-address)
-                 (setf hit addr)))
-             table)
-    (cond
-      (hit (remhash hit table) t)
-      ((gethash id-or-address table) (remhash id-or-address table) t)
-      (t nil))))
+        hits)
+    (if bank
+        (when (gethash (cons id-or-address bank) table)
+          (setf hits (list (cons id-or-address bank))))
+        (progn
+          (maphash (lambda (key bp)
+                     (when (eql (breakpoint-id bp) id-or-address)
+                       (setf hits (list key))))
+                   table)
+          (unless hits
+            (maphash (lambda (key bp)
+                       (declare (ignore bp))
+                       (when (eql (car key) id-or-address) (cl:push key hits)))
+                     table))))
+    (dolist (key hits) (remhash key table))
+    (and hits t)))
 
 (defun debug-breakpoints (session)
-  "SESSION's live breakpoints, as a list of BREAKPOINT, ascending by address."
+  "SESSION's live breakpoints, as a list of BREAKPOINT, ascending by address
+then bank."
   (let (result)
-    (maphash (lambda (addr bp) (declare (ignore addr)) (cl:push bp result)) (debug-session-breakpoints session))
-    (sort result #'< :key #'breakpoint-address)))
+    (maphash (lambda (key bp) (declare (ignore key)) (cl:push bp result)) (debug-session-breakpoints session))
+    (sort result (lambda (a b)
+                   (or (< (breakpoint-address a) (breakpoint-address b))
+                       (and (= (breakpoint-address a) (breakpoint-address b))
+                            (< (or (breakpoint-bank a) -1) (or (breakpoint-bank b) -1))))))))
+
+(defun %mapped-bank (session address)
+  "The bank currently mapped at ADDRESS, or NIL outside a banked region."
+  (let ((region (%session-banked-region session address)))
+    (and region (current-bank (debug-session-machine session) (memory-region-name region)))))
 
 ;;; Execution
 ;;;
@@ -197,16 +231,27 @@ re-triggering immediately -- the same behaviour gdb's `continue` has when
 already stopped on a breakpoint."
   (let ((breakpoints (debug-session-breakpoints session)))
     (%run-until session :breakpoint
-                (lambda () (nth-value 1 (gethash (%pc session) breakpoints)))
+                (lambda ()
+                  (let ((pc (%pc session)))
+                    (or (nth-value 1 (gethash (cons pc nil) breakpoints))
+                        (let ((bank (%mapped-bank session pc)))
+                          (and bank (nth-value 1 (gethash (cons pc bank) breakpoints)))))))
                 :max-steps max-steps)))
 
-(defun debug-continue-to (session where &key scope (max-steps 10000))
+(defun debug-continue-to (session where &key scope bank (max-steps 10000))
   "Like DEBUG-CONTINUE, but stops at WHERE (an address or label,
 %RESOLVE-BREAKPOINT-ADDRESS) regardless of whether it has a breakpoint set
--- a one-shot \"run until here\". Returns (VALUES REASON STEPS [CONDITION])
-with REASON :UNTIL in place of DEBUG-CONTINUE's :BREAKPOINT."
-  (let ((address (%resolve-breakpoint-address session where :scope scope)))
-    (%run-until session :until (lambda () (= (%pc session) address)) :max-steps max-steps)))
+-- a one-shot \"run until here\". A banked target only stops while its bank
+is mapped. Returns (VALUES REASON STEPS [CONDITION]) with REASON :UNTIL in
+place of DEBUG-CONTINUE's :BREAKPOINT."
+  (multiple-value-bind (address region bank)
+      (%resolve-breakpoint-address session where :scope scope :bank bank)
+    (declare (ignore region))
+    (%run-until session :until
+                (lambda ()
+                  (and (= (%pc session) address)
+                       (or (null bank) (eql bank (%mapped-bank session address)))))
+                :max-steps max-steps)))
 
 ;;; Inspection (read-only)
 ;;;
@@ -340,6 +385,7 @@ NIL."
   (let* ((session-assembly (debug-session-assembly session))
          (machine (debug-session-machine session))
          (pc (%pc session))
+         ;; TODO: labels from every bank are substituted, not just the mapped one (#234)
          (lines (disassemble-memory machine :memory (debug-session-memory session)
                                              :start pc :count context
                                              :symbol-info (and session-assembly
@@ -381,9 +427,19 @@ LASM's own lexer does -- or NIL if TEXT does not parse as one."
       (t (ignore-errors (parse-integer text))))))
 
 (defun %where-arg (text)
-  "TEXT as a breakpoint/continue-to target: an integer address if it parses
-as one (%PARSE-INTEGER-MAYBE), otherwise the raw string as a label name."
-  (or (%parse-integer-maybe text) text))
+  "TEXT as a breakpoint/continue-to target, as (VALUES WHERE BANK): an integer
+address if it parses as one (%PARSE-INTEGER-MAYBE), otherwise the raw string
+as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
+  (let* ((colon (position #\: text))
+         (bank (and colon (or (%parse-integer-maybe (subseq text 0 colon))
+                              (error "bad bank ~S" (subseq text 0 colon)))))
+         (target (string-trim " " (if colon (subseq text (1+ colon)) text))))
+    (values (or (%parse-integer-maybe target) target) bank)))
+
+(defun %breakpoint-address-text (session address bank)
+  (if bank
+      (format nil "~2,'0D:~V,'0X" bank (debug-session-addr-digits session) address)
+      (format nil "~V,'0X" (debug-session-addr-digits session) address)))
 
 (defun %split-command (line)
   (let* ((line (string-trim " 	" line))
@@ -395,14 +451,16 @@ as one (%PARSE-INTEGER-MAYBE), otherwise the raw string as a label name."
 (defparameter *debug-help-text*
   "Commands:
   break ADDR|LABEL   set a breakpoint
+  break BANK:ADDR    set a breakpoint that only stops while that bank is mapped
   delete ID|ADDR     remove a breakpoint (by id first, falling back to address)
+  delete BANK:ADDR   remove the breakpoint at ADDR in one bank
   info break         list breakpoints
   info reg           dump registers/flags/stacks
   info banks         list banked regions and their current bank
   info sym           list symbols (requires an attached assembly)
   step [N]           execute N instructions (default 1)
   continue           run until a breakpoint, trap, or decode failure
-  until ADDR|LABEL   run until ADDR/LABEL is reached
+  until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank)
   print NAME         print a register, register alias or flag's value
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
@@ -431,14 +489,16 @@ this call."
                   ((string-equal cmd "break")
                    (if (zerop (length rest))
                        "break: missing address or label"
-                       (let ((bp (debug-break session (%where-arg rest))))
-                         (format nil "Breakpoint ~D at ~V,'0X~%" (breakpoint-id bp)
-                                 (debug-session-addr-digits session) (breakpoint-address bp)))))
+                       (multiple-value-bind (where bank) (%where-arg rest)
+                         (let ((bp (debug-break session where :bank bank)))
+                           (format nil "Breakpoint ~D at ~A~%" (breakpoint-id bp)
+                                   (%breakpoint-address-text session (breakpoint-address bp)
+                                                             (breakpoint-bank bp)))))))
                   ((string-equal cmd "delete")
                    (if (zerop (length rest))
                        "delete: missing id or address"
-                       (let ((target (%parse-integer-maybe rest)))
-                         (if (and target (debug-unbreak session target))
+                       (multiple-value-bind (target bank) (%where-arg rest)
+                         (if (and (integerp target) (debug-unbreak session target :bank bank))
                              (format nil "Deleted breakpoint at/id ~A~%" rest)
                              "delete: no such breakpoint"))))
                   ((string-equal cmd "info")
@@ -448,8 +508,9 @@ this call."
                         (if bps
                             (with-output-to-string (s)
                               (dolist (bp bps)
-                                (format s "~D: ~V,'0X~@[ (~A)~]~%" (breakpoint-id bp)
-                                        (debug-session-addr-digits session) (breakpoint-address bp)
+                                (format s "~D: ~A~@[ (~A)~]~%" (breakpoint-id bp)
+                                        (%breakpoint-address-text session (breakpoint-address bp)
+                                                                  (breakpoint-bank bp))
                                         (breakpoint-label bp))))
                             (format nil "No breakpoints.~%"))))
                      ((string-equal rest "reg") (debug-state-text session))
@@ -473,7 +534,8 @@ this call."
                    (if (zerop (length rest))
                        "until: missing address or label"
                        (multiple-value-bind (reason steps condition)
-                           (debug-continue-to session (%where-arg rest))
+                           (multiple-value-bind (where bank) (%where-arg rest)
+                             (debug-continue-to session where :bank bank))
                          (format nil "Stopped: ~(~A~)  steps=~D  pc=~V,'0X~%~@[~A~%~]" reason steps
                                  (debug-session-addr-digits session) (%pc session)
                                  (and (eq reason :fault) condition)))))

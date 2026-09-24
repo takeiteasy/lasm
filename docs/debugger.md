@@ -48,8 +48,8 @@ creation, not re-resolved on every command.
 ## Breakpoints
 
 ```lisp
-(debug-break session where &key scope)   ; => breakpoint
-(debug-unbreak session id-or-address)    ; => t or nil
+(debug-break session where &key scope bank) ; => breakpoint
+(debug-unbreak session id-or-address &key bank) ; => t or nil
 (debug-breakpoints session)              ; => list of breakpoint, by address
 ```
 
@@ -68,14 +68,20 @@ Breaking on a label:
   rather than reintroducing it).
 
 Setting a second breakpoint at an address that already has one replaces it —
-there is only ever one stop per address.
+there is only ever one stop per address and bank.
+
+A label defined under [`.bank`](banked-output.md#bank) carries its bank, and
+`:bank n` qualifies an integer address the same way. A bank-qualified
+breakpoint only stops while that bank is mapped; an unqualified one stops
+whichever bank is mapped. `:bank` must name a bank of the region containing the
+address, and must agree with a label's own bank.
 
 ## Step and continue
 
 ```lisp
 (debug-step session &optional n)                     ; => (values reason steps)
 (debug-continue session &key max-steps)               ; => (values reason steps [condition])
-(debug-continue-to session where &key scope max-steps) ; => (values reason steps [condition])
+(debug-continue-to session where &key scope bank max-steps) ; => (values reason steps [condition])
 ```
 
 All three are built directly on the emulator's existing loop:
@@ -162,8 +168,8 @@ one. `debug-memory-text :bank n` dumps bank `n` of the region containing
 the address is not in a banked region or the range runs past its end.
 
 `where` finds the source line for a PC in a banked region from the mapped
-bank's [listing entries](banked-output.md#listings-and-symbols). A label
-breakpoint stops whichever bank is mapped when the address executes.
+bank's [listing entries](banked-output.md#listings-and-symbols).
+[Breakpoints](#breakpoints) and `until` on banked labels wait for their bank.
 
 ## Command dispatcher and REPL
 
@@ -184,14 +190,16 @@ Commands:
 | Command | Effect |
 |---|---|
 | `break ADDR\|LABEL` | set a breakpoint |
-| `delete ID\|ADDR` | remove a breakpoint |
+| `break BANK:ADDR` | set a breakpoint that only stops while that bank is mapped |
+| `delete ID\|ADDR` | remove a breakpoint (every bank at an address) |
+| `delete BANK:ADDR` | remove the breakpoint at an address in one bank |
 | `info break` | list breakpoints |
 | `info reg` | dump registers/flags/stacks |
 | `info banks` | list banked regions and their current bank |
 | `info sym` | list symbols (needs an attached assembly) |
 | `step [N]` | execute N instructions (default 1) |
 | `continue` | run until a breakpoint, trap, or decode failure |
-| `until ADDR\|LABEL` | run until a target is reached |
+| `until ADDR\|LABEL` | run until a target is reached (`BANK:ADDR` waits for a bank) |
 | `print NAME` | print a register, register alias or flag's value |
 | `x/N ADDR` | dump N memory cells starting at ADDR |
 | `x/N BANK:ADDR` | dump N cells of a bank of the banked region at ADDR |
@@ -199,6 +207,8 @@ Commands:
 | `where` | show pc, current instruction, and source context |
 | `help` | list commands |
 | `quit` | end the session |
+
+`BANK` is a decimal bank number; `info break` shows banked entries as `BB:AAAA`.
 
 An address argument accepts `0x`/`$`/`0b` prefixes (hex/hex/binary), the same
 number formats LASM's own lexer understands, or a plain label name when an
