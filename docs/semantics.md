@@ -36,7 +36,7 @@ access functions; see [Machine model](machine-model.md) and
 `mref` defaults to the sole memory element in semantics; name it when there
 are several. Stack operators default to the sole fixed stack, or the sole
 register-backed stack pointer if there is no fixed stack. An ambiguous
-default signals during macroexpansion. Fixed-stack inspection does not
+default signals `instruction-definition-error` during macroexpansion. Fixed-stack inspection does not
 operate on a register-backed stack pointer.[^stack]
 
 `idle` does not stop the current semantics body. `trap` signals a condition.

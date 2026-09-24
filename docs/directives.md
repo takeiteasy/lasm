@@ -110,6 +110,7 @@ assignment signals `assembly-error`.
 
 ## Conditions
 
+A malformed `defdirective` signals `directive-definition-error`.
 `assembly-error` covers invalid arity, symbols, values, addresses, or
 layout dependencies. `unresolved-label` covers a data expression naming
 a label absent from the completed program. See [Diagnostics](diagnostics.md).

@@ -62,19 +62,19 @@
 ;; from the expansion's body -- those need EVAL, not just MACROEXPAND.
 
 (fiveam:test defdirective-rejects-multi-form-body
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (macroexpand '(defdirective ".bad" (x) (set-origin! x) (reserve x)))))
 
 (fiveam:test defdirective-rejects-unknown-action-head
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (eval '(defdirective ".bad" (x) (frobnicate x)))))
 
 (fiveam:test defdirective-rejects-action-referencing-wrong-parameter
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (eval '(defdirective ".bad" (x) (set-origin! y)))))
 
 (fiveam:test defdirective-rejects-malformed-params
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (eval '(defdirective ".bad" (x y z) (set-origin! x)))))
 
 (fiveam:test defdirective-rejects-malformed-rest-params
@@ -82,7 +82,7 @@
   ;; even though it's the same length as .EQU's legal (x y). Param-list
   ;; checks run inside BUILD-DIRECTIVE-DESCRIPTOR (called from the
   ;; expansion's body), so this needs EVAL, not just MACROEXPAND.
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (eval '(defdirective ".bad" (&rest x y) (emit 1 x)))))
 
 (fiveam:test defdirective-accepts-two-fixed-params-for-assign
@@ -93,7 +93,7 @@
   (fiveam:is (equal '(:fixed 2) (directive-descriptor-arity (find-directive-descriptor ".test-assign")))))
 
 (fiveam:test defdirective-rejects-assign-referencing-wrong-parameters
-  (fiveam:signals error
+  (fiveam:signals directive-definition-error
     (eval '(defdirective ".bad" (x y) (assign y x)))))
 
 (fiveam:test defdirective-registers-a-new-directive

@@ -263,7 +263,7 @@ at the start of each test that reads it.")
 ;;; DEFMACHINE-time namespace rejection
 
 (fiveam:test defmachine-rejects-duplicate-device-name
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine device-dup-name-test
              (register pc :width 8)
              (memory ram :width 8 :addr-width 8)
@@ -271,14 +271,14 @@ at the start of each test that reads it.")
              (device dup)))))
 
 (fiveam:test defmachine-rejects-device-name-colliding-with-register
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine device-register-collision-test
              (register pc :width 8)
              (memory ram :width 8 :addr-width 8)
              (device pc)))))
 
 (fiveam:test defmachine-rejects-device-name-colliding-with-region
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine device-region-collision-test
              (register pc :width 8)
              (memory ram :width 8 :addr-width 8 (region io #x00 #x0F :kind :device))

@@ -112,7 +112,7 @@ an EQ check would spuriously reject a mode reclaiming its own suffix."
     (when suffix
       (let ((existing (find-mode-by-suffix suffix)))
         (when (and existing (not (eq (mode-descriptor-name existing) name)))
-          (error "DEFMODE ~S: suffix ~S is already used by mode ~S"
+          (%defmode-error "DEFMODE ~S: suffix ~S is already used by mode ~S"
                  name suffix (mode-descriptor-name existing)))))))
 
 ;;; DEFMODE pattern parsing
@@ -163,15 +163,15 @@ those off first)."
                                              (signed nil signed-given-p)) el
                    (declare (ignore expr))
                    (when (and register (not (symbolp register)))
-                     (error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
+                     (%defmode-error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
                    (when (and (member :register (rest el)) (null register))
-                     (error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
+                     (%defmode-error "Malformed DEFMODE expression hole ~S -- :REGISTER needs a register name" el))
                    (when (and relative-given-p (not (member relative '(nil t))))
-                     (error "Malformed DEFMODE expression hole ~S -- :RELATIVE must be T or NIL" el))
+                     (%defmode-error "Malformed DEFMODE expression hole ~S -- :RELATIVE must be T or NIL" el))
                    (when (and signed-given-p (not (member signed '(nil t))))
-                     (error "Malformed DEFMODE expression hole ~S -- :SIGNED must be T or NIL" el))
+                     (%defmode-error "Malformed DEFMODE expression hole ~S -- :SIGNED must be T or NIL" el))
                    (when (and relative (eq signed nil) signed-given-p)
-                     (error "DEFMODE expression hole ~S: :RELATIVE T implies :SIGNED T" el))
+                     (%defmode-error "DEFMODE expression hole ~S: :RELATIVE T implies :SIGNED T" el))
                    (append (list :expr register)
                            (when relative-given-p (list :relative relative))
                            (when signed-given-p (list :signed signed)))))
@@ -180,12 +180,12 @@ those off first)."
                         (alternatives (%one-of-alternatives el)))
                     (unless (and (>= (length alternatives) 2)
                                  (every #'symbolp alternatives))
-                      (error "Malformed DEFMODE pattern element ~S -- (ONE-OF ...) needs at ~
+                      (%defmode-error "Malformed DEFMODE pattern element ~S -- (ONE-OF ...) needs at ~
 least two mode-name symbols" el))
                     (if slot
                         (list* :one-of :named slot alternatives)
                         (list* :one-of alternatives))))
-                (t (error "Malformed DEFMODE pattern element ~S -- expected a string ~
+                (t (%defmode-error "Malformed DEFMODE pattern element ~S -- expected a string ~
 literal, the symbol EXPR, or (ONE-OF mode...)" el))))
             elements))
 
@@ -285,7 +285,7 @@ later, unrelated call."
   (defun %mode-hole-count (mode &optional seen)
     (let ((name (mode-descriptor-name mode)))
       (when (member name seen)
-        (error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
+        (%defmode-error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
                name (reverse seen) name))
       (%pattern-hole-count (mode-descriptor-pattern mode) (cons name seen))))
 
@@ -322,7 +322,7 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
                        (getf options :signed)
                        (mode-descriptor-signedp mode))))
       (when (and relative (member :signed options) (not signed))
-        (error "DEFMODE ~S: a relative EXPR hole cannot be unsigned"
+        (%defmode-error "DEFMODE ~S: a relative EXPR hole cannot be unsigned"
                (mode-descriptor-name mode)))
       (ecase attribute
         (:relative relative)
@@ -412,36 +412,36 @@ or wrapper options."
          (let* ((alt-names (%one-of-alternatives element))
                (alts (mapcar #'find-mode-descriptor alt-names)))
           (when (< (length alts) 2)
-            (error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
+            (%defmode-error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
                    name alt-names))
           (dolist (alt alts)
             (when (mode-descriptor-varyingp alt)
               (let ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
                 (when (rest varying)
-                  (error "DEFMODE ~S: ONE-OF alternative ~S has more than one ONE-OF whose ~
+                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has more than one ONE-OF whose ~
 alternatives disagree on hole count -- a nested alternative may have only one"
                          name (mode-descriptor-name alt)))
                 (when (some (lambda (option) (zerop (cdr option)))
                             (%one-of-element-options (first varying)))
-                  (error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
+                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
 alternative that has no operand hole"
                          name (mode-descriptor-name alt)))
                 (when (or (mode-descriptor-width alt) (mode-descriptor-signedp alt)
                           (mode-descriptor-relativep alt) (mode-descriptor-suffix alt)
                           (mode-descriptor-strictp alt))
-                  (error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF, so it cannot ~
+                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF, so it cannot ~
 declare :WIDTH, :SIGNED, :RELATIVE, :SUFFIX or :STRICT -- declare them on its holes or inner ~
 alternatives instead"
                          name (mode-descriptor-name alt)))))
             (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
-              (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
 alternative declares :SIGNED T or :RELATIVE T -- only the outermost ONE-OF a hole belongs ~
 to keeps its CHOICES entry, so a nested :SIGNED/:RELATIVE can never be recovered at decode ~
 time; give ~S itself :SIGNED T or :RELATIVE T instead, or move the alternative up to this ~
 ONE-OF directly"
                      name (mode-descriptor-name alt) (mode-descriptor-name alt)))
             (when (%pattern-nested-one-of-width-p (mode-descriptor-pattern alt))
-              (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
 alternative declares :WIDTH -- only the outermost ONE-OF a hole belongs to keeps its ~
 CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S itself ~
 :WIDTH instead, or move the :WIDTH alternative up to this ONE-OF directly"
@@ -450,7 +450,7 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
                 do (dolist (other later)
                      (when (and (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
                                 (not (and (mode-descriptor-suffix alt) (mode-descriptor-suffix other))))
-                       (error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
+                       (%defmode-error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
 -- nothing could ever choose between them (give both a :SUFFIX to select by prefix)"
                               name (mode-descriptor-name alt) (mode-descriptor-name other)))))))))
 
@@ -535,28 +535,29 @@ a mode with no varying :ONE-OF element."
       (values (reduce #'min counts) (reduce #'max counts))))
 
   (defun build-mode-descriptor (name body)
-    (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
-      (when (null pattern-elements)
-        (error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
-      (let ((pattern (%parse-mode-pattern pattern-elements)))
-        (%check-one-of-elements! name pattern)
-        ;; A literal-only mode is useful as a fixed alternative in a ONE-OF.
-        ;; It contributes no operand value; the enclosing instruction can
-        ;; attach its encoding with a named choice slot.
-        (destructuring-bind (&key width relative signed suffix strict) options
-          (when (and relative (not (eq signed t)) (member :signed options))
-            (error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
+  (let ((*definition-name* name))
+      (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
+        (when (null pattern-elements)
+          (%defmode-error "DEFMODE ~S: pattern must include at least one EXPR hole" name))
+        (let ((pattern (%parse-mode-pattern pattern-elements)))
+          (%check-one-of-elements! name pattern)
+          ;; A literal-only mode is useful as a fixed alternative in a ONE-OF.
+          ;; It contributes no operand value; the enclosing instruction can
+          ;; attach its encoding with a named choice slot.
+          (destructuring-bind (&key width relative signed suffix strict) options
+            (when (and relative (not (eq signed t)) (member :signed options))
+              (%defmode-error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
-          (%check-suffix-collision name suffix)
-          (let ((descriptor
-                  (make-mode-descriptor :name name :pattern pattern :width width
-                                        :relativep relative :signedp (or relative signed)
-                                        :suffix suffix :strictp strict
-                                        :varyingp (and (%pattern-varying-one-of-element pattern) t))))
-            (dolist (element pattern)
-              (when (eq (first element) :expr)
-                (%expr-hole-attribute element descriptor :signed)))
-            descriptor))))))
+            (%check-suffix-collision name suffix)
+            (let ((descriptor
+                    (make-mode-descriptor :name name :pattern pattern :width width
+                                          :relativep relative :signedp (or relative signed)
+                                          :suffix suffix :strictp strict
+                                          :varyingp (and (%pattern-varying-one-of-element pattern) t))))
+              (dolist (element pattern)
+                (when (eq (first element) :expr)
+                  (%expr-hole-attribute element descriptor :signed)))
+              descriptor)))))))
 
 (defmacro defmode (name &body pattern)
   "Define a mode from literal tokens, EXPR holes, and ONE-OF alternatives.

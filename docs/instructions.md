@@ -25,8 +25,8 @@ set and [`modes.lisp`](../examples/modes.lisp) for multiple modes.
 
 `MACHINE` and `MODE` must already be declared. An instruction with no
 `(modes ...)` accepts no operand. Each top-level clause appears at most
-once. Invalid clauses and missing required fields fail during
-macroexpansion.[^registration]
+once. Invalid clauses and missing required fields signal
+`instruction-definition-error` during macroexpansion.[^registration]
 
 | Clause | Purpose |
 | --- | --- |

@@ -85,7 +85,7 @@
             (case (length spec)
               (2 (list (first spec) nil (second spec)))
               (3 (list (first spec) (second spec) (third spec)))
-              (t (error "Malformed comment-styles entry ~S" spec))))
+              (t (%deflexer-error "Malformed comment-styles entry ~S" spec))))
           specs))
 
 (defun parse-number-format-clause (clause)
@@ -102,7 +102,7 @@
   ;; base class; the string lists additional allowed characters.
   (destructuring-bind (class extra) args
     (unless (eq class :alnum)
-      (error "Unsupported ident-chars class ~S (only :alnum is implemented)" class))
+      (%deflexer-error "Unsupported ident-chars class ~S (only :alnum is implemented)" class))
     extra))
 
 ;; Fixed punctuator table, checked in this order (two-char operators before
@@ -136,88 +136,89 @@
     (mapcar (lambda (entry)
               (unless (and (consp entry) (= 2 (length entry))
                            (member (second entry) *function-operator-keywords*))
-                (error "DEFLEXER ~S: function-operators entry ~S must be (spelling ~{~S~^ | ~})"
+                (%deflexer-error "DEFLEXER ~S: function-operators entry ~S must be (spelling ~{~S~^ | ~})"
                        name entry *function-operator-keywords*))
               (when (member (first entry) seen :test #'equalp)
-                (error "DEFLEXER ~S: duplicate function operator ~S" name (first entry)))
+                (%deflexer-error "DEFLEXER ~S: duplicate function operator ~S" name (first entry)))
               (cl:push (first entry) seen)
               (cons (first entry) (second entry)))
             entries)))
 
 (defun build-lexer-descriptor (name clauses)
-  (let (comment-styles number-formats label-suffix local-label-prefix
-        string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
-        hole-prefix-separator function-operators
-        location-counter location-counter-clause-p)
-    (dolist (clause clauses)
-      (case (first clause)
-        (comment-styles (setf comment-styles (parse-comment-styles-clause (rest clause))))
-        (number-formats (setf number-formats (mapcar #'parse-number-format-clause (rest clause))))
-        (label-suffix (setf label-suffix (second clause)))
-        (local-label-prefix (setf local-label-prefix (second clause)))
-        (string-delim (setf string-delim (second clause)))
-        (ident-chars (setf ident-extra-chars (parse-ident-chars-clause (rest clause))))
-        (line-continuation (setf line-continuation (second clause)))
-        (mode-suffix-separator (setf mode-suffix-separator (second clause)))
-        (hole-prefix-separator (setf hole-prefix-separator (second clause)))
-        (function-operators (setf function-operators (parse-function-operators-clause name (rest clause))))
-        (location-counter
-         (setf location-counter-clause-p t location-counter (second clause))
-         (unless (= 2 (length clause))
-           (error "DEFLEXER ~S: location-counter expects one spelling" name)))
-        (t (error "Unknown DEFLEXER clause head ~S in ~S" (first clause) clause))))
-    ;; MODE-SUFFIX-SEPARATOR must already lex as part of an identifier, or
-    ;; "lda.w" would split into two tokens at the lexer level and never
-    ;; reach the parser as one run for %SPLIT-MNEMONIC-SUFFIX to split --
-    ;; failing loudly here beats a baffling "no addressing mode matches this
-    ;; operand" from a mnemonic no one intended to look dotted.
-    (when (and mode-suffix-separator
-               (notevery (lambda (c) (find c ident-extra-chars)) mode-suffix-separator))
-      (error "DEFLEXER ~S: mode-suffix-separator ~S must consist only of ~
+  (let ((*definition-name* name))
+    (let (comment-styles number-formats label-suffix local-label-prefix
+          string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
+          hole-prefix-separator function-operators
+          location-counter location-counter-clause-p)
+      (dolist (clause clauses)
+        (case (first clause)
+          (comment-styles (setf comment-styles (parse-comment-styles-clause (rest clause))))
+          (number-formats (setf number-formats (mapcar #'parse-number-format-clause (rest clause))))
+          (label-suffix (setf label-suffix (second clause)))
+          (local-label-prefix (setf local-label-prefix (second clause)))
+          (string-delim (setf string-delim (second clause)))
+          (ident-chars (setf ident-extra-chars (parse-ident-chars-clause (rest clause))))
+          (line-continuation (setf line-continuation (second clause)))
+          (mode-suffix-separator (setf mode-suffix-separator (second clause)))
+          (hole-prefix-separator (setf hole-prefix-separator (second clause)))
+          (function-operators (setf function-operators (parse-function-operators-clause name (rest clause))))
+          (location-counter
+           (setf location-counter-clause-p t location-counter (second clause))
+           (unless (= 2 (length clause))
+             (%deflexer-error "DEFLEXER ~S: location-counter expects one spelling" name)))
+          (t (%deflexer-error "Unknown DEFLEXER clause head ~S in ~S" (first clause) clause))))
+      ;; MODE-SUFFIX-SEPARATOR must already lex as part of an identifier, or
+      ;; "lda.w" would split into two tokens at the lexer level and never
+      ;; reach the parser as one run for %SPLIT-MNEMONIC-SUFFIX to split --
+      ;; failing loudly here beats a baffling "no addressing mode matches this
+      ;; operand" from a mnemonic no one intended to look dotted.
+      (when (and mode-suffix-separator
+                 (notevery (lambda (c) (find c ident-extra-chars)) mode-suffix-separator))
+        (%deflexer-error "DEFLEXER ~S: mode-suffix-separator ~S must consist only of ~
 characters already listed in ident-chars" name mode-suffix-separator))
-    (when hole-prefix-separator
-      (unless (and (stringp hole-prefix-separator) (plusp (length hole-prefix-separator))
-                   (notany (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)
-                                           (member c '(#\Space #\Tab #\Newline))))
-                           hole-prefix-separator)
-                   (or (equal hole-prefix-separator label-suffix)
-                       (find hole-prefix-separator '("#" "=") :test #'string=)))
-        (error "DEFLEXER ~S: hole-prefix-separator ~S must be the label-suffix, \"#\" or \"=\"" name hole-prefix-separator)))
-    (dolist (entry function-operators)
-      (let ((spelling (car entry)))
-        (unless (and (stringp spelling) (plusp (length spelling))
-                     (or (alpha-char-p (char spelling 0))
-                         (find (char spelling 0) ident-extra-chars))
-                     (every (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)))
-                            spelling))
-          (error "DEFLEXER ~S: function operator ~S must be a valid identifier" name spelling))))
-    (when (find #\Null ident-extra-chars)
-      (error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
-    (when location-counter-clause-p
-      (unless (and (stringp location-counter) (plusp (length location-counter))
-                   (every (lambda (c) (and (graphic-char-p c) (not (alphanumericp c))))
-                          location-counter)
-                   (notany (lambda (entry)
-                             (and (<= (length location-counter) (length (car entry)))
-                                  (string= location-counter (car entry)
-                                           :end2 (length location-counter))))
-                           *punctuators*)
-                   (not (equal location-counter label-suffix))
-                   (not (equal location-counter string-delim))
-                   (not (equal location-counter line-continuation))
-                   (not (find location-counter comment-styles :key #'first :test #'equal)))
-        (error "DEFLEXER ~S: invalid location-counter spelling ~S" name location-counter)))
-    (make-lexer-descriptor :name name :comment-styles comment-styles
-                            :number-formats number-formats
-                            :label-suffix label-suffix
-                            :local-label-prefix local-label-prefix
-                            :string-delim string-delim
-                            :ident-extra-chars ident-extra-chars
-                            :line-continuation line-continuation
-                            :location-counter location-counter
-                            :function-operators function-operators
-                            :mode-suffix-separator mode-suffix-separator
-                            :hole-prefix-separator hole-prefix-separator)))
+      (when hole-prefix-separator
+        (unless (and (stringp hole-prefix-separator) (plusp (length hole-prefix-separator))
+                     (notany (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)
+                                             (member c '(#\Space #\Tab #\Newline))))
+                             hole-prefix-separator)
+                     (or (equal hole-prefix-separator label-suffix)
+                         (find hole-prefix-separator '("#" "=") :test #'string=)))
+          (%deflexer-error "DEFLEXER ~S: hole-prefix-separator ~S must be the label-suffix, \"#\" or \"=\"" name hole-prefix-separator)))
+      (dolist (entry function-operators)
+        (let ((spelling (car entry)))
+          (unless (and (stringp spelling) (plusp (length spelling))
+                       (or (alpha-char-p (char spelling 0))
+                           (find (char spelling 0) ident-extra-chars))
+                       (every (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)))
+                              spelling))
+            (%deflexer-error "DEFLEXER ~S: function operator ~S must be a valid identifier" name spelling))))
+      (when (find #\Null ident-extra-chars)
+        (%deflexer-error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
+      (when location-counter-clause-p
+        (unless (and (stringp location-counter) (plusp (length location-counter))
+                     (every (lambda (c) (and (graphic-char-p c) (not (alphanumericp c))))
+                            location-counter)
+                     (notany (lambda (entry)
+                               (and (<= (length location-counter) (length (car entry)))
+                                    (string= location-counter (car entry)
+                                             :end2 (length location-counter))))
+                             *punctuators*)
+                     (not (equal location-counter label-suffix))
+                     (not (equal location-counter string-delim))
+                     (not (equal location-counter line-continuation))
+                     (not (find location-counter comment-styles :key #'first :test #'equal)))
+          (%deflexer-error "DEFLEXER ~S: invalid location-counter spelling ~S" name location-counter)))
+      (make-lexer-descriptor :name name :comment-styles comment-styles
+                              :number-formats number-formats
+                              :label-suffix label-suffix
+                              :local-label-prefix local-label-prefix
+                              :string-delim string-delim
+                              :ident-extra-chars ident-extra-chars
+                              :line-continuation line-continuation
+                              :location-counter location-counter
+                              :function-operators function-operators
+                              :mode-suffix-separator mode-suffix-separator
+                              :hole-prefix-separator hole-prefix-separator))))
 
 (defmacro deflexer (name &body clauses)
   "Define a surface syntax named NAME from CLAUSES, each one of:

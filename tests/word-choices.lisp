@@ -134,7 +134,7 @@
 
 (fiveam:test named-slot-choice-case-rejects-another-slots-or-unknown-key
   (dolist (key '(independent-reg missing-choice))
-    (fiveam:signals error
+    (fiveam:signals instruction-definition-error
       (eval `(definstruction fixed-choice-machine invalid-slot-choice
                (modes fixed-role-pair)
                (encoding
@@ -511,7 +511,7 @@
       (setf (symbol-function '%check-opcode-decodable!) original))))
 
 (fiveam:test aliases-cannot-change-the-size-of-extra-holes
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction independent-choice-machine invalid
              (modes indexed-alias-mode)
              (encoding (opcode 5)
@@ -691,7 +691,7 @@
   (fiveam:is (string= "pick rb:$3" (%prefix-round-trip "pick rb:3"))))
 
 (fiveam:test hole-prefix-duplicate-variant-suffix-rejected
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1
      '(definstruction prefix-machine dupsfx
        (modes prefix-imm)
@@ -706,7 +706,7 @@
 (defmode shadow-pick (one-of shadow-alt-a shadow-alt-b))
 
 (fiveam:test hole-prefix-variant-suffix-shadowed-by-alternative-rejected
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1
      '(definstruction prefix-machine shadowed
        (modes shadow-pick)

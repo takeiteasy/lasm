@@ -67,7 +67,7 @@ list of the parameter symbols in order -- checked for &REST first since
      (values '(:fixed 1) params))
     ((= (length params) 2)
      (values '(:fixed 2) params))
-    (t (error "Malformed DEFDIRECTIVE parameter list ~S -- expected (name), ~
+    (t (%defdirective-error "Malformed DEFDIRECTIVE parameter list ~S -- expected (name), ~
 (name value), or (&rest name)" params))))
 
 (defun %parse-directive-action (action-form param-names)
@@ -80,7 +80,7 @@ Returns (VALUES action width). Handles the one-argument actions
 by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
   (unless (and (consp action-form) (= (length action-form) 2)
                (equal (rest action-form) param-names))
-    (error "Malformed DEFDIRECTIVE action ~S -- expected one of (set-origin! ~
+    (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected one of (set-origin! ~
 ~S), (select-bank! ~S), (reserve ~S) referencing this directive's own parameter"
            action-form (first param-names) (first param-names) (first param-names)))
   (destructuring-bind (head arg) action-form
@@ -89,7 +89,7 @@ by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
       (set-origin! (values :set-origin nil))
       (select-bank! (values :select-bank nil))
       (reserve (values :reserve nil))
-      (t (error "Unknown DEFDIRECTIVE action head ~S -- expected SET-ORIGIN!, ~
+      (t (%defdirective-error "Unknown DEFDIRECTIVE action head ~S -- expected SET-ORIGIN!, ~
 SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
 
 (defun %parse-emit-action (action-form param-names)
@@ -100,7 +100,7 @@ overrides the machine's endian order. Returns (VALUES :emit width endian)."
   (destructuring-bind (head width-form values-sym &rest options) action-form
     (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names)
                  (or (null options) (and (eq (first options) :endian) (= (length options) 2))))
-      (error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S [:endian ORDER])"
+      (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S [:endian ORDER])"
              action-form (first param-names)))
     (values :emit width-form
             (and options (%check-endian (second options) (first param-names))))))
@@ -109,21 +109,22 @@ overrides the machine's endian order. Returns (VALUES :emit width endian)."
   "Validate ASSIGN or REASSIGN with the directive's two parameters, in order."
   (unless (and (consp action-form) (member (first action-form) '(assign reassign))
                (equal (rest action-form) param-names))
-    (error "Malformed DEFDIRECTIVE action ~S -- expected an assignment with (~{~S~^ ~})"
+    (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected an assignment with (~{~S~^ ~})"
            action-form param-names))
   (if (eq (first action-form) 'assign) :assign :reassign))
 
 (defun build-directive-descriptor (name params action-form)
-  (multiple-value-bind (arity param-names) (%parse-directive-params params)
-    (multiple-value-bind (action width endian)
-        (cond
-          ((and (consp action-form) (eq (first action-form) 'emit))
-           (%parse-emit-action action-form param-names))
-          ((and (consp action-form) (member (first action-form) '(assign reassign)))
-           (values (%parse-assign-action action-form param-names) nil))
-          (t (%parse-directive-action action-form param-names)))
-      (make-directive-descriptor :name (string-upcase name) :arity arity
-                                  :action action :width width :endian endian))))
+  (let ((*definition-name* name))
+    (multiple-value-bind (arity param-names) (%parse-directive-params params)
+      (multiple-value-bind (action width endian)
+          (cond
+            ((and (consp action-form) (eq (first action-form) 'emit))
+             (%parse-emit-action action-form param-names))
+            ((and (consp action-form) (member (first action-form) '(assign reassign)))
+             (values (%parse-assign-action action-form param-names) nil))
+            (t (%parse-directive-action action-form param-names)))
+        (make-directive-descriptor :name (string-upcase name) :arity arity
+                                    :action action :width width :endian endian)))))
 
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
@@ -176,12 +177,13 @@ Registers the resulting DIRECTIVE-DESCRIPTOR under NAME (upcased) in
 to one recognized action (rather than arbitrary Lisp) is what lets the
 assembler compute a directive statement's layout size without evaluating
 anything -- see this file's header comment."
-  (unless (= (length body) 1)
-    (error "DEFDIRECTIVE ~S: body must be exactly one action form" name))
-  `(progn
-     (setf (gethash (string-upcase ,name) *directives*)
-           (build-directive-descriptor ,name ',params ',(first body)))
-     ,name))
+  (let ((*definition-name* name))
+    (unless (= (length body) 1)
+      (%defdirective-error "DEFDIRECTIVE ~S: body must be exactly one action form" name))
+    `(progn
+       (setf (gethash (string-upcase ,name) *directives*)
+             (build-directive-descriptor ,name ',params ',(first body)))
+       ,name)))
 
 ;;; Built-in directives
 

@@ -241,18 +241,18 @@
     (fiveam:is (= 0 (regref m 'bank 3)))))
 
 (fiveam:test defmachine-rejects-duplicate-names
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine dup-test
             (register a :width 8)
             (register a :width 8)))))
 
 (fiveam:test defmachine-rejects-unknown-clause
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-clause-test
             (bogus a :width 8)))))
 
 (fiveam:test defmachine-rejects-non-positive-width
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-width-test
             (register a :width 0)))))
 
@@ -266,17 +266,17 @@
     (fiveam:is (equal '(v0 v1 v2) (storage-element-names element)))))
 
 (fiveam:test defmachine-rejects-names-count-mismatch
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-names-count-test
             (register v :width 8 :count 4 :names (v0 v1 v2))))))
 
 (fiveam:test defmachine-rejects-duplicate-alias-within-clause
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine dup-alias-test
             (register v :width 8 :names (v0 v1 v0))))))
 
 (fiveam:test defmachine-rejects-alias-colliding-with-element-name
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine alias-element-collision-test
             (register a :width 8)
             (register v :width 8 :names (v0 a))))))
@@ -405,51 +405,51 @@ reset at the start of each test that reads it.")
     (fiveam:is (= 0 (mref m 'ram #x20)))))
 
 (fiveam:test defmachine-rejects-overlapping-regions
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine overlap-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :rom)
               (region b 10 20 :kind :rom))))))
 
 (fiveam:test defmachine-rejects-duplicate-region-name
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine dup-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :rom)
               (region a 16 31 :kind :rom))))))
 
 (fiveam:test defmachine-rejects-region-name-colliding-with-element
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine region-element-collision-test
             (memory ram :width 8 :addr-width 8
               (region ram 0 15 :kind :rom))))))
 
 (fiveam:test defmachine-rejects-region-out-of-address-range
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine region-range-test
             (memory ram :width 8 :addr-width 8
               (region a 0 256 :kind :rom))))))
 
 (fiveam:test defmachine-rejects-inverted-region-range
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine inverted-region-test
             (memory ram :width 8 :addr-width 8
               (region a 15 0 :kind :rom))))))
 
 (fiveam:test defmachine-rejects-unknown-region-kind
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-kind-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :bogus))))))
 
 (fiveam:test defmachine-rejects-on-write-on-non-rom
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-on-write-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :ram :on-write :error))))))
 
 (fiveam:test defmachine-rejects-read-write-on-non-device
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bad-read-region-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :rom :read (lambda (m a) (declare (ignore m a)) 0)))))))
@@ -553,11 +553,11 @@ reset at the start of each test that reads it.")
     (fiveam:is (= 0 (bank-peek m 'bram 2 20)))))
 
 (fiveam:test defmachine-rejects-bad-banks
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bank-on-device-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :kind :device :banks 2)))))
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bank-zero-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :banks 0))))))

@@ -99,6 +99,33 @@ instruction signals `assembly-error`:
 SYS: this encoding decodes as CLS
 ```
 
+## Definition errors
+
+A malformed `defmachine`, `definstruction`, `defmode`, `deflexer` or
+`defdirective` signals a `definition-error`, distinct from
+`lasm-syntax-error`, which reports a program's own source.
+
+| Condition | Signalled by |
+| --- | --- |
+| `machine-definition-error` | `defmachine` |
+| `instruction-definition-error` | `definstruction` and its `semantics` body |
+| `mode-definition-error` | `defmode` |
+| `lexer-definition-error` | `deflexer` |
+| `directive-definition-error` | `defdirective` |
+
+`definition-error-message` holds the text and `definition-error-name` the
+name being defined. `opcode-conflict` is an `instruction-definition-error`.
+
+```lisp
+(handler-case (eval '(defmode bad (one-of only-one)))
+  (definition-error (c) (definition-error-name c)))   ; => BAD
+```
+
+Errors from a word-encoded machine's `semantics` surface on the
+first execution of the instruction.[^definition] Under `compile-file`, SBCL
+reports them as `compiled-program-error`; see
+[Limitations](#limitations).
+
 ## Opcode conflicts
 
 `definstruction` signals `opcode-conflict` when two descriptors at one
@@ -106,3 +133,15 @@ opcode cannot be distinguished at decode. Cell-encoded instructions can
 share an opcode with distinct sub-opcodes; word-encoded instructions can
 share one when their fields are distinguishable or a valid fallback is
 declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
+
+## Limitations
+
+- `compile-file` of a malformed definition loses the condition type; it is
+  tracked in [ticket 258](https://todo.sr.ht/~takeiteasy/lasm/258).
+- Runtime-API and lookup errors (debugger, disassembler, `find-mode-descriptor`)
+  remain plain errors; see
+  [ticket 257](https://todo.sr.ht/~takeiteasy/lasm/257).
+
+[^definition]: Word-encoded semantics compile lazily on first use. The
+  compile step re-signals the typed condition, so the caller sees the same
+  `instruction-definition-error` as at definition time.

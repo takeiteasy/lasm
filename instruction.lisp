@@ -81,7 +81,7 @@ which no CHOICE-CASE clause names, and no OTHERWISE clause was given"
                      (no-matching-choice-machine c) (no-matching-choice-instruction c)
                      (no-matching-choice-operand c) (no-matching-choice-choice c)))))
 
-(define-condition opcode-conflict (lasm-error)
+(define-condition opcode-conflict (instruction-definition-error)
   ((machine :initarg :machine :reader opcode-conflict-machine)
    (opcode :initarg :opcode :reader opcode-conflict-opcode)
    (mnemonic :initarg :mnemonic :reader opcode-conflict-mnemonic)
@@ -849,10 +849,10 @@ sub-opcode-cell, #125) behavior when distinct co-tenants share an opcode."
                                        (machine-descriptor-elements descriptor))))
     (cond
       ((null mem-elements)
-       (error "DEFINSTRUCTION on machine ~S: this addressing mode needs a ~
+       (%definstruction-error "DEFINSTRUCTION on machine ~S: this addressing mode needs a ~
 memory element to size its operand, but none is declared" machine-name))
       ((> (length mem-elements) 1)
-       (error "DEFINSTRUCTION on machine ~S: more than one memory element ~
+       (%definstruction-error "DEFINSTRUCTION on machine ~S: more than one memory element ~
 declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode)"
               machine-name (mapcar #'storage-element-name mem-elements)))
       (t (ceiling (storage-element-addr-width (first mem-elements))
@@ -870,7 +870,7 @@ declared (~S) -- specify (operand :width n) explicitly instead of (operand :mode
     (cond
       ((eq spec-head :mode) (%mode-operand-width mode machine-name))
       ((eq spec-head :width) spec-arg)
-      (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)" spec)))))
+      (t (%definstruction-error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)" spec)))))
 
 (defun %parse-operand-subclause (subclause)
   "SUBCLAUSE is one whole (operand ...) form. Returns (VALUES name spec)
@@ -897,7 +897,7 @@ before any (variant ...) forms)."
   (cond
     ((eq (first tail) :register) (values (second tail) (cddr tail)))
     ((member :register tail)
-     (error "Malformed operand encoding spec ~S -- :REGISTER must come right after ~
+     (%definstruction-error "Malformed operand encoding spec ~S -- :REGISTER must come right after ~
 :MODE, :WIDTH n, or :FIELD f, before any (variant ...) forms" subclause))
     (t (values nil tail))))
 
@@ -916,9 +916,9 @@ does) are told apart correctly."
           (case spec-head
             (:mode (values (list :mode) spec-tail))
             (:width (values (list :width (first spec-tail)) (rest spec-tail)))
-            (:register (error "Malformed operand encoding spec ~S -- :REGISTER must come after ~
+            (:register (%definstruction-error "Malformed operand encoding spec ~S -- :REGISTER must come after ~
 :MODE or :WIDTH n, e.g. (operand NAME :mode :register ELEM), not before it" subclause))
-            (t (error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)"
+            (t (%definstruction-error "Malformed operand encoding spec ~S -- expected (operand :mode) or (operand :width n)"
                       subclause)))
         (multiple-value-bind (register variant-forms) (%parse-operand-register-clause after-spec subclause)
           (values name spec variant-forms register))))))
@@ -948,11 +948,11 @@ depending on binding order) the storage element of the same name."
   (let ((given (remove nil names)))
     (let ((dup (loop for (n . rest) on given when (member n rest) return n)))
       (when dup
-        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names the operand ~S ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S names the operand ~S ~
 more than once" machine name mode-name dup)))
     (dolist (n given)
       (when (member n (%scalar-bindable-names machine))
-        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S names an operand ~S, ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S names an operand ~S, ~
 which is also a register, flag, or register alias on ~S -- (semantics ...) ~
 can only see one of them" machine name mode-name n machine)))))
 
@@ -978,25 +978,25 @@ one, so this is checked unconditionally, not only when :REGISTER is given."
           when register
             do (let ((element (gethash register (machine-descriptor-table descriptor))))
                  (unless element
-                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+                   (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
 names no storage element on ~S" machine name mode-name register i machine))
                  (unless (eq (storage-element-kind element) :register)
-                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+                   (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
 is not a register on ~S" machine name mode-name register i machine))
                  (unless (storage-element-names element)
-                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
+                   (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S: :REGISTER ~S at operand hole ~D ~
 declares no #72 :NAMES -- there is no alias for the disassembler to render" machine name mode-name
                           register i))
                  (when (if alts
                            (some (lambda (alt) (%hole-source-attribute mode source :relative alt)) alts)
                            (%hole-source-attribute mode source :relative))
-                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both RELATIVE ~
+                   (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both RELATIVE ~
 and :REGISTER ~S -- a relative hole's value is adjusted to an absolute target at render time, ~
 which would corrupt a register index" machine name mode-name i register))
                  (when (if alts
                            (some (lambda (alt) (%hole-source-attribute mode source :signed alt)) alts)
                            (%hole-source-attribute mode source :signed))
-                   (error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both SIGNED ~
+                   (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S: operand hole ~D is both SIGNED ~
 and :REGISTER ~S -- a signed hole may decode negative, which is not a valid register index"
                           machine name mode-name i register))))))
 
@@ -1005,7 +1005,7 @@ and :REGISTER ~S -- a signed hole may decode negative, which is not a valid regi
 at least two symbols selecting an alternative inside a varying nested ONE-OF."
   (cond ((and (symbolp form) form) form)
         ((and (consp form) (rest form) (every #'symbolp form)) form)
-        (t (error "DEFINSTRUCTION: ~A: a choice must be a mode name or a path of at least two ~
+        (t (%definstruction-error "DEFINSTRUCTION: ~A: a choice must be a mode name or a path of at least two ~
 mode names such as (outer inner), got ~S" context form))))
 
 (defun %choice-hint (key)
@@ -1027,15 +1027,15 @@ unnamed one -- see %CHECK-BYTE-SUB-VARIANTS!). Returns (VALUES mode-name
 sub)."
   (destructuring-bind (head selector &rest tail) form
     (unless (eq head 'variant)
-      (error "DEFINSTRUCTION: operand ~A: malformed variant form ~S -- expected ~
+      (%definstruction-error "DEFINSTRUCTION: operand ~A: malformed variant form ~S -- expected ~
 (variant (choice m) (sub s))" hole-name form))
     (unless (and (consp selector) (eq (first selector) 'choice) (= (length selector) 2))
-      (error "DEFINSTRUCTION: operand ~A: variant selector must be (choice m), got ~S"
+      (%definstruction-error "DEFINSTRUCTION: operand ~A: variant selector must be (choice m), got ~S"
              hole-name selector))
     (let ((choice-name (%parse-choice-key (second selector) (format nil "operand ~A" hole-name))))
       (unless (and (consp (first tail)) (eq (first (first tail)) 'sub) (= (length (first tail)) 2)
                    (null (rest tail)))
-        (error "DEFINSTRUCTION: operand ~A: a (choice ~S) variant must be (sub s), got ~S"
+        (%definstruction-error "DEFINSTRUCTION: operand ~A: a (choice ~S) variant must be (sub s), got ~S"
                hole-name choice-name tail))
       (values choice-name (second (first tail))))))
 
@@ -1058,7 +1058,7 @@ result at runtime. On success, returns the parsed ((mode-name . sub) ...)
 pairs, in VARIANT-FORMS' own declaration order."
   (when variant-forms
     (unless hole-alternatives
-      (error "DEFINSTRUCTION ~S ~S: operand ~A: (variant (choice ...) ...) given for an ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: (variant (choice ...) ...) given for an ~
 operand hole that is not a ONE-OF pattern element -- a sub-opcode selector only ~
 chooses between ONE-OF alternatives" machine name hole-name))
     (let ((width (%machine-cell-width machine))
@@ -1067,22 +1067,22 @@ chooses between ONE-OF alternatives" machine name hole-name))
                           variant-forms)))
       (dolist (p pairs)
         (unless (member (car p) hole-alternatives :test #'equal)
-          (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) is not one of this hole's ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) is not one of this hole's ~
 ONE-OF alternatives ~S~A" machine name hole-name (car p) hole-alternatives (%choice-hint (car p))))
         (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
-          (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode ~D for (choice ~S) does not fit ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode ~D for (choice ~S) does not fit ~
 machine ~S's ~D-bit code cell" machine name hole-name (cdr p) (car p) machine width)))
       (let ((dup-mode (loop for (p . later) on pairs when (member (car p) later :key #'car :test #'equal) return (car p))))
         (when dup-mode
-          (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) given more than once"
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) given more than once"
                  machine name hole-name dup-mode)))
       (let ((dup-sub (loop for (p . later) on pairs when (member (cdr p) later :key #'cdr) return (cdr p))))
         (when dup-sub
-          (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode value ~D used by more than one ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode value ~D used by more than one ~
 (choice ...) variant" machine name hole-name dup-sub)))
       (let ((missing (set-difference hole-alternatives (mapcar #'car pairs) :test #'equal)))
         (when missing
-          (error "DEFINSTRUCTION ~S ~S: operand ~A: ONE-OF alternative~P ~S ~:[has~;have~] no ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: operand ~A: ONE-OF alternative~P ~S ~:[has~;have~] no ~
 (variant (choice ...) (sub ...)) -- every alternative of a sub-selected hole must be claimed"
                  machine name hole-name (length missing) missing (rest missing))))
       pairs)))
@@ -1096,16 +1096,16 @@ mode-name symbol per participating ONE-OF hole, in the table's own hole
 order."
   (destructuring-bind (head selector &rest tail) form
     (unless (eq head 'variant)
-      (error "DEFINSTRUCTION: (sub-opcode ...): malformed variant form ~S -- expected ~
+      (%definstruction-error "DEFINSTRUCTION: (sub-opcode ...): malformed variant form ~S -- expected ~
 (variant (choice m1 m2 ...) (sub s))" form))
     (unless (and (consp selector) (eq (first selector) 'choice) (rest selector))
-      (error "DEFINSTRUCTION: (sub-opcode ...): variant selector must be (choice m1 m2 ...), got ~S"
+      (%definstruction-error "DEFINSTRUCTION: (sub-opcode ...): variant selector must be (choice m1 m2 ...), got ~S"
              selector))
     (let ((names (mapcar (lambda (name) (%parse-choice-key name "(sub-opcode ...)"))
                          (rest selector))))
       (unless (and (consp (first tail)) (eq (first (first tail)) 'sub) (= (length (first tail)) 2)
                    (null (rest tail)))
-        (error "DEFINSTRUCTION: (sub-opcode ...): a (choice ~S) variant must be (sub s), got ~S"
+        (%definstruction-error "DEFINSTRUCTION: (sub-opcode ...): a (choice ~S) variant must be (sub s), got ~S"
                names tail))
       (values names (second (first tail))))))
 
@@ -1136,18 +1136,18 @@ ungoverned or fully-uncovered ONE-OF hole always has)."
   (if (and variant-forms (consp (first variant-forms)) (eq (first (first variant-forms)) 'holes))
       (let ((indices (rest (first variant-forms))))
         (unless indices
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes) names no hole -- give at ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes) names no hole -- give at ~
 least one hole index, or omit (holes ...) entirely to cover every ONE-OF hole" machine name))
         (let ((dup (loop for (i . later) on indices when (member i later) return i)))
           (when dup
-            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D more than once"
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D more than once"
                    machine name dup)))
         (dolist (i indices)
           (unless (and (integerp i) (<= 0 i) (< i (length hole-alternatives-list)))
-            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, not a valid ~
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, not a valid ~
 hole index for this mode (0-~D)" machine name i (1- (length hole-alternatives-list))))
           (unless (nth i hole-alternatives-list)
-            (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D, which is ~
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D, which is ~
 not a ONE-OF pattern element -- a sub-opcode table only chooses between ONE-OF alternatives"
                    machine name i)))
         (values (sort (copy-list indices) #'<) (rest variant-forms)))
@@ -1195,7 +1195,7 @@ own declaration order."
   (multiple-value-bind (hole-indices variant-forms)
       (%parse-byte-sub-table-holes-clause variant-forms hole-alternatives-list machine name)
     (unless hole-indices
-      (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but this mode has no ONE-OF ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but this mode has no ONE-OF ~
 operand hole -- a sub-opcode table only chooses between ONE-OF alternatives" machine name))
     (let* ((width (%machine-cell-width machine))
            (n (length hole-indices))
@@ -1212,36 +1212,36 @@ operand hole -- a sub-opcode table only chooses between ONE-OF alternatives" mac
                                         (cons names s)))
                            variant-forms)))
       (when (> (length all-combos) (ash 1 width))
-        (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) has ~D combinations across its ~D ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) has ~D combinations across its ~D ~
 participating ONE-OF hole~:P -- too many to fit machine ~S's ~D-bit code cell"
                machine name (length all-combos) n machine width))
       (dolist (p pairs)
         (unless (= (length (car p)) n)
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~D alternative~:P, ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~D alternative~:P, ~
 but this mode has ~D participating ONE-OF hole~:P" machine name (car p) (length (car p)) n))
         (loop for choice-name in (car p)
               for alts in alt-lists
               for i in hole-indices
               unless (member choice-name alts :test #'equal)
-                do (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~S, not ~
+                do (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~S, not ~
 one of operand hole ~D's ONE-OF alternatives ~S~A" machine name (car p) choice-name i alts
                           (%choice-hint choice-name)))
         (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode ~D for (choice ~S) does not ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode ~D for (choice ~S) does not ~
 fit machine ~S's ~D-bit code cell" machine name (cdr p) (car p) machine width)))
       (let ((dup-combo (loop for (p . later) on pairs
                               when (member (car p) later :key #'car :test #'equal)
                                 return (car p))))
         (when dup-combo
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) given more than once"
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) given more than once"
                  machine name dup-combo)))
       (let ((dup-sub (loop for (p . later) on pairs when (member (cdr p) later :key #'cdr) return (cdr p))))
         (when dup-sub
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode value ~D used by more than ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode value ~D used by more than ~
 one (choice ...) variant" machine name dup-sub)))
       (let ((missing (set-difference all-combos (mapcar #'car pairs) :test #'equal)))
         (when missing
-          (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): combination~P ~S ~:[has~;have~] no ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): combination~P ~S ~:[has~;have~] no ~
 (variant (choice ...) (sub ...)) -- every combination of a sub-opcode table's ONE-OF holes must ~
 be claimed" machine name (length missing) missing (rest missing))))
       (values hole-indices pairs))))
@@ -1282,7 +1282,7 @@ cell via two different mechanisms."
   (let ((holes (%mode-hole-count mode))
         (n (length subclauses)))
     (unless (= holes n)
-      (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
 but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
 per hole" machine name mode-name holes n (= n 1))))
   (let* ((hole-alternatives (%mode-hole-alternatives mode))
@@ -1305,10 +1305,10 @@ per hole" machine name mode-name holes n (= n 1))))
     (%check-operand-names names machine name mode-name)
     (%check-operand-registers! registers machine name mode-name mode hole-alternatives)
     (when (rest carrying)
-      (error "DEFINSTRUCTION ~S ~S: more than one operand hole declares its own sub-opcode ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: more than one operand hole declares its own sub-opcode ~
 selector -- combine them in a (sub-opcode ...) table instead" machine name))
     (when (and carrying sub-opcode-subclause)
-      (error "DEFINSTRUCTION ~S ~S: an operand hole's own (variant (choice ...) (sub ...)) ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: an operand hole's own (variant (choice ...) (sub ...)) ~
 selector and a (sub-opcode ...) table may not both be given -- they would write the same cell"
              machine name))
     (values widths names
@@ -1329,7 +1329,7 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
   "Keep mode-wide attributes off ONE-OF elements; their alternatives own them."
   (when (and (mode-descriptor-relativep mode)
              (some #'identity (%mode-hole-alternatives mode)))
-    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE and contains a ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :RELATIVE and contains a ~
 ONE-OF hole -- declare :RELATIVE on its alternatives instead"
            machine name (mode-descriptor-name mode)))
   ;; #132: the same hazard, one hole earlier in the pipeline, for a plain
@@ -1346,7 +1346,7 @@ ONE-OF hole -- declare :RELATIVE on its alternatives instead"
   (when (and (mode-descriptor-signedp mode)
              (not (mode-descriptor-relativep mode))
              (some #'identity (%mode-hole-alternatives mode)))
-    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :SIGNED and contains a ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S is :SIGNED and contains a ~
 ONE-OF hole -- declare :SIGNED on its alternatives instead"
            machine name (mode-descriptor-name mode))))
 
@@ -1401,7 +1401,7 @@ can never match a clause key, rather than binding an unbound variable.
 Signals a DEFINSTRUCTION-time error when NAME names no operand anywhere on
 this mode at all."
   (unless (or operand-names mode-operand-names named-slot-alternatives)
-    (error "DEFINSTRUCTION: CHOICE-CASE ~S: this variant has no operand fields" name))
+    (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE ~S: this variant has no operand fields" name))
   (let ((index (position name operand-names)))
     (cond
       (index (values index t))
@@ -1409,7 +1409,7 @@ this mode at all."
       ((or (member name mode-operand-names) (and (eq name 'operand) mode-operand-names))
        (values nil nil))
        ((assoc name named-slot-alternatives) (values :selection t))
-       (t (error "DEFINSTRUCTION: CHOICE-CASE: no operand field named ~S -- ~
+       (t (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE: no operand field named ~S -- ~
 declared fields are ~S" name (or (remove nil mode-operand-names) '(operand)))))))
 
 (defun %check-choice-case-keys! (name keys hole-alternatives)
@@ -1427,7 +1427,7 @@ exempted unconditionally, same rationale."
     (dolist (key (if (listp keys) keys (list keys)))
       (unless (member key '(otherwise t))
         (unless (member key hole-alternatives)
-          (error "DEFINSTRUCTION: CHOICE-CASE ~S: ~S is not one of this operand's ~
+          (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE ~S: ~S is not one of this operand's ~
 ONE-OF alternatives ~S" name key hole-alternatives))))))
 
 (defun %choice-case-components (name prefix hole-alternatives)
@@ -1439,7 +1439,7 @@ between: the path component after PREFIX in each of HOLE-ALTERNATIVES' keys."
                                     (equal prefix (subseq path 0 (length prefix))))
                             collect (nth (length prefix) path))))
     (unless components
-      (error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested varying ~
+      (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested varying ~
 ONE-OF alternative of this operand" name prefix name prefix))
     (remove-duplicates components)))
 
@@ -1467,7 +1467,7 @@ governing hole is what selects which descriptor ran in the first place."
                                     (cdr (assoc (%key-head name) named-slot-alternatives))
                                     (nth index hole-alternatives-list))))
         (when (and prefix (or (eq index :selection) (null hole-alternatives)))
-          (error "DEFINSTRUCTION: CHOICE-CASE ~S: only an operand hole governed by a ONE-OF can ~
+          (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE ~S: only an operand hole governed by a ONE-OF can ~
 be qualified" name))
         (dolist (clause clauses)
           (%check-choice-case-keys! name (first clause)
@@ -1542,6 +1542,16 @@ actually run for this descriptor."
   (let ((source (if mapping (nth index mapping) index)))
     (and source (nth source operands))))
 
+(defun %compile-definition (form name)
+  "COMPILE FORM, re-signalling a DEFINITION-ERROR raised while it expanded,
+which SBCL would otherwise defer to a COMPILED-PROGRAM-ERROR at call time."
+  (let* ((*definition-name* name)
+         (*last-definition-error* nil)
+         (function (compile nil form)))
+    (when *last-definition-error*
+      (error *last-definition-error*))
+    function))
+
 (defun %lazy-instruction-semantics (form machine-name name)
   "Compile on first use, then replace every sibling's shared proxy, on the
 machine and on each descendant holding a copy."
@@ -1549,7 +1559,7 @@ machine and on each descendant holding a copy."
     (setf proxy
           (lambda (machine operands choices &optional selections mapping)
             (unless compiled
-              (setf compiled (compile nil form))
+              (setf compiled (%compile-definition form name))
               (labels ((patch (machine-name)
                          (dolist (descriptor (gethash (string-upcase (string name))
                                                       (machine-descriptor-instructions
@@ -1709,11 +1719,11 @@ subclauses, their count must match MODE's hole count exactly, and SUB-SPEC
         (0 (values nil nil nil nil nil))
         (1
          (when sub-opcode-subclause
-           (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
+           (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
 (operand ...) subclauses -- a defaulted single-hole operand has no room to declare one"
                   machine name mode-name))
          (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t) (list nil)))
-        (t (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
+        (t (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
 -- an (operand ...) subclause is required per hole" machine name mode-name
                   (%mode-hole-count mode))))))
 
@@ -1724,7 +1734,7 @@ selector, #126, from %RESOLVE-OPERAND-FIELDS/%PARSE-OPERAND-SUBCLAUSES) are
 both non-NIL -- the sub-opcode cell is one cell, so an explicit value and a
 hole-selected one would both be trying to write it."
   (when (and explicit-sub sub-spec)
-    (error "DEFINSTRUCTION ~S ~S: an explicit (opcode n :sub s) and a hole-selected ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S: an explicit (opcode n :sub s) and a hole-selected ~
 (variant (choice ...) (sub ...)) may not both be given -- they would write the same cell"
            machine name)))
 
@@ -1781,17 +1791,17 @@ participate: its alternatives govern the element's other holes alike."
     (let ((first-hole (mode-hole-group-base-start group))
           (base-count (mode-hole-group-base-count group)))
       (when (zerop base-count)
-        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a varying ONE-OF whose shortest ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a varying ONE-OF whose shortest ~
 alternative has no operand hole -- there is no hole to carry its sub-opcode selector"
                machine name (mode-descriptor-name mode)))
       (unless (member first-hole (car sub-spec))
-        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree on ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree on ~
 hole count -- operand hole ~D must carry a sub-opcode selector, alone or inside a (sub-opcode ...) ~
 table, so decode can tell how many operand cells follow"
                machine name (mode-descriptor-name mode) first-hole))
       (loop for hole from (1+ first-hole) below (+ first-hole base-count)
             when (member hole (car sub-spec))
-              do (error "DEFINSTRUCTION ~S ~S: operand hole ~D shares a varying ONE-OF element with ~
+              do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D shares a varying ONE-OF element with ~
 hole ~D -- only the element's first hole may carry a sub-opcode selector"
                         machine name hole first-hole)))))
 
@@ -1803,7 +1813,7 @@ plus its own extras) into (VALUES widths names mode-specified registers)."
                       collect (multiple-value-bind (op-name spec variant-forms register)
                                   (%parse-byte-operand-subclause subclause)
                                 (when (and variant-forms (not (member subclause base-subclauses)))
-                                  (error "DEFINSTRUCTION ~S ~S: extra operand ~A cannot declare a ~
+                                  (%definstruction-error "DEFINSTRUCTION ~S ~S: extra operand ~A cannot declare a ~
 sub-opcode selector -- its alternative is chosen at the element's first hole"
                                          machine name (or op-name i)))
                                 (list (%operand-width mode spec machine) op-name (eq (first spec) :mode)
@@ -1892,7 +1902,7 @@ bindings forms) like %BYTE-DESCRIPTOR-FORMS."
                                      cycles semantics-forms)
   "Descriptor forms for one byte-encoded use of MODE: (VALUES bindings forms)."
   (when (and for-choice-subclauses (not (mode-descriptor-varyingp mode)))
-    (error "DEFINSTRUCTION ~S ~S: (for-choice ...) given but addressing mode ~S has no ONE-OF whose ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S: (for-choice ...) given but addressing mode ~S has no ONE-OF whose ~
 alternatives disagree on hole count" machine name mode-name))
   (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
       (%resolve-operand-fields mode operand-subclauses machine name mode-name machine sub-opcode-subclause)
@@ -1936,7 +1946,7 @@ alternatives disagree on hole count" machine name mode-name))
   ;; LAYOUT to default against, so every downstream reader (word-field-choice,
   ;; below) always sees a concrete positive integer. #120: :TRAILING-WORD's
   ;; own width in cells, same defaulting.
-  (extra-cells nil :type (or null (integer 1)))
+  (extra-cells nil)
   ;; Non-NIL for a (CHOICE M) selector -- the ONE-OF alternative
   ;; mode-name symbol M that must be this hole's matched alternative
   ;; (mode.lisp's hole-aligned CHOICES) for this variant to apply, rather
@@ -2340,7 +2350,7 @@ off the variant's own tail."
          (suffix (and pos (nth (1+ pos) form))))
     (when pos
       (unless (and (stringp suffix) (plusp (length suffix)))
-        (error "DEFINSTRUCTION: field ~S: variant :suffix must be a non-empty string, got ~S"
+        (%definstruction-error "DEFINSTRUCTION: field ~S: variant :suffix must be a non-empty string, got ~S"
                field-name suffix))
       (setf form (append (subseq form 0 pos) (nthcdr (+ pos 2) form))))
     (let ((variant (%parse-word-variant-form-1 form field-name)))
@@ -2366,26 +2376,29 @@ when omitted; %PARSE-WORD-OPERAND-SUBCLAUSE defaults it to the layout's
 WIDTH-CELLS once it has a LAYOUT to default against."
   (destructuring-bind (head selector &rest tail) form
     (unless (eq head 'variant)
-      (error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
+      (%definstruction-error "DEFINSTRUCTION: field ~S: malformed variant form ~S -- expected ~
 (variant selector kind)" field-name form))
     (cond
       ((and (consp selector) (eq (first selector) 'range))
        (destructuring-bind (range-kw lo hi) selector
          (declare (ignore range-kw))
          (unless (eq (first tail) 'inline)
-           (error "DEFINSTRUCTION: field ~S: a (range ...) variant must be ~
+           (%definstruction-error "DEFINSTRUCTION: field ~S: a (range ...) variant must be ~
 INLINE, got ~S" field-name tail))
          (destructuring-bind (inline-sym &key (bias 0)) tail
            (declare (ignore inline-sym))
            (make-word-variant :kind :inline :bias bias :range (cons lo hi)))))
       ((eq selector :else)
        (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
-         (error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
+         (%definstruction-error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
 (extra-word :escape n), got ~S" field-name tail))
-       (destructuring-bind (extra-word-kw &key escape cells) (first tail)
+       (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
          (declare (ignore extra-word-kw))
+         (when alias
+           (%definstruction-error "DEFINSTRUCTION: field ~S: :alias applies only to a (choice ...) variant"
+                                  field-name))
          (unless escape
-           (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
+           (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
          (make-word-variant :kind :extra-word :escape escape :extra-cells cells)))
       ((and (consp selector) (eq (first selector) 'choice))
        (destructuring-bind (choice-kw choice-name) selector
@@ -2396,21 +2409,21 @@ INLINE, got ~S" field-name tail))
             (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
               (declare (ignore extra-word-kw))
               (unless escape
-                (error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
+                (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
               (make-word-variant :kind :extra-word :escape escape :choice choice-name
                                  :extra-cells cells :alias (and alias t))))
            ((eq (first tail) 'inline)
             (destructuring-bind (inline-sym &key range (bias 0) alias) tail
               (declare (ignore inline-sym))
               (unless range
-                (error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
+                (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
 own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range of its own"
                        field-name choice-name))
               (destructuring-bind (lo hi) range
                 (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name :alias (and alias t)))))
-           (t (error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
+           (t (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
 :range) or (extra-word :escape n), got ~S" field-name choice-name tail)))))
-      (t (error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
+      (t (%definstruction-error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
 or (choice mode), got ~S" field-name selector)))))
 
 (defun %word-variant-signedp-at-parse (v hole-signedp &optional mode source)
@@ -2477,7 +2490,7 @@ a CHOICE selector -- a hole prefix could not tell them apart."
                   (find-if (lambda (o) (and (equal (word-variant-suffix o) (word-variant-suffix v))
                                             (equal (word-variant-choice o) (word-variant-choice v))))
                            later))
-          do (error "DEFINSTRUCTION: field ~S: more than one variant declares :suffix ~S"
+          do (%definstruction-error "DEFINSTRUCTION: field ~S: more than one variant declares :suffix ~S"
                     field-name (word-variant-suffix v))))
 
 (defun %check-word-variant-suffix-shadows! (variants field-name hole-alternatives)
@@ -2491,7 +2504,7 @@ so the variant could never be forced."
           (dolist (name (%key-list alt))
             (let ((alt-suffix (mode-descriptor-suffix (find-mode-descriptor name))))
               (when (and alt-suffix (string-equal alt-suffix suffix))
-                (error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
+                (%definstruction-error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
 alternative ~S, which declares the same mode :suffix"
                        field-name suffix name)))))))))
 
@@ -2538,7 +2551,7 @@ variant is treated as signed here too."
                                (= (word-variant-bias v) (word-variant-bias alias))))
                         variants)))
         (unless (= (length canonical) 1)
-          (error "DEFINSTRUCTION: field ~S: inline alias requires exactly one canonical variant with identical range and bias"
+          (%definstruction-error "DEFINSTRUCTION: field ~S: inline alias requires exactly one canonical variant with identical range and bias"
                  field-name))
         (%check-alias-encodes-like-canonical! alias (first canonical) field-name))))
   (let ((max (1- (ash 1 field-width))) inline-chunks escapes)
@@ -2553,29 +2566,29 @@ variant is treated as signed here too."
                  (unless (word-variant-alias v)
                    (cl:push chunk inline-chunks)))
              (signed-range-out-of-field (c)
-               (error "DEFINSTRUCTION: field ~S: signed inline range ~D..~D does not fit its ~
+               (%definstruction-error "DEFINSTRUCTION: field ~S: signed inline range ~D..~D does not fit its ~
 ~D-bit field (must be between ~D and ~D)"
                       field-name lo hi field-width (slot-value c 'low-bound) (slot-value c 'high-bound))))
            (unless signedp
              (when (or (< lo 0) (> hi max))
-               (error "DEFINSTRUCTION: field ~S: biased inline range ~D..~D does ~
+               (%definstruction-error "DEFINSTRUCTION: field ~S: biased inline range ~D..~D does ~
 not fit its ~D-bit field" field-name lo hi field-width)))))
         (:extra-word
          (let ((e (word-variant-escape v)))
            (when (or (< e 0) (> e max))
-             (error "DEFINSTRUCTION: field ~S: escape ~D does not fit its ~D-bit field"
+             (%definstruction-error "DEFINSTRUCTION: field ~S: escape ~D does not fit its ~D-bit field"
                     field-name e field-width))
            ;; #135: EXTRA-CELLS is defaulted by the time this runs
            ;; (%PARSE-WORD-OPERAND-SUBCLAUSE), so any non-positive-integer
            ;; value here is an explicit, invalid :CELLS.
            (unless (typep (word-variant-extra-cells v) '(integer 1))
-             (error "DEFINSTRUCTION: field ~S: (extra-word ...) :cells ~S must be a ~
+             (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) :cells ~S must be a ~
 positive integer" field-name (word-variant-extra-cells v)))
            (cl:push e escapes)))))
     (dolist (e escapes)
       (dolist (r inline-chunks)
         (when (<= (car r) e (cdr r))
-          (error "DEFINSTRUCTION: field ~S: escape value ~D is inside inline ~
+          (%definstruction-error "DEFINSTRUCTION: field ~S: escape value ~D is inside inline ~
 range ~D..~D -- an encoded field value of ~D can never be told apart from a ~
 genuine inline value" field-name e (car r) (cdr r) e))))
     ;; #104/#127: reachable now that several CHOICE-selected :INLINE
@@ -2584,7 +2597,7 @@ genuine inline value" field-name e (car r) (cdr r) e))))
     (loop for (r . later) on inline-chunks
           do (dolist (r2 later)
                (when (<= (max (car r) (car r2)) (min (cdr r) (cdr r2)))
-                 (error "DEFINSTRUCTION: field ~S: inline ranges overlap in raw field value ~D..~D -- ~
+                 (%definstruction-error "DEFINSTRUCTION: field ~S: inline ranges overlap in raw field value ~D..~D -- ~
 an encoded field value in the overlap could never be told apart"
                         field-name (max (car r) (car r2)) (min (cdr r) (cdr r2))))))
     ;; #104/#187: a shared escape is legal only as (extra-word ... :alias t)
@@ -2596,11 +2609,11 @@ an encoded field value in the overlap could never be told apart"
                (aliases (remove-if-not #'word-variant-alias group)))
           (cond
             ((rest canonical)
-             (error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant ~
+             (%definstruction-error "DEFINSTRUCTION: field ~S: escape value ~D is used by more than one variant ~
 -- mark a second spelling of the same encoding with (extra-word :escape ~D :alias t)"
                     field-name e e))
             ((and aliases (null canonical))
-             (error "DEFINSTRUCTION: field ~S: (extra-word :escape ~D :alias t) has no ~
+             (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word :escape ~D :alias t) has no ~
 non-alias variant on that escape to be an alias of" field-name e))
             (aliases
              (dolist (a aliases)
@@ -2609,7 +2622,7 @@ non-alias variant on that escape to be an alias of" field-name e))
 (defun %check-alias-encodes-like-canonical! (alias canonical field-name)
   "Require identical value interpretation for alternate encoding spellings."
   (unless (and (word-variant-choice alias) (word-variant-choice canonical))
-    (error "DEFINSTRUCTION: field ~S: aliases require both variants to be CHOICE-selected" field-name))
+    (%definstruction-error "DEFINSTRUCTION: field ~S: aliases require both variants to be CHOICE-selected" field-name))
   (let ((am (%choice-key-descriptor (word-variant-choice alias)))
         (cm (%choice-key-descriptor (word-variant-choice canonical))))
     (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
@@ -2618,7 +2631,7 @@ non-alias variant on that escape to be an alias of" field-name e))
                  (eq (mode-descriptor-signedp am) (mode-descriptor-signedp cm))
                  (eql (mode-descriptor-width am) (mode-descriptor-width cm))
                  (eq (mode-descriptor-relativep am) (mode-descriptor-relativep cm)))
-      (error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, hole count, signedness, width and relativeness must agree"
+      (%definstruction-error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, hole count, signedness, width and relativeness must agree"
              field-name (word-variant-choice alias) (word-variant-choice canonical)))))
 
 (defun %check-word-variant-choices! (variants field-name hole-alternatives)
@@ -2660,11 +2673,11 @@ than left to silently skew encode and decode apart."
       (when choice
         (mapc #'find-mode-descriptor (%key-list choice))
         (unless hole-alternatives
-          (error "DEFINSTRUCTION: field ~S: (choice ~S) given for an operand hole that is ~
+          (%definstruction-error "DEFINSTRUCTION: field ~S: (choice ~S) given for an operand hole that is ~
 not a ONE-OF pattern element -- CHOICE only selects between ONE-OF alternatives"
                  field-name choice))
         (unless (member choice hole-alternatives :test #'equal)
-          (error "DEFINSTRUCTION: field ~S: (choice ~S) is not one of this hole's ONE-OF ~
+          (%definstruction-error "DEFINSTRUCTION: field ~S: (choice ~S) is not one of this hole's ONE-OF ~
 alternatives ~S~A" field-name choice hole-alternatives (%choice-hint choice))))))
   (let* ((choice-selected (remove-if-not #'word-variant-choice variants))
          (value-selected (remove-if #'word-variant-choice variants)))
@@ -2673,11 +2686,11 @@ alternatives ~S~A" field-name choice hole-alternatives (%choice-hint choice)))))
                                    :test #'equal)))
         (cond
           ((null unclaimed)
-           (error "DEFINSTRUCTION: field ~S: every ONE-OF alternative ~S is already claimed ~
+           (%definstruction-error "DEFINSTRUCTION: field ~S: every ONE-OF alternative ~S is already claimed ~
 by a (choice ...) variant, so this field's value-selected variant~P could never be selected"
                   field-name hole-alternatives (length value-selected)))
           ((rest unclaimed)
-           (error "DEFINSTRUCTION: field ~S: value-selected (RANGE/:ELSE) variants would be ~
+           (%definstruction-error "DEFINSTRUCTION: field ~S: value-selected (RANGE/:ELSE) variants would be ~
 selected by more than one unclaimed ONE-OF alternative ~S -- nothing could tell them apart ~
 at decode" field-name unclaimed))
           ;; #127: the unclaimed alternative backfilled onto VALUE-SELECTED
@@ -2709,7 +2722,7 @@ at decode" field-name unclaimed))
           ;; docs/modes.md both currently document as rejected outright, and
           ;; is out of #63's scope (see #63's closing comment).
           ((mode-descriptor-signedp (%choice-key-descriptor (first unclaimed)))
-           (error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
+           (%definstruction-error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
 field's value-selected variant~P declares :SIGNED T -- a value-selected variant has no (CHOICE ~
 ...) of its own to read :SIGNED from, so a mixed field cannot carry a signed fallback; give ~S ~
 its own (CHOICE ...) variant instead"
@@ -2722,7 +2735,7 @@ its own (CHOICE ...) variant instead"
           ;; holes would imply a hole with no encoding anywhere.
           ((/= (%option-hole-count (first unclaimed))
                (reduce #'min (mapcar #'%option-hole-count hole-alternatives)))
-           (error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
+           (%definstruction-error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
 field's value-selected variant~P has ~D hole~:P, not this element's base hole count ~D -- a ~
 value-selected variant has no (CHOICE ...) of its own to declare extra holes on; give ~S its own ~
 (CHOICE ...) variant instead"
@@ -2782,7 +2795,7 @@ carry it."
         (destructuring-bind (trailing-kw &key cells register) spec
           (declare (ignore trailing-kw))
           (when (and cells (not (and (integerp cells) (plusp cells))))
-            (error "DEFINSTRUCTION: (operand ~@[~S ~]:trailing-word :cells ~S): :CELLS must be ~
+            (%definstruction-error "DEFINSTRUCTION: (operand ~@[~S ~]:trailing-word :cells ~S): :CELLS must be ~
 a positive integer" name cells))
           (make-word-operand-spec
            :name name :field nil :width nil :shift nil :register register
@@ -2800,11 +2813,11 @@ a branch that never uses them. NAME/SPEC are %PARSE-OPERAND-SUBCLAUSE's own
 split of SUBCLAUSE."
   (destructuring-bind (field-kw field-name &rest after-field) spec
       (unless (eq field-kw :field)
-        (error "DEFINSTRUCTION: malformed word operand spec ~S -- expected ~
+        (%definstruction-error "DEFINSTRUCTION: malformed word operand spec ~S -- expected ~
 (operand [name] :field f ...) or (operand [name] :trailing-word [:cells k])" subclause))
       (let ((field (instruction-word-field layout field-name)))
         (unless field
-          (error "DEFINSTRUCTION: no field named ~S in ~:[the default instruction-word ~
+          (%definstruction-error "DEFINSTRUCTION: no field named ~S in ~:[the default instruction-word ~
 layout~;instruction-word layout ~:*~S~] on machine ~S" field-name layout-name machine-name))
         (destructuring-bind (fname fwidth fshift) field
           (declare (ignore fname))
@@ -2865,7 +2878,7 @@ SUBCLAUSES (#136) already makes for (field-value ...)."
          (holes (length hole-alternatives))
          (n (length subclauses)))
     (unless (= holes n)
-      (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P ~
 but ~D (operand ...) subclause~:P ~:[were~;was~] given -- one is required ~
 per hole" machine name mode-name holes n (= n 1)))
     (let* ((hole-signedp-list (%word-hole-signedp-list mode
@@ -2876,14 +2889,14 @@ per hole" machine name mode-name holes n (= n 1)))
                                                             alts hole-signedp mode source))
                            subclauses hole-alternatives hole-signedp-list sources)))
       (when (find 'opcode specs :key #'word-operand-spec-field)
-        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (operand ... :field opcode) is not allowed -- the ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (operand ... :field opcode) is not allowed -- the ~
 opcode field is already given by this instruction's own (opcode n)" machine name mode-name))
       (let ((dup (loop for (s . later) on specs
                         when (and (word-operand-spec-field s)
                                   (find (word-operand-spec-field s) later :key #'word-operand-spec-field))
                           return (word-operand-spec-field s))))
         (when dup
-          (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: more than one (operand ... :field ~S) subclause -- a ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: more than one (operand ... :field ~S) subclause -- a ~
 field may carry at most one operand" machine name mode-name dup)))
       (%check-operand-names (mapcar #'word-operand-spec-name specs) machine name mode-name)
       (%check-operand-registers! (mapcar #'word-operand-spec-register specs) machine name mode-name mode
@@ -3051,9 +3064,9 @@ nested varying alternative; short selectors must be unique."
                          groups)))
           (when (and qualified
                      (or (< (length selector) 2) (null (first selector))))
-            (error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative...), got ~S" selector))
+            (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative...), got ~S" selector))
           (unless (= (length matches) 1)
-            (error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate~A"
+            (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate~A"
                    selector (if qualified "" (%choice-hint selector))))
           (let* ((group (first matches))
                  (key (list (mode-hole-group-slot group)
@@ -3061,12 +3074,12 @@ nested varying alternative; short selectors must be unique."
                  (needed (- (%option-hole-count alt)
                             (mode-hole-group-base-count group))))
             (when (assoc key entries :test #'equal)
-              (error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
+              (%definstruction-error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
              (unless (if (plusp needed)
                          (and (= (length extras) needed)
                               (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
                          (every (lambda (s) (and (consp s) (eq (first s) 'field-value))) extras))
-               (error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
+               (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
                       selector needed))
             (cl:push (cons key extras) entries)))))
     (dolist (group groups)
@@ -3075,7 +3088,7 @@ nested varying alternative; short selectors must be unique."
           (unless (assoc (list (mode-hole-group-slot group)
                                (mode-hole-group-base-start group) alt)
                          entries :test #'equal)
-            (error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D"
+            (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D"
                    alt (mode-hole-group-base-start group))))))
     entries))
 
@@ -3125,7 +3138,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
             when (word-operand-spec-field spec)
               do (let ((filtered (%filter-spec-variants-for-tuple spec own-alts)))
                    (unless (word-operand-spec-variants filtered)
-                     (error "DEFINSTRUCTION ~S ~S: field ~S has no CHOICE variant for ~S"
+                     (%definstruction-error "DEFINSTRUCTION ~S ~S: field ~S has no CHOICE variant for ~S"
                             machine name (word-operand-spec-field spec) own-alts))
                    (setf (nth i specs) filtered)))))
   specs)
@@ -3163,7 +3176,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                                     variants)))
                      (unless (equal (encoding (word-variant-choice alias) group)
                                     (encoding (word-variant-choice canonical) group))
-                       (error "DEFINSTRUCTION: aliases ~S and ~S have different extra-hole encodings"
+                       (%definstruction-error "DEFINSTRUCTION: aliases ~S and ~S have different extra-hole encodings"
                               (word-variant-choice alias) (word-variant-choice canonical)))))))))
   specs)
 
@@ -3177,7 +3190,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
             do (dolist (variant (word-operand-spec-variants spec))
                  (when (and (word-variant-choice variant)
                             (not (equal (word-variant-choice variant) (mode-hole-group-alt-name group))))
-                   (error "DEFINSTRUCTION: extra operand ~S claims a different FOR-CHOICE alternative"
+                   (%definstruction-error "DEFINSTRUCTION: extra operand ~S claims a different FOR-CHOICE alternative"
                           (word-operand-spec-name spec)))
                  (setf (word-variant-choice variant) (mode-hole-group-alt-name group))))))
    specs)
@@ -3240,7 +3253,7 @@ one's ONE-OF alternatives."
   "Expand every fixed-arity shape into its field-variant descriptors.
 Returns bindings and forms; menus and semantics are shared within a shape."
   (when (and (null operand-subclauses) (plusp (%mode-hole-count mode)))
-    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR hole~:P but no ~
 (operand ...) subclause was given -- a word-encoded operand has no default ~
 field to fall back to" machine name mode-name (%mode-hole-count mode)))
   (let* ((layout (instruction-word-layout-named
@@ -3370,7 +3383,7 @@ field identical in width and shift to the default's (#64)."
                                                     (find-machine-descriptor machine))
                                                   'opcode))))
       (when (or (minusp opcode) (>= opcode (ash 1 width)))
-        (error "DEFINSTRUCTION ~S ~S: opcode ~D does not fit the ~D-bit OPCODE field"
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: opcode ~D does not fit the ~D-bit OPCODE field"
                machine name opcode width)))))
 
 (defun %one-of-signed-disagreement (mode hole-alternatives-list &optional sources)
@@ -3413,7 +3426,7 @@ one-hole restriction used to allow."
     (loop for alts in (%one-of-signed-disagreement mode hole-alternatives-list)
           for i from 0
           when (and alts (not (member i carrying-indices)))
-            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+            do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
 disagree on :SIGNED, but this hole carries no sub-opcode selector -- per-hole :SIGNED needs a ~
 (variant (choice ...) (sub ...)) selector, alone or inside a (sub-opcode ...) table, as its ~
 decode-time record of which alternative matched"
@@ -3451,7 +3464,7 @@ naming a width directly, always wins over a matched alternative's own
           for specified in mode-specified
           for i from 0
           when (and alts specified (not (member i carrying-indices)))
-            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+            do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
 disagree on :WIDTH, but this hole carries no sub-opcode selector -- per-hole :WIDTH needs a ~
 (variant (choice ...) (sub ...)) selector, alone or inside a (sub-opcode ...) table, as its ~
 decode-time record of which alternative matched"
@@ -3482,7 +3495,7 @@ relativeness is static regardless of which one matched."
     (loop for alts in (%one-of-relative-disagreement mode hole-alternatives-list)
           for i from 0
           when (and alts (not (member i carrying-indices)))
-            do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+            do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
 disagree on :RELATIVE, but this hole carries no sub-opcode selector -- per-hole :RELATIVE needs a ~
 (variant (choice ...) (sub ...)) selector, alone or inside a (sub-opcode ...) table, as its ~
 decode-time record of which alternative matched"
@@ -3503,7 +3516,7 @@ rejects."
         for spec in specs
         for i from 0
         when (and alts (notevery #'word-variant-choice (word-operand-spec-variants spec)))
-          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+          do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
 disagree on :SIGNED, but not every field variant at that hole is CHOICE-selected -- ~
 per-hole :SIGNED needs a (choice m) selector on every variant as its decode-time record ~
 of which alternative matched" machine name i alts)))
@@ -3521,7 +3534,7 @@ rather than silently ignoring an inert declaration."
   (loop for alts in hole-alternatives-list
         for i from 0
         when (and alts (some (lambda (m) (mode-descriptor-width (%choice-key-descriptor m))) alts))
-          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
+          do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
 :WIDTH, but per-hole :WIDTH is permanently out of scope on word-encoded machine ~S -- operand ~
 sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
                       machine name i alts machine)))
@@ -3532,7 +3545,7 @@ sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
         for spec in specs
         for i from 0
         when (and alts (notevery #'word-variant-choice (word-operand-spec-variants spec)))
-          do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
+          do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S ~
 disagree on :RELATIVE, but not every field variant at that hole is CHOICE-selected -- ~
 per-hole :RELATIVE needs a (choice m) selector on every variant as its decode-time record ~
 of which alternative matched" machine name i alts)))
@@ -3550,14 +3563,14 @@ when it names a layout the machine's instruction-word clause does not
 declare (INSTRUCTION-WORD-LAYOUT-NAMED)."
   (when layout-subclause
     (unless (%word-machine-p machine)
-      (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (layout ...) is only meaningful on a ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (layout ...) is only meaningful on a ~
 word-encoded machine (#64) -- ~S declares no instruction-word clause"
              machine name context machine))
     (destructuring-bind (layout-name) (rest layout-subclause)
       (unless (instruction-word-layout-named
                (machine-descriptor-instruction-word (find-machine-descriptor machine))
                layout-name)
-        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no instruction-word layout named ~S on machine ~S"
+        (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no instruction-word layout named ~S on machine ~S"
                machine name context layout-name machine))
       layout-name)))
 
@@ -3596,17 +3609,17 @@ encode a different, silently wrapped one -- the same rationale as
   (destructuring-bind (field-value-kw field-name value) subclause
     (declare (ignore field-value-kw))
     (when (eq field-name 'opcode)
-      (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value opcode ...) is not allowed -- the ~
+      (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value opcode ...) is not allowed -- the ~
 opcode field is already given by this instruction's own (opcode n)" machine name context))
     (let ((field (instruction-word-field layout field-name)))
       (unless field
-        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no field named ~S in ~:[the default instruction-word ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no field named ~S in ~:[the default instruction-word ~
 layout~;instruction-word layout ~:*~S~] on machine ~S"
                machine name context field-name layout-name machine))
       (destructuring-bind (fname fwidth fshift) field
         (declare (ignore fname))
         (when (or (minusp value) (> value (1- (ash 1 fwidth))))
-          (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ~D) does not fit its ~D-bit field"
+          (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ~D) does not fit its ~D-bit field"
                  machine name context field-name value fwidth))
         (make-word-constant :name field-name :width fwidth :shift fshift :value value)))))
 
@@ -3623,7 +3636,7 @@ field OPERAND-FIELD-NAMES says an (operand ... :field F) hole here already
 claims -- both would OR two different values into the same bits, silently
 corrupting whichever one loses."
   (when (and field-value-subclauses (not (%word-machine-p machine)))
-    (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ...) is a word-encoded-machine-only ~
+    (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ...) is a word-encoded-machine-only ~
 mechanism (#136) -- ~S declares no instruction-word clause; a byte-encoded machine's analogue ~
 is (opcode n :sub s) (#125)" machine name context machine))
   (let ((constants (mapcar (lambda (s) (%parse-field-value-subclause machine name context layout layout-name s))
@@ -3632,11 +3645,11 @@ is (opcode n :sub s) (#125)" machine name context machine))
                       when (find (word-constant-name c) later :key #'word-constant-name)
                         return (word-constant-name c))))
       (when dup
-        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) is given more than once"
+        (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) is given more than once"
                machine name context dup)))
     (dolist (c constants)
       (when (member (word-constant-name c) operand-field-names)
-        (error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) names the same field an ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: (field-value ~S ...) names the same field an ~
 (operand ... :field ~S) subclause already uses -- a field may be pinned to a constant or ~
 carry an operand, not both" machine name context (word-constant-name c) (word-constant-name c))))
     constants))
@@ -3661,16 +3674,16 @@ per-field discrimination and has no use for a second, separate cell."
   (destructuring-bind (opcode &rest plist) (rest opcode-subclause)
     (loop for key in plist by #'cddr
           unless (eq key :sub)
-            do (error "DEFINSTRUCTION ~S ~S: unknown (opcode ...) option ~S" machine name key))
+            do (%definstruction-error "DEFINSTRUCTION ~S ~S: unknown (opcode ...) option ~S" machine name key))
     (let ((sub (getf plist :sub)))
       (when sub
         (when (%word-machine-p machine)
-          (error "DEFINSTRUCTION ~S ~S: (opcode ~S :sub ~S) -- a sub-opcode is a ~
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: (opcode ~S :sub ~S) -- a sub-opcode is a ~
 byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
                  machine name opcode sub machine))
         (let ((width (%machine-cell-width machine)))
           (when (or (minusp sub) (>= sub (ash 1 width)))
-            (error "DEFINSTRUCTION ~S ~S: sub-opcode ~D does not fit machine ~S's ~D-bit code cell"
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: sub-opcode ~D does not fit machine ~S's ~D-bit code cell"
                    machine name sub machine width))))
       (values opcode sub))))
 
@@ -3678,15 +3691,15 @@ byte-machine-only mechanism (#125), not supported on word-encoded machine ~S"
   (let ((seen nil))
     (dolist (subclause body)
       (unless (consp subclause)
-        (error "DEFINSTRUCTION ~S ~S: ~S has a malformed subclause ~S"
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: ~S has a malformed subclause ~S"
                machine name context subclause))
       (let ((head (first subclause)))
         (unless (member head allowed :test #'eq)
-          (error "DEFINSTRUCTION ~S ~S: ~S has an unknown subclause ~S"
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: ~S has an unknown subclause ~S"
                  machine name context subclause))
         (unless (member head repeatable :test #'eq)
           (when (member head seen :test #'eq)
-            (error "DEFINSTRUCTION ~S ~S: ~S has a duplicate ~S subclause"
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: ~S has a duplicate ~S subclause"
                    machine name context head))
           (cl:push head seen))))))
 
@@ -3730,13 +3743,13 @@ its absolute-mode sibling."
            (cycles-subclause (find 'cycles body :key #'first)))
       (%check-mode-hole-attributes mode machine name)
       (unless opcode-subclause
-        (error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
       (when (and sub-opcode-subclause (%word-machine-p machine))
-        (error "DEFINSTRUCTION ~S ~S: mode ~S: (sub-opcode ...) is a byte-machine-only ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: mode ~S: (sub-opcode ...) is a byte-machine-only ~
 mechanism (#128), not supported on word-encoded machine ~S" machine name mode-sym machine))
       (when (and field-value-subclauses (not (%word-machine-p machine)))
-        (error "DEFINSTRUCTION ~S ~S: mode ~S: (field-value ...) is a word-encoded-machine-only ~
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: mode ~S: (field-value ...) is a word-encoded-machine-only ~
 mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub s) (#125)"
                machine name mode-sym machine))
       (let ((layout-name (%parse-layout-subclause machine name mode-sym layout-subclause)))
@@ -3745,7 +3758,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
               (semantics-forms (cond
                                   (semantics-subclause (rest semantics-subclause))
                                   (default-semantics-forms default-semantics-forms)
-                                  (t (error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
+                                  (t (%definstruction-error "DEFINSTRUCTION ~S ~S: mode ~S has no ~
 (semantics ...) of its own and no shared top-level (semantics ...) default"
                                             machine name mode-sym)))))
           (%check-word-opcode machine name opcode)
@@ -3785,10 +3798,10 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
     (cond
       ((null subclauses) (values encoding-clause nil))
       ((or (rest subclauses) (rest (first subclauses)))
-       (error "DEFINSTRUCTION ~S ~S: (fallback) takes no arguments and may appear once"
+       (%definstruction-error "DEFINSTRUCTION ~S ~S: (fallback) takes no arguments and may appear once"
               machine name))
       ((not (%word-machine-p machine))
-       (error "DEFINSTRUCTION ~S ~S: (fallback) is a word-encoded-machine-only mechanism"
+       (%definstruction-error "DEFINSTRUCTION ~S ~S: (fallback) is a word-encoded-machine-only mechanism"
               machine name))
       (t (values (cons (first encoding-clause)
                        (remove (first subclauses) (rest encoding-clause)))
@@ -3950,165 +3963,166 @@ a hole matching none of the given keys -- including a hole with no recorded
 choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own (#126) -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
-  (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads fallbackp)
-    (dolist (clause clauses)
-      (when (member (first clause) seen-heads)
-        (error "DEFINSTRUCTION ~S ~S: duplicate ~S clause" machine name (first clause)))
-      (cl:push (first clause) seen-heads)
-      (case (first clause)
-        (modes (setf modes-clause clause))
-        (encoding (setf encoding-clause clause))
-        (semantics (setf semantics-clause clause))
-        (cycles (setf cycles-clause clause))
-        (t (error "Unknown DEFINSTRUCTION clause head ~S in ~S" (first clause) clause))))
-    (multiple-value-setq (encoding-clause fallbackp)
-      (%extract-fallback machine name encoding-clause))
-    (let* ((*definstruction-fallback* fallbackp)
-           (mode-forms (rest modes-clause))
-           (cycles-form (and cycles-clause (second cycles-clause))))
-      (cond
-        ;; No addressing mode -- no operand.
-        ((null mode-forms)
-         (unless encoding-clause
-           (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
-         (unless semantics-clause
-           (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
-         (%check-instruction-subclauses
-          (rest encoding-clause) machine name '(encoding)
-          '(opcode operand layout field-value) '(field-value))
-         (let* ((opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
-                (operand-subclause (find 'operand (rest encoding-clause) :key #'first))
-                (layout-subclause (find 'layout (rest encoding-clause) :key #'first))
-                ;; #136: repeatable, like OPERAND-SUBCLAUSES elsewhere --
-                ;; REMOVE-IF-NOT, not FIND.
-                (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
-                                                        (rest encoding-clause))))
-           (unless opcode-subclause
-             (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
-                    machine name))
-           (when operand-subclause
-             (error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
+  (let ((*definition-name* name))
+    (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads fallbackp)
+      (dolist (clause clauses)
+        (when (member (first clause) seen-heads)
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: duplicate ~S clause" machine name (first clause)))
+        (cl:push (first clause) seen-heads)
+        (case (first clause)
+          (modes (setf modes-clause clause))
+          (encoding (setf encoding-clause clause))
+          (semantics (setf semantics-clause clause))
+          (cycles (setf cycles-clause clause))
+          (t (%definstruction-error "Unknown DEFINSTRUCTION clause head ~S in ~S" (first clause) clause))))
+      (multiple-value-setq (encoding-clause fallbackp)
+        (%extract-fallback machine name encoding-clause))
+      (let* ((*definstruction-fallback* fallbackp)
+             (mode-forms (rest modes-clause))
+             (cycles-form (and cycles-clause (second cycles-clause))))
+        (cond
+          ;; No addressing mode -- no operand.
+          ((null mode-forms)
+           (unless encoding-clause
+             (%definstruction-error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
+           (unless semantics-clause
+             (%definstruction-error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+           (%check-instruction-subclauses
+            (rest encoding-clause) machine name '(encoding)
+            '(opcode operand layout field-value) '(field-value))
+           (let* ((opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
+                  (operand-subclause (find 'operand (rest encoding-clause) :key #'first))
+                  (layout-subclause (find 'layout (rest encoding-clause) :key #'first))
+                  ;; #136: repeatable, like OPERAND-SUBCLAUSES elsewhere --
+                  ;; REMOVE-IF-NOT, not FIND.
+                  (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
+                                                          (rest encoding-clause))))
+             (unless opcode-subclause
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
+                      machine name))
+             (when operand-subclause
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (encoding ...) has an (operand ...) subclause ~
 but no (modes ...) clause declares an addressing mode" machine name))
-           ;; #64/#136: a no-operand instruction has no field an ordinary
-           ;; operand hole could resolve, and every layout shares one OPCODE
-           ;; field, so naming a non-default layout here says nothing *unless*
-           ;; a (field-value ...) also pins one of that layout's other
-           ;; fields -- reject only the bare case, since the other genuinely
-           ;; needs the layout to know which fields exist to pin (CLS/RET-
-           ;; shaped CHIP8 opcodes, e.g. 00E0/00EE, need exactly this).
-           (when (and layout-subclause (null field-value-subclauses))
-             (error "DEFINSTRUCTION ~S ~S: (encoding ...) has a (layout ...) subclause ~
+             ;; #64/#136: a no-operand instruction has no field an ordinary
+             ;; operand hole could resolve, and every layout shares one OPCODE
+             ;; field, so naming a non-default layout here says nothing *unless*
+             ;; a (field-value ...) also pins one of that layout's other
+             ;; fields -- reject only the bare case, since the other genuinely
+             ;; needs the layout to know which fields exist to pin (CLS/RET-
+             ;; shaped CHIP8 opcodes, e.g. 00E0/00EE, need exactly this).
+             (when (and layout-subclause (null field-value-subclauses))
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (encoding ...) has a (layout ...) subclause ~
 but no (modes ...) clause declares an addressing mode and no (field-value ...) pins a field ~
 in it -- a no-operand instruction with nothing to pin has no field to resolve, so naming a ~
 layout has no effect" machine name))
-           (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
-             (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
-               (%check-word-opcode machine name opcode)
-               (let* ((layout (and (%word-machine-p machine)
-                                    (instruction-word-layout-named
-                                     (machine-descriptor-instruction-word (find-machine-descriptor machine))
-                                     layout-name)))
-                      (constants (%parse-field-value-subclauses machine name nil layout layout-name
-                                                                  field-value-subclauses nil))
-                      (constants-form (%word-constants-form constants)))
-                 (%instruction-registration-form
-                  machine name
-                  `(list ,(%descriptor-form machine name nil opcode nil nil
-                                            cycles-form
-                                            (%semantics-fn-form (rest semantics-clause) machine name nil nil)
-                                            sub nil nil nil layout-name constants-form))))))))
-        ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
-        ((consp (first mode-forms))
-         (when encoding-clause
-           (error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause gives ~
+             (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
+               (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+                 (%check-word-opcode machine name opcode)
+                 (let* ((layout (and (%word-machine-p machine)
+                                      (instruction-word-layout-named
+                                       (machine-descriptor-instruction-word (find-machine-descriptor machine))
+                                       layout-name)))
+                        (constants (%parse-field-value-subclauses machine name nil layout layout-name
+                                                                    field-value-subclauses nil))
+                        (constants-form (%word-constants-form constants)))
+                   (%instruction-registration-form
+                    machine name
+                    `(list ,(%descriptor-form machine name nil opcode nil nil
+                                              cycles-form
+                                              (%semantics-fn-form (rest semantics-clause) machine name nil nil)
+                                              sub nil nil nil layout-name constants-form))))))))
+          ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
+          ((consp (first mode-forms))
+           (when encoding-clause
+             (%definstruction-error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause gives ~
 each mode its own (opcode n) -- a top-level (encoding ...) clause is not allowed"
-                  machine name))
-         (unless (rest mode-forms)
-           (error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause needs ~
+                    machine name))
+           (unless (rest mode-forms)
+             (%definstruction-error "DEFINSTRUCTION ~S ~S: a multi-mode (modes ...) clause needs ~
 at least two modes -- use (modes MODE) with (encoding ...) for just one" machine name))
-         (let ((default-semantics-forms (and semantics-clause (rest semantics-clause)))
-               (all-bindings nil)
-               (all-forms nil))
-           ;; #150: each mode's own BINDINGS/FORMS accumulate separately --
-           ;; one shared LET* below wraps every mode's descriptors, so a
-           ;; sibling descriptor's semantics/alternatives/constants form is
-           ;; compiled once per tuple/mode rather than once per descriptor.
-           (dolist (variant-form mode-forms)
-             (multiple-value-bind (bindings forms)
-                 (%parse-mode-variant-clause-forms variant-form machine name
-                                                    default-semantics-forms cycles-form)
-               (setf all-bindings (nconc all-bindings bindings))
-               (setf all-forms (nconc all-forms forms))))
-           (%instruction-registration-form
-            machine name
-            `(let* (,@all-bindings) (%collect-instruction-descriptors ,@all-forms)))))
-        ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
-        ;; all shared with the rest of the instruction -- the M1 shape.
-        (t
-         (when (rest mode-forms)
-           (error "DEFINSTRUCTION ~S ~S: more than one bare addressing-mode ~
+           (let ((default-semantics-forms (and semantics-clause (rest semantics-clause)))
+                 (all-bindings nil)
+                 (all-forms nil))
+             ;; #150: each mode's own BINDINGS/FORMS accumulate separately --
+             ;; one shared LET* below wraps every mode's descriptors, so a
+             ;; sibling descriptor's semantics/alternatives/constants form is
+             ;; compiled once per tuple/mode rather than once per descriptor.
+             (dolist (variant-form mode-forms)
+               (multiple-value-bind (bindings forms)
+                   (%parse-mode-variant-clause-forms variant-form machine name
+                                                      default-semantics-forms cycles-form)
+                 (setf all-bindings (nconc all-bindings bindings))
+                 (setf all-forms (nconc all-forms forms))))
+             (%instruction-registration-form
+              machine name
+              `(let* (,@all-bindings) (%collect-instruction-descriptors ,@all-forms)))))
+          ;; Sugar: (modes MODE), one bare mode symbol, opcode/width/semantics
+          ;; all shared with the rest of the instruction -- the M1 shape.
+          (t
+           (when (rest mode-forms)
+             (%definstruction-error "DEFINSTRUCTION ~S ~S: more than one bare addressing-mode ~
 symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
 (opcode ...)) (~A (opcode ...)))" machine name (first mode-forms) (second mode-forms)))
-         (unless encoding-clause
-           (error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
-         (unless semantics-clause
-           (error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
-         (%check-instruction-subclauses
-          (rest encoding-clause) machine name '(encoding)
-          '(opcode operand field-value for-choice sub-opcode layout)
-          '(operand field-value for-choice))
-         (let* ((mode-sym (first mode-forms))
-                (mode (find-mode-descriptor mode-sym))
-                (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
-                (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
-                                                    (rest encoding-clause)))
-                ;; #136: repeatable, like OPERAND-SUBCLAUSES above --
-                ;; REMOVE-IF-NOT, not FIND.
-                (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
-                                                        (rest encoding-clause)))
-                ;; #120: repeatable, same reason as FIELD-VALUE-SUBCLAUSES.
-                (for-choice-subclauses (remove-if-not (lambda (c) (eq (first c) 'for-choice))
-                                                       (rest encoding-clause)))
-                (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first))
-                (layout-subclause (find 'layout (rest encoding-clause) :key #'first)))
-           (%check-mode-hole-attributes mode machine name)
-           (unless opcode-subclause
-             (error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
-                    machine name))
-            (multiple-value-bind (minimum-holes maximum-holes) (%mode-hole-count-range mode)
-              (declare (ignore minimum-holes))
-              (unless (or (zerop maximum-holes) operand-subclauses
-                           (some (lambda (c) (some (lambda (s) (eq (first s) 'operand)) (cddr c)))
-                                 for-choice-subclauses))
-                (error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
+           (unless encoding-clause
+             (%definstruction-error "DEFINSTRUCTION ~S ~S requires an (encoding ...) clause" machine name))
+           (unless semantics-clause
+             (%definstruction-error "DEFINSTRUCTION ~S ~S requires a (semantics ...) clause" machine name))
+           (%check-instruction-subclauses
+            (rest encoding-clause) machine name '(encoding)
+            '(opcode operand field-value for-choice sub-opcode layout)
+            '(operand field-value for-choice))
+           (let* ((mode-sym (first mode-forms))
+                  (mode (find-mode-descriptor mode-sym))
+                  (opcode-subclause (find 'opcode (rest encoding-clause) :key #'first))
+                  (operand-subclauses (remove-if-not (lambda (c) (eq (first c) 'operand))
+                                                      (rest encoding-clause)))
+                  ;; #136: repeatable, like OPERAND-SUBCLAUSES above --
+                  ;; REMOVE-IF-NOT, not FIND.
+                  (field-value-subclauses (remove-if-not (lambda (c) (eq (first c) 'field-value))
+                                                          (rest encoding-clause)))
+                  ;; #120: repeatable, same reason as FIELD-VALUE-SUBCLAUSES.
+                  (for-choice-subclauses (remove-if-not (lambda (c) (eq (first c) 'for-choice))
+                                                         (rest encoding-clause)))
+                  (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first))
+                  (layout-subclause (find 'layout (rest encoding-clause) :key #'first)))
+             (%check-mode-hole-attributes mode machine name)
+             (unless opcode-subclause
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
+                      machine name))
+              (multiple-value-bind (minimum-holes maximum-holes) (%mode-hole-count-range mode)
+                (declare (ignore minimum-holes))
+                (unless (or (zerop maximum-holes) operand-subclauses
+                             (some (lambda (c) (some (lambda (s) (eq (first s) 'operand)) (cddr c)))
+                                   for-choice-subclauses))
+                  (%definstruction-error "DEFINSTRUCTION ~S ~S: (modes ~A) declares an addressing mode but ~
 (encoding ...) has no (operand ...) subclause" machine name mode-sym)))
-           (when (and sub-opcode-subclause (%word-machine-p machine))
-             (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) is a byte-machine-only mechanism ~
+             (when (and sub-opcode-subclause (%word-machine-p machine))
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) is a byte-machine-only mechanism ~
 (#128), not supported on word-encoded machine ~S" machine name machine))
-           (when (and field-value-subclauses (not (%word-machine-p machine)))
-             (error "DEFINSTRUCTION ~S ~S: (field-value ...) is a word-encoded-machine-only ~
+             (when (and field-value-subclauses (not (%word-machine-p machine)))
+               (%definstruction-error "DEFINSTRUCTION ~S ~S: (field-value ...) is a word-encoded-machine-only ~
 mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub s) (#125)"
-                    machine name machine))
-           (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
-           (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
-             (%check-word-opcode machine name opcode)
-             (if (%word-machine-p machine)
-                 (multiple-value-bind (bindings forms)
-                     (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                                   opcode operand-subclauses
-                                                   mode mode-sym machine
-                                                   cycles-form (rest semantics-clause) layout-name
-                                                   field-value-subclauses for-choice-subclauses)
-                   (%instruction-registration-form
-                    machine name
-                    `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
-                 (multiple-value-bind (bindings forms)
-                     (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
-                                                  opcode sub operand-subclauses for-choice-subclauses
-                                                  sub-opcode-subclause cycles-form (rest semantics-clause))
-                   (%instruction-registration-form
-                    machine name
-                    `(let* (,@bindings) (list ,@forms)))))))))))))
+                      machine name machine))
+             (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
+             (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
+               (%check-word-opcode machine name opcode)
+               (if (%word-machine-p machine)
+                   (multiple-value-bind (bindings forms)
+                       (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                                                     opcode operand-subclauses
+                                                     mode mode-sym machine
+                                                     cycles-form (rest semantics-clause) layout-name
+                                                     field-value-subclauses for-choice-subclauses)
+                     (%instruction-registration-form
+                      machine name
+                      `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
+                   (multiple-value-bind (bindings forms)
+                       (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
+                                                    opcode sub operand-subclauses for-choice-subclauses
+                                                    sub-opcode-subclause cycles-form (rest semantics-clause))
+                     (%instruction-registration-form
+                      machine name
+                      `(let* (,@bindings) (list ,@forms))))))))))))))
 
 (defun %evaluate-instruction-registration (form)
   (eval form))

@@ -5,7 +5,7 @@
 
 (defun %check-positive (value what name)
   (unless (and (integerp value) (plusp value))
-    (error "~A for ~S must be a positive integer, got ~S" what name value))
+    (%defmachine-error "~A for ~S must be a positive integer, got ~S" what name value))
   value)
 
 (defun %check-endian (value name)
@@ -17,7 +17,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                    (member (first value) '(:little :big))
                    (member (second value) '(:little :big))
                    (integerp (third value)) (>= (third value) 2)))
-    (error "~S :endian must be :LITTLE, :BIG or (OUTER INNER GROUP), got ~S" name value))
+    (%defmachine-error "~S :endian must be :LITTLE, :BIG or (OUTER INNER GROUP), got ~S" name value))
   value)
 
 (defun %endian-byte-order (endian)
@@ -32,17 +32,17 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
   ;; must agree, since a mismatched pair almost certainly indicates a typo
   ;; in one or the other rather than an intentional partial naming.
   (destructuring-bind (name &key width count names) name-form
-    (unless width (error "register ~S requires :width" name))
+    (unless width (%defmachine-error "register ~S requires :width" name))
     (when names
       (unless (every #'symbolp names)
-        (error "register ~S :names must be a list of symbols, got ~S" name names))
+        (%defmachine-error "register ~S :names must be a list of symbols, got ~S" name names))
       (let ((dup (loop for (n . rest) on names
                         when (member n rest :test #'string-equal) return n)))
         (when dup
-          (error "register ~S :names: duplicate alias ~S" name dup)))
+          (%defmachine-error "register ~S :names: duplicate alias ~S" name dup)))
       (if count
           (unless (= count (length names))
-            (error "register ~S: :count ~D disagrees with :names' length ~D"
+            (%defmachine-error "register ~S: :count ~D disagrees with :names' length ~D"
                    name count (length names)))
           (setf count (length names))))
     (setf count (or count 1))
@@ -54,8 +54,8 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 (defun parse-stack-clause (form)
   ;; (stack NAME :width n :depth n)
   (destructuring-bind (name &key width depth) form
-    (unless width (error "stack ~S requires :width" name))
-    (unless depth (error "stack ~S requires :depth" name))
+    (unless width (%defmachine-error "stack ~S requires :width" name))
+    (unless depth (%defmachine-error "stack ~S requires :depth" name))
     (make-storage-element :name name :kind :stack
                            :width (%check-positive width ":width" name)
                            :depth (%check-positive depth ":depth" name))))
@@ -71,11 +71,11 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 (defun parse-stack-pointer-clause (form)
   (destructuring-bind (register &key memory (grows :down)) form
     (unless (symbolp register)
-      (error "stack-pointer ~S must be a symbol" register))
+      (%defmachine-error "stack-pointer ~S must be a symbol" register))
     (when (and memory (not (symbolp memory)))
-      (error "stack-pointer ~S :memory must be a symbol, got ~S" register memory))
+      (%defmachine-error "stack-pointer ~S :memory must be a symbol, got ~S" register memory))
     (unless (member grows '(:down :up))
-      (error "stack-pointer ~S :grows must be :DOWN or :UP, got ~S" register grows))
+      (%defmachine-error "stack-pointer ~S :grows must be :DOWN or :UP, got ~S" register grows))
     (make-stack-pointer-descriptor :register register :memory memory :grows grows)))
 
 ;; #166: resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
@@ -89,19 +89,19 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
       (let* ((reg (stack-pointer-descriptor-register sp))
              (element (gethash reg (machine-descriptor-table descriptor))))
         (unless (and element (eq (storage-element-kind element) :register))
-          (error "stack-pointer on machine ~S: ~S is not a declared register element"
+          (%defmachine-error "stack-pointer on machine ~S: ~S is not a declared register element"
                  name reg))
         (when (> (storage-element-count element) 1)
-          (error "stack-pointer on machine ~S: ~S is a banked (:count > 1) register -- ~
+          (%defmachine-error "stack-pointer on machine ~S: ~S is a banked (:count > 1) register -- ~
 only a scalar register may be a stack pointer" name reg))
         (when (gethash reg (machine-descriptor-stack-pointers descriptor))
-          (error "stack-pointer on machine ~S: more than one (stack-pointer ~S ...) clause"
+          (%defmachine-error "stack-pointer on machine ~S: more than one (stack-pointer ~S ...) clause"
                  name reg))
         (let ((given (stack-pointer-descriptor-memory sp)))
           (if given
               (let ((mem (gethash given (machine-descriptor-table descriptor))))
                 (unless (and mem (eq (storage-element-kind mem) :memory))
-                  (error "stack-pointer ~S on machine ~S: :memory ~S is not a declared ~
+                  (%defmachine-error "stack-pointer ~S on machine ~S: :memory ~S is not a declared ~
 memory element" reg name given)))
               (let ((memories (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
                                               (machine-descriptor-elements descriptor))))
@@ -109,9 +109,9 @@ memory element" reg name given)))
                   ((= (length memories) 1)
                    (setf (stack-pointer-descriptor-memory sp) (storage-element-name (first memories))))
                   ((null memories)
-                   (error "stack-pointer ~S on machine ~S: no memory element is declared -- ~
+                   (%defmachine-error "stack-pointer ~S on machine ~S: no memory element is declared -- ~
 name one explicitly with :memory" reg name))
-                  (t (error "stack-pointer ~S on machine ~S: more than one memory element ~
+                  (t (%defmachine-error "stack-pointer ~S on machine ~S: more than one memory element ~
 declared (~{~S~^ ~}) -- name one explicitly with :memory"
                             reg name (mapcar #'storage-element-name memories)))))))
         (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
@@ -127,31 +127,31 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
 (defun %parse-memory-region-form (form context)
   (destructuring-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write) form
     (unless (eq head 'region)
-      (error "~A: expected (region name start end ...), got ~S" context form))
+      (%defmachine-error "~A: expected (region name start end ...), got ~S" context form))
     (unless (symbolp name)
-      (error "~A: region name must be a symbol, got ~S" context name))
+      (%defmachine-error "~A: region name must be a symbol, got ~S" context name))
     (unless (and (integerp start) (>= start 0))
-      (error "~A region ~S: start must be a non-negative integer, got ~S" context name start))
+      (%defmachine-error "~A region ~S: start must be a non-negative integer, got ~S" context name start))
     (unless (and (integerp end) (>= end 0))
-      (error "~A region ~S: end must be a non-negative integer, got ~S" context name end))
+      (%defmachine-error "~A region ~S: end must be a non-negative integer, got ~S" context name end))
     (unless (<= start end)
-      (error "~A region ~S: start ~D must not be greater than end ~D" context name start end))
+      (%defmachine-error "~A region ~S: start ~D must not be greater than end ~D" context name start end))
     (unless (member kind '(:ram :rom :device))
-      (error "~A region ~S: :kind must be :RAM, :ROM or :DEVICE, got ~S" context name kind))
+      (%defmachine-error "~A region ~S: :kind must be :RAM, :ROM or :DEVICE, got ~S" context name kind))
     (when banks
       (unless (and (integerp banks) (plusp banks))
-        (error "~A region ~S: :banks must be a positive integer, got ~S" context name banks))
+        (%defmachine-error "~A region ~S: :banks must be a positive integer, got ~S" context name banks))
       (when (eq kind :device)
-        (error "~A region ~S: :banks does not apply to a :DEVICE region" context name)))
+        (%defmachine-error "~A region ~S: :banks does not apply to a :DEVICE region" context name)))
     (unless (member on-write '(:ignore :error))
-      (error "~A region ~S: :on-write must be :IGNORE or :ERROR, got ~S" context name on-write))
+      (%defmachine-error "~A region ~S: :on-write must be :IGNORE or :ERROR, got ~S" context name on-write))
     (unless (or (eq on-write :ignore) (eq kind :rom))
-      (error "~A region ~S: :on-write only applies to a :ROM region" context name))
+      (%defmachine-error "~A region ~S: :on-write only applies to a :ROM region" context name))
     (when (and (or read write) (not (eq kind :device)))
-      (error "~A region ~S: :read/:write only apply to a :DEVICE region" context name))
+      (%defmachine-error "~A region ~S: :read/:write only apply to a :DEVICE region" context name))
     (dolist (fn (list (cons :read read) (cons :write write)))
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
-        (error "~A region ~S: ~A must be a function designator (a symbol or a ~
+        (%defmachine-error "~A region ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" context name (car fn) (cdr fn))))
     (make-memory-region :name name :start start :end end :kind kind :banks banks
                          :on-write on-write :read read :write write)))
@@ -163,11 +163,11 @@ function), got ~S" context name (car fn) (cdr fn))))
 (defun %check-memory-regions (regions context)
   (loop for (region . rest) on regions
         do (when (member (memory-region-name region) rest :key #'memory-region-name)
-             (error "~A: duplicate region name ~S" context (memory-region-name region)))
+             (%defmachine-error "~A: duplicate region name ~S" context (memory-region-name region)))
            (dolist (other rest)
              (when (and (<= (memory-region-start region) (memory-region-end other))
                         (<= (memory-region-start other) (memory-region-end region)))
-               (error "~A: region ~S (~D-~D) overlaps region ~S (~D-~D)"
+               (%defmachine-error "~A: region ~S (~D-~D) overlaps region ~S (~D-~D)"
                       context (memory-region-name region) (memory-region-start region)
                       (memory-region-end region) (memory-region-name other)
                       (memory-region-start other) (memory-region-end other)))))
@@ -184,8 +184,8 @@ function), got ~S" context name (car fn) (cdr fn))))
   (let* ((region-forms (remove-if-not (lambda (f) (and (consp f) (eq (first f) 'region))) form))
          (plist-forms (remove-if (lambda (f) (and (consp f) (eq (first f) 'region))) form)))
     (destructuring-bind (name &key width addr-width cell-width (endian :little)) plist-forms
-      (unless width (error "memory ~S requires :width" name))
-      (unless addr-width (error "memory ~S requires :addr-width" name))
+      (unless width (%defmachine-error "memory ~S requires :width" name))
+      (unless addr-width (%defmachine-error "memory ~S requires :addr-width" name))
       (%check-positive width ":width" name)
       (%check-positive addr-width ":addr-width" name)
       (let* ((context (format nil "memory ~S" name))
@@ -195,7 +195,7 @@ function), got ~S" context name (car fn) (cdr fn))))
                        context)))
         (dolist (r regions)
           (when (> (memory-region-end r) max-address)
-            (error "~A region ~S: end ~D is outside the element's address range 0-~D"
+            (%defmachine-error "~A region ~S: end ~D is outside the element's address range 0-~D"
                    context (memory-region-name r) (memory-region-end r) max-address)))
         (make-storage-element :name name :kind :memory
                                :width width
@@ -230,15 +230,15 @@ function), got ~S" context name (car fn) (cdr fn))))
                              init tick receive detach save load)
       form
     (unless (symbolp name)
-      (error "device ~S: name must be a symbol" name))
+      (%defmachine-error "device ~S: name must be a symbol" name))
     (dolist (v (list (cons :id id) (cons :version version) (cons :manufacturer manufacturer)))
       (unless (and (integerp (cdr v)) (>= (cdr v) 0))
-        (error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
+        (%defmachine-error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
     (dolist (fn (list (cons :init init) (cons :tick tick)
                        (cons :receive receive) (cons :detach detach)
                        (cons :save save) (cons :load load)))
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
-        (error "device ~S: ~A must be a function designator (a symbol or a ~
+        (%defmachine-error "device ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" name (car fn) (cdr fn))))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
                              :init init :tick tick :receive receive :detach detach
@@ -269,33 +269,33 @@ register (#163)."
                              mask-when mask-flag (cycles 0) (drop-on-zero-vector t)
                              mask-on-deliver)
       form
-    (unless vector (error "interrupts requires :vector"))
+    (unless vector (%defmachine-error "interrupts requires :vector"))
     (unless (%interrupt-place-designator-p vector)
-      (error "interrupts :vector must be a symbol or (NAME INDEX), got ~S" vector))
-    (unless message (error "interrupts requires :message"))
+      (%defmachine-error "interrupts :vector must be a symbol or (NAME INDEX), got ~S" vector))
+    (unless message (%defmachine-error "interrupts requires :message"))
     (unless (%interrupt-place-designator-p message)
-      (error "interrupts :message must be a symbol or (NAME INDEX), got ~S" message))
-    (unless save (error "interrupts requires :save"))
+      (%defmachine-error "interrupts :message must be a symbol or (NAME INDEX), got ~S" message))
+    (unless save (%defmachine-error "interrupts requires :save"))
     (unless (and (listp save) (every #'%interrupt-place-designator-p save))
-      (error "interrupts :save must be a list of symbols or (NAME INDEX) places, got ~S" save))
+      (%defmachine-error "interrupts :save must be a list of symbols or (NAME INDEX) places, got ~S" save))
     (when (and stack (not (symbolp stack)))
-      (error "interrupts :stack must be a symbol, got ~S" stack))
+      (%defmachine-error "interrupts :stack must be a symbol, got ~S" stack))
     (unless (and (integerp queue) (plusp queue))
-      (error "interrupts :queue must be a positive integer, got ~S" queue))
+      (%defmachine-error "interrupts :queue must be a positive integer, got ~S" queue))
     (unless (member on-overflow '(:error :trap :drop :drop-oldest))
-      (error "interrupts :on-overflow must be :ERROR, :TRAP, :DROP or :DROP-OLDEST, got ~S"
+      (%defmachine-error "interrupts :on-overflow must be :ERROR, :TRAP, :DROP or :DROP-OLDEST, got ~S"
              on-overflow))
     (when (and mask-when mask-flag)
-      (error "interrupts: at most one of :mask-when/:mask-flag may be given"))
+      (%defmachine-error "interrupts: at most one of :mask-when/:mask-flag may be given"))
     (when (and mask-when (not (or (symbolp mask-when) (functionp mask-when))))
-      (error "interrupts :mask-when must be a function designator (a symbol or a ~
+      (%defmachine-error "interrupts :mask-when must be a function designator (a symbol or a ~
 function), got ~S" mask-when))
     (when (and mask-flag (not (symbolp mask-flag)))
-      (error "interrupts :mask-flag must be a symbol, got ~S" mask-flag))
+      (%defmachine-error "interrupts :mask-flag must be a symbol, got ~S" mask-flag))
     (unless (and (integerp cycles) (>= cycles 0))
-      (error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
+      (%defmachine-error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
     (when (and mask-on-deliver (not mask-flag))
-      (error "interrupts :mask-on-deliver requires :mask-flag"))
+      (%defmachine-error "interrupts :mask-on-deliver requires :mask-flag"))
     (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
                                 :queue-depth queue :on-overflow on-overflow
                                 :mask-when mask-when :mask-flag mask-flag :cycles cycles
@@ -324,9 +324,9 @@ function), got ~S" mask-when))
             ((gethash given (machine-descriptor-stack-pointers descriptor))
              (values given :pointer))
             ((and element (eq (storage-element-kind element) :register))
-             (error "interrupts on machine ~S: :stack ~S is a register with no ~
+             (%defmachine-error "interrupts on machine ~S: :stack ~S is a register with no ~
 (stack-pointer ~S ...) clause declared" name given given))
-            (t (error "interrupts on machine ~S: :stack ~S is not a declared stack ~
+            (t (%defmachine-error "interrupts on machine ~S: :stack ~S is not a declared stack ~
 element or a register bound by (stack-pointer ...)" name given))))
         (let ((stacks (remove-if-not (lambda (e) (eq (storage-element-kind e) :stack))
                                       (machine-descriptor-elements descriptor))))
@@ -338,11 +338,11 @@ element or a register bound by (stack-pointer ...)" name given))))
                (cond
                  ((= (length pointers) 1) (values (first pointers) :pointer))
                  ((null pointers)
-                  (error "interrupts on machine ~S: :save needs a stack, but no stack ~
+                  (%defmachine-error "interrupts on machine ~S: :save needs a stack, but no stack ~
 element or stack-pointer is declared -- name one explicitly with :stack" name))
-                 (t (error "interrupts on machine ~S: more than one stack-pointer declared ~
+                 (t (%defmachine-error "interrupts on machine ~S: more than one stack-pointer declared ~
 (~{~S~^ ~}) -- name one explicitly with :stack" name pointers)))))
-            (t (error "interrupts on machine ~S: more than one stack element declared ~
+            (t (%defmachine-error "interrupts on machine ~S: more than one stack element declared ~
 (~{~S~^ ~}) -- name one explicitly with :stack" name (mapcar #'storage-element-name stacks))))))))
 
 ;; #109: resolves an INTERRUPT-DESCRIPTOR's symbolic names -- :VECTOR/
@@ -360,10 +360,10 @@ element or stack-pointer is declared -- name one explicitly with :stack" name))
                (let* ((n (if (consp place) (first place) place))
                       (e (element n)))
                  (unless e
-                   (error "interrupts on machine ~S: ~A ~S is not a declared storage element"
+                   (%defmachine-error "interrupts on machine ~S: ~A ~S is not a declared storage element"
                           name what n))
                  (unless (member (storage-element-kind e) kinds)
-                   (error "interrupts on machine ~S: ~A ~S must be a ~{~S~^ or a ~} element, ~
+                   (%defmachine-error "interrupts on machine ~S: ~A ~S must be a ~{~S~^ or a ~} element, ~
 got ~S" name what n kinds (storage-element-kind e)))
                  ;; A bare banked register is ambiguous (which bank cell?) and
                  ;; rejected at DEFMACHINE time rather than at first delivery.
@@ -373,10 +373,10 @@ got ~S" name what n kinds (storage-element-kind e)))
                  (if (consp place)
                      (unless (and (eq (storage-element-kind e) :register)
                                   (< -1 (second place) (storage-element-count e)))
-                       (error "interrupts on machine ~S: ~A ~S is out of range for register ~S ~
+                       (%defmachine-error "interrupts on machine ~S: ~A ~S is out of range for register ~S ~
 (~D cell~:P)" name what place n (storage-element-count e)))
                      (when (> (storage-element-count e) 1)
-                       (error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
+                       (%defmachine-error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
 name one cell as (~S INDEX), or use a scalar register" name what n n))))))
       (require-kind (interrupt-descriptor-vector interrupts) '(:register) ":vector")
       (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
@@ -401,7 +401,7 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
             (let* ((n (if (consp place) (first place) place))
                    (width (storage-element-width (gethash n (machine-descriptor-table descriptor)))))
               (when (> width cell-width)
-                (error "interrupts on machine ~S: :save place ~S is ~D bits wide, too wide ~
+                (%defmachine-error "interrupts on machine ~S: :save place ~S is ~D bits wide, too wide ~
 for stack-pointer ~S's memory ~S (~D-bit cells)"
                        name place width stack-name (stack-pointer-descriptor-memory sp) cell-width)))))))))
 
@@ -433,7 +433,7 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
 ;; "instruction-word layout NAME" for an alternate.
 (defun %parse-instruction-word-fields (field-forms width context)
   (unless field-forms
-    (error "~A requires at least one (field name width) clause" context))
+    (%defmachine-error "~A requires at least one (field name width) clause" context))
   (let ((seen (make-hash-table :test 'eq))
         (opcode-seen nil)
         (total 0)
@@ -441,18 +441,18 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
     (dolist (field-form field-forms)
       (destructuring-bind (head name field-width) field-form
         (unless (eq head 'field)
-          (error "~A: expected (field name width), got ~S" context field-form))
+          (%defmachine-error "~A: expected (field name width), got ~S" context field-form))
         (when (gethash name seen)
-          (error "~A: duplicate field name ~S" context name))
+          (%defmachine-error "~A: duplicate field name ~S" context name))
         (setf (gethash name seen) t)
         (%check-positive field-width ":width" name)
         (when (eq name 'opcode) (setf opcode-seen t))
         (cl:push (list name field-width) fields)
         (incf total field-width)))
     (unless opcode-seen
-      (error "~A requires exactly one field named OPCODE" context))
+      (%defmachine-error "~A requires exactly one field named OPCODE" context))
     (unless (= total width)
-      (error "~A: field widths sum to ~D, but :width is ~D" context total width))
+      (%defmachine-error "~A: field widths sum to ~D, but :width is ~D" context total width))
     ;; FIELDS was accumulated MSB-first-declared but CL:PUSH-reversed, so
     ;; NREVERSE restores declaration order before computing each field's
     ;; shift from the LSB -- the last-declared field sits at shift 0.
@@ -474,9 +474,9 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
 (defun %parse-instruction-word-layout-form (form width)
   (destructuring-bind (head name &rest field-forms) form
     (unless (eq head 'layout)
-      (error "instruction-word: expected (layout name (field ...)...), got ~S" form))
+      (%defmachine-error "instruction-word: expected (layout name (field ...)...), got ~S" form))
     (unless (symbolp name)
-      (error "instruction-word: layout name must be a symbol, got ~S" name))
+      (%defmachine-error "instruction-word: layout name must be a symbol, got ~S" name))
     (make-instruction-word-layout
      :name name
      :width width
@@ -498,10 +498,10 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
          ;; #191: (extra-word-order FIELD...) -- at most one, default layout only.
          (order-forms (remove-if-not (lambda (f) (eq (first f) 'extra-word-order)) rest-forms))
          (field-forms (remove-if (lambda (f) (member (first f) '(layout extra-word-order))) rest-forms)))
-    (unless width (error "instruction-word requires :width"))
+    (unless width (%defmachine-error "instruction-word requires :width"))
     (%check-positive width ":width" 'instruction-word)
     (when (rest order-forms)
-      (error "instruction-word: more than one (extra-word-order ...) clause"))
+      (%defmachine-error "instruction-word: more than one (extra-word-order ...) clause"))
     (let* ((fields (%parse-instruction-word-fields field-forms width "instruction-word"))
            (opcode-field (find 'opcode fields :key #'first))
            (extra-word-order (rest (first order-forms)))
@@ -522,18 +522,18 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
       ;; know which layout matched first.
       (loop for tail on extra-word-order
             do (unless (find (first tail) fields :key #'first)
-                 (error "instruction-word: extra-word-order names ~S, which is not a declared field"
+                 (%defmachine-error "instruction-word: extra-word-order names ~S, which is not a declared field"
                         (first tail)))
                (when (member (first tail) (rest tail))
-                 (error "instruction-word: extra-word-order names ~S twice" (first tail))))
+                 (%defmachine-error "instruction-word: extra-word-order names ~S twice" (first tail))))
       (let ((names (mapcar #'instruction-word-layout-name alternates)))
         (loop for tail on names
               when (member (first tail) (rest tail))
-                do (error "instruction-word: duplicate layout name ~S" (first tail))))
+                do (%defmachine-error "instruction-word: duplicate layout name ~S" (first tail))))
       (dolist (alt alternates)
         (let ((alt-opcode (instruction-word-field alt 'opcode)))
           (unless (equal (rest alt-opcode) (rest opcode-field))
-            (error "instruction-word layout ~S: OPCODE field ~S disagrees with the ~
+            (%defmachine-error "instruction-word layout ~S: OPCODE field ~S disagrees with the ~
 default layout's OPCODE field ~S -- every layout must place OPCODE identically"
                    (instruction-word-layout-name alt) alt-opcode opcode-field))))
       (make-instruction-word-layout
@@ -555,7 +555,7 @@ number of cells. Setting ENDIAN here (rather than resolving it per-decode)
 means %DECODE-WORD-INSTRUCTION (decoder.lisp) needs no extra lookup."
   (let ((width (instruction-word-layout-width layout)))
     (unless (zerop (mod width cell-width))
-      (error "instruction-word :width ~D must be a whole number of ~D-bit cells"
+      (%defmachine-error "instruction-word :width ~D must be a whole number of ~D-bit cells"
              width cell-width))
     (setf (instruction-word-layout-width-cells layout) (/ width cell-width)
           (instruction-word-layout-cell-width layout) cell-width
@@ -704,19 +704,19 @@ rationale as CELL-WIDTH-CACHE (#63)."
 (defun parse-undefined-opcode-clause (form)
   (destructuring-bind (policy) form
     (unless (member policy '(:fault :nop :trap))
-      (error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
+      (%defmachine-error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
     policy))
 
 (defun parse-properties-clause (form)
   (unless (evenp (length form))
-    (error "properties requires key/value pairs, got ~S" form))
+    (%defmachine-error "properties requires key/value pairs, got ~S" form))
   (let ((keys (loop for (key) on form by #'cddr collect key)))
     (dolist (key keys)
       (unless (keywordp key)
-        (error "properties key must be a keyword, got ~S" key)))
+        (%defmachine-error "properties key must be a keyword, got ~S" key)))
     (loop for (key . rest) on keys
           when (member key rest)
-            do (error "properties: duplicate key ~S" key)))
+            do (%defmachine-error "properties: duplicate key ~S" key)))
   (copy-list form))
 
 (defun parse-machine-clauses (clauses)
@@ -730,32 +730,32 @@ rationale as CELL-WIDTH-CACHE (#63)."
         (flags (dolist (e (parse-flags-clause (rest clause))) (cl:push e elements)))
         (instruction-word
          (when instruction-word
-           (error "DEFMACHINE: more than one instruction-word clause"))
+           (%defmachine-error "DEFMACHINE: more than one instruction-word clause"))
          (setf instruction-word (parse-instruction-word-clause clause)))
         (clock-speed
          (when clock-speed
-           (error "DEFMACHINE: more than one clock-speed clause"))
+           (%defmachine-error "DEFMACHINE: more than one clock-speed clause"))
          (setf clock-speed (parse-clock-speed-clause (rest clause))))
         (device (cl:push (parse-device-clause (rest clause)) devices))
         (interrupts
          (when interrupts
-           (error "DEFMACHINE: more than one interrupts clause"))
+           (%defmachine-error "DEFMACHINE: more than one interrupts clause"))
          (setf interrupts (parse-interrupts-clause (rest clause))))
         (stack-pointer (cl:push (parse-stack-pointer-clause (rest clause)) stack-pointers))
         (undefined-opcode
          (when undefined-opcode-seen
-           (error "DEFMACHINE: more than one undefined-opcode clause"))
+           (%defmachine-error "DEFMACHINE: more than one undefined-opcode clause"))
          (setf undefined-opcode-seen t
                undefined-opcode (parse-undefined-opcode-clause (rest clause))))
         (properties
          (when properties-seen
-           (error "DEFMACHINE: more than one properties clause"))
+           (%defmachine-error "DEFMACHINE: more than one properties clause"))
          (setf properties-seen t
                properties (parse-properties-clause (rest clause))))
         ((without-instructions instruction-cycles)
-         (error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
+         (%defmachine-error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
                 (first clause)))
-        (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
+        (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
             (nreverse stack-pointers) undefined-opcode properties)))
 
@@ -772,7 +772,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
-          (error "Duplicate storage element name ~S in machine ~S"
+          (%defmachine-error "Duplicate storage element name ~S in machine ~S"
                  (storage-element-name element) name))
         (setf (gethash (storage-element-name element) seen) t)
         (setf (gethash (storage-element-name element) (machine-descriptor-table descriptor))
@@ -784,7 +784,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
         (loop for alias in (storage-element-names element)
               for index from 0
               do (when (gethash alias seen)
-                   (error "Duplicate storage element name ~S in machine ~S" alias name))
+                   (%defmachine-error "Duplicate storage element name ~S in machine ~S" alias name))
                  (setf (gethash alias seen) t)
                   (setf (gethash (symbol-name alias) (machine-descriptor-register-aliases descriptor))
                         index)
@@ -797,14 +797,14 @@ rationale as CELL-WIDTH-CACHE (#63)."
         ;; (memory ram ...) itself.
         (dolist (region (storage-element-regions element))
           (when (gethash (memory-region-name region) seen)
-            (error "Duplicate storage element name ~S in machine ~S" (memory-region-name region) name))
+            (%defmachine-error "Duplicate storage element name ~S in machine ~S" (memory-region-name region) name))
           (setf (gethash (memory-region-name region) seen) t)))
       ;; #108: a declared device's name joins the same namespace -- SEEN also
       ;; catches a device colliding with an element name, register alias, or
       ;; region name, and two devices sharing a name.
       (dolist (device-descriptor devices)
         (when (gethash (device-descriptor-name device-descriptor) seen)
-          (error "Duplicate storage element name ~S in machine ~S"
+          (%defmachine-error "Duplicate storage element name ~S in machine ~S"
                  (device-descriptor-name device-descriptor) name))
         (setf (gethash (device-descriptor-name device-descriptor) seen) t))
       (setf (machine-descriptor-elements descriptor) elements)
@@ -867,7 +867,7 @@ key by key (interrupts, properties); flags are additive."
       (let ((head (first clause)))
         (case head
           ((instruction-word stack-pointer)
-           (error "DEFMACHINE: a machine extending another cannot declare ~S -- inherited ~
+           (%defmachine-error "DEFMACHINE: a machine extending another cannot declare ~S -- inherited ~
 instructions are compiled against the parent's" head))
           ((register stack memory device)
            (let ((position (position-if (lambda (p) (and (eq (first p) head)
@@ -892,7 +892,7 @@ instructions are compiled against the parent's" head))
                  (setf (nth position merged)
                        (cons head (%plist-merge (rest (nth position merged)) (rest clause))))
                  (cl:push clause added))))
-          (t (error "Unknown DEFMACHINE clause head ~S in ~S" head clause)))))
+          (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" head clause)))))
     (append merged (nreverse added))))
 
 (defun %element-operand-cells (element)
@@ -903,7 +903,7 @@ instructions are compiled against the parent's" head))
   (let ((pname (machine-descriptor-name parent))
         (cname (machine-descriptor-name child)))
     (flet ((fail (fmt &rest args)
-             (error "Machine ~S cannot extend ~S: ~?" cname pname fmt args)))
+             (%defmachine-error "Machine ~S cannot extend ~S: ~?" cname pname fmt args)))
       (unless (equalp (machine-descriptor-instruction-word parent)
                       (machine-descriptor-instruction-word child))
         (fail "the instruction word differs"))
@@ -953,58 +953,60 @@ instructions are compiled against the parent's" head))
 (defun %define-machine (name parent clauses)
   "Build and register machine NAME. With PARENT, CLAUSES merge over PARENT's
 and the parent's instructions are copied in."
-  (if (null parent)
-      (setf (gethash name *machines*) (build-machine-descriptor name clauses))
-      (let ((parent-md (or (gethash parent *machines*)
-                           (error "Machine ~S extends ~S, which has not been defined" name parent))))
-        (when (or (eq name parent) (member name (%machine-ancestors parent)))
-          (error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
-        (let* ((removals (loop for c in clauses when (eq (first c) 'without-instructions)
-                               append (mapcar #'%mnemonic-key (rest c))))
-               (cycles (loop for c in clauses when (eq (first c) 'instruction-cycles)
-                             append (mapcar (lambda (entry)
-                                              (destructuring-bind (mnemonic n) entry
-                                                (unless (and (integerp n) (>= n 0))
-                                                  (error "instruction-cycles ~S must be a non-negative integer, got ~S"
-                                                         mnemonic n))
-                                                (cons (%mnemonic-key mnemonic) n)))
-                                            (rest c))))
-               (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles)))
-                                 clauses))
-               (child (build-machine-descriptor
-                       name (%merge-machine-clauses (machine-descriptor-source-clauses parent-md)
-                                                    plain))))
-          (dolist (key (append removals (mapcar #'car cycles)))
-            (unless (gethash key (machine-descriptor-instructions parent-md))
-              (warn 'style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
-                 :format-arguments (list name key parent))))
-          (dolist (entry cycles)
-            (when (member (car entry) removals :test #'string=)
-              (error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
-          (%check-inheritance-compatible parent-md child)
-          (setf (machine-descriptor-parent child) parent
-                (machine-descriptor-removed-instructions child)
-                (remove-duplicates (append removals (machine-descriptor-removed-instructions parent-md))
-                                   :test #'string=)
-                (machine-descriptor-instruction-cycles child) cycles)
-          (%inherit-instructions parent-md child)
-          (setf (gethash name *machines*) child)))))
+  (let ((*definition-name* name))
+    (if (null parent)
+        (setf (gethash name *machines*) (build-machine-descriptor name clauses))
+        (let ((parent-md (or (gethash parent *machines*)
+                             (%defmachine-error "Machine ~S extends ~S, which has not been defined" name parent))))
+          (when (or (eq name parent) (member name (%machine-ancestors parent)))
+            (%defmachine-error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
+          (let* ((removals (loop for c in clauses when (eq (first c) 'without-instructions)
+                                 append (mapcar #'%mnemonic-key (rest c))))
+                 (cycles (loop for c in clauses when (eq (first c) 'instruction-cycles)
+                               append (mapcar (lambda (entry)
+                                                (destructuring-bind (mnemonic n) entry
+                                                  (unless (and (integerp n) (>= n 0))
+                                                    (%defmachine-error "instruction-cycles ~S must be a non-negative integer, got ~S"
+                                                           mnemonic n))
+                                                  (cons (%mnemonic-key mnemonic) n)))
+                                              (rest c))))
+                 (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles)))
+                                   clauses))
+                 (child (build-machine-descriptor
+                         name (%merge-machine-clauses (machine-descriptor-source-clauses parent-md)
+                                                      plain))))
+            (dolist (key (append removals (mapcar #'car cycles)))
+              (unless (gethash key (machine-descriptor-instructions parent-md))
+                (warn 'style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
+                   :format-arguments (list name key parent))))
+            (dolist (entry cycles)
+              (when (member (car entry) removals :test #'string=)
+                (%defmachine-error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
+            (%check-inheritance-compatible parent-md child)
+            (setf (machine-descriptor-parent child) parent
+                  (machine-descriptor-removed-instructions child)
+                  (remove-duplicates (append removals (machine-descriptor-removed-instructions parent-md))
+                                     :test #'string=)
+                  (machine-descriptor-instruction-cycles child) cycles)
+            (%inherit-instructions parent-md child)
+            (setf (gethash name *machines*) child))))))
 
 (defun %parse-machine-name (name-spec)
   "Values NAME and PARENT from a DEFMACHINE name or (NAME (:extends PARENT))."
-  (if (symbolp name-spec)
-      (values name-spec nil)
-      (destructuring-bind (name &rest options) name-spec
-        (let (parent parent-seen)
-          (dolist (option options)
-            (unless (and (consp option) (eq (first option) :extends) (= (length option) 2)
-                         (symbolp (second option)))
-              (error "DEFMACHINE ~S: unknown name option ~S; expected (:extends PARENT)"
-                     name option))
-            (when parent-seen
-              (error "DEFMACHINE ~S: more than one :extends option" name))
-            (setf parent-seen t parent (second option)))
-          (values name parent)))))
+  (let ((*definition-name* (if (consp name-spec) (car name-spec) name-spec)))
+    (if (symbolp name-spec)
+        (values name-spec nil)
+        (destructuring-bind (name &rest options) name-spec
+          (let (parent parent-seen)
+            (dolist (option options)
+              (unless (and (consp option) (eq (first option) :extends) (= (length option) 2)
+                           (symbolp (second option)))
+                (%defmachine-error "DEFMACHINE ~S: unknown name option ~S; expected (:extends PARENT)"
+                       name option))
+              (when parent-seen
+                (%defmachine-error "DEFMACHINE ~S: more than one :extends option" name))
+              (setf parent-seen t parent (second option)))
+            (values name parent))))))
 
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:

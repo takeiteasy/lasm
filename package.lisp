@@ -39,6 +39,14 @@
    #:interrupt-queue-full-machine
    #:lasm-trap
    #:lasm-trap-tag
+   #:definition-error
+   #:definition-error-message
+   #:definition-error-name
+   #:machine-definition-error
+   #:instruction-definition-error
+   #:mode-definition-error
+   #:lexer-definition-error
+   #:directive-definition-error
    #:runtime-location
    #:runtime-location-pc
    #:runtime-location-listing-line

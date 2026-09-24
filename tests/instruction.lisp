@@ -236,90 +236,90 @@
            (fiveam:is (and message (search (string-upcase (symbol-name head)) message)))))
 
 (fiveam:test missing-encoding-clause-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate)
              (semantics (set! x operand))))))
 
 (fiveam:test missing-semantics-clause-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate)
              (encoding (opcode #xFF) (operand :mode))))))
 
 (fiveam:test multiple-bare-mode-symbols-signals-error
   ;; more than one bare mode symbol requires the multi-mode list form
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate absolute)
              (encoding (opcode #xFF) (operand :mode))
              (semantics (set! x operand))))))
 
 (fiveam:test multi-mode-with-top-level-encoding-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))
              (encoding (opcode #xFF))
              (semantics nil)))))
 
 (fiveam:test multi-mode-single-variant-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (opcode #xF0)))
              (semantics nil)))))
 
 (fiveam:test multi-mode-variant-without-opcode-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (semantics nil)) (absolute (opcode #xF1)))
              (semantics nil)))))
 
 (fiveam:test multi-mode-variant-without-semantics-or-default-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes (immediate (opcode #xF0)) (absolute (opcode #xF1)))))))
 
 (fiveam:test multi-mode-rejects-unknown-and-malformed-subclauses
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (modes (immediate (opcode #xF0))
                             (absolute (opcode #xF1) (cycle 2)))
                      (semantics nil))))
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (modes (immediate (opcode #xF0) stray)
                             (absolute (opcode #xF1)))
                      (semantics nil)))))
 
 (fiveam:test encoding-rejects-unknown-subclauses-in-both-shapes
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (encoding (opcode #xF0) (opcod #xF1))
                      (semantics nil))))
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (modes immediate)
                      (encoding (opcode #xF0) (operand :mode) (cycle 2))
                      (semantics nil)))))
 
 (fiveam:test instruction-rejects-duplicate-singular-subclauses
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (modes (immediate (opcode #xF0) (cycles 2) (cycles 3))
                             (absolute (opcode #xF1)))
                      (semantics nil))))
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (encoding (opcode #xF0) (opcode #xF1))
                      (semantics nil))))
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction instr-test-machine bogus
                      (modes immediate)
                      (encoding (opcode #xF0) (opcode #xF1) (operand :mode))
                      (semantics nil)))))
 
 (fiveam:test word-mode-rejects-unknown-subclause
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (macroexpand-1 '(definstruction word-test-machine bogus
                      (modes (immediate (opcode 1) (cycle 2))
                             (absolute (opcode 2)))
@@ -342,14 +342,14 @@
     (fiveam:is (= 3 (instruction-descriptor-total-operand-width movi)))))
 
 (fiveam:test multi-operand-instruction-too-few-operand-subclauses-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test multi-operand-instruction-too-many-operand-subclauses-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate)
              (encoding (opcode #xFF) (operand :width 1) (operand :width 1))
@@ -358,7 +358,7 @@
 (fiveam:test multi-operand-instruction-with-no-operand-subclause-in-multi-mode-form-signals-error
   ;; the multi-mode form's operand-subclause default only applies to a
   ;; single-hole mode -- a two-hole mode has no single width to default to
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes (two-hole-test-mode (opcode #xFF)) (absolute (opcode #xFE)))
              (semantics nil)))))
@@ -376,7 +376,7 @@
     (fiveam:is (= #xAB (mref m 'ram #x10)))))
 
 (fiveam:test multi-operand-instruction-duplicate-operand-name-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand n :width 1) (operand n :width 1))
@@ -387,7 +387,7 @@
   ;; operand field the same would leave (semantics ...) unable to see one of
   ;; them, so this is rejected at DEFINSTRUCTION time rather than silently
   ;; shadowing the register.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand a :width 1) (operand :width 1))
@@ -398,14 +398,14 @@
   ;; WITH-MACHINE-BINDINGS as a MACROLET rather than a symbol-macro -- an
   ;; operand named V would shadow it exactly as silently as a scalar
   ;; register would, so %SCALAR-BINDABLE-NAMES must reject it too.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand v :width 1) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test multi-operand-instruction-operand-name-shadowing-flag-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand z :width 1) (operand :width 1))
@@ -421,7 +421,7 @@
   (memory ram :width 8 :addr-width 16))
 
 (fiveam:test multi-operand-instruction-operand-name-shadowing-register-alias-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFF) (operand v0 :width 1) (operand :width 1))
@@ -431,14 +431,14 @@
 ;;; reusing ALIAS-TEST-MACHINE above (its V bank carries :NAMES (v0 v1)).
 
 (fiveam:test operand-register-naming-unknown-element-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFE) (operand x :width 1 :register nosuch) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test operand-register-naming-a-non-register-element-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFE) (operand x :width 1 :register ram) (operand :width 1))
@@ -447,7 +447,7 @@
 (fiveam:test operand-register-naming-an-unnamed-register-signals-error
   ;; ALIAS-TEST-MACHINE's PC is a scalar register declaring no #72 :NAMES --
   ;; :REGISTER only makes sense against a bank the disassembler can alias.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes two-hole-test-mode)
              (encoding (opcode #xFE) (operand x :width 1 :register pc) (operand :width 1))
@@ -458,14 +458,14 @@
   ;; time (disassembler.lisp's %OPERAND-RENDER-VALUES) -- combined with
   ;; :REGISTER, that would corrupt a bank index rather than merely
   ;; mis-render one.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes relative)
              (encoding (opcode #xFE) (operand :mode :register v))
              (semantics nil)))))
 
 (fiveam:test operand-register-on-a-signed-hole-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes instr-signed-imm-test-mode)
              (encoding (opcode #xFE) (operand :mode :register v))
@@ -490,7 +490,7 @@
     (fiveam:is (equal '(dst src) (instruction-descriptor-operand-names moo)))))
 
 (fiveam:test one-of-mode-too-few-operand-subclauses-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes oo-instr-two)
              (encoding (opcode #xFF) (operand :width 1))
@@ -613,7 +613,7 @@ second: nop" :machine 'instr-test-machine))))
     (one-of relative-one-of-hole-test-a relative-one-of-hole-test-b) :relative t)
 
 (fiveam:test relative-mode-whose-single-hole-is-a-one-of-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes relative-one-of-hole-test-mode)
              (encoding (opcode #xFE) (operand :width 1))
@@ -632,28 +632,28 @@ second: nop" :machine 'instr-test-machine))))
     (one-of signed-one-of-hole-test-a signed-one-of-hole-test-b) :signed t)
 
 (fiveam:test signed-mode-whose-single-hole-is-a-one-of-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes signed-one-of-hole-test-mode)
              (encoding (opcode #xFD) (operand :width 1))
              (semantics nil)))))
 
 (fiveam:test unknown-clause-head-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (bogus-clause 1)
              (encoding (opcode #xFF))
              (semantics nil)))))
 
 (fiveam:test mode-without-operand-subclause-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (modes immediate)
              (encoding (opcode #xFF))
              (semantics nil)))))
 
 (fiveam:test operand-subclause-without-mode-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine bogus
              (encoding (opcode #xFF) (operand :mode))
              (semantics nil)))))
@@ -754,7 +754,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (equal (list #x4C #x56 #x34 #x12) (encode-instruction jmpfar (list #x123456))))))
 
 (fiveam:test ambiguous-memory-element-requires-explicit-width
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction multi-memory-machine bogus
              (modes absolute)
              (encoding (opcode #xFF) (operand :mode))
@@ -864,7 +864,7 @@ second: nop" :machine 'instr-test-machine))))
 ;;; instruction-word layout parsing (machine.lisp)
 
 (fiveam:test instruction-word-clause-requires-width
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine
              (instruction-word (field opcode 4))))))
 
@@ -875,7 +875,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; fails earlier with a different error ("no memory element declared",
   ;; %MACHINE-CELL-WIDTH), which FIVEAM:SIGNALS ERROR can't tell apart from
   ;; the intended failure.
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine
              (memory ram :width 8 :addr-width 8)
              (instruction-word :width 12 (field opcode 12))))))
@@ -884,23 +884,23 @@ second: nop" :machine 'instr-test-machine))))
   ;; Same check, on a machine whose cell width isn't 8 -- :width 24 doesn't
   ;; divide evenly by a 16-bit cell (24 mod 16 = 8), so this must still
   ;; signal rather than only ever checking against a hardcoded 8.
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine-16
              (memory ram :width 16 :addr-width 8 :cell-width 16)
              (instruction-word :width 24 (field opcode 24))))))
 
 (fiveam:test instruction-word-clause-requires-opcode-field
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine
              (instruction-word :width 16 (field a 16))))))
 
 (fiveam:test instruction-word-clause-rejects-duplicate-field-names
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine
              (instruction-word :width 16 (field opcode 8) (field opcode 8))))))
 
 (fiveam:test instruction-word-clause-field-widths-must-sum-to-word-width
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-machine
              (instruction-word :width 16 (field opcode 4) (field a 4))))))
 
@@ -1118,7 +1118,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (null (instruction-word-layout-named layout 'no-such-layout)))))
 
 (fiveam:test instruction-word-layout-rejects-duplicate-layout-name
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-layouts-machine
              (memory ram :width 8 :addr-width 8)
              (instruction-word :width 16
@@ -1127,7 +1127,7 @@ second: nop" :machine 'instr-test-machine))))
                (layout dup (field opcode 4) (field x 12)))))))
 
 (fiveam:test instruction-word-layout-widths-must-match-default
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-layouts-machine
              (memory ram :width 8 :addr-width 8)
              (instruction-word :width 16
@@ -1135,7 +1135,7 @@ second: nop" :machine 'instr-test-machine))))
                (layout narrower (field opcode 4) (field x 4)))))))
 
 (fiveam:test instruction-word-layout-opcode-field-width-must-match-default
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-layouts-machine
              (memory ram :width 8 :addr-width 8)
              (instruction-word :width 16
@@ -1143,7 +1143,7 @@ second: nop" :machine 'instr-test-machine))))
                (layout wide-opcode (field opcode 8) (field x 8)))))))
 
 (fiveam:test instruction-word-layout-opcode-field-shift-must-match-default
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-word-layouts-machine
              (memory ram :width 8 :addr-width 8)
              (instruction-word :width 16
@@ -1151,7 +1151,7 @@ second: nop" :machine 'instr-test-machine))))
                (layout shifted-opcode (field x 12) (field opcode 4)))))))
 
 (fiveam:test definstruction-layout-subclause-rejects-unknown-layout-name
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-layouts-test-machine bogus
              (modes word-layouts-x)
              (encoding (opcode 5) (layout no-such-layout)
@@ -1159,7 +1159,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! a x))))))
 
 (fiveam:test definstruction-layout-subclause-rejects-field-not-in-selected-layout
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-layouts-test-machine bogus
              (modes word-layouts-x)
              (encoding (opcode 5) (layout wide)
@@ -1167,14 +1167,14 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! a z))))))
 
 (fiveam:test definstruction-layout-subclause-rejected-on-byte-machine
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction test-machine bogus
              (modes immediate)
              (encoding (opcode 200) (layout anything) (operand :mode))
              (semantics)))))
 
 (fiveam:test definstruction-layout-subclause-rejected-on-no-operand-instruction
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-layouts-test-machine bogus
              (modes)
              (encoding (opcode 6) (layout wide))
@@ -1299,14 +1299,14 @@ second: nop" :machine 'instr-test-machine))))
                                  lines))))))
 
 (fiveam:test field-value-rejected-on-byte-machine
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction test-machine bogus
              (modes immediate)
              (encoding (opcode 201) (field-value n 1) (operand :mode))
              (semantics)))))
 
 (fiveam:test field-value-rejects-unknown-field
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction field-value-test-machine bogus
              (modes field-value-x)
              (encoding (opcode 3) (field-value zzz 1)
@@ -1314,7 +1314,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! (a x) 0))))))
 
 (fiveam:test field-value-rejects-opcode-as-target-field
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction field-value-test-machine bogus
              (modes field-value-x)
              (encoding (opcode 3) (field-value opcode 1)
@@ -1322,7 +1322,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! (a x) 0))))))
 
 (fiveam:test field-value-rejects-out-of-range-value
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction field-value-test-machine bogus
              (modes field-value-x)
              (encoding (opcode 3) (field-value n 16)
@@ -1330,7 +1330,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! (a x) 0))))))
 
 (fiveam:test field-value-rejects-duplicate-pin
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction field-value-test-machine bogus
              (modes field-value-x)
              (encoding (opcode 3) (field-value n 1) (field-value n 2)
@@ -1338,7 +1338,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (set! (a x) 0))))))
 
 (fiveam:test field-value-rejects-collision-with-operand-field
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction field-value-test-machine bogus
              (modes field-value-x)
              (encoding (opcode 3) (field-value x 1)
@@ -1681,14 +1681,14 @@ second: nop" :machine 'instr-test-machine))))
 ;;; Two operand subclauses naming the same field carry the identical hazard.
 
 (fiveam:test word-operand-rejects-opcode-as-target-field
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-layouts-test-machine bogus
              (modes word-layouts-x)
              (encoding (opcode 13) (operand v :field opcode))
              (semantics (set! a v))))))
 
 (fiveam:test word-operand-rejects-duplicate-target-field
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-layouts-test-machine bogus
              (modes word-layouts-xy)
              (encoding (opcode 13)
@@ -1714,7 +1714,7 @@ second: nop" :machine 'instr-test-machine))))
 ;;; Decodability checks (#20's own ambiguity, %CHECK-WORD-VARIANTS)
 
 (fiveam:test word-variant-inline-range-overflowing-field-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 3)
@@ -1724,7 +1724,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test word-variant-escape-overflowing-field-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 3)
@@ -1734,7 +1734,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test word-variant-escape-colliding-with-inline-range-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 3)
@@ -1752,7 +1752,7 @@ second: nop" :machine 'instr-test-machine))))
 ;; distinguish CHOICE-selected from value-selected variants -- this test
 ;; only closes the ticket-#63 gap of having no coverage for this exact shape.
 (fiveam:test word-variant-value-selected-overlapping-inline-ranges-signal-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 3)
@@ -1949,7 +1949,7 @@ second: nop" :machine 'instr-test-machine))))
 (defmode wc-signed-one-of-hole-test-mode (one-of wc-reg wc-ind) :signed t)
 
 (fiveam:test word-signed-mode-whose-single-hole-is-a-one-of-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-signed-one-of-hole-test-mode)
              (encoding (opcode 5)
@@ -1959,7 +1959,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test choice-inline-without-range-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -1981,7 +1981,7 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test choice-on-non-one-of-hole-signals-error
   ;; WORD-IMM's single hole is a plain EXPR, not a ONE-OF -- CHOICE only
   ;; selects between ONE-OF alternatives.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 5)
@@ -1993,7 +1993,7 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test choice-not-among-hole-alternatives-signals-error
   ;; WORD-ABS is a registered mode, so FIND-MODE-DESCRIPTOR alone wouldn't
   ;; catch this -- it just isn't one of WC-TWO's own ONE-OF alternatives.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2025,7 +2025,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; WC-TWO has only two alternatives (WC-REG, WC-IND); claiming both with
   ;; CHOICE-selected variants leaves no unclaimed alternative for the
   ;; value-selected (:ELSE) one to be stamped with.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2039,7 +2039,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; WC-THREE (below) has three alternatives; claiming only one with a
   ;; CHOICE-selected variant leaves two unclaimed for the value-selected
   ;; variants -- nothing tells decode which of the two they belong to.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-three)
              (encoding (opcode 5)
@@ -2050,7 +2050,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test choice-overlapping-inline-ranges-signal-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2091,7 +2091,7 @@ second: nop" :machine 'instr-test-machine))))
   (semantics (set! b operand)))
 
 (fiveam:test choice-duplicate-escapes-signal-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2140,7 +2140,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (string= "wcal [$5]" (disassembly-line-text (first lines))))))
 
 (fiveam:test alias-without-canonical-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes wc-alias)
              (encoding (opcode 5)
@@ -2150,7 +2150,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test alias-disagreeing-on-cells-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2160,7 +2160,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test two-non-alias-escapes-still-signal-with-alias-present
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes wc-alias)
              (encoding (opcode 5)
@@ -2171,7 +2171,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test alias-on-inline-or-else-variant-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2179,7 +2179,7 @@ second: nop" :machine 'instr-test-machine))))
                          (variant (choice wc-reg) inline :range (0 7) :alias t)
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil))))
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction alias-test-machine bogus
              (modes wc-two)
              (encoding (opcode 5)
@@ -2319,7 +2319,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (search "[$3,$64]" (disassembly-line-text (first lines))))))
 
 (fiveam:test for-choice-missing-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction varying-hole-test-machine bogus
              (modes vh-mode)
              (encoding
@@ -2331,7 +2331,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test for-choice-wrong-arity-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction varying-hole-test-machine bogus
              (modes vh-mode)
              (encoding
@@ -2344,7 +2344,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test for-choice-unknown-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction varying-hole-test-machine bogus
              (modes vh-mode)
              (encoding
@@ -2360,7 +2360,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; VH-IDX contributes a FOR-CHOICE group but no (CHOICE VH-IDX) variant
   ;; claims it on SRC -- %FILTER-TUPLE-GOVERNING-SPECS' own tuple then has
   ;; nothing left in its filtered menu.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction varying-hole-test-machine bogus
              (modes vh-mode)
              (encoding
@@ -2376,7 +2376,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; is just as much an unclaimed-alternative case as the over-count one
   ;; above -- SRC only claims VH-IDX, so the base tuple's own filtered menu
   ;; comes up empty too.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction varying-hole-test-machine bogus
              (modes vh-mode)
              (encoding
@@ -2656,7 +2656,7 @@ second: nop" :machine 'instr-test-machine))))
       (fiveam:is (equal '(100000) values)))))
 
 (fiveam:test word-extra-word-cells-zero-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 5)
@@ -2666,7 +2666,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics nil)))))
 
 (fiveam:test word-extra-word-cells-non-integer-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes word-imm)
              (encoding (opcode 12)
@@ -2907,7 +2907,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (= (wrap-value -1 16) (sref m 'a)))))
 
 (fiveam:test choice-case-unknown-operand-name-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 12)
@@ -2917,7 +2917,7 @@ second: nop" :machine 'instr-test-machine))))
              (semantics (choice-case no-such-operand (wc-reg 1)))))))
 
 (fiveam:test choice-case-key-not-among-hole-alternatives-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes wc-two)
              (encoding (opcode 12)
@@ -2981,7 +2981,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
   ;; before that backfill even runs: %CHECK-WORD-VARIANTS validates a
   ;; not-yet-CHOICE-selected variant's range as unsigned, and -512..-1 has no
   ;; valid unsigned 10-bit encoding.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction mixed-field-test-machine wsibad
              (modes wsi-mix)
              (encoding (opcode 4)
@@ -2999,7 +2999,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
 ;; against the (unsigned-declared) 600..700 range, a DECODE-FAILURE for an
 ;; encoding that assembled cleanly.
 (fiveam:test one-of-signed-word-mixed-field-backfilled-to-a-signed-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction mixed-field-test-machine wsibad3
              (modes wsi-mix)
              (encoding (opcode 6)
@@ -3014,7 +3014,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
 ;; alternative it came from, so %CHECK-WORD-ONE-OF-SIGNED itself (not
 ;; %CHECK-WORD-VARIANTS' unsigned-range check above) is what rejects this.
 (fiveam:test one-of-signed-word-wholly-value-selected-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction mixed-field-test-machine wsibad2
              (modes wsi-mix)
              (encoding (opcode 4)
@@ -3054,7 +3054,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
       (fiveam:is (eq 'wc-ind (%matched-choice-name choices 1))))))
 
 (fiveam:test word-opcode-overflowing-opcode-field-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (encoding (opcode 16))
              (semantics nil)))))
@@ -3142,7 +3142,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
 (defmode wrel-two (one-of wrel-abs wrel-rel))
 
 (fiveam:test word-per-hole-relative-one-of-requires-choice-selector-on-disagreement
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-relative-test-machine bogus
              (modes wrel-two)
              (encoding (opcode 3)
@@ -3271,7 +3271,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
   ;; unlike the byte-encoded multi-mode form, a word-encoded single-hole mode
   ;; still requires an explicit (operand ...) subclause -- there is no
   ;; default field to fall back to
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine bogus
              (modes (word-imm (opcode 3)) (word-abs (opcode 4) (operand value :field src)))
              (semantics nil)))))
@@ -3884,7 +3884,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (:no-error (&rest values) (declare (ignore values)) (fiveam:fail "expected OPCODE-CONFLICT"))))
 
 (fiveam:test sub-opcode-on-word-machine-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine subwrong
              (modes wc-two)
              (encoding (opcode 15 :sub 0) (operand v :field src))
@@ -3893,7 +3893,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 (fiveam:test sub-opcode-too-wide-for-cell-width-signals-error
   ;; INSTR-TEST-MACHINE's code cell is 8 bits wide (its sole memory element,
   ;; RAM, is :WIDTH 8) -- 256 doesn't fit.
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine subwide
              (modes immediate)
              (encoding (opcode #xBA :sub 256) (operand :mode))
@@ -4039,7 +4039,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 ;; More than one operand hole carrying a sub selector -- the sub-opcode cell
 ;; is singular, so two holes each wanting to pick it has no coherent meaning.
 (fiveam:test hole-selected-sub-opcode-two-holes-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad1
              (modes oo-instr-two)
              (encoding (opcode #xC1)
@@ -4054,7 +4054,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 ;; A sub selector on a hole that isn't a ONE-OF at all has nothing to select
 ;; between.
 (fiveam:test hole-selected-sub-opcode-non-one-of-hole-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad2
              (modes immediate)
              (encoding (opcode #xC2)
@@ -4065,7 +4065,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 ;; An unclaimed alternative -- unlike #118's word-machine mixed-field rule,
 ;; there is no value-selected fallback for it to resolve into here.
 (fiveam:test hole-selected-sub-opcode-unclaimed-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad3
              (modes sc-instr-one)
              (encoding (opcode #xC3)
@@ -4075,7 +4075,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 
 ;; Two alternatives claiming the same sub value can never be told apart.
 (fiveam:test hole-selected-sub-opcode-duplicate-sub-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad4
              (modes sc-instr-one)
              (encoding (opcode #xC4)
@@ -4087,7 +4087,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 ;; An explicit (opcode n :sub s) and a hole-selected selector would both be
 ;; writing the same cell.
 (fiveam:test hole-selected-sub-opcode-conflicts-with-explicit-sub-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad5
              (modes sc-instr-one)
              (encoding (opcode #xC5 :sub 9)
@@ -4098,7 +4098,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 
 ;; A sub value that doesn't fit the machine's code cell width.
 (fiveam:test hole-selected-sub-opcode-too-wide-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine scbad6
              (modes sc-instr-one)
              (encoding (opcode #xC6)
@@ -4112,7 +4112,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 ;; (operand NAME :width n (variant ...)) spec doesn't even parse as a
 ;; word-encoded (operand NAME :field f ...) subclause.
 (fiveam:test hole-selected-sub-opcode-on-word-machine-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine scwordbad
              (modes wc-two)
              (encoding (opcode 20)
@@ -4213,7 +4213,7 @@ signd #-100" :machine 'instr-test-machine)
 ;; hole-selected sub-opcode selector at all has no decode-time record of
 ;; which alternative matched -- %CHECK-BYTE-ONE-OF-SIGNED must reject it.
 (fiveam:test one-of-signed-disagreement-without-selector-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine signdbad1
              (modes si-instr-one)
              (encoding (opcode #xC8)
@@ -4301,7 +4301,7 @@ widthd #300" :machine 'instr-test-machine)
 ;; selector at all, has no decode-time record of which alternative matched
 ;; -- %CHECK-BYTE-ONE-OF-WIDTH must reject it.
 (fiveam:test one-of-width-disagreement-without-selector-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine widthdbad1
              (modes wi-instr-one)
              (encoding (opcode #x61)
@@ -4347,7 +4347,7 @@ widthd #300" :machine 'instr-test-machine)
 ;; hole whose alternatives declare :WIDTH at all (agreeing or not) is a
 ;; DEFINSTRUCTION-time error rather than a silently inert declaration.
 (fiveam:test one-of-width-on-word-machine-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction mixed-field-test-machine widthdword
              (modes wi-instr-one)
              (encoding (opcode 7)
@@ -4422,7 +4422,7 @@ reld #*" :machine 'instr-test-machine)
 ;; which alternative matched -- %CHECK-BYTE-ONE-OF-RELATIVE must reject it,
 ;; mirroring %CHECK-BYTE-ONE-OF-SIGNED's own selector requirement.
 (fiveam:test one-of-relative-disagreement-without-selector-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine reldbad1
              (modes rl-instr-one)
              (encoding (opcode #x66)
@@ -4471,7 +4471,7 @@ reld #*" :machine 'instr-test-machine)
 
 ;; Identical field ranges cannot distinguish the selected alternative.
 (fiveam:test overlapping-word-relative-alternatives-signal-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction mixed-field-test-machine reldword
              (modes rl-instr-one)
              (encoding (opcode 8)
@@ -4886,7 +4886,7 @@ target: nop")
 ;; Missing combination -- the table's own generalization of #126's "every
 ;; alternative claimed" rule to "every combination claimed".
 (fiveam:test sub-opcode-table-missing-combination-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad1
              (modes oo-instr-two)
              (encoding (opcode #xE0)
@@ -4901,7 +4901,7 @@ target: nop")
 ;; Duplicated combination -- two entries claiming the same (choice ...) can
 ;; never be told apart either.
 (fiveam:test sub-opcode-table-duplicated-combination-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad2
              (modes oo-instr-two)
              (encoding (opcode #xE1)
@@ -4917,7 +4917,7 @@ target: nop")
 
 ;; (choice ...) arity must equal the mode's participating ONE-OF hole count.
 (fiveam:test sub-opcode-table-wrong-arity-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad3
              (modes oo-instr-two)
              (encoding (opcode #xE2)
@@ -4929,7 +4929,7 @@ target: nop")
 
 ;; A (choice ...) name that isn't one of its own hole's ONE-OF alternatives.
 (fiveam:test sub-opcode-table-unknown-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad4
              (modes oo-instr-two)
              (encoding (opcode #xE3)
@@ -4944,7 +4944,7 @@ target: nop")
 
 ;; Two combinations claiming the same sub value.
 (fiveam:test sub-opcode-table-duplicate-sub-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad5
              (modes oo-instr-two)
              (encoding (opcode #xE4)
@@ -4969,7 +4969,7 @@ target: nop")
 (defmode nw-two (one-of nw-a1 nw-a2 nw-a3) "," (one-of nw-a1 nw-a2 nw-a3))
 
 (fiveam:test sub-opcode-table-product-too-wide-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction subtab-narrow-machine sctbad6
              (modes nw-two)
              (encoding (opcode 0)
@@ -4982,7 +4982,7 @@ target: nop")
 ;; A (sub-opcode ...) table and a per-hole (variant (choice m) (sub s))
 ;; selector on another hole would both be writing the same cell.
 (fiveam:test sub-opcode-table-conflicts-with-per-hole-selector-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad7
              (modes oo-instr-two)
              (encoding (opcode #xE5)
@@ -5000,7 +5000,7 @@ target: nop")
 ;; A (sub-opcode ...) table and an explicit (opcode n :sub s) would also both
 ;; be writing the same cell.
 (fiveam:test sub-opcode-table-conflicts-with-explicit-sub-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad8
              (modes oo-instr-two)
              (encoding (opcode #xE6 :sub 9)
@@ -5016,7 +5016,7 @@ target: nop")
 ;; (sub-opcode ...) is a byte-machine-only mechanism, same as a hole-selected
 ;; single-hole selector.
 (fiveam:test sub-opcode-table-on-word-machine-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction word-test-machine sctwordbad
              (modes wc-two)
              (encoding (opcode 20)
@@ -5028,7 +5028,7 @@ target: nop")
 ;; A mode with no ONE-OF hole at all has nothing for a table to select
 ;; between.
 (fiveam:test sub-opcode-table-no-one-of-hole-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine sctbad9
              (modes absolute)
              (encoding (opcode #xE7)
@@ -5167,7 +5167,7 @@ target: nop")
 
 ;; (holes) with no indices at all names nothing to cover.
 (fiveam:test sub-opcode-table-holes-clause-empty-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine holtabbad1
              (modes holes-three)
              (encoding (opcode #xEB)
@@ -5180,7 +5180,7 @@ target: nop")
 
 ;; A duplicate hole index in (holes ...).
 (fiveam:test sub-opcode-table-holes-clause-duplicate-index-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine holtabbad2
              (modes holes-three)
              (encoding (opcode #xEC)
@@ -5193,7 +5193,7 @@ target: nop")
 
 ;; A hole index out of range for this mode's own hole count.
 (fiveam:test sub-opcode-table-holes-clause-out-of-range-index-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine holtabbad3
              (modes holes-three)
              (encoding (opcode #xED)
@@ -5209,7 +5209,7 @@ target: nop")
 (defmode holes-mixed expr "," (one-of holes-a1 holes-a2))
 
 (fiveam:test sub-opcode-table-holes-clause-non-one-of-index-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine holtabbad4
              (modes holes-mixed)
              (encoding (opcode #xEE)
@@ -5224,7 +5224,7 @@ target: nop")
 ;; ONE-OF hole count -- a 3-name (choice ...) against a 2-hole (holes 0 2)
 ;; subset is a mismatch.
 (fiveam:test sub-opcode-table-holes-clause-wrong-arity-signals-error
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction instr-test-machine holtabbad5
              (modes holes-three)
              (encoding (opcode #xEF)
@@ -5295,7 +5295,7 @@ target: nop")
       (fiveam:is (equal (list -100) values)))))
 
 (fiveam:test defmachine-rejects-invalid-endian
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine endian-bad-machine
              (memory ram :width 8 :addr-width 8 :endian :middle)))))
 
@@ -5430,14 +5430,14 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
       (fiveam:is (= 3 size)))))
 
 (fiveam:test extra-word-order-rejects-an-undeclared-field
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-order-machine
              (memory ram :width 16 :addr-width 16 :cell-width 16)
              (instruction-word :width 16 (field opcode 8) (field dst 8)
                (extra-word-order nope))))))
 
 (fiveam:test extra-word-order-rejects-a-repeated-field
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine bogus-order-machine
              (memory ram :width 16 :addr-width 16 :cell-width 16)
              (instruction-word :width 16 (field opcode 8) (field dst 8)
@@ -5560,7 +5560,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
     (:no-error () (fiveam:fail "expected OPCODE-CONFLICT"))))
 
 (fiveam:test fallback-rejected-on-byte-machine
-  (fiveam:signals error
+  (fiveam:signals instruction-definition-error
     (eval '(definstruction test-machine fbbyte
              (encoding (opcode 201) (fallback))
              (semantics nil)))))

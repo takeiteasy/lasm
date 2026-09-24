@@ -36,7 +36,13 @@ For context, see [Machine model](machine-model.md#conditions),
 | `unresolved-label` | `lasm-syntax-error` | `unresolved-label-name` |
 | `unknown-instruction` | `lasm-error` | `unknown-instruction-machine`, `unknown-instruction-mnemonic`, `unknown-instruction-opcode` |
 | `no-matching-choice` | `lasm-error` | `no-matching-choice-machine`, `no-matching-choice-instruction`, `no-matching-choice-operand`, `no-matching-choice-choice` |
-| `opcode-conflict` | `lasm-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |
+| `definition-error` | `lasm-error` | `definition-error-message`, `definition-error-name` |
+| `machine-definition-error` | `definition-error` | — |
+| `instruction-definition-error` | `definition-error` | — |
+| `mode-definition-error` | `definition-error` | — |
+| `lexer-definition-error` | `definition-error` | — |
+| `directive-definition-error` | `definition-error` | — |
+| `opcode-conflict` | `instruction-definition-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |
 | `macro-error` | `lasm-syntax-error` | — |
 | `include-error` | `lasm-syntax-error` | — |
 | `conditional-error` | `lasm-syntax-error` | — |

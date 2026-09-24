@@ -53,7 +53,7 @@
   (fiveam:finishes (make-machine 'interrupt-test-machine)))
 
 (fiveam:test defmachine-rejects-more-than-one-interrupts-clause
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-dup-clause-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4)
@@ -62,7 +62,7 @@
              (interrupts :vector ia :message a :save (pc))))))
 
 (fiveam:test defmachine-rejects-interrupts-vector-naming-nothing
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-bad-vector-test
              (register pc :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4)
@@ -70,7 +70,7 @@
              (interrupts :vector nosuch :message a :save (pc))))))
 
 (fiveam:test defmachine-rejects-interrupts-save-naming-nothing
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-bad-save-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4)
@@ -78,7 +78,7 @@
              (interrupts :vector ia :message a :save (nosuch))))))
 
 (fiveam:test defmachine-rejects-interrupts-mask-flag-naming-a-non-flag
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-bad-mask-flag-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4)
@@ -86,7 +86,7 @@
              (interrupts :vector ia :message a :save (pc) :mask-flag a)))))
 
 (fiveam:test defmachine-rejects-a-banked-register-as-vector
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-banked-vector-test
              (register pc :width 8) (register ia :width 8 :count 4) (register a :width 8)
              (stack sp :width 8 :depth 4)
@@ -94,7 +94,7 @@
              (interrupts :vector ia :message a :save (pc))))))
 
 (fiveam:test defmachine-rejects-both-mask-when-and-mask-flag
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-both-masks-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4) (flags z)
@@ -102,14 +102,14 @@
              (interrupts :vector ia :message a :save (pc) :mask-when zerop :mask-flag z)))))
 
 (fiveam:test defmachine-rejects-interrupts-with-no-stack-and-no-explicit-one
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-no-stack-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (memory ram :width 8 :addr-width 8)
              (interrupts :vector ia :message a :save (pc))))))
 
 (fiveam:test defmachine-rejects-interrupts-with-ambiguous-stack
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-ambiguous-stack-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp1 :width 8 :depth 4) (stack sp2 :width 8 :depth 4)
@@ -631,41 +631,41 @@
   (fiveam:finishes (make-machine 'interrupt-pointer-stack-test-machine)))
 
 (fiveam:test defmachine-rejects-interrupts-stack-naming-a-register-with-no-stack-pointer-clause
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-no-clause-test
              (register pc :width 8) (register ia :width 8) (register a :width 8) (register sp :width 8)
              (memory ram :width 8 :addr-width 8)
              (interrupts :vector ia :message a :save (pc) :stack sp)))))
 
 (fiveam:test defmachine-rejects-a-banked-register-as-a-stack-pointer
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-banked-test
              (register sp :width 8 :count 4)
              (memory ram :width 8 :addr-width 8)
              (stack-pointer sp :memory ram)))))
 
 (fiveam:test defmachine-rejects-a-stack-pointer-on-a-non-register-name
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-non-register-test
              (memory ram :width 8 :addr-width 8)
              (stack-pointer ram)))))
 
 (fiveam:test defmachine-rejects-stack-pointer-memory-naming-a-non-memory-element
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-bad-memory-test
              (register sp :width 8) (register other :width 8)
              (memory ram :width 8 :addr-width 8)
              (stack-pointer sp :memory other)))))
 
 (fiveam:test defmachine-rejects-stack-pointer-with-no-memory-and-two-declared
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-ambiguous-memory-test
              (register sp :width 8)
              (memory ram1 :width 8 :addr-width 8) (memory ram2 :width 8 :addr-width 8)
              (stack-pointer sp)))))
 
 (fiveam:test defmachine-rejects-two-stack-pointer-clauses-for-one-register
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-dup-test
              (register sp :width 8)
              (memory ram :width 8 :addr-width 8)
@@ -673,7 +673,7 @@
              (stack-pointer sp :memory ram)))))
 
 (fiveam:test defmachine-rejects-a-save-place-wider-than-the-pointer-stacks-cell-width
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-sp-wide-save-test
              (register pc :width 32) (register ia :width 16) (register a :width 16) (register sp :width 16)
              (memory ram :width 16 :addr-width 16 :cell-width 16)
@@ -743,7 +743,7 @@
     (fiveam:is (= 1 (regref m 'reg 0)))))
 
 (fiveam:test defmachine-rejects-an-out-of-range-banked-place
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-banked-range-test
              (register pc :width 8) (register ia :width 8)
              (register reg :width 8 :count 2)
@@ -752,7 +752,7 @@
              (interrupts :vector ia :message (reg 2) :save (pc))))))
 
 (fiveam:test defmachine-rejects-mask-on-deliver-without-a-mask-flag
-  (fiveam:signals error
+  (fiveam:signals machine-definition-error
     (eval '(defmachine interrupt-mask-on-deliver-no-flag-test
              (register pc :width 8) (register ia :width 8) (register a :width 8)
              (stack sp :width 8 :depth 4)

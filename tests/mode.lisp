@@ -59,7 +59,7 @@ looks like."
   (fiveam:is (mode-descriptor-signedp (find-mode-descriptor 'relative))))
 
 (fiveam:test defmode-relative-t-signed-nil-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode bogus-relative-unsigned expr :relative t :signed nil))))
 
 (fiveam:test expr-hole-attributes-override-mode-defaults
@@ -77,9 +77,9 @@ looks like."
     (fiveam:is (equal '(t) (%mode-hole-attributes mode :signed)))))
 
 (fiveam:test expr-relative-and-unsigned-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode bogus-hole-relative (expr :relative t :signed nil))))
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode bogus-inherited-relative (expr :signed nil) :relative t))))
 
 (fiveam:test nested-one-of-cannot-hide-hole-signedness
@@ -87,7 +87,7 @@ looks like."
   (eval '(defmode nested-attr-plain "[" expr "]"))
   (eval '(defmode nested-attr-inner (one-of nested-attr-signed nested-attr-plain)))
   (eval '(defmode nested-attr-other "@" expr))
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode nested-attr-outer (one-of nested-attr-inner nested-attr-other)))))
 
 (fiveam:test defmode-allows-literal-only-pattern
@@ -110,7 +110,7 @@ looks like."
      (fiveam:is (equal '((fixed-slot . test-no-width)) selections))))
 
 (fiveam:test defmode-malformed-pattern-element-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
      (eval '(defmode bogus-mode 42 expr))))
 
 (fiveam:test plus-separates-expression-holes
@@ -269,7 +269,7 @@ looks like."
   (fiveam:finishes (eval '(defmode test-suffixed-mode expr :width 1 :suffix "q"))))
 
 (fiveam:test different-mode-claiming-a-taken-suffix-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode test-suffixed-mode-conflict expr :suffix "q"))))
 
 ;;; ONE-OF -- orthogonal per-operand addressing modes (#103)
@@ -387,7 +387,7 @@ looks like."
 ;;; ONE-OF validation errors
 
 (fiveam:test one-of-fewer-than-two-alternatives-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-single (one-of oo-reg)))))
 
 (fiveam:test one-of-unknown-alternative-signals-error
@@ -599,14 +599,14 @@ looks like."
   (fiveam:is (mode-descriptor-strictp (find-mode-descriptor 'oo-strict))))
 
 (fiveam:test one-of-alternative-with-suffix-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-suffix (one-of oo-reg oo-suffixed)))))
 
 (defmode oo-reg-2 expr)
 (defmode oo-indexed-x-lower expr "," "x")
 
 (fiveam:test one-of-duplicate-alternative-patterns-signal-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-dup (one-of oo-reg oo-reg-2)))))
 
 (fiveam:test one-of-duplicate-check-is-case-insensitive
@@ -614,7 +614,7 @@ looks like."
   ;; (STRING-EQUAL), so two alternatives differing only in a literal's case
   ;; are the same syntax and must be rejected the same way -- EQUALP, not
   ;; EQUAL, on the pattern comparison.
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-dup-case (one-of test-indexed-x oo-indexed-x-lower)))))
 
 ;;; Hole-aligned CHOICES (#104) -- ONE-OF's CHOICES value grows one entry per
@@ -709,7 +709,7 @@ looks like."
 (defmode no-signed-inner (one-of no-signed-inner-a no-signed-inner-b))
 
 (fiveam:test nested-one-of-with-signed-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode no-signed-outer (one-of no-signed-inner no-other)))))
 
 ;;; Nested ONE-OF with a :WIDTH alternative (#129) -- the same
@@ -722,7 +722,7 @@ looks like."
 (defmode no-widthed-inner (one-of no-widthed-inner-a no-widthed-inner-b))
 
 (fiveam:test nested-one-of-with-width-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode no-widthed-outer (one-of no-widthed-inner no-other)))))
 
 ;;; Nested ONE-OF with a :RELATIVE alternative (#130) -- MODE-DESCRIPTOR-
@@ -736,7 +736,7 @@ looks like."
 (defmode no-relative-inner (one-of no-relative-inner-a no-relative-inner-b))
 
 (fiveam:test nested-one-of-with-relative-alternative-signals-error
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode no-relative-outer (one-of no-relative-inner no-other)))))
 
 ;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
@@ -787,6 +787,6 @@ looks like."
                              (first (nth-value 2 (try-match-operand-mode (%prefixed-tokens "5") 'hp-twins)))))))
 
 (fiveam:test identical-syntax-alternatives-need-suffixes
-  (fiveam:signals error
+  (fiveam:signals mode-definition-error
     (eval '(defmode hp-bad-twins (one-of hp-plain hp-plain-copy))))
   (fiveam:finishes (eval '(defmode hp-ok-twins (one-of hp-twin-a hp-twin-b)))))

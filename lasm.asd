@@ -66,6 +66,7 @@
                (:file "lexer")
                (:file "parser")
                (:file "mode")
+               (:file "definition-error")
                (:file "instruction")
                (:file "word-choices")
                (:file "inheritance")

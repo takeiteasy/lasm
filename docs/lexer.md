@@ -62,6 +62,7 @@ mode patterns can match them.
 
 ## Conditions
 
+A malformed `deflexer` clause signals `lexer-definition-error`.
 Malformed strings, comments, character literals, numeric prefixes, or
 unknown characters signal `lex-error` with position and source context.
 See [Diagnostics](diagnostics.md).

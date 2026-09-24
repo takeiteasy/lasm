@@ -40,9 +40,9 @@
     (fiveam:is (string= ".loop" (token-value (second dot))))))
 
 (fiveam:test location-counter-alias-rejects-operators
-  (fiveam:signals error
+  (fiveam:signals lexer-definition-error
     (eval '(deflexer invalid-counter-syntax (location-counter "+"))))
-  (fiveam:signals error
+  (fiveam:signals lexer-definition-error
     (eval '(deflexer missing-counter-syntax (location-counter nil)))))
 
 (fiveam:test percent-literal-and-operator-tokens
@@ -161,7 +161,7 @@ sta b"))))
   (fiveam:is (string= "." (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor 'default)))))
 
 (fiveam:test mode-suffix-separator-not-in-ident-chars-signals-error
-  (fiveam:signals error
+  (fiveam:signals lexer-definition-error
     (eval '(deflexer bogus-suffix-separator-syntax
              (number-formats (:dec :default))
              (ident-chars :alnum "_")

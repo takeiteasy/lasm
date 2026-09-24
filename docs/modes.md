@@ -18,6 +18,8 @@ to an encoding and semantics. See [Per-operand modes](operand-modes.md) for
   [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t])
 ```
 
+A malformed definition signals `mode-definition-error`.
+
 | Part | Meaning |
 | --- | --- |
 | String literal | Match token text, ignoring case. |

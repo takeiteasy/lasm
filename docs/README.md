@@ -27,5 +27,5 @@
 - [Binary output](binary-output.md) — raw binary and Intel HEX files from an `assembly`
 - [Banked output](banked-output.md) — `.bank`, `bank(label)`, bank images, banked listings and loading
 - [Command line](cli.md) — `lasm assemble`/`run`/`disassemble`/`listing`
-- [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
+- [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range, definition errors
 - [Debugger](debugger.md) — breakpoints, step/continue/back, cycle budgets, register/memory inspection and editing, a reference REPL

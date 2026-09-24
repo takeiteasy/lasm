@@ -154,6 +154,8 @@ instruction fetch, and PC advancement do not call it. The
 | `register-index-out-of-range` | Invalid bank index. |
 | `no-such-device`, `interrupt-queue-full` | Device or interrupt error. |
 
+A malformed `defmachine` signals `machine-definition-error`.
+
 These inherit `lasm-error`; see [Conditions](conditions.md) for readers.
 During `run`, storage faults return `:fault` and the condition. Direct
 stepping signals them. `interrupt-queue-full` still signals with the default

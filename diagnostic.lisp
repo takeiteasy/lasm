@@ -65,6 +65,48 @@ a line, only the message appears. Without a column, the caret is omitted."
 ;; Named LASM-SYNTAX-ERROR rather than PARSE-ERROR because CL:PARSE-ERROR is
 ;; a standard condition type and this package :USEs #:CL. Moved here from
 ;; storage.lisp (#74) so the condition and its renderer live together.
+;;; Definition errors: a malformed DEFMACHINE/DEFINSTRUCTION/DEFMODE/DEFLEXER/
+;;; DEFDIRECTIVE form, as opposed to a program's own source (LASM-SYNTAX-ERROR).
+
+(defvar *definition-name* nil
+  "Name of the definition being built, recorded on DEFINITION-ERRORs.")
+
+(defvar *last-definition-error* nil
+  "The last DEFINITION-ERROR signalled; lets a caller of COMPILE re-signal one
+SBCL turned into a COMPILED-PROGRAM-ERROR.")
+
+(define-condition definition-error (lasm-error)
+  ((message :initarg :message :initform nil :reader definition-error-message)
+   (name :initarg :name :initform nil :reader definition-error-name))
+  (:report (lambda (c s) (write-string (definition-error-message c) s))))
+
+(define-condition machine-definition-error (definition-error) ())
+(define-condition instruction-definition-error (definition-error) ())
+(define-condition mode-definition-error (definition-error) ())
+(define-condition lexer-definition-error (definition-error) ())
+(define-condition directive-definition-error (definition-error) ())
+
+(defun %definition-error (type control &rest args)
+  (let ((condition (make-condition type :message (apply #'format nil control args)
+                                        :name *definition-name*)))
+    (setf *last-definition-error* condition)
+    (error condition)))
+
+(defun %defmachine-error (control &rest args)
+  (apply #'%definition-error 'machine-definition-error control args))
+
+(defun %definstruction-error (control &rest args)
+  (apply #'%definition-error 'instruction-definition-error control args))
+
+(defun %defmode-error (control &rest args)
+  (apply #'%definition-error 'mode-definition-error control args))
+
+(defun %deflexer-error (control &rest args)
+  (apply #'%definition-error 'lexer-definition-error control args))
+
+(defun %defdirective-error (control &rest args)
+  (apply #'%definition-error 'directive-definition-error control args))
+
 (define-condition lasm-syntax-error (lasm-error)
   ((message :initarg :message :initform nil :reader lasm-syntax-error-message)
    (line :initarg :line :initform nil :accessor lasm-syntax-error-line)

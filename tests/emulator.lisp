@@ -1416,11 +1416,11 @@ nop" :machine 'cycle-test-machine)))
         (fiveam:is (= 2 (machine-cycles m)))))))
 
 (fiveam:test defmachine-rejects-non-positive-clock-speed
-  (fiveam:signals error (eval '(defmachine bad-clock-test-machine
+  (fiveam:signals machine-definition-error (eval '(defmachine bad-clock-test-machine
                                  (register pc :width 16)
                                  (memory ram :width 8 :addr-width 16)
                                  (clock-speed 0))))
-  (fiveam:signals error (eval '(defmachine bad-clock-test-machine
+  (fiveam:signals machine-definition-error (eval '(defmachine bad-clock-test-machine
                                  (register pc :width 16)
                                  (memory ram :width 8 :addr-width 16)
                                  (clock-speed -1)))))

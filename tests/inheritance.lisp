@@ -127,30 +127,30 @@
     (fiveam:is (equal '(:pc 2 :opcode #x20) (lasm-trap-data condition)))))
 
 (fiveam:test undefined-opcode-clause-is-validated
-  (fiveam:signals error (eval '(defmachine fam-bad-policy
+  (fiveam:signals machine-definition-error (eval '(defmachine fam-bad-policy
                                  (register pc :width 8) (memory ram :width 8 :addr-width 8)
                                  (undefined-opcode :panic))))
-  (fiveam:signals error (eval '(defmachine fam-bad-policy
+  (fiveam:signals machine-definition-error (eval '(defmachine fam-bad-policy
                                  (register pc :width 8) (memory ram :width 8 :addr-width 8)
                                  (undefined-opcode :nop) (undefined-opcode :trap)))))
 
 ;;; Definition errors
 
 (fiveam:test extends-errors
-  (fiveam:signals error (eval '(defmachine (fam-orphan (:extends fam-no-such-parent)))))
-  (fiveam:signals error (eval '(defmachine (fam-self (:extends fam-self)))))
-  (fiveam:signals error (macroexpand '(defmachine (fam-x (:bogus fam-base)))))
-  (fiveam:signals error (macroexpand '(defmachine (fam-x (:extends fam-base) (:extends fam-lite))))))
+  (fiveam:signals machine-definition-error (eval '(defmachine (fam-orphan (:extends fam-no-such-parent)))))
+  (fiveam:signals machine-definition-error (eval '(defmachine (fam-self (:extends fam-self)))))
+  (fiveam:signals machine-definition-error (macroexpand '(defmachine (fam-x (:bogus fam-base)))))
+  (fiveam:signals machine-definition-error (macroexpand '(defmachine (fam-x (:extends fam-base) (:extends fam-lite))))))
 
 (fiveam:test extends-cycle-is-rejected
   (fiveam:signals error (%define-machine 'fam-base 'fam-turbo nil))
   (fiveam:is (null (machine-descriptor-parent (find-machine-descriptor 'fam-base)))))
 
 (fiveam:test child-only-clauses-need-a-parent
-  (fiveam:signals error (eval '(defmachine fam-bare
+  (fiveam:signals machine-definition-error (eval '(defmachine fam-bare
                                  (register pc :width 8) (memory ram :width 8 :addr-width 8)
                                  (without-instructions foo))))
-  (fiveam:signals error (eval '(defmachine fam-bare
+  (fiveam:signals machine-definition-error (eval '(defmachine fam-bare
                                  (register pc :width 8) (memory ram :width 8 :addr-width 8)
                                  (instruction-cycles (foo 1))))))
 
@@ -163,10 +163,10 @@
                      ((memory ram2 :width 8 :addr-width 8))
                      ((memory ram :addr-width 32))
                      ((without-instructions inc) (instruction-cycles (inc 3)))))
-    (fiveam:signals error (eval `(defmachine (fam-reject (:extends fam-base)) ,@clauses)))))
+    (fiveam:signals machine-definition-error (eval `(defmachine (fam-reject (:extends fam-base)) ,@clauses)))))
 
 (fiveam:test failed-definition-keeps-the-existing-machine
-  (fiveam:signals error (eval '(defmachine (fam-lite (:extends fam-base))
+  (fiveam:signals machine-definition-error (eval '(defmachine (fam-lite (:extends fam-base))
                                  (register a :width 8 :count 2))))
   (fiveam:is (eq 'fam-base (machine-descriptor-parent (find-machine-descriptor 'fam-lite))))
   (fiveam:is (find-instruction 'fam-lite "LDA")))
