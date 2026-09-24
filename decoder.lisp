@@ -120,13 +120,31 @@ decodes those cells instead, or NIL."
            (not (%sibling-combos-p found descriptor))
            found))))
 
+(defun %find-word-decode-candidate (descriptor layout word)
+  "Like %FIND-WORD-CANDIDATE, but ranks removed instructions alongside live
+ones, so a removed specific encoding is not decoded by a (fallback) it
+shadowed. Returns the candidate and whether it is a removed one."
+  (let ((disabled (machine-descriptor-disabled-opcodes descriptor)))
+    (if (zerop (hash-table-count disabled))
+        (values (%find-word-candidate descriptor layout word) nil)
+        (destructuring-bind (name width shift) (instruction-word-field layout 'opcode)
+          (declare (ignore name))
+          (let* ((opcode (ldb (byte width shift) word))
+                 (dead (gethash opcode disabled))
+                 (found (find-if (lambda (candidate) (%word-candidate-matches-p candidate word))
+                                 (%insert-by-specificity
+                                  dead (gethash opcode (machine-descriptor-opcodes descriptor))))))
+            (values found (and found (member found dead) t)))))))
+
 (defun %word-decode-table (descriptor layout)
-  "Publish a complete, read-only dispatch table for words up to 16 bits."
+  "Publish a complete, read-only dispatch table for words up to 16 bits. A
+removed instruction's word maps to :DISABLED."
   (when (<= (instruction-word-layout-width layout) 16)
     (or (machine-descriptor-word-decode-table descriptor)
         (let ((table (make-array (ash 1 (instruction-word-layout-width layout)))))
           (dotimes (word (length table))
-            (setf (aref table word) (%find-word-candidate descriptor layout word)))
+            (multiple-value-bind (found disabledp) (%find-word-decode-candidate descriptor layout word)
+              (setf (aref table word) (if disabledp :disabled found))))
           (setf (machine-descriptor-word-decode-table descriptor) table)))))
 
 (defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word endian)
@@ -182,9 +200,12 @@ field choices rather than the descriptor's encoding-size variant."
          (word (%fetch-cells read-cell address width-cells cell-width endian))
          (machine (find-machine-descriptor machine-name))
          (table (%word-decode-table machine layout))
-         (descriptor (if table (aref table (ldb (byte (instruction-word-layout-width layout) 0) word))
-                         (%find-word-candidate machine layout word))))
-    (if descriptor
+         (descriptor (if table
+                         (aref table (ldb (byte (instruction-word-layout-width layout) 0) word))
+                         (multiple-value-bind (found disabledp)
+                             (%find-word-decode-candidate machine layout word)
+                           (if disabledp :disabled found)))))
+    (if (and descriptor (not (eq descriptor :disabled)))
         (multiple-value-bind (values offset matches okp)
             (%try-decode-word-candidate read-cell address width-cells cell-width descriptor word endian)
           (declare (ignore okp))
@@ -315,3 +336,35 @@ ENDIAN off LAYOUT's own slot, set once at DEFMACHINE time -- see
     (%decode-instruction-at-resolved read-cell address machine-name layout
                                      (unless layout (%machine-cell-width machine-name memory))
                                      (unless layout (%machine-endian machine-name memory)))))
+
+(defun %undefined-opcode-extent (read-cell address machine-name layout)
+  "For the undecodable instruction at ADDRESS, values: the cells to skip past
+it, its opcode (the whole word on a word-encoded machine), and whether it is
+a removed instruction (whose full size is known) rather than an unassigned
+opcode (one cell, or one instruction word). Reads only the opcode, sub-opcode
+and instruction word, never an operand."
+  (let ((md (find-machine-descriptor machine-name)))
+    (if layout
+        (let* ((width-cells (instruction-word-layout-width-cells layout))
+               (word (%fetch-cells read-cell address width-cells
+                                   (instruction-word-layout-cell-width layout)
+                                   (instruction-word-layout-endian layout))))
+          (multiple-value-bind (found disabledp) (%find-word-decode-candidate md layout word)
+            (if disabledp
+                (values (+ width-cells
+                           (loop for alternatives in (instruction-descriptor-word-alternatives found)
+                                 for match = (%word-field-match alternatives word)
+                                 when (and match (member (word-field-choice-kind match)
+                                                         '(:extra-word :trailing-word)))
+                                   sum (word-field-choice-extra-cells match)))
+                        word t)
+                (values width-cells word nil))))
+        (let* ((opcode (funcall read-cell address))
+               (candidates (gethash opcode (machine-descriptor-disabled-opcodes md)))
+               (found (if (some #'instruction-descriptor-sub-opcode candidates)
+                          (find (funcall read-cell (1+ address)) candidates
+                                :key #'instruction-descriptor-sub-opcode)
+                          (first candidates))))
+          (if found
+              (values (instruction-descriptor-size found) opcode t)
+              (values 1 opcode nil))))))

@@ -9,6 +9,7 @@ architectures, not real silicon.
 ## Documentation
 
 - [Machine model](docs/machine-model.md) — storage elements, `defmachine`
+- [Machine families](docs/machine-families.md) — extending a machine, removing instructions, undefined opcodes
 - [Devices](docs/devices.md) — the device bus, attach/detach, ticking
 - [Interrupts](docs/interrupts.md) — `(interrupts ...)`, delivery, masking, overflow
 - [Semantics vocabulary](docs/semantics.md) — `with-machine`, `set!`, `push`/`pop`

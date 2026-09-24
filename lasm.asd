@@ -59,6 +59,7 @@
                (:file "mode")
                (:file "instruction")
                (:file "word-choices")
+               (:file "inheritance")
                (:file "directive")
                (:file "include")
                (:file "macro")

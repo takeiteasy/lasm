@@ -696,8 +696,27 @@ rationale as CELL-WIDTH-CACHE (#63)."
 %DESCRIPTOR-ENDIAN for every caller outside DEFMACHINE's own expansion."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
+(defun parse-undefined-opcode-clause (form)
+  (destructuring-bind (policy) form
+    (unless (member policy '(:fault :nop :trap))
+      (error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
+    policy))
+
+(defun parse-properties-clause (form)
+  (unless (evenp (length form))
+    (error "properties requires key/value pairs, got ~S" form))
+  (let ((keys (loop for (key) on form by #'cddr collect key)))
+    (dolist (key keys)
+      (unless (keywordp key)
+        (error "properties key must be a keyword, got ~S" key)))
+    (loop for (key . rest) on keys
+          when (member key rest)
+            do (error "properties: duplicate key ~S" key)))
+  (copy-list form))
+
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed devices interrupts stack-pointers)
+  (let (elements instruction-word clock-speed devices interrupts stack-pointers
+        (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -718,16 +737,33 @@ rationale as CELL-WIDTH-CACHE (#63)."
            (error "DEFMACHINE: more than one interrupts clause"))
          (setf interrupts (parse-interrupts-clause (rest clause))))
         (stack-pointer (cl:push (parse-stack-pointer-clause (rest clause)) stack-pointers))
+        (undefined-opcode
+         (when undefined-opcode-seen
+           (error "DEFMACHINE: more than one undefined-opcode clause"))
+         (setf undefined-opcode-seen t
+               undefined-opcode (parse-undefined-opcode-clause (rest clause))))
+        (properties
+         (when properties-seen
+           (error "DEFMACHINE: more than one properties clause"))
+         (setf properties-seen t
+               properties (parse-properties-clause (rest clause))))
+        ((without-instructions instruction-cycles)
+         (error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
+                (first clause)))
         (t (error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
-            (nreverse stack-pointers))))
+            (nreverse stack-pointers) undefined-opcode properties)))
 
 (defun build-machine-descriptor (name clauses)
-  (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers)
+  (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
+                        undefined-opcode properties)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
                                                 :clock-speed clock-speed :devices devices
-                                                :interrupts interrupts))
+                                                :interrupts interrupts
+                                                :undefined-opcode undefined-opcode
+                                                :properties properties
+                                                :source-clauses clauses))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
@@ -790,6 +826,181 @@ rationale as CELL-WIDTH-CACHE (#63)."
         (%finish-interrupt-model descriptor))
       descriptor)))
 
+;;; Machine families
+
+(defun %plist-merge (parent child)
+  "PARENT's keyword plist with every key of CHILD's overriding or appended."
+  (let ((result (copy-list parent)))
+    (loop for (key value) on child by #'cddr
+          do (setf (getf result key) value))
+    result))
+
+(defun %region-form-p (form)
+  (and (consp form) (eq (first form) 'region)))
+
+(defun %merge-keyed-clause (parent child)
+  "Merge CHILD's (HEAD NAME ...) clause over PARENT's. A memory clause's
+nested (region ...) forms are replaced wholesale when CHILD gives any."
+  (destructuring-bind (head name &rest parent-body) parent
+    (let* ((child-body (cddr child))
+           (regions (if (eq head 'memory)
+                        (or (remove-if-not #'%region-form-p child-body)
+                            (remove-if-not #'%region-form-p parent-body))
+                        nil))
+           (plist (%plist-merge (remove-if #'%region-form-p parent-body)
+                                (remove-if #'%region-form-p child-body))))
+      (list* head name (append plist regions)))))
+
+(defun %merge-machine-clauses (parent-clauses child-clauses)
+  "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
+existing register/stack/memory/device merges into the parent's in place, a new
+one is appended. Singletons replace (clock-speed, undefined-opcode) or merge
+key by key (interrupts, properties); flags are additive."
+  (let ((merged (copy-list parent-clauses))
+        (added '()))
+    (dolist (clause child-clauses)
+      (let ((head (first clause)))
+        (case head
+          ((instruction-word stack-pointer)
+           (error "DEFMACHINE: a machine extending another cannot declare ~S -- inherited ~
+instructions are compiled against the parent's" head))
+          ((register stack memory device)
+           (let ((position (position-if (lambda (p) (and (eq (first p) head)
+                                                          (eq (second p) (second clause))))
+                                        merged)))
+             (if position
+                 (setf (nth position merged)
+                       (%merge-keyed-clause (nth position merged) clause))
+                 (cl:push clause added))))
+          (flags
+           (let ((known (loop for p in merged when (eq (first p) 'flags) append (rest p))))
+             (let ((new (remove-if (lambda (f) (member f known)) (rest clause))))
+               (when new (cl:push (cons 'flags new) added)))))
+          ((clock-speed undefined-opcode)
+           (let ((position (position head merged :key #'first)))
+             (if position
+                 (setf (nth position merged) clause)
+                 (cl:push clause added))))
+          ((interrupts properties)
+           (let ((position (position head merged :key #'first)))
+             (if position
+                 (setf (nth position merged)
+                       (cons head (%plist-merge (rest (nth position merged)) (rest clause))))
+                 (cl:push clause added))))
+          (t (error "Unknown DEFMACHINE clause head ~S in ~S" head clause)))))
+    (append merged (nreverse added))))
+
+(defun %element-operand-cells (element)
+  (ceiling (storage-element-addr-width element) (storage-element-cell-width element)))
+
+(defun %check-inheritance-compatible (parent child)
+  "Signal unless CHILD keeps everything PARENT's compiled instructions bake in."
+  (let ((pname (machine-descriptor-name parent))
+        (cname (machine-descriptor-name child)))
+    (flet ((fail (fmt &rest args)
+             (error "Machine ~S cannot extend ~S: ~?" cname pname fmt args)))
+      (unless (equalp (machine-descriptor-instruction-word parent)
+                      (machine-descriptor-instruction-word child))
+        (fail "the instruction word differs"))
+      (dolist (pe (machine-descriptor-elements parent))
+        (let* ((name (storage-element-name pe))
+               (ce (gethash name (machine-descriptor-table child))))
+          (unless (and ce (eq (storage-element-kind ce) (storage-element-kind pe)))
+            (fail "storage element ~S is missing or changes kind" name))
+          (case (storage-element-kind pe)
+            (:register
+             (unless (and (= (storage-element-count pe) (storage-element-count ce))
+                          (equal (storage-element-names pe) (storage-element-names ce)))
+               (fail "register ~S changes its :count or :names" name)))
+            (:memory
+             (unless (and (= (storage-element-cell-width pe) (storage-element-cell-width ce))
+                          (equal (storage-element-endian pe) (storage-element-endian ce))
+                          (= (%element-operand-cells pe) (%element-operand-cells ce)))
+               (fail "memory ~S changes its :cell-width, :endian or operand cell count" name))))))
+      (dolist (kind '(:memory :stack))
+        (unless (= (count kind (machine-descriptor-elements parent) :key #'storage-element-kind)
+                   (count kind (machine-descriptor-elements child) :key #'storage-element-kind))
+          (fail "the number of ~(~A~) elements changes" kind)))
+      (let ((pp (machine-descriptor-stack-pointers parent))
+            (cp (machine-descriptor-stack-pointers child)))
+        (unless (= (hash-table-count pp) (hash-table-count cp))
+          (fail "the stack-pointer set differs"))
+        (maphash (lambda (reg psp)
+                   (let ((csp (gethash reg cp)))
+                     (unless (and csp
+                                  (eq (stack-pointer-descriptor-memory psp)
+                                      (stack-pointer-descriptor-memory csp))
+                                  (eq (stack-pointer-descriptor-grows psp)
+                                      (stack-pointer-descriptor-grows csp)))
+                       (fail "stack-pointer ~S differs" reg))))
+                 pp))
+      (let ((pi* (machine-descriptor-interrupts parent))
+            (ci (machine-descriptor-interrupts child)))
+        (when (and pi* ci)
+          (unless (and (equal (interrupt-descriptor-save pi*) (interrupt-descriptor-save ci))
+                       (eq (interrupt-descriptor-stack-name pi*) (interrupt-descriptor-stack-name ci))
+                       (eq (interrupt-descriptor-stack-kind pi*) (interrupt-descriptor-stack-kind ci)))
+            (fail "the interrupt :save list or stack differs")))))))
+
+(defun %mnemonic-key (designator)
+  (string-upcase (string designator)))
+
+(defun %define-machine (name parent clauses)
+  "Build and register machine NAME. With PARENT, CLAUSES merge over PARENT's
+and the parent's instructions are copied in."
+  (if (null parent)
+      (setf (gethash name *machines*) (build-machine-descriptor name clauses))
+      (let ((parent-md (or (gethash parent *machines*)
+                           (error "Machine ~S extends ~S, which has not been defined" name parent))))
+        (when (or (eq name parent) (member name (%machine-ancestors parent)))
+          (error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
+        (let* ((removals (loop for c in clauses when (eq (first c) 'without-instructions)
+                               append (mapcar #'%mnemonic-key (rest c))))
+               (cycles (loop for c in clauses when (eq (first c) 'instruction-cycles)
+                             append (mapcar (lambda (entry)
+                                              (destructuring-bind (mnemonic n) entry
+                                                (unless (and (integerp n) (>= n 0))
+                                                  (error "instruction-cycles ~S must be a non-negative integer, got ~S"
+                                                         mnemonic n))
+                                                (cons (%mnemonic-key mnemonic) n)))
+                                            (rest c))))
+               (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles)))
+                                 clauses))
+               (child (build-machine-descriptor
+                       name (%merge-machine-clauses (machine-descriptor-source-clauses parent-md)
+                                                    plain))))
+          (dolist (key (append removals (mapcar #'car cycles)))
+            (unless (gethash key (machine-descriptor-instructions parent-md))
+              (warn 'style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
+                 :format-arguments (list name key parent))))
+          (dolist (entry cycles)
+            (when (member (car entry) removals :test #'string=)
+              (error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
+          (%check-inheritance-compatible parent-md child)
+          (setf (machine-descriptor-parent child) parent
+                (machine-descriptor-removed-instructions child)
+                (remove-duplicates (append removals (machine-descriptor-removed-instructions parent-md))
+                                   :test #'string=)
+                (machine-descriptor-instruction-cycles child) cycles)
+          (%inherit-instructions parent-md child)
+          (setf (gethash name *machines*) child)))))
+
+(defun %parse-machine-name (name-spec)
+  "Values NAME and PARENT from a DEFMACHINE name or (NAME (:extends PARENT))."
+  (if (symbolp name-spec)
+      (values name-spec nil)
+      (destructuring-bind (name &rest options) name-spec
+        (let (parent parent-seen)
+          (dolist (option options)
+            (unless (and (consp option) (eq (first option) :extends) (= (length option) 2)
+                         (symbolp (second option)))
+              (error "DEFMACHINE ~S: unknown name option ~S; expected (:extends PARENT)"
+                     name option))
+            (when parent-seen
+              (error "DEFMACHINE ~S: more than one :extends option" name))
+            (setf parent-seen t parent (second option)))
+          (values name parent)))))
+
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:
      (register NAME :width n [:count n] [:names (A B C ...)])
@@ -807,6 +1018,17 @@ rationale as CELL-WIDTH-CACHE (#63)."
                  [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:cycles n]
                  [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
+     (undefined-opcode :fault/:nop/:trap)
+     (properties :key value...)
+
+NAME may be (NAME (:extends PARENT)): the machine then inherits PARENT's
+clauses and instructions. A clause naming an existing register, stack, memory
+or device merges its keywords over the parent's; interrupts and properties
+merge key by key; clock-speed and undefined-opcode replace; flags add. Two
+further clauses are valid only on an extending machine:
+     (without-instructions MNEMONIC...)
+     (instruction-cycles (MNEMONIC n)...)
+See docs/machine-families.md.
 
 A register's :names (#72) gives each bank cell of a banked (:count > 1)
 register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
@@ -923,7 +1145,7 @@ Registration happens inside an EVAL-WHEN so the resulting machine-descriptor
 is available at macroexpansion time, not only after this file is loaded --
 required for M1's DEFINSTRUCTION to resolve storage names/widths against a
 DEFMACHINE appearing earlier in the same file."
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (setf (gethash ',name *machines*)
-           (build-machine-descriptor ',name ',clauses))
-     ',name))
+  (multiple-value-bind (machine-name parent) (%parse-machine-name name)
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (%define-machine ',machine-name ',parent ',clauses)
+       ',machine-name)))

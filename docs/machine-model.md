@@ -166,6 +166,16 @@ widths against a machine defined earlier in the same file.
   [Interrupts](interrupts.md). `:stack` accepts either a `(stack ...)`
   element or a `(stack-pointer ...)`-bound register (#166, above).
 
+- `(undefined-opcode :fault/:nop/:trap)` — what a step does on an opcode with
+  no instruction (default `:fault`) — see
+  [Machine families](machine-families.md#undefined-opcodes).
+- `(properties :key value ...)` — literal per-machine data, read with
+  `machine-property` — see [Machine families](machine-families.md#properties).
+
+A machine can extend another with `(defmachine (NAME (:extends PARENT)) ...)`,
+inheriting its clauses and instructions — see
+[Machine families](machine-families.md).
+
 Widths and depths must be positive integers; duplicate element names and
 unknown clause heads are compile-time errors. `instruction-word`'s field
 widths must sum exactly to its own `:width`, which must itself be a whole

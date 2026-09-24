@@ -68,7 +68,10 @@ The fetch/decode logic — both paths described below — is shared with
 `step-machine` resolves the selected memory's cell width and endianness,
 decodes through that shared logic, advances `pc` by the decoded size, and
 executes. Looped runs resolve those properties once for the run. Direct
-`decode-instruction-at` calls resolve them for each call.
+`decode-instruction-at` calls resolve them for each call. It returns the
+executed descriptor and its cycle cost, `:decode-failure` and `0`, `:idle`, or
+`:nop` when an [`(undefined-opcode :nop)`](machine-families.md#undefined-opcodes)
+machine steps over an instruction it does not implement.
 
 Fetches the opcode cell at `pc`, decodes it (`find-instruction-by-opcode`),
 reads its declared `operand-widths` fields in the machine's own endian
@@ -216,7 +219,7 @@ Calls `step-machine` in a loop until one of several stop conditions:
 |---|---|
 | `:trap` | An instruction's semantics called `trap` (see [Semantics vocabulary](semantics.md)), signalling `lasm-trap`. `run` catches it; the condition itself is the third return value. This *is* M1's halt mechanism — no dedicated halt primitive exists, or is needed: `(definstruction m hlt (encoding (opcode #x00)) (semantics (trap :halt)))` is enough. `trap` and #109's interrupt delivery remain two separate mechanisms; a model unifying them is future M6 work. |
 | `:fault` | A storage access signalled `storage-error`, including stack, register-bank, and memory range errors. The condition is the third return value. |
-| `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. |
+| `:decode-failure` | `step-machine` hit a cell that isn't a registered opcode — typically a program with no `hlt` running off the end into zeroed (unassigned) memory, which decodes as opcode `0`. A machine's [`(undefined-opcode ...)`](machine-families.md#undefined-opcodes) clause can instead skip the instruction (`step-machine` returns `:nop`) or trap. |
 | `:idle` | #110: the machine went idle (see [Idle steps](#idle-steps-110) above) and, with `run`'s own no-budget call, nothing left running it could ever wake it back up — its pending interrupt queue is empty and no live device remains on its bus. A host can `signal-interrupt` or `wake-machine` and call `run` again, exactly as it already can after `:trap`. `run-for-cycles`/`run-for-duration` are unaffected by this check — an idle step there just keeps costing cycles until their own budget stops the loop. |
 | `:max-steps` | `max-steps` instructions executed without stopping otherwise — a runaway-program guard, not a cycle timer. `run-for-cycles`/`run-for-duration` below add the cycle-based budgets `(cycles n)` was accepted for. |
 | `:max-cycles` | `run-for-cycles` only — see below. |

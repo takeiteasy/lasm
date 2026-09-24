@@ -114,6 +114,26 @@ future listing annotation (a follow-up ticket) can't disagree on it."
 
 ;;; Step
 
+(defun %undefined-opcode-step (machine pc address memory machine-name layout)
+  "The undecodable instruction at ADDRESS, handled per the machine's
+undefined-opcode policy: :FAULT returns :DECODE-FAILURE, :TRAP signals
+LASM-TRAP, :NOP steps over it, evaluating no operand. Returns (VALUES result
+cost)."
+  (let ((policy (machine-descriptor-undefined-opcode (machine-descriptor machine))))
+    (if (eq policy :fault)
+        (values :decode-failure 0)
+        (multiple-value-bind (size opcode removedp)
+            (%undefined-opcode-extent (machine-peek-reader machine memory) address machine-name layout)
+          (ecase policy
+            (:trap (error 'lasm-trap :tag :undefined-opcode
+                                     :data (list :pc address :opcode opcode)))
+            (:nop
+             (let ((cost (if removedp size 1)))
+               (setf (sref machine pc) (+ address size))
+               (incf (machine-cycles machine) cost)
+               (tick-devices machine cost)
+               (values :nop cost))))))))
+
 (defun %step-machine-resolved (machine pc memory machine-name layout cell-width endian)
   "Fetch one instruction from MACHINE's MEMORY at its PC register, advance
 PC past it, then execute it against MACHINE. Returns (VALUES result cost):
@@ -190,7 +210,7 @@ decoded, not just the values."
         (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
                                          machine-name layout cell-width endian)
       (if (eq descriptor :decode-failure)
-          (values :decode-failure 0)
+          (%undefined-opcode-step machine pc address memory machine-name layout)
           (let ((cost (%descriptor-cycle-cost descriptor)))
             (setf (sref machine pc) (+ address size))
             (incf (machine-cycles machine) cost)
@@ -210,7 +230,9 @@ decoded, not just the values."
 
 (defun step-machine (machine &key pc memory)
   "Execute one instruction, returning its descriptor and cycle cost, or
-:DECODE-FAILURE and zero cost. MEMORY and PC select the fetch location."
+:DECODE-FAILURE and zero cost. A machine whose undefined-opcode policy is :NOP
+returns :NOP and the skipped cost instead. MEMORY and PC select the fetch
+location."
   (let* ((descriptor (machine-descriptor machine))
          (machine-name (machine-descriptor-name descriptor))
          (pc (%resolve-pc machine-name pc))

@@ -427,7 +427,25 @@ machine's default layout -- callers hold no other kind (#64)."
   (cell-width-cache :unset)
   ;; #66: same memoization rationale as CELL-WIDTH-CACHE above, for
   ;; %DESCRIPTOR-ENDIAN's no-MEMORY-NAME case.
-  (endian-cache :unset))
+  (endian-cache :unset)
+  ;; Machine families: PARENT is the name of the machine this one extends
+  ;; (NIL for a standalone machine) and SOURCE-CLAUSES the fully merged clause
+  ;; list a child merges onto in turn.
+  (parent nil :type (or null symbol))
+  (source-clauses nil :type list)
+  ;; Upcased mnemonics defined directly on this machine, which parent
+  ;; propagation never overwrites.
+  (own-instructions (make-hash-table :test 'equal))
+  ;; Upcased mnemonics removed from this machine, including inherited removals.
+  (removed-instructions nil :type list)
+  ;; Alist of upcased mnemonic -> cycle cost overriding inherited variants.
+  (instruction-cycles nil :type list)
+  ;; opcode -> descriptors of removed mnemonics, kept only so an undefined-
+  ;; opcode :NOP can size them and word decode can rank them.
+  (disabled-opcodes (make-hash-table :test 'eql))
+  ;; What a step does on an opcode with no descriptor: :FAULT, :NOP or :TRAP.
+  (undefined-opcode :fault :type (member :fault :nop :trap))
+  (properties nil :type list))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))
@@ -444,6 +462,23 @@ machine's default layout -- callers hold no other kind (#64)."
 (defun find-machine-descriptor (name)
   (or (gethash name *machines*)
       (error "No machine named ~S has been defined with DEFMACHINE" name)))
+
+(defun %machine-children (name)
+  "Descriptors of every machine registered with parent NAME."
+  (loop for descriptor being the hash-values of *machines*
+        when (eq (machine-descriptor-parent descriptor) name)
+          collect descriptor))
+
+(defun %machine-ancestors (name)
+  "Names of NAME's parent, grandparent and so on, nearest first."
+  (loop for parent = (let ((d (gethash name *machines*))) (and d (machine-descriptor-parent d)))
+          then (let ((d (gethash parent *machines*))) (and d (machine-descriptor-parent d)))
+        while parent
+        collect parent))
+
+(defun machine-descriptor-property (descriptor key &optional default)
+  "The value of KEY in DESCRIPTOR's (properties ...), or DEFAULT."
+  (getf (machine-descriptor-properties descriptor) key default))
 
 ;; #108: a live device on a MACHINE's bus -- DESCRIPTOR is the DEVICE-
 ;; DESCRIPTOR it was attached from (a declared one, or one built inline by
@@ -603,6 +638,16 @@ machine's default layout -- callers hold no other kind (#64)."
     (when init
       (setf (device-state device) (funcall init machine device)))
     device))
+
+(defun machine-property (thing key &optional default)
+  "The value of KEY in the (properties ...) of THING -- a runtime machine, a
+machine descriptor or a machine name -- or DEFAULT."
+  (machine-descriptor-property
+   (etypecase thing
+     (machine (machine-descriptor thing))
+     (machine-descriptor thing)
+     (symbol (find-machine-descriptor thing)))
+   key default))
 
 (defun make-machine (name)
   "Instantiate runtime state for the machine descriptor registered under NAME."

@@ -122,6 +122,11 @@
    #:device-index
    #:device-state
    #:machine-descriptor-interrupts
+   #:machine-descriptor-parent
+   #:machine-descriptor-undefined-opcode
+   #:machine-descriptor-properties
+   #:machine-descriptor-property
+   #:machine-property
    #:interrupt-descriptor
    #:interrupt-descriptor-p
    #:interrupt-descriptor-vector

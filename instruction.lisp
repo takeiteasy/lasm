@@ -444,53 +444,122 @@ cell after the opcode is a sub-opcode or the first operand -- and so is a
 collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
-         (wordp (%word-machine-p machine-name))
-         (*word-bit-constraints-cache* (when wordp (make-hash-table :test #'eq)))
-         (additions (make-hash-table)))
+         (plan (%collect-propagation md name descriptors))
+         (target-evicted (%check-registration md name descriptors))
+         (checked (loop for (child kind copies) in plan
+                        collect (list child kind copies
+                                      (when (eq kind :install)
+                                        (%check-registration child name copies :evict t))))))
+    (setf (gethash name (machine-descriptor-own-instructions md)) t
+          (machine-descriptor-removed-instructions md)
+          (remove name (machine-descriptor-removed-instructions md) :test #'string=))
+    (%install-registration md name descriptors :evicted target-evicted :compute-order t)
+    (loop for (child kind copies evicted) in checked
+          do (ecase kind
+               (:install (%install-registration child name copies :evicted evicted))
+               (:disable (%install-disabled child name copies))))
+    descriptors))
+
+;;; Registration is validated first (%CHECK-REGISTRATION, no side effects),
+;;; then applied (%INSTALL-REGISTRATION), so a conflict anywhere in a family
+;;; tree leaves every machine untouched.
+
+(defun %registration-additions (descriptors)
+  "Hash of opcode -> DESCRIPTORS at that opcode, in declaration order."
+  (let ((additions (make-hash-table)))
     (dolist (descriptor descriptors)
       (cl:push descriptor (gethash (instruction-descriptor-opcode descriptor) additions)))
     (maphash (lambda (opcode bucket)
                (setf (gethash opcode additions) (nreverse bucket)))
              additions)
-    ;; Validate each opcode family before mutating the registry, then append
-    ;; the complete family in one operation below.
-    (maphash
-     (lambda (opcode new)
-       (let ((kept (remove name (gethash opcode (machine-descriptor-opcodes md))
-                           :key #'instruction-descriptor-name :test #'string=)))
-         (if wordp
-             (let ((groups (remove-duplicates kept :test #'%sibling-combos-p)))
-               (dolist (descriptor new)
-                 (unless (find descriptor groups :test #'%sibling-combos-p)
-                   (dolist (other groups)
-                     (%check-opcode-decodable! machine-name name descriptor other))
-                   (cl:push descriptor groups))))
-             (let ((checked (copy-list kept)))
-               (dolist (descriptor new)
-                 (let ((sub (instruction-descriptor-sub-opcode descriptor)))
-                   (dolist (other checked)
-                     (cond
-                       ((and sub (instruction-descriptor-sub-opcode other))
-                        (when (= sub (instruction-descriptor-sub-opcode other))
-                          (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
-                                                   :other-mnemonic (instruction-descriptor-name other)
-                                                   :reason :duplicate-sub-opcode)))
-                       ((or sub (instruction-descriptor-sub-opcode other))
-                        (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
-                                                 :other-mnemonic (instruction-descriptor-name other)
-                                                 :reason :sub-opcode-required))
-                       (t
-                        (error 'opcode-conflict :machine machine-name :opcode opcode :mnemonic name
-                                                 :other-mnemonic (instruction-descriptor-name other)
-                                                 :reason (when (string= name (instruction-descriptor-name other))
-                                                           :undecodable-byte-machine)))))
-                   (cl:push descriptor checked)))))))
-     additions)
-    (when wordp
+    additions))
+
+(defun %check-registration (md name descriptors &key evict)
+  "Signal OPCODE-CONFLICT if DESCRIPTORS (mnemonic NAME) cannot join MD's
+opcode buckets. With EVICT, a conflict against an inherited mnemonic (one MD
+did not define itself) is not an error: the mnemonics that must be replaced
+are returned instead."
+  (let* ((machine-name (machine-descriptor-name md))
+         (wordp (%word-machine-p machine-name))
+         (*word-bit-constraints-cache* (when wordp (make-hash-table :test #'eq)))
+         (own (machine-descriptor-own-instructions md))
+         (evicted '()))
+    (flet ((inherited-p (other)
+             (and evict (not (gethash (instruction-descriptor-name other) own)))))
+      (maphash
+       (lambda (opcode new)
+         (let ((kept (remove name (gethash opcode (machine-descriptor-opcodes md))
+                             :key #'instruction-descriptor-name :test #'string=)))
+           (if wordp
+               (let ((groups (remove-duplicates kept :test #'%sibling-combos-p)))
+                 (dolist (descriptor new)
+                   (unless (find descriptor groups :test #'%sibling-combos-p)
+                     (dolist (other groups)
+                       (handler-case (%check-opcode-decodable! machine-name name descriptor other)
+                         (opcode-conflict (c)
+                           (if (inherited-p other)
+                               (pushnew (instruction-descriptor-name other) evicted :test #'string=)
+                               (error c)))))
+                     (cl:push descriptor groups))))
+               (let ((checked (copy-list kept)))
+                 (dolist (descriptor new)
+                   (let ((sub (instruction-descriptor-sub-opcode descriptor)))
+                     (dolist (other checked)
+                       (flet ((conflict (reason)
+                                (if (inherited-p other)
+                                    (pushnew (instruction-descriptor-name other) evicted :test #'string=)
+                                    (error 'opcode-conflict :machine machine-name :opcode opcode
+                                                            :mnemonic name
+                                                            :other-mnemonic (instruction-descriptor-name other)
+                                                            :reason reason))))
+                         (cond
+                           ((and sub (instruction-descriptor-sub-opcode other))
+                            (when (= sub (instruction-descriptor-sub-opcode other))
+                              (conflict :duplicate-sub-opcode)))
+                           ((or sub (instruction-descriptor-sub-opcode other))
+                            (conflict :sub-opcode-required))
+                           (t
+                            (conflict (when (string= name (instruction-descriptor-name other))
+                                        :undecodable-byte-machine))))))
+                     (cl:push descriptor checked)))))))
+       (%registration-additions descriptors)))
+    evicted))
+
+(defun %drop-mnemonic (md name)
+  "Remove every descriptor of mnemonic NAME from MD's instruction and opcode tables."
+  (remhash name (machine-descriptor-instructions md))
+  (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
+          using (hash-value bucket)
+        do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
+             (if kept
+                 (setf (gethash opcode (machine-descriptor-opcodes md)) kept)
+                 (remhash opcode (machine-descriptor-opcodes md))))))
+
+(defun %clear-disabled (md name descriptors)
+  "Forget MD's removed-descriptor sizing entries for NAME and at the opcodes DESCRIPTORS occupy."
+  (let ((table (machine-descriptor-disabled-opcodes md)))
+    (dolist (descriptor descriptors)
+      (remhash (instruction-descriptor-opcode descriptor) table))
+    (loop for opcode being the hash-keys of table
+            using (hash-value bucket)
+          do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
+               (if kept
+                   (setf (gethash opcode table) kept)
+                   (remhash opcode table))))))
+
+(defun %install-registration (md name descriptors &key evicted compute-order)
+  "Apply a registration %CHECK-REGISTRATION accepted. COMPUTE-ORDER derives
+each descriptor's word decode order; propagated copies carry it over."
+  (let ((wordp (%word-machine-p (machine-descriptor-name md)))
+        (additions (%registration-additions descriptors)))
+    (when (and wordp compute-order)
       (dolist (descriptor descriptors)
         (setf (instruction-descriptor-word-decode-order descriptor)
               (%compute-word-decode-order descriptor))))
     (setf (machine-descriptor-word-decode-table md) nil)
+    (%clear-disabled md name descriptors)
+    (dolist (mnemonic evicted)
+      (%drop-mnemonic md mnemonic))
     (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
             using (hash-value bucket)
           do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
@@ -504,8 +573,105 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
                            (%insert-by-specificity new bucket)
                            (append bucket new)))))
              additions)
-    (setf (gethash name (machine-descriptor-instructions md)) descriptors)
-    descriptors))
+    (setf (gethash name (machine-descriptor-instructions md)) descriptors)))
+
+(defun %install-disabled (md name descriptors)
+  "Record DESCRIPTORS (mnemonic NAME) as removed from MD: kept only so an undefined-opcode
+:NOP can size them and word decode can rank them."
+  (let ((table (machine-descriptor-disabled-opcodes md)))
+    (setf (machine-descriptor-word-decode-table md) nil)
+    (%clear-disabled md name '())
+    (dolist (descriptor descriptors)
+      (let ((opcode (instruction-descriptor-opcode descriptor)))
+        (setf (gethash opcode table)
+              (%insert-by-specificity (list descriptor) (gethash opcode table)))))))
+
+;;; Machine families: a child machine holds its own copy of every inherited
+;;; descriptor, re-targeted at the child, so decode never walks the chain.
+
+(defun %copy-descriptor-family (descriptors machine-name cycles)
+  "Shallow copies of DESCRIPTORS re-targeted at MACHINE-NAME, in order. CYCLES,
+when given, replaces each copy's cycle cost. Word-encoded siblings get a new
+sibling index keyed by the same field lists."
+  (let ((indexes (make-hash-table :test 'eq))
+        (copies (mapcar (lambda (descriptor)
+                          (let ((copy (copy-instruction-descriptor descriptor)))
+                            (setf (instruction-descriptor-machine copy) machine-name)
+                            (when cycles (setf (instruction-descriptor-cycles copy) cycles))
+                            copy))
+                        descriptors)))
+    (loop for old in descriptors
+          for copy in copies
+          for index = (instruction-descriptor-word-siblings old)
+          when index
+            do (let ((new (or (gethash index indexes)
+                              (setf (gethash index indexes) (make-hash-table :test 'equal)))))
+                 (setf (gethash (instruction-descriptor-word-fields copy) new) copy
+                       (instruction-descriptor-word-siblings copy) new)))
+    copies))
+
+(defun %inherit-instructions (parent child)
+  "Fill CHILD's instruction, opcode and disabled-opcode tables from PARENT's,
+honouring CHILD's removals and cycle overrides."
+  (let ((copies (make-hash-table :test 'eq))
+        (cycles (machine-descriptor-instruction-cycles child))
+        (removed (machine-descriptor-removed-instructions child))
+        (child-name (machine-descriptor-name child)))
+    (maphash (lambda (mnemonic descriptors)
+               (let ((new (%copy-descriptor-family
+                           descriptors child-name (cdr (assoc mnemonic cycles :test #'string=)))))
+                 (loop for old in descriptors
+                       for copy in new
+                       do (setf (gethash old copies) copy))
+                 (unless (member mnemonic removed :test #'string=)
+                   (setf (gethash mnemonic (machine-descriptor-instructions child)) new))))
+             (machine-descriptor-instructions parent))
+    (maphash (lambda (opcode bucket)
+               (let (live disabled)
+                 (dolist (old bucket)
+                   (let ((copy (gethash old copies)))
+                     (if (member (instruction-descriptor-name old) removed :test #'string=)
+                         (cl:push copy disabled)
+                         (cl:push copy live))))
+                 (when live
+                   (setf (gethash opcode (machine-descriptor-opcodes child)) (nreverse live)))
+                 (when disabled
+                   (setf (gethash opcode (machine-descriptor-disabled-opcodes child))
+                         (nreverse disabled)))))
+             (machine-descriptor-opcodes parent))
+    (maphash (lambda (opcode bucket)
+               (setf (gethash opcode (machine-descriptor-disabled-opcodes child))
+                     (append (gethash opcode (machine-descriptor-disabled-opcodes child))
+                             (%copy-descriptor-family bucket child-name nil))))
+             (machine-descriptor-disabled-opcodes parent))))
+
+(defun %collect-propagation (md name descriptors)
+  "Plan of (CHILD KIND COPIES) for every descendant of MD that inherits a new
+or redefined mnemonic NAME: :INSTALL onto a descendant that still has it,
+:DISABLE onto one that removed it. A descendant that defines NAME itself, or
+whose compatibility with its parent no longer holds, keeps its subtree as is."
+  (let ((plan '()))
+    (labels ((walk (parent source)
+               (dolist (child (%machine-children (machine-descriptor-name parent)))
+                 (cond
+                   ((gethash name (machine-descriptor-own-instructions child)))
+                   ((not (handler-case (progn (%check-inheritance-compatible parent child) t)
+                           (error (c)
+                             (warn 'style-warning :format-control "~A; re-evaluate its DEFMACHINE"
+                                 :format-arguments (list c))
+                             nil))))
+                   (t
+                    (let* ((removedp (member name (machine-descriptor-removed-instructions child)
+                                             :test #'string=))
+                           (copies (%copy-descriptor-family
+                                    source (machine-descriptor-name child)
+                                    (unless removedp
+                                      (cdr (assoc name (machine-descriptor-instruction-cycles child)
+                                                  :test #'string=))))))
+                      (cl:push (list child (if removedp :disable :install) copies) plan)
+                      (walk child copies)))))))
+      (walk md descriptors))
+    (nreverse plan)))
 
 (defun %collect-instruction-descriptors (&rest groups)
   "Flatten descriptor-family lists while accepting ordinary descriptor forms."
