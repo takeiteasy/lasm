@@ -5592,3 +5592,242 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (dolist (bad '((:big :middle 2) (:big :little 1) (:big) (:big :little 2 3) (:big :little :x) :pdp))
     (fiveam:signals error (%check-endian bad 'ram)))
   (fiveam:is (equal '(:big :little 2) (%check-endian '(:big :little 2) 'ram))))
+
+;;; Nested varying ONE-OF: NW-IND varies in hole count and sits inside NW-MODE's
+;;; own ONE-OF; a path such as (nw-ind vh-idx) names the inner alternative.
+
+(defmode nw-ind (one-of vh-reg vh-idx))
+(defmode nw-lit "#" expr)
+(defmode nw-mode expr "," (one-of nw-ind nw-lit))
+
+(definstruction varying-hole-test-machine nwl
+  (modes nw-mode)
+  (encoding
+    (opcode 6)
+    (operand dst :field dst)
+    (operand src :field src
+      (variant (choice (nw-ind vh-reg)) inline :range (0 7) :bias #x00)
+      (variant (choice (nw-ind vh-idx)) inline :range (0 7) :bias #x10)
+      (variant (choice nw-lit) inline :range (0 7) :bias #x20))
+    (for-choice (src nw-ind vh-idx) (operand off :trailing-word)))
+  (semantics
+    (choice-case src
+      (nw-lit (set! (a dst) src))
+      (nw-ind (choice-case (src nw-ind)
+                (vh-reg (set! (a dst) (a src)))
+                (vh-idx (set! (a dst) (mref machine 'ram (+ (a src) off)))))))))
+
+(fiveam:test nested-varying-word-expands-one-descriptor-per-path
+  (let ((variants (find-instruction-variants 'varying-hole-test-machine 'nwl)))
+    (fiveam:is (equal '(2 2 3)
+                      (sort (mapcar (lambda (d) (length (instruction-descriptor-operand-names d)))
+                                    variants)
+                            #'<)))))
+
+(fiveam:test nested-varying-word-assemble-decode-round-trip
+  (dolist (case '(("nwl 1, 5" 1) ("nwl 1, [3, 100]" 2) ("nwl 1, #4" 1)))
+    (destructuring-bind (source length) case
+      (let ((cells (assembly-cells (assemble source :machine 'varying-hole-test-machine))))
+        (fiveam:is (= length (length cells)))
+        (multiple-value-bind (descriptor values size)
+            (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
+          (fiveam:is (string= "NWL" (instruction-descriptor-name descriptor)))
+          (fiveam:is (= length size))
+          (fiveam:is (= (if (= length 2) 3 2) (length values))))))))
+
+(fiveam:test nested-varying-word-decoded-choices-carry-the-path
+  (let ((cells (assembly-cells (assemble "nwl 1, [3, 100]" :machine 'varying-hole-test-machine))))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
+      (declare (ignore descriptor size))
+      (fiveam:is (equal '(1 3 100) values))
+      (fiveam:is (equal '((nw-ind vh-idx) (nw-ind vh-idx))
+                        (mapcar (lambda (c) (and c (word-field-choice-choice c))) (rest choices)))))))
+
+(fiveam:test nested-varying-word-semantics-dispatch-on-the-inner-pick
+  (let ((m (make-machine 'varying-hole-test-machine)))
+    (setf (regref m 'a 3) 3
+          (mref m 'ram 103) 999)
+    (load-program m (assembly-cells (assemble "nwl 2, [3, 100]" :machine 'varying-hole-test-machine)))
+    (step-machine m)
+    (fiveam:is (= 999 (regref m 'a 2))))
+  (let ((m (make-machine 'varying-hole-test-machine)))
+    (setf (regref m 'a 3) 77)
+    (load-program m (assembly-cells (assemble "nwl 2, 3" :machine 'varying-hole-test-machine)))
+    (step-machine m)
+    (fiveam:is (= 77 (regref m 'a 2))))
+  (let ((m (make-machine 'varying-hole-test-machine)))
+    (load-program m (assembly-cells (assemble "nwl 2, #5" :machine 'varying-hole-test-machine)))
+    (step-machine m)
+    (fiveam:is (= 5 (regref m 'a 2)))))
+
+(fiveam:test nested-varying-word-disassembles-each-shape
+  (dolist (case '(("nwl 1, 5" "$5") ("nwl 1, [3, 100]" "[$3,$64]") ("nwl 1, #4" "#$4")))
+    (let* ((cells (assembly-cells (assemble (first case) :machine 'varying-hole-test-machine)))
+           (lines (disassemble-cells cells :machine 'varying-hole-test-machine)))
+      (fiveam:is (search (second case) (disassembly-line-text (first lines)))))))
+
+(defmacro %nested-word-instruction (&rest encoding)
+  "A bogus NW-MODE instruction; the valid (src nw-ind vh-idx) for-choice is always
+present, so an error comes from the ENCODING under test."
+  `(eval '(definstruction varying-hole-test-machine bogus
+            (modes nw-mode)
+            (encoding (opcode 7) (operand dst :field dst) ,@encoding
+                      (for-choice (src nw-ind vh-idx) (operand off :trailing-word)))
+            (semantics nil))))
+
+(defun %error-text (thunk)
+  (handler-case (progn (funcall thunk) nil)
+    (error (c) (princ-to-string c))))
+
+(fiveam:test nested-varying-word-rejects-a-bare-varying-choice
+  (let ((text (%error-text
+               (lambda ()
+                 (%nested-word-instruction
+                  (operand src :field src
+                    (variant (choice nw-ind) inline :range (0 7) :bias #x00)
+                    (variant (choice nw-lit) inline :range (0 7) :bias #x20)))))))
+    (fiveam:is (search "varies in hole count" text))))
+
+(fiveam:test nested-varying-word-rejects-an-unknown-inner-choice
+  (let ((text (%error-text
+               (lambda ()
+                 (%nested-word-instruction
+                  (operand src :field src
+                    (variant (choice (nw-ind vh-reg)) inline :range (0 7) :bias #x00)
+                    (variant (choice (nw-ind nw-lit)) inline :range (0 7) :bias #x10)
+                    (variant (choice nw-lit) inline :range (0 7) :bias #x20)))))))
+    (fiveam:is (search "is not one of this hole's ONE-OF alternatives" text))))
+
+(fiveam:test nested-varying-word-rejects-a-one-name-path
+  (let ((text (%error-text
+               (lambda ()
+                 (%nested-word-instruction
+                  (operand src :field src
+                    (variant (choice (nw-ind)) inline :range (0 7) :bias #x00)))))))
+    (fiveam:is (search "at least two mode names" text))))
+
+(fiveam:test nested-varying-word-requires-a-for-choice-per-path
+  (let ((text (%error-text
+               (lambda ()
+                 (eval '(definstruction varying-hole-test-machine bogus
+                          (modes nw-mode)
+                          (encoding
+                            (opcode 7)
+                            (operand dst :field dst)
+                            (operand src :field src
+                              (variant (choice (nw-ind vh-reg)) inline :range (0 7) :bias #x00)
+                              (variant (choice (nw-ind vh-idx)) inline :range (0 7) :bias #x10)
+                              (variant (choice nw-lit) inline :range (0 7) :bias #x20)))
+                          (semantics nil)))))))
+    (fiveam:is (search "missing FOR-CHOICE for (NW-IND VH-IDX)" text))))
+
+(fiveam:test nested-varying-word-rejects-a-short-for-choice-on-a-varying-alternative
+  (let ((text (%error-text
+               (lambda ()
+                 (eval '(definstruction varying-hole-test-machine bogus
+                          (modes nw-mode)
+                          (encoding
+                            (opcode 7)
+                            (operand dst :field dst)
+                            (operand src :field src
+                              (variant (choice (nw-ind vh-reg)) inline :range (0 7) :bias #x00)
+                              (variant (choice (nw-ind vh-idx)) inline :range (0 7) :bias #x10)
+                              (variant (choice nw-lit) inline :range (0 7) :bias #x20))
+                            (for-choice nw-ind (operand off :trailing-word)))
+                          (semantics nil)))))))
+    (fiveam:is (search "varies in hole count" text))))
+
+(fiveam:test nested-varying-choice-case-rejects-bad-qualification
+  (dolist (case '(((choice-case (src nw-lit) (vh-reg 1)) "does not name a nested varying")
+                  ((choice-case (src nw-ind) (nw-lit 1)) "is not one of this operand's")
+                  ((choice-case (src nw-ind vh-reg) (vh-reg 1)) "does not name a nested varying")))
+    (destructuring-bind (body expected) case
+      (let ((text (%error-text
+                   (lambda ()
+                     (eval `(definstruction varying-hole-test-machine bogus
+                              (modes nw-mode)
+                              (encoding
+                                (opcode 7)
+                                (operand dst :field dst)
+                                (operand src :field src
+                                  (variant (choice (nw-ind vh-reg)) inline :range (0 7) :bias #x00)
+                                  (variant (choice (nw-ind vh-idx)) inline :range (0 7) :bias #x10)
+                                  (variant (choice nw-lit) inline :range (0 7) :bias #x20))
+                                (for-choice (src nw-ind vh-idx) (operand off :trailing-word)))
+                              (semantics ,body)))))))
+        (fiveam:is (search expected text))))))
+
+;;; Byte-encoded nesting, three levels deep: NB-FAR is a varying alternative of
+;;; NB-DEEP, which is itself a varying alternative of NB-MODE.
+
+(defmode nb-abs expr)
+(defmode nb-idx "[" expr "," expr "]")
+(defmode nb-far "<" expr "," (one-of nb-abs nb-idx) ">")
+(defmode nb-deep (one-of nb-abs nb-far))
+(defmode nb-lit "#" expr)
+(defmode nb-mode (one-of nb-deep nb-lit))
+
+(definstruction varying-hole-byte-test-machine nbd
+  (modes nb-mode)
+  (encoding
+    (opcode 11)
+    (operand src :width 1
+      (variant (choice (nb-deep nb-abs)) (sub 0))
+      (variant (choice (nb-deep nb-far nb-abs)) (sub 1))
+      (variant (choice (nb-deep nb-far nb-idx)) (sub 2))
+      (variant (choice nb-lit) (sub 3)))
+    (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
+    (for-choice (src nb-deep nb-far nb-idx) (operand x1 :width 1) (operand x2 :width 1)))
+  (semantics
+    (choice-case src
+      (nb-lit (set! a src))
+      (nb-deep (choice-case (src nb-deep)
+                 (nb-abs (set! a src))
+                 (nb-far (choice-case (src nb-deep nb-far)
+                           (nb-abs (set! a (+ src x1)))
+                           (nb-idx (set! a (+ src x1 x2))))))))))
+
+(fiveam:test nested-varying-byte-three-levels-round-trip
+  (dolist (case '(("nbd 7" #(11 0 7) (nb-deep nb-abs))
+                  ("nbd <1, 2>" #(11 1 1 2) (nb-deep nb-far nb-abs))
+                  ("nbd <1, [2, 3]>" #(11 2 1 2 3) (nb-deep nb-far nb-idx))
+                  ("nbd #4" #(11 3 4) nb-lit)))
+    (destructuring-bind (source cells key) case
+      (let ((assembled (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine))))
+        (fiveam:is (equalp cells assembled))
+        (multiple-value-bind (descriptor values size choices)
+            (decode-instruction-at (vector-cell-reader assembled) 0 'varying-hole-byte-test-machine)
+          (fiveam:is (string= "NBD" (instruction-descriptor-name descriptor)))
+          (fiveam:is (= (length cells) size))
+          (fiveam:is (equal (coerce (subseq cells 2) 'list) values))
+          (fiveam:is (every (lambda (c) (equal key c)) (remove nil choices))))))))
+
+(fiveam:test nested-varying-byte-three-levels-semantics-dispatch
+  (dolist (case '(("nbd 7" 7) ("nbd <1, 2>" 3) ("nbd <1, [2, 3]>" 6) ("nbd #4" 4)))
+    (let ((m (make-machine 'varying-hole-byte-test-machine)))
+      (load-program m (assembly-cells (assemble (first case) :machine 'varying-hole-byte-test-machine)))
+      (step-machine m)
+      (fiveam:is (= (second case) (sref m 'a))))))
+
+(fiveam:test nested-varying-byte-disassembles-each-path
+  (dolist (case '(("nbd 7" "$7") ("nbd <1, 2>" "<$1,$2>") ("nbd <1, [2, 3]>" "<$1,[$2,$3]>")
+                  ("nbd #4" "#$4")))
+    (let* ((cells (assembly-cells (assemble (first case) :machine 'varying-hole-byte-test-machine)))
+           (lines (disassemble-cells cells :machine 'varying-hole-byte-test-machine)))
+      (fiveam:is (search (second case) (disassembly-line-text (first lines)))))))
+
+(fiveam:test nested-varying-byte-rejects-a-bare-varying-choice
+  (let ((text (%error-text
+               (lambda ()
+                 (eval '(definstruction varying-hole-byte-test-machine bogus
+                          (modes nb-mode)
+                          (encoding
+                            (opcode 12)
+                            (operand src :width 1
+                              (variant (choice nb-deep) (sub 0))
+                              (variant (choice nb-lit) (sub 1)))
+                            (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
+                            (for-choice (src nb-deep nb-far nb-idx) (operand x1 :width 1) (operand x2 :width 1)))
+                          (semantics nil)))))))
+    (fiveam:is (search "varies in hole count" text))))

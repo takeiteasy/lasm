@@ -354,7 +354,7 @@ its own hole count actually matches CHOICES' length."
     (loop for wanted in selectors
           for hole-choice in choices
           always (or (null wanted)
-                     (and hole-choice (eq wanted (mode-descriptor-name hole-choice)))))))
+                     (and hole-choice (equal wanted (%choice-entry-key hole-choice)))))))
 
 (defun %narrow-to-forced-mode (statement variants)
   "STATEMENT carries a mnemonic mode suffix (e.g. \"w\" from \"lda.w\"). Return
@@ -1319,7 +1319,7 @@ encoded into. Relative fields are checked by %RELATIVE-OFFSET."
           when (and (not (nth i relative-holes))
                     (or *strict-operand-range*
                         (and mode (mode-descriptor-strictp mode))
-                        (and choice (mode-descriptor-strictp choice))))
+                        (and choice (mode-descriptor-strictp (if (consp choice) (first choice) choice)))))
             do (if word-fields
                    (multiple-value-bind (lo hi) (%word-field-bounds (nth i word-fields) cell-width)
                      (unless (<= lo value hi)

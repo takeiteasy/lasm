@@ -736,6 +736,24 @@ which would corrupt a register index" machine name mode-name i register))
 and :REGISTER ~S -- a signed hole may decode negative, which is not a valid register index"
                           machine name mode-name i register))))))
 
+(defun %parse-choice-key (form context)
+  "Parse a (choice ...) name: a mode-name symbol, or a path (NAME INNER...) of
+at least two symbols selecting an alternative inside a varying nested ONE-OF."
+  (cond ((and (symbolp form) form) form)
+        ((and (consp form) (rest form) (every #'symbolp form)) form)
+        (t (error "DEFINSTRUCTION: ~A: a choice must be a mode name or a path of at least two ~
+mode names such as (outer inner), got ~S" context form))))
+
+(defun %choice-hint (key)
+  "Extra diagnostic text when KEY names a nested varying mode without its inner alternative."
+  (let ((mode (and (symbolp key) (gethash key *modes*))))
+    (if (and mode (mode-descriptor-varyingp mode))
+        (format nil " -- ~S varies in hole count; name its inner alternative with a path such as (~S ~S)"
+                key key (first (mapcar #'car (%one-of-element-options
+                                              (%pattern-varying-one-of-element
+                                               (mode-descriptor-pattern mode))))))
+        "")))
+
 (defun %parse-byte-sub-variant-form (form hole-name)
   "Parse one (variant (choice m) (sub s)) form (#126) -- the byte-encoded
 counterpart of a word field's (variant (choice m) ...) form
@@ -750,7 +768,7 @@ sub)."
     (unless (and (consp selector) (eq (first selector) 'choice) (= (length selector) 2))
       (error "DEFINSTRUCTION: operand ~A: variant selector must be (choice m), got ~S"
              hole-name selector))
-    (let ((choice-name (second selector)))
+    (let ((choice-name (%parse-choice-key (second selector) (format nil "operand ~A" hole-name))))
       (unless (and (consp (first tail)) (eq (first (first tail)) 'sub) (= (length (first tail)) 2)
                    (null (rest tail)))
         (error "DEFINSTRUCTION: operand ~A: a (choice ~S) variant must be (sub s), got ~S"
@@ -784,13 +802,13 @@ chooses between ONE-OF alternatives" machine name hole-name))
                                         (cons m s)))
                           variant-forms)))
       (dolist (p pairs)
-        (unless (member (car p) hole-alternatives)
+        (unless (member (car p) hole-alternatives :test #'equal)
           (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) is not one of this hole's ~
-ONE-OF alternatives ~S" machine name hole-name (car p) hole-alternatives))
+ONE-OF alternatives ~S~A" machine name hole-name (car p) hole-alternatives (%choice-hint (car p))))
         (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
           (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode ~D for (choice ~S) does not fit ~
 machine ~S's ~D-bit code cell" machine name hole-name (cdr p) (car p) machine width)))
-      (let ((dup-mode (loop for (p . later) on pairs when (member (car p) later :key #'car) return (car p))))
+      (let ((dup-mode (loop for (p . later) on pairs when (member (car p) later :key #'car :test #'equal) return (car p))))
         (when dup-mode
           (error "DEFINSTRUCTION ~S ~S: operand ~A: (choice ~S) given more than once"
                  machine name hole-name dup-mode)))
@@ -798,7 +816,7 @@ machine ~S's ~D-bit code cell" machine name hole-name (cdr p) (car p) machine wi
         (when dup-sub
           (error "DEFINSTRUCTION ~S ~S: operand ~A: sub-opcode value ~D used by more than one ~
 (choice ...) variant" machine name hole-name dup-sub)))
-      (let ((missing (set-difference hole-alternatives (mapcar #'car pairs))))
+      (let ((missing (set-difference hole-alternatives (mapcar #'car pairs) :test #'equal)))
         (when missing
           (error "DEFINSTRUCTION ~S ~S: operand ~A: ONE-OF alternative~P ~S ~:[has~;have~] no ~
 (variant (choice ...) (sub ...)) -- every alternative of a sub-selected hole must be claimed"
@@ -819,7 +837,8 @@ order."
     (unless (and (consp selector) (eq (first selector) 'choice) (rest selector))
       (error "DEFINSTRUCTION: (sub-opcode ...): variant selector must be (choice m1 m2 ...), got ~S"
              selector))
-    (let ((names (rest selector)))
+    (let ((names (mapcar (lambda (name) (%parse-choice-key name "(sub-opcode ...)"))
+                         (rest selector))))
       (unless (and (consp (first tail)) (eq (first (first tail)) 'sub) (= (length (first tail)) 2)
                    (null (rest tail)))
         (error "DEFINSTRUCTION: (sub-opcode ...): a (choice ~S) variant must be (sub s), got ~S"
@@ -939,9 +958,10 @@ but this mode has ~D participating ONE-OF hole~:P" machine name (car p) (length 
         (loop for choice-name in (car p)
               for alts in alt-lists
               for i in hole-indices
-              unless (member choice-name alts)
+              unless (member choice-name alts :test #'equal)
                 do (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~S, not ~
-one of operand hole ~D's ONE-OF alternatives ~S" machine name (car p) choice-name i alts))
+one of operand hole ~D's ONE-OF alternatives ~S~A" machine name (car p) choice-name i alts
+                          (%choice-hint choice-name)))
         (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
           (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode ~D for (choice ~S) does not ~
 fit machine ~S's ~D-bit code cell" machine name (cdr p) (car p) machine width)))
@@ -1146,6 +1166,19 @@ exempted unconditionally, same rationale."
           (error "DEFINSTRUCTION: CHOICE-CASE ~S: ~S is not one of this operand's ~
 ONE-OF alternatives ~S" name key hole-alternatives))))))
 
+(defun %choice-case-components (name prefix hole-alternatives)
+  "The mode names a qualified (CHOICE-CASE (NAME . PREFIX) ...) can select
+between: the path component after PREFIX in each of HOLE-ALTERNATIVES' keys."
+  (let ((components (loop for key in hole-alternatives
+                          for path = (%key-list key)
+                          when (and (> (length path) (length prefix))
+                                    (equal prefix (subseq path 0 (length prefix))))
+                            collect (nth (length prefix) path))))
+    (unless components
+      (error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested varying ~
+ONE-OF alternative of this operand" name prefix name prefix))
+    (remove-duplicates components)))
+
 (defun %choice-case-form (name clauses machine-name instruction-name operand-names hole-alternatives-list
                             &optional mode-operand-names named-slot-alternatives operand-map-form)
   "Expansion of one (CHOICE-CASE NAME CLAUSE...) form (see the DEFINSTRUCTION
@@ -1162,17 +1195,30 @@ so this always falls to OTHERWISE/NO-MATCHING-CHOICE, unreachable in
 practice since the shared (semantics ...) body's own CHOICE-CASE on NAME's
 governing hole is what selects which descriptor ran in the first place."
   (multiple-value-bind (index foundp)
-      (%choice-case-operand-index name operand-names mode-operand-names named-slot-alternatives)
+      (%choice-case-operand-index (if (consp name) (first name) name) operand-names
+                                  mode-operand-names named-slot-alternatives)
     (when foundp
-      (let ((hole-alternatives (if (eq index :selection)
-                                   (cdr (assoc name named-slot-alternatives))
-                                   (nth index hole-alternatives-list))))
+      (let* ((prefix (and (consp name) (rest name)))
+             (hole-alternatives (if (eq index :selection)
+                                    (cdr (assoc (%key-head name) named-slot-alternatives))
+                                    (nth index hole-alternatives-list))))
+        (when (and prefix (or (eq index :selection) (null hole-alternatives)))
+          (error "DEFINSTRUCTION: CHOICE-CASE ~S: only an operand hole governed by a ONE-OF can ~
+be qualified" name))
         (dolist (clause clauses)
-          (%check-choice-case-keys! name (first clause) hole-alternatives))))
+          (%check-choice-case-keys! name (first clause)
+                                    (cond (prefix (%choice-case-components (first name) prefix
+                                                                           hole-alternatives))
+                                          ((eq index :selection) hole-alternatives)
+                                          (t (mapcar #'%key-head hole-alternatives)))))))
     (let ((has-fallback (some (lambda (c) (member (first c) '(otherwise t))) clauses))
-          (choice-var (gensym "CHOICE")))
+          (choice-var (gensym "CHOICE"))
+          (name (if (consp name) (first name) name))
+          (prefix (and (consp name) (rest name))))
       `(let ((,choice-var ,(cond ((not foundp) nil)
                                  ((eq index :selection) `(cdr (assoc ',name selections)))
+                                 (prefix `(%matched-choice-component choices ,index ',prefix
+                                                                     ,operand-map-form))
                                  (t `(%matched-choice-name choices ,index ,operand-map-form)))))
          (case ,choice-var
            ,@clauses
@@ -1362,8 +1408,8 @@ hole sharing a common :WIDTH -- that shared value)."
         for declared = (nth i declared-widths)
         for specified = (nth i mode-specified)
         collect (if specified
-                    (or (and chosen (mode-descriptor-width (find-mode-descriptor chosen)))
-                        (and alts (mode-descriptor-width (find-mode-descriptor (first alts))))
+                    (or (and chosen (mode-descriptor-width (%choice-key-descriptor chosen)))
+                        (and alts (mode-descriptor-width (%choice-key-descriptor (first alts))))
                         declared)
                     declared)))
 
@@ -1511,8 +1557,8 @@ sub-opcode selector -- its alternative is chosen at the element's first hole"
            (let ((chosen (%byte-pair-chosen pair hole-indices group))
                  (alt (mode-hole-group-alt-name group)))
              (if alt
-                 (eq chosen alt)
-                 (= (%mode-hole-count (find-mode-descriptor chosen)) (mode-hole-group-base-count group)))))
+                 (equal chosen alt)
+                 (= (%option-hole-count chosen) (mode-hole-group-base-count group)))))
          (mode-hole-tuple-groups tuple)))
 
 (defun %byte-tuple-sub-choices (pair hole-indices tuple)
@@ -1634,7 +1680,7 @@ alternatives disagree on hole count" machine name mode-name))
   ;; longer NIL here by the time %EXPAND-WORD-COMBOS/%WORD-FIELD-CHOICE-FORM
   ;; (below) see it. A field with no CHOICE variant at all is left alone --
   ;; every variant there stays NIL, exactly as before #118.
-  (choice nil :type (or null symbol))
+  (choice nil :type (or null symbol cons))
   ;; Alternate syntax for a canonical encoding; never matched at decode.
   (alias nil :type boolean)
   ;; Name a source hole prefix ("w:5") selects this variant with.
@@ -1701,7 +1747,7 @@ alternatives disagree on hole count" machine name mode-name))
   ;; choice (decoder.lisp) gives the disassembler (disassembler.lisp, #117)
   ;; a record of which alternative was really encoded, instead of always
   ;; rendering a ONE-OF's first alternative.
-  (choice nil :type (or null symbol))
+  (choice nil :type (or null symbol cons))
   ;; #127 (M4): T when this field's operand is a signed quantity --
   ;; stamped, at DEFINSTRUCTION time (%WORD-FIELD-CHOICE-FORM), from CHOICE's
   ;; own MODE-DESCRIPTOR-SIGNEDP when CHOICE is non-NIL, else NIL. Scoped to
@@ -1737,21 +1783,36 @@ reinterpreted before comparison; extra-word escapes remain unsigned."
                (destructuring-bind (lo . hi) (word-field-choice-range choice)
                  (<= (+ lo (word-field-choice-bias choice)) raw-value (+ hi (word-field-choice-bias choice))))))))
 
-(defun %matched-choice-name (choices index &optional mapping)
-  "The mode-name symbol INDEX's hole actually matched, from CHOICES (a
-positional, hole-aligned list) -- or NIL if CHOICES is too short, INDEX's
-entry is NIL, or it names a value-selected field (no CHOICE of its own).
-Normalizes the two shapes CHOICES arrives in: a WORD-FIELD-CHOICE
-(DECODE-INSTRUCTION-AT/EXECUTE-INSTRUCTION, decoder.lisp) or a MODE-DESCRIPTOR
-(MATCH-OPERAND-MODE, mode.lisp -- the same shape %WORD-CHOICES-ELIGIBLE-P
-already reads at assemble time, assembler.lisp); a bare symbol or NIL passes
-through unchanged, for a caller that already extracted a mode name itself."
+(defun %matched-choice-key (choices index &optional mapping)
+  "The option key INDEX's hole actually matched, from CHOICES (a positional,
+hole-aligned list) -- a mode-name symbol, a path list for a varying nested
+ONE-OF alternative, or NIL if CHOICES is too short, INDEX's entry is NIL, or
+it names a value-selected field (no CHOICE of its own). Normalizes the shapes
+CHOICES arrives in: a WORD-FIELD-CHOICE (DECODE-INSTRUCTION-AT/EXECUTE-
+INSTRUCTION, decoder.lisp) or a MODE-DESCRIPTOR or path of them (MATCH-
+OPERAND-MODE, mode.lisp -- the same shape %CHOICES-ELIGIBLE-P already reads
+at assemble time, assembler.lisp); a bare symbol or NIL passes through
+unchanged, for a caller that already extracted a key itself."
   (let ((entry (%semantics-operand choices index mapping)))
     (etypecase entry
       (null nil)
       (symbol entry)
+      (cons (%collapse-key (mapcar (lambda (e) (if (symbolp e) e (mode-descriptor-name e))) entry)))
       (word-field-choice (word-field-choice-choice entry))
       (mode-descriptor (mode-descriptor-name entry)))))
+
+(defun %matched-choice-name (choices index &optional mapping)
+  "The mode-name symbol INDEX's hole actually matched: the head of its option key."
+  (%key-head (%matched-choice-key choices index mapping)))
+
+(defun %matched-choice-component (choices index prefix &optional mapping)
+  "The path component INDEX's hole matched just after PREFIX (a list of mode
+names), or NIL when its key does not start with PREFIX."
+  (let ((key (%key-list (%matched-choice-key choices index mapping)))
+        (n (length prefix)))
+    (and (> (length key) n)
+         (equal prefix (subseq key 0 n))
+         (nth n key))))
 
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
@@ -2060,6 +2121,7 @@ INLINE, got ~S" field-name tail))
       ((and (consp selector) (eq (first selector) 'choice))
        (destructuring-bind (choice-kw choice-name) selector
          (declare (ignore choice-kw))
+         (setf choice-name (%parse-choice-key choice-name (format nil "field ~S" field-name)))
          (cond
            ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
             (destructuring-bind (extra-word-kw &key escape cells alias) (first tail)
@@ -2099,7 +2161,7 @@ below the same as any other signed variant would."
   (if (word-variant-choice v)
       (if source
           (%hole-source-attribute mode source :signed (word-variant-choice v))
-          (mode-descriptor-signedp (find-mode-descriptor (word-variant-choice v))))
+          (mode-descriptor-signedp (%choice-key-descriptor (word-variant-choice v))))
       hole-signedp))
 
 (define-condition signed-range-out-of-field (error)
@@ -2144,7 +2206,7 @@ a CHOICE selector -- a hole prefix could not tell them apart."
   (loop for (v . later) on variants
         when (and (word-variant-suffix v)
                   (find-if (lambda (o) (and (equal (word-variant-suffix o) (word-variant-suffix v))
-                                            (eq (word-variant-choice o) (word-variant-choice v))))
+                                            (equal (word-variant-choice o) (word-variant-choice v))))
                            later))
           do (error "DEFINSTRUCTION: field ~S: more than one variant declares :suffix ~S"
                     field-name (word-variant-suffix v))))
@@ -2157,11 +2219,12 @@ so the variant could never be forced."
     (let ((suffix (word-variant-suffix v)))
       (when suffix
         (dolist (alt hole-alternatives)
-          (let ((alt-suffix (mode-descriptor-suffix (find-mode-descriptor alt))))
-            (when (and alt-suffix (string-equal alt-suffix suffix))
-              (error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
+          (dolist (name (%key-list alt))
+            (let ((alt-suffix (mode-descriptor-suffix (find-mode-descriptor name))))
+              (when (and alt-suffix (string-equal alt-suffix suffix))
+                (error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
 alternative ~S, which declares the same mode :suffix"
-                     field-name suffix alt))))))))
+                       field-name suffix name)))))))))
 
 (defun %check-word-variants (variants field-width field-name hole-signedp &optional mode source)
   "Signal an error if any of VARIANTS (one FIELD-NAME operand's declared
@@ -2278,10 +2341,11 @@ non-alias variant on that escape to be an alias of" field-name e))
   "Require identical value interpretation for alternate encoding spellings."
   (unless (and (word-variant-choice alias) (word-variant-choice canonical))
     (error "DEFINSTRUCTION: field ~S: aliases require both variants to be CHOICE-selected" field-name))
-  (let ((am (find-mode-descriptor (word-variant-choice alias)))
-        (cm (find-mode-descriptor (word-variant-choice canonical))))
+  (let ((am (%choice-key-descriptor (word-variant-choice alias)))
+        (cm (%choice-key-descriptor (word-variant-choice canonical))))
     (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
-                 (= (%mode-hole-count am) (%mode-hole-count cm))
+                 (= (%option-hole-count (word-variant-choice alias))
+                    (%option-hole-count (word-variant-choice canonical)))
                  (eq (mode-descriptor-signedp am) (mode-descriptor-signedp cm))
                  (eql (mode-descriptor-width am) (mode-descriptor-width cm))
                  (eq (mode-descriptor-relativep am) (mode-descriptor-relativep cm)))
@@ -2325,18 +2389,19 @@ than left to silently skew encode and decode apart."
   (dolist (v variants)
     (let ((choice (word-variant-choice v)))
       (when choice
-        (find-mode-descriptor choice)
+        (mapc #'find-mode-descriptor (%key-list choice))
         (unless hole-alternatives
           (error "DEFINSTRUCTION: field ~S: (choice ~S) given for an operand hole that is ~
 not a ONE-OF pattern element -- CHOICE only selects between ONE-OF alternatives"
                  field-name choice))
-        (unless (member choice hole-alternatives)
+        (unless (member choice hole-alternatives :test #'equal)
           (error "DEFINSTRUCTION: field ~S: (choice ~S) is not one of this hole's ONE-OF ~
-alternatives ~S" field-name choice hole-alternatives)))))
+alternatives ~S~A" field-name choice hole-alternatives (%choice-hint choice))))))
   (let* ((choice-selected (remove-if-not #'word-variant-choice variants))
          (value-selected (remove-if #'word-variant-choice variants)))
     (when (and choice-selected value-selected)
-      (let ((unclaimed (set-difference hole-alternatives (mapcar #'word-variant-choice choice-selected))))
+      (let ((unclaimed (set-difference hole-alternatives (mapcar #'word-variant-choice choice-selected)
+                                   :test #'equal)))
         (cond
           ((null unclaimed)
            (error "DEFINSTRUCTION: field ~S: every ONE-OF alternative ~S is already claimed ~
@@ -2374,7 +2439,7 @@ at decode" field-name unclaimed))
           ;; legalize a mixed-field shape docs/instructions.md and
           ;; docs/modes.md both currently document as rejected outright, and
           ;; is out of #63's scope (see #63's closing comment).
-          ((mode-descriptor-signedp (find-mode-descriptor (first unclaimed)))
+          ((mode-descriptor-signedp (%choice-key-descriptor (first unclaimed)))
            (error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
 field's value-selected variant~P declares :SIGNED T -- a value-selected variant has no (CHOICE ~
 ...) of its own to read :SIGNED from, so a mixed field cannot carry a signed fallback; give ~S ~
@@ -2386,15 +2451,15 @@ its own (CHOICE ...) variant instead"
           ;; must match every other alternative sharing this element's base
           ;; (minimum) count; an unclaimed alternative contributing MORE
           ;; holes would imply a hole with no encoding anywhere.
-          ((/= (%mode-hole-count (find-mode-descriptor (first unclaimed)))
-               (%pattern-one-of-min-hole-count hole-alternatives))
+          ((/= (%option-hole-count (first unclaimed))
+               (reduce #'min (mapcar #'%option-hole-count hole-alternatives)))
            (error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
 field's value-selected variant~P has ~D hole~:P, not this element's base hole count ~D -- a ~
 value-selected variant has no (CHOICE ...) of its own to declare extra holes on; give ~S its own ~
 (CHOICE ...) variant instead"
                   field-name (first unclaimed) (length value-selected)
-                  (%mode-hole-count (find-mode-descriptor (first unclaimed)))
-                  (%pattern-one-of-min-hole-count hole-alternatives) (first unclaimed)))
+                  (%option-hole-count (first unclaimed))
+                  (reduce #'min (mapcar #'%option-hole-count hole-alternatives)) (first unclaimed)))
           (t (dolist (v value-selected)
                (setf (word-variant-choice v) (first unclaimed)))))))))
 
@@ -2693,8 +2758,9 @@ narrower extra word before one needing a wider one."
     ,constants-form ',choice-selections ,cycles ,semantics-fn-form))
 
 (defun %parse-for-choice-subclauses (mode subclauses operand-subclauses)
-  "Resolve each group to (base-hole-index alternative), validating its extras.
-Qualified selectors use (operand alternative); short selectors must be unique."
+  "Resolve each group to (slot base-hole-index option-key), validating its extras.
+Qualified selectors are (operand-or-slot alternative...), the path naming a
+nested varying alternative; short selectors must be unique."
   (let ((groups (mode-hole-tuple-groups (first (%mode-hole-tuples mode))))
         (names (mapcar #'%parse-operand-subclause operand-subclauses))
         entries)
@@ -2702,27 +2768,28 @@ Qualified selectors use (operand alternative); short selectors must be unique."
       (destructuring-bind (head selector &rest extras) subclause
         (declare (ignore head))
         (let* ((qualified (consp selector))
-               (alt (if qualified (second selector) selector))
+               (alt (if qualified (%collapse-key (rest selector)) selector))
                (position (and qualified (position (first selector) names)))
                (matches (remove-if-not
                          (lambda (g)
-                           (and (member alt (mode-hole-group-alternatives g))
-                (or (not qualified)
-                    (eq (mode-hole-group-slot g) (first selector))
-                    (and position
+                           (and (member alt (mode-hole-group-options g) :test #'equal)
+                                (or (not qualified)
+                                    (eq (mode-hole-group-slot g) (first selector))
+                                    (and position
                                          (<= (mode-hole-group-base-start g) position)
                                          (< position (+ (mode-hole-group-base-start g)
                                                         (mode-hole-group-base-count g)))))))
                          groups)))
           (when (and qualified
-                     (or (/= (length selector) 2) (null (first selector))))
-            (error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative), got ~S" selector))
+                     (or (< (length selector) 2) (null (first selector))))
+            (error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative...), got ~S" selector))
           (unless (= (length matches) 1)
-            (error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate" selector))
+            (error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate~A"
+                   selector (if qualified "" (%choice-hint selector))))
           (let* ((group (first matches))
                  (key (list (mode-hole-group-slot group)
                             (mode-hole-group-base-start group) alt))
-                 (needed (- (%mode-hole-count (find-mode-descriptor alt))
+                 (needed (- (%option-hole-count alt)
                             (mode-hole-group-base-count group))))
             (when (assoc key entries :test #'equal)
               (error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
@@ -2734,8 +2801,8 @@ Qualified selectors use (operand alternative); short selectors must be unique."
                       selector needed))
             (cl:push (cons key extras) entries)))))
     (dolist (group groups)
-      (dolist (alt (mode-hole-group-alternatives group))
-        (when (> (%mode-hole-count (find-mode-descriptor alt)) (mode-hole-group-base-count group))
+      (dolist (alt (mode-hole-group-options group))
+        (when (> (%option-hole-count alt) (mode-hole-group-base-count group))
           (unless (assoc (list (mode-hole-group-slot group)
                                (mode-hole-group-base-start group) alt)
                          entries :test #'equal)
@@ -2772,7 +2839,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                            :width (word-operand-spec-width spec)
                            :shift (word-operand-spec-shift spec)
                            :register (word-operand-spec-register spec)
-                           :variants (remove-if-not (lambda (v) (member (word-variant-choice v) own-alt-names))
+                           :variants (remove-if-not (lambda (v) (member (word-variant-choice v) own-alt-names :test #'equal))
                                                      (word-operand-spec-variants spec))))
 
 (defun %filter-tuple-governing-specs (specs tuple machine name)
@@ -2782,9 +2849,8 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
            (base-count (mode-hole-group-base-count group))
            (alt (mode-hole-group-alt-name group))
            (own-alts (if alt (list alt)
-                         (remove-if-not (lambda (n)
-                                          (= (%mode-hole-count (find-mode-descriptor n)) base-count))
-                                        (mode-hole-group-alternatives group)))))
+                         (remove-if-not (lambda (n) (= (%option-hole-count n) base-count))
+                                        (mode-hole-group-options group)))))
       (loop for i from start below (+ start base-count)
             for spec = (nth i specs)
             when (word-operand-spec-field spec)
@@ -2802,7 +2868,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
               (lambda (subclause)
                 (let ((spec (%parse-word-operand-subclause
                              subclause layout layout-name machine-name (list alt)
-                             (mode-descriptor-signedp (find-mode-descriptor alt)))))
+                             (mode-descriptor-signedp (%choice-key-descriptor alt)))))
                   (list (word-operand-spec-field spec)
                         (mapcar (lambda (v)
                                   (list (word-variant-kind v) (word-variant-range v)
@@ -2841,26 +2907,29 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
             for spec = (nth i specs)
             do (dolist (variant (word-operand-spec-variants spec))
                  (when (and (word-variant-choice variant)
-                            (not (eq (word-variant-choice variant) (mode-hole-group-alt-name group))))
+                            (not (equal (word-variant-choice variant) (mode-hole-group-alt-name group))))
                    (error "DEFINSTRUCTION: extra operand ~S claims a different FOR-CHOICE alternative"
                           (word-operand-spec-name spec)))
                  (setf (word-variant-choice variant) (mode-hole-group-alt-name group))))))
    specs)
 
-(defun %tuple-choice-selections (tuple)
-  "Return named ONE-OF selections represented by TUPLE.
-  The minimum-arity tuple uses its sole minimum-arity alternative; an
-  over-count tuple records its selected alternative directly."
+(defun %tuple-choice-keys (tuple)
+  "Return (slot . option-key) for each named ONE-OF group of TUPLE.
+The minimum-arity tuple uses its sole minimum-arity alternative; an
+over-count tuple records its selected alternative directly."
   (loop for group in (mode-hole-tuple-groups tuple)
-        for alternatives = (mode-hole-group-alternatives group)
         for count = (mode-hole-group-base-count group)
-        for matching = (remove-if-not (lambda (name)
-                                        (= (%mode-hole-count (find-mode-descriptor name)) count))
-                                      alternatives)
+        for matching = (remove-if-not (lambda (key) (= (%option-hole-count key) count))
+                                      (mode-hole-group-options group))
         for alt = (or (mode-hole-group-alt-name group)
                       (and (null (rest matching)) (first matching)))
         when (and (mode-hole-group-slot group) alt)
           collect (cons (mode-hole-group-slot group) alt)))
+
+(defun %tuple-choice-selections (tuple)
+  "Return named ONE-OF selections represented by TUPLE, by outer alternative."
+  (loop for (slot . key) in (%tuple-choice-keys tuple)
+        collect (cons slot (%key-head key))))
 
 (defun %same-semantics-operand-subclause-p (a b)
   "Whether A and B represent the same semantics operand across mode shapes."
@@ -2983,7 +3052,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                            (tuple-field-values
                              (loop for entry in for-choice-alist
                                    when (member (cons (first (car entry)) (third (car entry)))
-                                                tuple-selections :test #'equal)
+                                                (%tuple-choice-keys tuple) :test #'equal)
                                      append (remove-if-not (lambda (s) (eq (first s) 'field-value))
                                                            (cdr entry))))
                            (tuple-constants
@@ -3090,7 +3159,7 @@ decode-time discriminator for. Alternatives that agree need no discriminator
 at all -- the hole's width is static regardless of which one matched."
   (mapcar (lambda (alts)
             (and alts
-                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-width (find-mode-descriptor m)))
+                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-width (%choice-key-descriptor m)))
                                                    alts)))
                  alts))
           hole-alternatives-list))
@@ -3181,7 +3250,7 @@ keeping docs/modes.md's \"permanently out of scope\" true by erroring loudly
 rather than silently ignoring an inert declaration."
   (loop for alts in hole-alternatives-list
         for i from 0
-        when (and alts (some (lambda (m) (mode-descriptor-width (find-mode-descriptor m))) alts))
+        when (and alts (some (lambda (m) (mode-descriptor-width (%choice-key-descriptor m))) alts))
           do (error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
 :WIDTH, but per-hole :WIDTH is permanently out of scope on word-encoded machine ~S -- operand ~
 sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"

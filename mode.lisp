@@ -63,11 +63,8 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL preserves #28/#43's
                ; original wrap-on-overflow behavior.
-    varyingp)  ; T if this mode's pattern has a varying ONE-OF element.
-               ; %MODE-HOLE-TUPLES (below) returns one tuple per combination.
-               ; %CHECK-ONE-OF-ELEMENTS! rejects any mode declaring VARYINGP
-               ; T as another mode's own :ONE-OF alternative -- a varying
-               ; :ONE-OF nested inside another is not yet supported.
+    varyingp)  ; T if this mode's pattern has a varying ONE-OF element: one
+               ; whose options (%ONE-OF-ELEMENT-OPTIONS) disagree on hole count.
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -200,6 +197,62 @@ options start at the first keyword symbol; everything before it is pattern."
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
 
+  (defun %key-list (key)
+    (if (consp key) key (list key)))
+
+  (defun %collapse-key (names)
+    (if (rest names) names (first names)))
+
+  (defun %key-head (key)
+    (if (consp key) (first key) key))
+
+  (defun %option-hole-count (key &optional seen)
+    "Hole count of an option KEY (see %ONE-OF-ELEMENT-OPTIONS)."
+    (if (consp key)
+        (let* ((alt (find-mode-descriptor (first key)))
+               (element (%pattern-varying-one-of-element (mode-descriptor-pattern alt) seen)))
+          (+ (- (%mode-hole-count alt seen)
+                (reduce #'min (mapcar #'cdr (%one-of-element-options element seen))))
+             (%option-hole-count (%collapse-key (rest key)) seen)))
+        (%mode-hole-count (find-mode-descriptor key) seen)))
+
+  (defun %one-of-element-options (element &optional seen)
+    "((KEY . HOLE-COUNT)...) for ELEMENT's alternatives in declaration order.
+A non-varying alternative is keyed by its name; a varying alternative
+contributes one key (NAME . INNER-KEY-LIST) per option of its own varying
+element."
+    (loop for name in (%one-of-alternatives element)
+          for alt = (find-mode-descriptor name)
+          append (if (mode-descriptor-varyingp alt)
+                     (let ((options (%one-of-element-options
+                                     (%pattern-varying-one-of-element (mode-descriptor-pattern alt) seen)
+                                     seen)))
+                       (loop for (key . nil) in options
+                             collect (let ((full (cons name (%key-list key))))
+                                       (cons full (%option-hole-count full seen)))))
+                     (list (cons name (%mode-hole-count alt seen))))))
+
+  (defun %pattern-varying-one-of-elements (pattern &optional seen)
+    "The ONE-OF elements of PATTERN whose options disagree on hole count."
+    (remove-if-not (lambda (element)
+                     (and (eq (first element) :one-of)
+                          (> (length (remove-duplicates
+                                      (mapcar #'cdr (%one-of-element-options element seen))))
+                             1)))
+                   pattern))
+
+  (defun %pattern-varying-one-of-element (pattern &optional seen)
+    (first (%pattern-varying-one-of-elements pattern seen)))
+
+  (defun %choice-entry-key (entry)
+    "The option key for a matcher CHOICES ENTRY: a descriptor or a path list."
+    (if (consp entry)
+        (%collapse-key (mapcar #'mode-descriptor-name entry))
+        (mode-descriptor-name entry)))
+
+  (defun %choice-key-descriptor (key)
+    (find-mode-descriptor (%key-head key)))
+
   (defun %pattern-one-of-min-hole-count (alt-names &optional seen)
     "The minimum MODE-HOLE-COUNT across ALT-NAMES (a :ONE-OF element's own
 alternative mode-name symbols) -- since #120, an alternative may contribute
@@ -253,9 +306,9 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
           append (ecase (first element)
                    (:literal nil)
                     (:expr (list nil))
-                    (:one-of (let* ((alt-names (%one-of-alternatives element))
-                                    (holes (%pattern-one-of-min-hole-count alt-names seen)))
-                              (make-list holes :initial-element alt-names))))))
+                    (:one-of (let* ((options (%one-of-element-options element seen))
+                                    (holes (reduce #'min (mapcar #'cdr options))))
+                              (make-list holes :initial-element (mapcar #'car options)))))))
 
   (defun %mode-hole-alternatives (mode &optional seen)
     (%pattern-hole-alternatives (mode-descriptor-pattern mode) seen))
@@ -275,15 +328,25 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
         (:relative relative)
         (:signed (or relative signed)))))
 
-  (defun %mode-hole-attributes (mode attribute)
-    "Return default attributes in pattern order."
-    (loop for element in (mode-descriptor-pattern mode)
-          append (ecase (first element)
-                   (:literal nil)
-                   (:expr (list (%expr-hole-attribute element mode attribute)))
-                   (:one-of (%mode-hole-attributes
-                             (find-mode-descriptor (first (%one-of-alternatives element)))
-                             attribute)))))
+  (defun %option-hole-attributes (key attribute)
+    (if (consp key)
+        (%mode-hole-attributes (find-mode-descriptor (first key)) attribute
+                               (%collapse-key (rest key)))
+        (%mode-hole-attributes (find-mode-descriptor key) attribute)))
+
+  (defun %mode-hole-attributes (mode attribute &optional inner-key)
+    "Return default attributes in pattern order. INNER-KEY names the option
+taken by MODE's varying ONE-OF element."
+    (let ((varying (%pattern-varying-one-of-element (mode-descriptor-pattern mode))))
+      (loop for element in (mode-descriptor-pattern mode)
+            append (ecase (first element)
+                     (:literal nil)
+                     (:expr (list (%expr-hole-attribute element mode attribute)))
+                     (:one-of (%option-hole-attributes
+                               (if (and inner-key (eq element varying))
+                                   inner-key
+                                   (car (first (%one-of-element-options element))))
+                               attribute))))))
 
   (defun %pattern-nested-one-of-signed-p (pattern &optional seen)
     "T if any :ONE-OF element nested anywhere in PATTERN -- at any depth, not
@@ -341,8 +404,9 @@ reason."
   (defun %check-one-of-elements! (name pattern)
     "Validate alternative syntax and supported ONE-OF nesting.
 Alternatives may vary in arity and operand attributes; DEFINSTRUCTION
-validates encoding support. Whole-mode suffixes, ambiguous syntax and
-nested varying modes are rejected."
+validates encoding support. Ambiguous syntax is rejected, as is a nested
+varying alternative with several varying elements, a hole-less inner option,
+or wrapper options."
     (dolist (element pattern)
       (when (eq (first element) :one-of)
          (let* ((alt-names (%one-of-alternatives element))
@@ -352,10 +416,23 @@ nested varying modes are rejected."
                    name alt-names))
           (dolist (alt alts)
             (when (mode-descriptor-varyingp alt)
-              (error "DEFMODE ~S: ONE-OF alternative ~S itself has a ONE-OF whose own ~
-alternatives disagree on hole count -- nesting a varying ONE-OF inside another is not yet ~
-supported (#120)"
-                     name (mode-descriptor-name alt)))
+              (let ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
+                (when (rest varying)
+                  (error "DEFMODE ~S: ONE-OF alternative ~S has more than one ONE-OF whose ~
+alternatives disagree on hole count -- a nested alternative may have only one"
+                         name (mode-descriptor-name alt)))
+                (when (some (lambda (option) (zerop (cdr option)))
+                            (%one-of-element-options (first varying)))
+                  (error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
+alternative that has no operand hole"
+                         name (mode-descriptor-name alt)))
+                (when (or (mode-descriptor-width alt) (mode-descriptor-signedp alt)
+                          (mode-descriptor-relativep alt) (mode-descriptor-suffix alt)
+                          (mode-descriptor-strictp alt))
+                  (error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF, so it cannot ~
+declare :WIDTH, :SIGNED, :RELATIVE, :SUFFIX or :STRICT -- declare them on its holes or inner ~
+alternatives instead"
+                         name (mode-descriptor-name alt)))))
             (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
               (error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
 alternative declares :SIGNED T or :RELATIVE T -- only the outermost ONE-OF a hole belongs ~
@@ -377,23 +454,13 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
 -- nothing could ever choose between them (give both a :SUFFIX to select by prefix)"
                               name (mode-descriptor-name alt) (mode-descriptor-name other)))))))))
 
-  (defun %pattern-varying-one-of-element (pattern &optional seen)
-    "The first ONE-OF element whose alternatives disagree on hole count."
-    (find-if (lambda (element)
-               (and (eq (first element) :one-of)
-                    (> (length (remove-duplicates
-                                (mapcar (lambda (n)
-                                          (%mode-hole-count (find-mode-descriptor n) seen))
-                                         (%one-of-alternatives element))))
-                       1)))
-             pattern))
-
   (defstruct mode-hole-group
     base-start
     start
     base-count
     count
     alternatives
+    options
     alt-name
     slot)
 
@@ -410,54 +477,51 @@ CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S
                                               :hole-alternatives holes
                                               :hole-sources sources))
                    (let* ((element (first pattern))
-                           (alts (and (eq (first element) :one-of) (%one-of-alternatives element)))
+                          (alts (and (eq (first element) :one-of) (%one-of-alternatives element)))
+                          (options (and alts (%one-of-element-options element seen)))
+                          (keys (mapcar #'car options))
                           (base-count (ecase (first element)
                                         (:literal 0)
                                         (:expr 1)
-                                        (:one-of (%pattern-one-of-min-hole-count alts seen))))
-                          (minimum (remove-if-not (lambda (n)
-                                                    (= (%mode-hole-count (find-mode-descriptor n) seen)
-                                                       base-count))
-                                                  alts))
-                          (over (remove-if (lambda (n)
-                                             (= (%mode-hole-count (find-mode-descriptor n) seen)
-                                                base-count))
-                                           alts))
-                           (split-minimum-p (and (%one-of-slot element)
-                                                 (> (length minimum) 1))))
+                                        (:one-of (reduce #'min (mapcar #'cdr options)))))
+                          (minimum (loop for (key . count) in options
+                                         when (= count base-count) collect key))
+                          (over (loop for (key . count) in options
+                                      unless (= count base-count) collect key))
+                          (split-minimum-p (and (%one-of-slot element)
+                                                (> (length minimum) 1))))
                      (loop for alt in (if split-minimum-p
-                                           (append minimum over)
-                                           (cons nil over))
+                                          (append minimum over)
+                                          (cons nil over))
                            for count = (if alt
-                                           (%mode-hole-count (find-mode-descriptor alt) seen)
+                                           (cdr (assoc alt options :test #'equal))
                                            base-count)
                            append (walk (rest pattern) (+ base-start base-count) (+ start count)
                                         (if (or over split-minimum-p)
                                             (cons (make-mode-hole-group
                                                    :base-start base-start :start start
                                                    :base-count base-count :count count
-                                                    :alternatives alts :alt-name alt
-                                                    :slot (%one-of-slot element))
+                                                   :alternatives alts :options keys
+                                                   :alt-name alt :slot (%one-of-slot element))
                                                   groups)
                                             groups)
-                                        (append holes (make-list count :initial-element alts))
+                                        (append holes (make-list count :initial-element keys))
                                         (append sources
                                                 (ecase (first element)
                                                   (:literal nil)
                                                   (:expr (list (list :expr element)))
                                                   (:one-of
                                                    (loop for index below count
-                                                         collect (list :one-of alts index alt)))))))))))
+                                                         collect (list :one-of keys index alt)))))))))))
       (walk (mode-descriptor-pattern mode) 0 0 nil nil nil)))
 
   (defun %hole-source-attribute (mode source attribute &optional choice)
     (ecase (first source)
       (:expr (%expr-hole-attribute (second source) mode attribute))
       (:one-of
-       (let* ((alt (find-mode-descriptor (or choice (fourth source)
-                                             (first (second source)))))
-              (attributes (%mode-hole-attributes alt attribute)))
-         (nth (third source) attributes)))))
+       (nth (third source)
+            (%option-hole-attributes (or choice (fourth source) (first (second source)))
+                                     attribute)))))
 
   (defun %mode-hole-sources (mode)
     (mode-hole-tuple-hole-sources (first (%mode-hole-tuples mode))))
@@ -514,6 +578,18 @@ Literal count decides first; register-qualified hole count breaks its ties."
       (> (car a) (car b))
       (and (= (car a) (car b)) (> (cdr a) (cdr b)))))
 
+(defun %nested-choice-entry (alt choices)
+  "The CHOICES entry for ALT matched at a ONE-OF: ALT itself, or for a varying
+ALT the path (ALT . inner descriptors), read from the entry at its varying
+element's first hole in CHOICES."
+  (if (mode-descriptor-varyingp alt)
+      (let* ((pattern (mode-descriptor-pattern alt))
+             (element (%pattern-varying-one-of-element pattern))
+             (before (%pattern-hole-count (subseq pattern 0 (position element pattern))))
+             (inner (nth before choices)))
+        (cons alt (if (consp inner) inner (list inner))))
+      alt))
+
 (defun %match-mode-elements (tokens elements i end &optional require-end)
   "Match ELEMENTS (a suffix of some mode's pattern) against TOKENS from
 position I (bounded by END). Returns (VALUES asts choices next-i okp
@@ -535,10 +611,10 @@ would have reported for those holes -- the outermost :ONE-OF a hole belongs
 to always wins its CHOICES entry, preserving \"CHOICES[i] is one of the
 alternatives named by the pattern element that produced hole i\" as an
 invariant callers can validate against (mirrored by mode.lisp's
-%MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). Nested
-:ONE-OF is legal (BUILD-MODE-DESCRIPTOR's hole-count check treats it like a
-plain :EXPR) -- see tests/mode.lisp for coverage of both the hole-counting
-and this outermost-wins CHOICES behavior.
+%MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). A
+varying nested alternative is the exception: its entry is a path, the list
+of descriptors from the outer alternative down to the inner one picked
+(%NESTED-CHOICE-ENTRY), matching an option key of %ONE-OF-ELEMENT-OPTIONS.
 
 A hand-written DEFMODE cycle -- redefining a mode that some :ONE-OF already
 references so the reference loops back to it -- is guarded against
@@ -653,13 +729,14 @@ element on the winning path whose pick was decided by declaration order."
                       ((equal score best-score) (cl:push alt tied))
                       ((%score> score best-score)
                        (let* ((slot (%one-of-slot element))
-                              (count (%mode-hole-count alt))
+                              (entry (%nested-choice-entry alt choices))
+                              (count (%option-hole-count (%choice-entry-key entry)))
                               (selection (and slot (cons slot (mode-descriptor-name alt)))))
                          (setf best-score score
                                tied (list alt)
                                best
                                (list asts
-                                     (append (make-list count :initial-element alt)
+                                     (append (make-list count :initial-element entry)
                                              (nthcdr count choices))
                                      next-i t nil nil
                                      (if slot

@@ -440,9 +440,121 @@ looks like."
     (fiveam:is (equal '(2 4 3 5)
                       (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple))) tuples)))))
 
-(fiveam:test one-of-nested-varying-alternative-signals-error
-  (fiveam:signals error
-    (eval '(defmode oo-nest-varying (one-of oo-reg oo-varying-holes)))))
+(defmode nv-vary (one-of oo-reg oo-two-hole))
+(defmode nv-plain "#" expr)
+(defmode nv-outer (one-of (nv-slot nv-vary nv-plain)))
+(defmode nv-unnamed (one-of nv-vary nv-plain))
+(defmode nv-wrapped "(" (one-of oo-reg oo-two-hole) ")")
+(defmode nv-wrapped-outer (one-of nv-wrapped nv-plain))
+(defmode nv-deep-mid "<" expr "," (one-of oo-reg oo-two-hole) ">")
+(defmode nv-deep (one-of oo-reg nv-deep-mid))
+(defmode nv-deep-outer (one-of nv-deep nv-plain))
+(defmode nv-signed-tail (one-of oo-reg oo-two-hole) "," (expr :signed t))
+(defmode nv-signed-outer (one-of nv-signed-tail nv-plain))
+
+(defun nv-keys (mode)
+  (mapcar #'car (%one-of-element-options (first (mode-descriptor-pattern mode)))))
+
+(defun nv-choices (text mode)
+  (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for text) mode)
+    (declare (ignore asts))
+    (fiveam:is-true okp)
+    (mapcar (lambda (entry)
+              (if (consp entry)
+                  (mapcar #'mode-descriptor-name entry)
+                  (mode-descriptor-name entry)))
+            choices)))
+
+(fiveam:test nested-varying-alternative-is-accepted-and-varying
+  (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'nv-outer)))
+  (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'nv-wrapped-outer))))
+
+(fiveam:test nested-varying-option-keys-and-counts
+  (fiveam:is (equal '((nv-vary oo-reg) (nv-vary oo-two-hole) nv-plain)
+                    (nv-keys (find-mode-descriptor 'nv-outer))))
+  (fiveam:is (equal '(1 2 1)
+                    (mapcar #'cdr (%one-of-element-options
+                                   (first (mode-descriptor-pattern (find-mode-descriptor 'nv-outer)))))))
+  (fiveam:is (equal '((nv-deep oo-reg) (nv-deep nv-deep-mid oo-reg) (nv-deep nv-deep-mid oo-two-hole) nv-plain)
+                    (nv-keys (find-mode-descriptor 'nv-deep-outer)))))
+
+(fiveam:test nested-varying-named-slot-tuples
+  (let ((tuples (%mode-hole-tuples (find-mode-descriptor 'nv-outer))))
+    (fiveam:is (equal '(1 1 2)
+                      (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple)))
+                              tuples)))
+    (fiveam:is (equal '((nv-vary oo-reg) nv-plain (nv-vary oo-two-hole))
+                      (mapcar (lambda (tuple)
+                                (mode-hole-group-alt-name (first (mode-hole-tuple-groups tuple))))
+                              tuples)))))
+
+(fiveam:test nested-varying-unnamed-tuples
+  (let ((tuples (%mode-hole-tuples (find-mode-descriptor 'nv-unnamed))))
+    (fiveam:is (equal '(1 2)
+                      (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple)))
+                              tuples)))
+    (fiveam:is (equal '((nv-vary oo-reg) (nv-vary oo-two-hole) nv-plain)
+                      (first (mode-hole-tuple-hole-alternatives (first tuples)))))))
+
+(fiveam:test nested-varying-choices-report-the-path
+  (fiveam:is (equal '((nv-vary oo-reg)) (nv-choices "5" 'nv-outer)))
+  (fiveam:is (equal '((nv-vary oo-two-hole) (nv-vary oo-two-hole))
+                    (nv-choices "1, 2" 'nv-outer)))
+  (fiveam:is (equal '(nv-plain) (nv-choices "#5" 'nv-outer))))
+
+(fiveam:test nested-varying-non-wrapper-alternative
+  (fiveam:is (equal '((nv-wrapped oo-reg)) (nv-choices "(5)" 'nv-wrapped-outer)))
+  (fiveam:is (equal '((nv-wrapped oo-two-hole) (nv-wrapped oo-two-hole))
+                    (nv-choices "(1, 2)" 'nv-wrapped-outer))))
+
+(fiveam:test nested-varying-three-levels
+  (fiveam:is (equal '((nv-deep oo-reg)) (nv-choices "5" 'nv-deep-outer)))
+  (fiveam:is (equal '((nv-deep nv-deep-mid oo-reg) (nv-deep nv-deep-mid oo-reg))
+                    (nv-choices "<1, 2>" 'nv-deep-outer)))
+  (fiveam:is (equal '((nv-deep nv-deep-mid oo-two-hole) (nv-deep nv-deep-mid oo-two-hole)
+                      (nv-deep nv-deep-mid oo-two-hole))
+                    (nv-choices "<1, 2, 3>" 'nv-deep-outer)))
+  (fiveam:is (= 3 (%option-hole-count '(nv-deep nv-deep-mid oo-two-hole)))))
+
+(fiveam:test nested-varying-hole-attributes-follow-the-path
+  (let ((mode (find-mode-descriptor 'nv-signed-outer)))
+    (fiveam:is (equal '(nil t)
+                      (%option-hole-attributes '(nv-signed-tail oo-reg) :signed)))
+    (fiveam:is (equal '(nil nil t)
+                      (%option-hole-attributes '(nv-signed-tail oo-two-hole) :signed)))
+    (fiveam:is (= 3 (length (mode-hole-tuple-hole-sources
+                             (third (%mode-hole-tuples mode))))))))
+
+(fiveam:test nested-varying-propagates-varyingp
+  (eval '(defmode nv-pair-a (one-of oo-reg oo-two-hole)))
+  (eval '(defmode nv-pair-b "@" (one-of oo-reg oo-two-hole)))
+  (eval '(defmode nv-pair-outer (one-of nv-pair-a nv-pair-b)))
+  (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'nv-pair-outer))))
+
+(defun nv-error-text (form)
+  (handler-case (progn (eval form) nil)
+    (error (c) (princ-to-string c))))
+
+(fiveam:test nested-varying-rejections-do-not-cite-tickets
+  (dolist (form '((defmode nv-bad-two (one-of nv-two-varying nv-plain))
+                  (defmode nv-bad-zero (one-of nv-zero-hole nv-plain))
+                  (defmode nv-bad-width (one-of nv-wide nv-plain))
+                  (defmode nv-bad-signed (one-of nv-signed-wrap nv-plain))
+                  (defmode nv-bad-relative (one-of nv-relative-wrap nv-plain))
+                  (defmode nv-bad-suffix (one-of nv-suffix-wrap nv-plain))
+                  (defmode nv-bad-strict (one-of nv-strict-wrap nv-plain))))
+    (let ((text (nv-error-text form)))
+      (fiveam:is-true text)
+      (fiveam:is (null (search "#1" text))))))
+
+(defmode nv-two-varying (one-of oo-reg oo-two-hole) "|" (one-of oo-reg oo-three-hole))
+(defmode nv-none "NONE")
+(defmode nv-zero-hole (one-of nv-none oo-two-hole))
+(defmode nv-wide (one-of oo-reg oo-two-hole) :width 1)
+(defmode nv-signed-wrap (one-of oo-reg oo-two-hole) :signed t)
+(defmode nv-relative-wrap (one-of oo-reg oo-two-hole) :relative t)
+(defmode nv-suffix-wrap (one-of oo-reg oo-two-hole) :suffix "nvs")
+(defmode nv-strict-wrap (one-of oo-reg oo-two-hole) :strict t)
 
 (defmode oo-signed "@" expr :signed t)
 (defmode oo-relative expr :relative t)

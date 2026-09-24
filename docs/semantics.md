@@ -135,6 +135,13 @@ alternative at all — signals `no-matching-choice` instead of silently
 falling through. An `:alias` alternative is never decoded, so a clause keyed
 on it never runs; the canonical alternative's clause covers both spellings.
 
+When the hole's alternative is a varying nested mode (see [Addressing modes,
+"Nested varying alternatives"](modes.md#nested-varying-alternatives)),
+`(choice-case name ...)` dispatches on the outer alternative, and
+`(choice-case (name outer) (inner ...)...)` on the alternative picked inside
+`outer`. A deeper level extends the qualifier: `(name outer middle)`.
+Qualifying a hole that does not name a nested varying alternative is an error.
+
 `name` may also be an extra operand a *sibling* alternative's own hole count
 contributes but this one's own mode use doesn't (see [Addressing modes,
 "Varying hole counts across

@@ -149,7 +149,8 @@ name). At `defmode` time, every alternative:
 - may have a *different* hole count than its siblings — see [Varying hole
   counts across alternatives](#varying-hole-counts-across-alternatives)
   below for the encoding declarations. Multiple elements may vary
-  independently; their alternatives cannot themselves be varying modes;
+  independently, and an alternative may itself be varying — see [Nested
+  varying alternatives](#nested-varying-alternatives);
 - may declare `:strict` (see [Per-hole `:strict`](#per-hole-strict) below),
   `:signed` (see [Per-hole `:signed`](#per-hole-signed) below), `:width`
   (see [Per-hole `:width`](#per-hole-width) below), `:relative` (see
@@ -198,7 +199,10 @@ alternative reports its own chosen `mode-descriptor` for *every* hole it
 contributes, not just once for the element as a whole; a nested `one-of`
 (one alternative's own pattern containing another `one-of`) reports the
 *outer* element's chosen alternative for all of its holes, not the nested
-match's own choice. On a word-encoded machine (see
+match's own choice. The exception is a varying nested alternative (see
+[Nested varying alternatives](#nested-varying-alternatives)), whose entry is
+a path: the list of descriptors from the outer alternative down to the
+inner one picked. On a word-encoded machine (see
 [Instructions](instructions.md#choice-selected-word-fields)), a `(choice
 mode)` variant selector reads this value to pick a field's own code, or an
 unconditional extra word, by which alternative a hole actually matched; on a
@@ -329,8 +333,54 @@ hole of the element, so `choice-case`, disassembly and per-hole `:width`,
 [`examples/subvarying.lisp`](../examples/subvarying.lisp) for this run end to
 end.
 
-A varying `one-of` nested inside another alternative, and a varying element
-whose shortest alternative has no hole, are rejected at `definstruction` time.
+A varying element whose shortest alternative has no hole is rejected at
+`definstruction` time on a byte-encoded machine.
+
+### Nested varying alternatives
+
+An alternative of a `one-of` may itself be a varying mode:
+
+```lisp
+(defmode ind-abs expr)
+(defmode ind-idx "[" expr "," expr "]")
+(defmode ind (one-of ind-abs ind-idx))    ; varies: one hole or two
+(defmode imm "#" expr)
+(defmode any (one-of ind imm))
+```
+
+`any` has three shapes, so an alternative is named by a *path* rather than
+by its outer mode alone: `(ind ind-abs)`, `(ind ind-idx)` and plain `imm`.
+A path lists the outer alternative followed by the inner one picked at each
+level, to any depth. A non-varying alternative keeps its bare name, and a
+non-varying nested `one-of` still reports only its outer alternative.
+
+- `try-match-operand-mode` and `match-operand-mode` report a path as a list
+  of descriptors in every hole the outer alternative contributes.
+- `(choice (ind ind-idx))`, `(variant (choice (ind ind-idx)) (sub s))`
+  and `(for-choice (operand ind ind-idx) ...)` select by path; a bare
+  `(choice ind)` on a varying alternative is an error. See [Instructions,
+  "`for-choice`"](instructions.md#for-choice--extra-holes-for-a-varying-alternative).
+- `(choice-case operand ...)` dispatches on the outer alternative;
+  `(choice-case (operand ind) ...)` dispatches on the inner pick. See
+  [Semantics vocabulary, "`choice-case`"](semantics.md#choice-case).
+- Decoded `choices` carry the same path as the symbols
+  `(ind ind-idx)`.
+
+A nested varying alternative:
+
+- has exactly one varying `one-of` element of its own;
+- has at least one hole in every alternative of that element;
+- declares none of `:width`, `:signed`, `:relative`, `:suffix` or `:strict`
+  itself, and none of that element's alternatives declares `:width`,
+  `:signed` or `:relative` — put them on holes or on the outer alternatives
+  instead.
+
+Extra holes follow the ordinary `for-choice` rule, positionally after the
+element's base holes. When a path's extra holes replace holes another path
+spends as its own operands, a shared `(semantics ...)` body reads them
+through `choice-case` rather than by position.
+
+See [`examples/nestvarying.lisp`](../examples/nestvarying.lisp).
 
 ### Per-hole `:strict`
 

@@ -1260,8 +1260,26 @@ combination. Registration still produces the same concrete
 `instruction-descriptor` list in the same narrow-before-wide order, so the
 public descriptor lookup and accessor APIs are unchanged.
 
-Multiple `one-of` elements may vary independently, but their alternatives
-cannot themselves contain a varying `one-of`.
+Multiple `one-of` elements may vary independently. An alternative that is
+itself varying is selected by a path: `(choice (outer inner))` in a
+`variant`, and `(for-choice (operand outer inner) (operand ...)...)` for its
+extra holes. A path names one alternative per level, so `(choice outer)` on
+a varying `outer` is an error; see [Addressing modes, "Nested varying
+alternatives"](modes.md#nested-varying-alternatives).
+
+```lisp
+(defmode ind (one-of ind-abs ind-idx))
+(defmode any (one-of ind imm))
+
+(operand src :field a
+  (variant (choice (ind ind-abs)) inline :range (0 7) :bias #x00)
+  (variant (choice (ind ind-idx)) inline :range (0 7) :bias #x10)
+  (variant (choice imm) inline :range (0 7) :bias #x20))
+(for-choice (src ind ind-idx) (operand off :trailing-word))
+```
+
+Inside a `(sub-opcode ...)` table a path is one nested name:
+`(variant (choice (ind ind-idx)) (sub 1))`.
 
 On a byte-encoded machine the extra holes take ordinary `(operand name :width
 n)` or `(operand name :mode)` subclauses, and the varying element's first

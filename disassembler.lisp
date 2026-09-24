@@ -308,7 +308,7 @@ lists every site that declares a prefix, whatever the policy."
    (values
     (with-output-to-string (s)
      (let ((vals render-values) (choices hole-choices) (elements hole-elements))
-      (labels ((render-pattern (pattern)
+      (labels ((render-pattern (pattern &optional (tail :top))
                  (dolist (el pattern)
                    (ecase (first el)
                      (:literal (write-string (second el) s))
@@ -335,7 +335,9 @@ lists every site that declares a prefix, whatever the policy."
                                (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s))))
                       (:one-of
                        (let* ((alternatives (%one-of-alternatives el))
-                              (matched (%matched-choice-name choices 0))
+                              (path (cond ((eq tail :top) (%key-list (%matched-choice-key choices 0)))
+                                          ((eq el (%pattern-varying-one-of-element pattern)) tail)))
+                              (matched (first path))
                               (alt-name (or (and (member matched alternatives) matched)
                                             (cdr (assoc (%one-of-slot el) choice-selections))
                                             (first alternatives)))
@@ -347,7 +349,7 @@ lists every site that declares a prefix, whatever the policy."
                              (when (or (eq prefix-policy t) (member site prefix-policy :test #'equal))
                                (write-string (mode-descriptor-suffix alt) s)
                                (write-string prefix-separator s))))
-                         (render-pattern (mode-descriptor-pattern alt))))))))
+                         (render-pattern (mode-descriptor-pattern alt) (rest path))))))))
         (render-pattern (mode-descriptor-pattern mode)))))
     (nreverse sites))))
 
@@ -401,7 +403,10 @@ DESCRIPTOR's decoded one. T when TEXT cannot be re-assembled."
           (loop for (site field) in sites
                 unless (ecase (first site)
                          (:hole (equalp field (nth (second site) (instruction-descriptor-word-fields chosen))))
-                         (:alt (or (some (lambda (c) (and c (eq (mode-descriptor-name c) (second site)))) choices)
+                         (:alt (or (some (lambda (c)
+                                           (and c (member (second site)
+                                                          (mapcar #'mode-descriptor-name (%key-list c)))))
+                                         choices)
                                    (rassoc (second site) selections))))
                   collect site)))
     (error () t)))

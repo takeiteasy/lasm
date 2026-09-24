@@ -193,7 +193,10 @@ it chooses the literal-only alternative to render without adding an entry to
 escapes"](instructions.md#aliased-escapes)) is never matched at decode, so
 its words render as the canonical spelling. A nested `one-of` only uses a
 decoded choice when that choice belongs to its own alternatives; otherwise it
-uses its first alternative as the canonical spelling. When the matched alternative has more holes than its `one-of`
+uses its first alternative as the canonical spelling. A varying nested
+alternative's decoded choice is a path, and each level of nesting consumes
+one name of it ([Addressing modes, "Nested varying
+alternatives"](modes.md#nested-varying-alternatives)). When the matched alternative has more holes than its `one-of`
 element's other alternatives ([Addressing modes, "Varying hole counts
 across alternatives"](modes.md#varying-hole-counts-across-alternatives)),
 the render walk consumes exactly that many values and record entries for
