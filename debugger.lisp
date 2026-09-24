@@ -237,17 +237,20 @@ on a syntax error or an unknown name."
         (memory (debug-session-memory session)))
     (lambda (address) (%without-hook (machine) (mpeek machine memory address)))))
 
+(defun %eval-condition (session test values readers)
+  "TEST evaluated over freshly read READERS and VALUES, with mem() bound."
+  (loop for (name . reader) in readers
+        do (setf (gethash name values) (funcall reader)))
+  (let ((*memory-reader* (%memory-reader session)))
+    (eval-expr test :symbols values :pc (%pc session))))
+
 (defun %breakpoint-triggered-p (session bp)
   "True when BP has no condition or its condition is nonzero. An error in the
 condition counts as true and is left in SESSION's CONDITION-ERROR."
   (or (null (breakpoint-test bp))
       (handler-case
-          (progn
-            (loop for (name . reader) in (breakpoint-readers bp)
-                  do (setf (gethash name (breakpoint-values bp)) (funcall reader)))
-            (/= 0 (let ((*memory-reader* (%memory-reader session)))
-                    (eval-expr (breakpoint-test bp) :symbols (breakpoint-values bp)
-                                                    :pc (%pc session)))))
+          (/= 0 (%eval-condition session (breakpoint-test bp) (breakpoint-values bp)
+                                 (breakpoint-readers bp)))
         (error (c) (setf (debug-session-condition-error session) c) t))))
 
 (defun debug-break (session where &key scope bank condition)
@@ -389,6 +392,7 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
                 (make-watch-hit
                  :watchpoint wp :access access :new value
                  :old (cond ((eq access :read) value)
+                            ((eq index :pointer) (stack-depth machine name))
                             ((%stack-name-p machine name) (%stack-slot-value machine name index))
                             ((watchpoint-name wp) (%read-storage machine name index))
                             (t (mpeek machine name index))))))))))
@@ -776,7 +780,7 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   continue           run until a breakpoint, watchpoint, trap, or decode failure
   until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
                      LABEL takes an `in GLOBAL` scope like break)
-  print NAME         print a register, register alias or flag's value
+  print EXPR         print a register, alias or flag, or evaluate an expression
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
@@ -889,12 +893,14 @@ this call."
                             (format nil "~A = ~D~%" rest
                                     (regref machine (storage-element-name alias-element)
                                             (gethash rest (machine-descriptor-register-aliases descriptor)))))
-                           ((null element) (format nil "print: unknown storage element ~A" rest))
-                           ((eq (storage-element-kind element) :flag)
+                           ((and element (eq (storage-element-kind element) :flag))
                             (format nil "~A = ~D~%" rest (flag machine (storage-element-name element))))
-                           ((eq (storage-element-kind element) :register)
+                           ((and element (eq (storage-element-kind element) :register))
                             (format nil "~A = ~A~%" rest (%register-value-text machine element)))
-                           (t (format nil "print: ~A is not a register or flag" rest))))))
+                           (t (multiple-value-bind (test values readers)
+                                  (%compile-condition session rest nil)
+                                (format nil "~A = ~D~%" rest
+                                        (%eval-condition session test values readers))))))))
                   ((and (>= (length cmd) 2) (string-equal (subseq cmd 0 2) "x/"))
                    (let* ((n (or (%parse-integer-maybe (subseq cmd 2)) 8))
                           (colon (position #\: rest))

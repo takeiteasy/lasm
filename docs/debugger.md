@@ -117,7 +117,8 @@ signal from `debug-break`. An error while evaluating stops the run as
 name, a label, or a memory address. A banked register takes `:index`; a stack
 takes `:index` for one bottom-relative slot (0 is the oldest entry) and
 otherwise stops on any access. `stack-push` and `(setf stack-ref)` are writes;
-`stack-pop` and `stack-ref` are reads. A push reports `old` as `nil`. `access` is `:read`,
+`stack-pop` and `stack-ref` are reads; `(setf stack-pointer)` is a write of
+the new depth, seen by a whole-stack watch only. A push reports `old` as `nil`. `access` is `:read`,
 `:write` (default) or `:read-write`. `scope` and `bank` qualify a memory
 target as for `debug-break`. Breakpoints and watchpoints share one id space.
 
@@ -258,7 +259,7 @@ Commands:
 | `step [N]` | execute N instructions (default 1) |
 | `continue` | run until a breakpoint, watchpoint, trap, or decode failure |
 | `until ADDR\|LABEL` | run until a target is reached (`BANK:ADDR` waits for a bank) |
-| `print NAME` | print a register, register alias or flag's value |
+| `print EXPR` | print a register, alias or flag, or evaluate a [condition](#conditional-breakpoints) expression (`print mem(0x200) + x`) |
 | `x/N ADDR` | dump N memory cells starting at ADDR |
 | `x/N BANK:ADDR` | dump N cells of a bank of the banked region at ADDR |
 | `bank REGION N` | map bank N into a banked region |

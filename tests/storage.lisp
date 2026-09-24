@@ -617,3 +617,11 @@ reset at the start of each test that reads it.")
     (fiveam:is (equal '((ds 0 :write 5) (ds 1 :write 7) (ds 0 :read 5)
                         (ds 1 :write 9) (ds 1 :read 9))
                       (funcall drain)))))
+
+(fiveam:test access-hook-sees-stack-pointer-writes
+  (let* ((m (make-machine 'stack-test-machine))
+         (drain (%record-accesses m)))
+    (stack-push m 'ds 5)
+    (funcall drain)
+    (setf (stack-pointer m 'ds) 0)
+    (fiveam:is (equal '((ds :pointer :write 0)) (funcall drain)))))

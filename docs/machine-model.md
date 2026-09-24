@@ -340,7 +340,8 @@ integer. Other values follow Lisp truthiness. It reads back as `0` or `1`.
 `(machine name index access value)`, called by `sref`, `regref`, `flag` and
 `mref` and their setters, and by `stack-push`, `stack-pop` and `stack-ref`.
 `index` is the bank index (`regref`), the address (`mref`), the bottom-relative
-slot (fixed stacks; slot 0 is the oldest entry) or `nil`; `access` is `:read`
+slot (fixed stacks; slot 0 is the oldest entry), `:pointer` (a write of
+`(setf stack-pointer)`) or `nil`; `access` is `:read`
 or `:write`; `value` is the value read, or the wrapped value about to be
 written. Peeks, pokes and the emulator's own instruction fetch and PC advance
 do not call it. Like

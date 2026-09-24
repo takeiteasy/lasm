@@ -227,7 +227,7 @@ loop.next: hlt" :machine 'emu-test-machine))
                      (debug-command (%dbg-alias-session) "print reg"))))
 
 (fiveam:test debug-command-print-unknown-name-still-reports
-  (fiveam:is (search "unknown storage element zz"
+  (fiveam:is (search "unknown name \"zz\""
                      (debug-command (%dbg-alias-session) "print zz"))))
 
 (fiveam:test debug-memory-text-hex-width-follows-cell-width
@@ -550,3 +550,27 @@ count: ldx #3
     (fiveam:is (search "Watchpoint 1 (w) at ds[1]" (debug-command session "watch ds[1]")))
     (fiveam:is (search "Error" (debug-command session "watch ds[99]")))
     (fiveam:signals error (debug-break session 0 :condition "ds == 1"))))
+
+(fiveam:test debug-watch-stack-pointer-write
+  (let ((session (%dbg-stack-session)))
+    (let ((m (debug-session-machine session)))
+      (debug-watch session "ds")
+      (%arm session)
+      (setf (stack-pointer m 'ds) 0)
+      (%disarm session)
+      (let ((hit (debug-session-watch-hit session)))
+        (fiveam:is (= 0 (watch-hit-new hit)))
+        (fiveam:is (= 0 (watch-hit-old hit))))))
+  (let ((session (%dbg-stack-session)))
+    (debug-watch session "ds" :index 0)
+    (%arm session)
+    (setf (stack-pointer (debug-session-machine session) 'ds) 0)
+    (%disarm session)
+    (fiveam:is (null (debug-session-watch-hit session)))))
+
+(fiveam:test debug-command-print-expression
+  (let ((session (%dbg-session)))
+    (setf (mref (debug-session-machine session) 'ram #x200) 3)
+    (fiveam:is (search "mem(0x200) + 1 = 4" (debug-command session "print mem(0x200) + 1")))
+    (fiveam:is (search "count.loop = 258" (debug-command session "print count.loop")))
+    (fiveam:is (search "Error" (debug-command session "print 1 +")))))

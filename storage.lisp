@@ -1074,6 +1074,7 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
       (error 'stack-pointer-out-of-range
              :machine (machine-descriptor-name (machine-descriptor machine))
              :name name :value value))
+    (%notify-access machine name :pointer :write value)
     (setf (cdr slot) value)))
 
 (defun stack-pointer (machine name)
