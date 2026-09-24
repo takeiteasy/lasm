@@ -1611,7 +1611,8 @@ bank the following lines are tagged with."
 ASSEMBLY. Runs EXPAND-MACROS (macro.lisp) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
 blocks collected and every invocation replaced by its substituted body
-before layout ever looks at the statement list. Signals ASSEMBLY-ERROR on a
+before layout ever looks at the statement list, then EXPAND-CONDITIONALS
+(conditional.lisp) resolves .if blocks. Signals ASSEMBLY-ERROR on a
 duplicate symbol, an operand matching no addressing mode, a malformed or
 backward-moving directive, a forward assignment reference, or a cyclic
 .ORG/.RES address dependency. Signals MACRO-ERROR on a malformed .macro/.endm
@@ -1673,7 +1674,8 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                                    (lasm-syntax-error-definition-source condition)
                                    (source-unit-text *current-definition-unit*)))))))
         (multiple-value-bind (symbols sized final-address asm-origin info label-banks)
-            (%layout (expand-macros statements machine) machine origin cell-width)
+            (%layout (expand-conditionals (expand-macros statements machine))
+                     machine origin cell-width)
           (multiple-value-bind (cells bank-images)
               (let ((*label-banks* label-banks))
                 (%encode sized symbols asm-origin final-address cell-width endian))

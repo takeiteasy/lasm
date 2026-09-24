@@ -34,6 +34,11 @@ include is relative to its own includer. For source given as a string to
 `assemble`, the base is `*default-pathname-defaults*`; `assemble-file` uses the
 file's own directory.
 
+## Inside `.if`
+
+An `.include` inside `.if` is always read, even when the branch is skipped;
+see [Conditional assembly](conditionals.md#macros-and-includes).
+
 ## Nesting and cycles
 
 Includes nest. A file that (directly or indirectly) includes itself signals

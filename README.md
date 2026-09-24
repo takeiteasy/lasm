@@ -19,6 +19,7 @@ architectures, not real silicon.
 - [Instructions](docs/instructions.md) — `definstruction`, encoding, semantics
 - [Directives](docs/directives.md) — `defdirective`, data, layout, `.equ` and `.set`
 - [Macros](docs/macros.md) — `.macro`/`.endm`, parameter substitution, expansion
+- [Conditional assembly](docs/conditionals.md) — `.if`/`.elseif`/`.else`/`.endif`
 - [Includes](docs/includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](docs/assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Binary output](docs/binary-output.md) — `write-binary`, `write-intel-hex`

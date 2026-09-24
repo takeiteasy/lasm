@@ -136,6 +136,9 @@ comparisons, `&&` tighter than `||`, so `a == 1 && b != 0` needs no
 parentheses. `&&` and `||` short-circuit: `0 && x` and `1 || x` never
 evaluate `x`, so an undefined `x` is not an error there.
 
+Comparisons and logical operators are consumed by
+[`.if`](conditionals.md).
+
 ### Function operators
 
 `name(expr)` operators are spelled by the lexer's

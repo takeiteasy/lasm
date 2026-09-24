@@ -3,7 +3,8 @@
 `defdirective` declares an assembler directive: a named-parameter list plus
 exactly one action form from a small fixed vocabulary. LASM ships nine
 built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.cell`,
-`.dat`, `.res`, `.bank`, `.equ`, `.set`. The assembler (see [Assembler](assembler.md))
+`.dat`, `.res`, `.bank`, `.equ`, `.set`. `.if`/`.else`/`.endif` are handled
+separately; see [Conditional assembly](conditionals.md). The assembler (see [Assembler](assembler.md))
 dispatches a statement to a directive by mnemonic, the same way it dispatches
 to an instruction's addressing-mode variants — a directive statement is
 otherwise an ordinary `statement` (see [Statement grammar & expression

@@ -125,6 +125,13 @@ neither layout nor encode below has any notion of a macro at all. Both entry
 points (`assemble` and `assemble-statements`) get this, since `assemble`
 reaches `assemble-statements` after parsing.
 
+## Conditional expansion
+
+After macros, `assemble-statements` runs `expand-conditionals`
+([Conditional assembly](conditionals.md)), which keeps the statements of each
+selected `.if` branch. Layout sees only the kept statements. The order is
+includes, then macros, then conditionals, then layout.
+
 ## Layout and encode
 
 1. **Layout.** Walk the statements with an address counter starting at
@@ -667,6 +674,8 @@ at, `.org` can still move it further before the first byte).
   [Includes](includes.md)).
 - `macro-error` — a malformed `.macro`/`.endm` block or invocation (see
   [Macros](macros.md)).
+- `conditional-error` — a malformed or unbalanced `.if` block, or a condition
+  that is not a constant (see [Conditional assembly](conditionals.md)).
 - `unknown-instruction` — an unregistered mnemonic (from
   `find-instruction-variants`, see [Instructions](instructions.md)).
 - `unresolved-label` — an operand references a label never bound anywhere in

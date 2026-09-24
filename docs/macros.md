@@ -131,6 +131,12 @@ and forces its mode after expansion exactly as it would in ordinary code:
 .endm
 ```
 
+## Conditionals
+
+A macro body may contain balanced `.if`/`.endif` blocks, which see the
+substituted arguments; `.macro` cannot be defined inside `.if`. See
+[Conditional assembly](conditionals.md).
+
 ## Conditions
 
 `macro-error` (a subtype of `lasm-syntax-error`) covers every

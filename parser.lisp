@@ -349,3 +349,12 @@ and listings. Signals LEX-ERROR or PARSE-FAILURE with source context."
                      statement))
                  (%split-lines (tokenize string :lexer lexer)))
          unit)))))
+
+(defun %conditional-mnemonic (statement)
+  "The conditional-assembly keyword STATEMENT's mnemonic spells (:IF :ELSEIF
+:ELSE :ENDIF), or NIL."
+  (let ((mnemonic (statement-mnemonic statement)))
+    (and mnemonic
+         (cdr (assoc mnemonic '((".if" . :if) (".elseif" . :elseif)
+                                (".else" . :else) (".endif" . :endif))
+                     :test #'string-equal)))))

@@ -95,6 +95,7 @@ name collision, invocation, or non-converging expansion."))
 Reject malformed definitions and names reserved by MACHINE or directives."
   (let ((macros (make-hash-table :test 'equal))
         remaining
+        (if-depth 0) (body-if-depth 0) (body-if-unbalanced-p nil)
         in-macro-p header-name header-key header-params header-defaults header-line header-unit body)
     (dolist (statement statements)
       (with-source-unit (statement-source-unit statement)
@@ -103,6 +104,10 @@ Reject malformed definitions and names reserved by MACHINE or directives."
           ((%macro-directive-p mnemonic)
            (when in-macro-p
              (%macro-error (statement-line statement) ".macro: nested inside another .macro"))
+           (when (plusp if-depth)
+             ;; TODO: a .macro inside .if is rejected rather than defined
+             ;; conditionally; lazy macro collection would lift this.
+             (%macro-error (statement-line statement) ".macro: cannot be defined inside .if"))
            (when (statement-label statement)
              (%macro-error (statement-line statement) ".macro: cannot itself carry a label"))
            (when (statement-mode-suffix statement)
@@ -111,7 +116,8 @@ Reject malformed definitions and names reserved by MACHINE or directives."
              (let ((key (string-upcase name)))
                (when (nth-value 1 (gethash key macros))
                  (%macro-error (statement-line statement) "Duplicate macro ~S" name))
-               (when (find-directive-descriptor name)
+               (when (or (find-directive-descriptor name)
+                         (%conditional-mnemonic (make-statement :mnemonic name)))
                  (%macro-error (statement-line statement)
                                 "Macro name ~S collides with a directive" name))
                (when (gethash key (machine-descriptor-instructions
@@ -121,7 +127,8 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                (setf in-macro-p t header-name name header-key key header-params params
                      header-defaults defaults
                      header-line (statement-line statement)
-                     header-unit (statement-source-unit statement) body nil))))
+                     header-unit (statement-source-unit statement) body nil
+                     body-if-depth 0 body-if-unbalanced-p nil))))
           ((%endm-directive-p mnemonic)
            (unless in-macro-p
              (%macro-error (statement-line statement) ".endm without a matching .macro"))
@@ -129,6 +136,8 @@ Reject malformed definitions and names reserved by MACHINE or directives."
              (%macro-error (statement-line statement) ".endm: cannot itself carry a label"))
            (when (statement-mode-suffix statement)
              (%macro-error (statement-line statement) ".endm: a mode suffix is not valid here"))
+           (when (or body-if-unbalanced-p (/= 0 body-if-depth))
+             (%macro-error header-line ".macro ~A has an unbalanced .if/.endif" header-name))
            (dolist (key (%macro-symbol-definitions body))
              (when (and (not (cdr key))
                         (member (car key) header-params :test #'string=))
@@ -139,8 +148,16 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                          :defaults header-defaults
                                          :body (nreverse body) :line header-line))
            (setf in-macro-p nil header-key nil))
-          (in-macro-p (cl:push statement body))
-          (t (cl:push statement remaining))))))
+          (in-macro-p
+           (case (%conditional-mnemonic statement)
+             (:if (incf body-if-depth))
+             (:endif (when (minusp (decf body-if-depth)) (setf body-if-unbalanced-p t))))
+           (cl:push statement body))
+          (t
+           (case (%conditional-mnemonic statement)
+             (:if (incf if-depth))
+             (:endif (setf if-depth (max 0 (1- if-depth)))))
+           (cl:push statement remaining))))))
     (when in-macro-p
       (with-source-unit header-unit
         (%macro-error header-line ".macro ~A has no matching .endm" header-name)))

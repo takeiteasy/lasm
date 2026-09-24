@@ -1,0 +1,283 @@
+;;;; tests/conditional.lisp
+;;;; fiveam tests for .if/.elseif/.else/.endif (conditional.lisp). Reuses the
+;;;; INSTR-TEST-MACHINE fixture.
+
+(in-package #:lasm)
+
+(fiveam:def-suite conditional :in lasm)
+(fiveam:in-suite conditional)
+
+(defun %cells (source)
+  (coerce (assembly-cells (assemble source :machine 'instr-test-machine)) 'list))
+
+(fiveam:test true-branch-is-kept-and-false-branch-dropped
+  (fiveam:is (equal '(#xEA) (%cells ".if 1
+    nop
+.else
+    ldx #1
+.endif")))
+  (fiveam:is (equal '(#xA2 1) (%cells ".if 0
+    nop
+.else
+    ldx #1
+.endif")))
+  (fiveam:is (equal '(#xEA) (%cells ".if 1
+    nop
+.endif"))))
+
+(fiveam:test elseif-chain-selects-the-first-true-branch
+  (let ((source ".equ x, ~D
+.if x == 1
+    ldx #1
+.elseif x == 2
+    ldx #2
+.elseif x >= 2
+    ldx #3
+.else
+    ldx #4
+.endif"))
+    (fiveam:is (equal '(#xA2 1) (%cells (format nil source 1))))
+    (fiveam:is (equal '(#xA2 2) (%cells (format nil source 2))))
+    (fiveam:is (equal '(#xA2 3) (%cells (format nil source 3))))
+    (fiveam:is (equal '(#xA2 4) (%cells (format nil source 0))))))
+
+(fiveam:test conditional-directives-are-case-insensitive
+  (fiveam:is (equal '(#xEA) (%cells ".IF 1
+    nop
+.ELSE
+.ENDIF"))))
+
+(fiveam:test nested-blocks
+  (fiveam:is (equal '(#xA2 2) (%cells ".if 1
+.if 0
+    ldx #1
+.else
+    ldx #2
+.endif
+.else
+    ldx #3
+.endif")))
+  (fiveam:is (equal '(#xA2 3) (%cells ".if 0
+.if 1
+    ldx #1
+.else
+    ldx #2
+.endif
+.else
+    ldx #3
+.endif"))))
+
+(fiveam:test skipped-blocks-are-not-evaluated
+  (fiveam:is (equal '(#xEA) (%cells ".if 0
+.if undefined_name
+    nop
+.elseif also_undefined
+    nop
+.endif
+.else
+    nop
+.endif")))
+  (fiveam:is (equal '(#xEA) (%cells ".if 1
+    nop
+.elseif undefined_name
+    ldx #1
+.endif"))))
+
+(fiveam:test conditions-see-earlier-constants
+  (fiveam:is (equal '(#xEA) (%cells "debug = 1
+.equ size, 4
+.if debug && size > 2
+    nop
+.endif"))))
+
+(fiveam:test set-values-are-read-in-source-order
+  (fiveam:is (equal '(#xA2 1 #xEA) (%cells ".set n, 1
+.if n
+    ldx #1
+.endif
+.set n, 0
+.if n
+    ldx #2
+.else
+    nop
+.endif"))))
+
+(fiveam:test local-constants-resolve-within-their-scope
+  (fiveam:is (equal '(#xEA) (%cells "start:
+.on = 1
+.if .on
+    nop
+.endif"))))
+
+(fiveam:test logical-operators-in-conditions
+  (fiveam:is (equal '(#xEA) (%cells ".if !0 && (1 || undefined_name)
+    nop
+.endif")))
+  (fiveam:is (equal '() (%cells ".if 0 && undefined_name
+    nop
+.endif"))))
+
+(fiveam:test label-on-a-conditional-line-binds
+  (let ((a (assemble "    nop
+here: .if 1
+    nop
+.endif
+there:" :machine 'instr-test-machine)))
+    (fiveam:is (= 1 (gethash "here" (assembly-symbols a))))
+    (fiveam:is (= 2 (gethash "there" (assembly-symbols a))))))
+
+(fiveam:test same-label-in-both-branches-does-not-collide
+  (fiveam:is (equal '(#xEA) (%cells ".if 0
+tag: nop
+.else
+tag: nop
+.endif"))))
+
+(fiveam:test conditional-inside-macro-sees-substituted-argument
+  (let ((source ".macro pick n
+.if n
+    ldx #1
+.else
+    ldx #2
+.endif
+.endm
+    pick ~D"))
+    (fiveam:is (equal '(#xA2 1) (%cells (format nil source 5))))
+    (fiveam:is (equal '(#xA2 2) (%cells (format nil source 0))))))
+
+(fiveam:test macro-invocation-in-skipped-branch-emits-nothing
+  (fiveam:is (equal '(#xEA) (%cells ".macro loadx n
+    ldx #n
+.endm
+.if 0
+    loadx 1
+.else
+    nop
+.endif"))))
+
+(fiveam:test skipped-lines-leave-no-listing-entries
+  (let ((a (assemble ".if 0
+    ldx #1
+.else
+    nop
+.endif" :machine 'instr-test-machine)))
+    (fiveam:is (= 1 (length (assembly-listing a))))))
+
+;;; Conditions that are not constants
+
+(fiveam:test label-in-condition-signals
+  (fiveam:signals conditional-error
+    (assemble "start: nop
+.if start
+    nop
+.endif" :machine 'instr-test-machine))
+  (fiveam:signals conditional-error
+    (assemble ".if later
+    nop
+.endif
+later: nop" :machine 'instr-test-machine)))
+
+(fiveam:test location-counter-and-bank-in-condition-signal
+  (fiveam:signals conditional-error
+    (assemble ".if * == 0
+    nop
+.endif" :machine 'instr-test-machine))
+  (fiveam:signals conditional-error
+    (assemble "start: nop
+.if bank(start)
+    nop
+.endif" :machine 'instr-test-machine)))
+
+(fiveam:test layout-dependent-equ-in-condition-signals
+  (fiveam:signals conditional-error
+    (assemble "start: nop
+.equ size, * - start
+.if size
+    nop
+.endif" :machine 'instr-test-machine)))
+
+(fiveam:test undefined-name-in-condition-signals
+  (fiveam:signals conditional-error
+    (assemble ".if nope
+    nop
+.endif" :machine 'instr-test-machine)))
+
+;;; Malformed and unbalanced blocks
+
+(fiveam:test unbalanced-blocks-signal
+  (dolist (source '(".endif" ".else" ".elseif 1"
+                    ".if 1
+    nop"
+                    ".if 1
+.else
+.else
+.endif"
+                    ".if 1
+.else
+.elseif 1
+.endif"))
+    (fiveam:signals conditional-error (assemble source :machine 'instr-test-machine))))
+
+(fiveam:test unterminated-if-reports-its-own-line
+  (handler-case (assemble "nop
+.if 1
+    nop" :machine 'instr-test-machine)
+    (conditional-error (c) (fiveam:is (= 2 (lasm-syntax-error-line c))))))
+
+(fiveam:test malformed-conditional-lines-signal
+  (dolist (source '(".if
+.endif" ".if 1, 2
+.endif" ".if.w 1
+.endif" ".if 1
+.else 1
+.endif" ".if 1
+.endif 1"))
+    (fiveam:signals lasm-syntax-error (assemble source :machine 'instr-test-machine))))
+
+;;; Interaction with macros and includes
+
+(fiveam:test macro-definition-inside-if-signals
+  (fiveam:signals macro-error
+    (assemble ".if 1
+.macro m
+    nop
+.endm
+.endif" :machine 'instr-test-machine)))
+
+(fiveam:test macro-body-must-balance-its-conditionals
+  (fiveam:signals macro-error
+    (assemble ".macro open
+.if 1
+.endm
+    open
+.endif" :machine 'instr-test-machine))
+  (fiveam:signals macro-error
+    (assemble ".macro close
+.endif
+.endm" :machine 'instr-test-machine)))
+
+(fiveam:test macro-cannot-take-a-conditional-name
+  (fiveam:signals macro-error
+    (assemble ".macro .if
+    nop
+.endm" :machine 'instr-test-machine)))
+
+(fiveam:test include-inside-false-if-contributes-nothing
+  (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
+    (fiveam:is (equal '(#xEA) (%cells ".if 0
+.include \"sub/c.asm\"
+.endif
+    nop")))))
+
+(fiveam:test include-defining-a-macro-inside-if-signals
+  (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
+    (fiveam:signals macro-error
+      (assemble ".if 1
+.include \"macro-def.asm\"
+.endif" :machine 'instr-test-machine))))
+
+(fiveam:test included-file-cannot-leave-an-if-open
+  (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
+    (fiveam:signals conditional-error
+      (assemble ".include \"open-if.asm\"
+.endif" :machine 'instr-test-machine))))

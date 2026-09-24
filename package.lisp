@@ -276,6 +276,8 @@
    ;; Macros
    #:expand-macros
    #:expand-includes
+   #:expand-conditionals
+   #:conditional-error
    #:include-error
    #:macro-error
    #:macro-descriptor

@@ -43,7 +43,12 @@ first:  addconst cell1, 5    ; cell1 = 10 + 5
 second: addconst cell2, 3    ; cell2 = 20 + 3
         hlt
 cell1:  .byte 10
-cell2:  .byte 20")
+.equ big, 0
+.if big
+cell2:  .byte 200
+.else
+cell2:  .byte 20
+.endif")
 
 (format t "~&Source:~%~A~2%" *source*)
 
