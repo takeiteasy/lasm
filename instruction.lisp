@@ -339,6 +339,12 @@ than each caller assuming a byte opcode."
 (defvar *layout-bank* nil
   "The bank selected by the latest .BANK, or NIL before any.")
 
+(defvar *main-window-lines* nil
+  "(REGION-NAME . LINE) for each main-image entry overlapping a banked region.")
+
+(defvar *bank-output-regions* nil
+  "Names of the banked regions that .BANK output landed in.")
+
 (defun %bank-region-at (address)
   "The banked region ADDRESS lies in while a bank is selected, else NIL."
   (and *layout-bank*
