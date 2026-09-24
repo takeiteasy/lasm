@@ -1152,3 +1152,9 @@ count: ldx #3
     (let ((reply (debug-command session "write x = 5")))
       (fiveam:is (search "Error" reply))
       (fiveam:is (search "use set" reply)))))
+
+(fiveam:test documented-debugger-api-is-exported
+  (dolist (name '("DEBUG-STEP" "DEBUG-STEP-CYCLES" "DEBUG-STEP-BACK" "DEBUG-CONTINUE"
+                  "DEBUG-CONTINUE-TO" "DEBUG-REVERSE-CONTINUE" "DEBUG-REVERSE-CONTINUE-TO"
+                  "DEBUG-SET" "DEBUG-WRITE" "DEBUG-SET-BANK" "DEBUGGER-REPL"))
+    (fiveam:is (eq :external (nth-value 1 (find-symbol name :lasm))) "~A" name)))

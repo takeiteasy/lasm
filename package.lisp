@@ -502,6 +502,10 @@
    #:debug-unbreak
    #:debug-breakpoints
    #:debug-step
+   #:debug-step-cycles
+   #:debug-step-back
+   #:debug-reverse-continue
+   #:debug-reverse-continue-to
    #:debug-continue
    #:debug-continue-to
    #:debug-state-text
