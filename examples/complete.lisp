@@ -6,7 +6,7 @@
 ;;;; `.macro`/`.endm` expansion (#33, docs/macros.md), and a forced
 ;;;; addressing-mode suffix (#40, docs/modes.md#forcing-a-mode-with-a-
 ;;;; mnemonic-suffix) that overrides LDA/STA's normal zero-page-vs-absolute
-;;;; choice. Each feature has its own narrower example elsewhere
+;;;; choice, plus a post-layout `.assert` (docs/assertions.md). Each feature has its own narrower example elsewhere
 ;;;; (examples/directives.lisp, examples/macros.lisp) -- this one shows them
 ;;;; working together in a single assembly.
 ;;;;
@@ -84,7 +84,9 @@ start:  lda #10             ; A = 10 -- IMMEDIATE
         ldx #3               ; loop 3 times
 loop:   dex
         bne loop
-        hlt")
+        hlt
+done:
+        .assert done <= $40, \"program must fit below the data area\"")
 
 (format t "~&Source:~%~A~2%" *source*)
 
