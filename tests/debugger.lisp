@@ -574,3 +574,190 @@ count: ldx #3
     (fiveam:is (search "mem(0x200) + 1 = 4" (debug-command session "print mem(0x200) + 1")))
     (fiveam:is (search "count.loop = 258" (debug-command session "print count.loop")))
     (fiveam:is (search "Error" (debug-command session "print 1 +")))))
+
+;;; Step back
+
+(defun %dbg-history-session (&key (history 100))
+  (let* ((a (%dbg-assembly))
+         (m (make-machine 'emu-test-machine)))
+    (load-program m a)
+    (make-debug-session m :assembly a :history history)))
+
+(defun %dbg-snapshot (session)
+  (machine-snapshot (debug-session-machine session)))
+
+(fiveam:test debug-step-back-restores-the-previous-state
+  (let ((session (%dbg-history-session)))
+    (debug-step session 2)
+    (let ((before (%dbg-snapshot session)))
+      (debug-step session 3)
+      (multiple-value-bind (reason undone) (debug-step-back session 3)
+        (fiveam:is (eq :back reason))
+        (fiveam:is (= 3 undone))
+        (fiveam:is (equal before (%dbg-snapshot session)))))))
+
+(fiveam:test debug-step-back-defaults-to-one-step
+  (let ((session (%dbg-history-session)))
+    (debug-step session 2)
+    (let ((before (%dbg-snapshot session)))
+      (debug-step session 1)
+      (debug-step-back session)
+      (fiveam:is (equal before (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-crosses-checkpoints
+  (let ((*debug-checkpoint-interval* 2)
+        (session (%dbg-history-session)))
+    (debug-step session 1)
+    (let ((before (%dbg-snapshot session)))
+      (fiveam:is (eq :trap (debug-continue session)))
+      (fiveam:is (eq :back (debug-step-back session 8)))
+      (fiveam:is (equal before (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-undoes-a-trapping-step
+  (let ((session (%dbg-history-session)))
+    (debug-step session 8)
+    (let ((before (%dbg-snapshot session)))
+      (fiveam:is (eq :trap (debug-step session 1)))
+      (debug-step-back session 1)
+      (fiveam:is (equal before (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-past-the-start-reports-history-start
+  (let* ((session (%dbg-history-session))
+         (initial (%dbg-snapshot session)))
+    (debug-step session 2)
+    (multiple-value-bind (reason undone) (debug-step-back session 5)
+      (fiveam:is (eq :history-start reason))
+      (fiveam:is (= 2 undone))
+      (fiveam:is (equal initial (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-with-nothing-run-undoes-nothing
+  (multiple-value-bind (reason undone) (debug-step-back (%dbg-history-session))
+    (fiveam:is (eq :history-start reason))
+    (fiveam:is (= 0 undone))))
+
+(fiveam:test debug-step-back-history-limits-how-far-back-it-goes
+  (let ((session (%dbg-history-session :history 3)))
+    (dotimes (i 10) (debug-step session 1))
+    (multiple-value-bind (reason undone) (debug-step-back session 100)
+      (fiveam:is (eq :history-start reason))
+      (fiveam:is (<= 3 undone 4)))))
+
+(fiveam:test debug-step-forward-after-back-is-deterministic
+  (let ((session (%dbg-history-session)))
+    (debug-step session 5)
+    (let ((expected (%dbg-snapshot session)))
+      (debug-step-back session 3)
+      (debug-step session 3)
+      (fiveam:is (equal expected (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-repeats
+  (let ((session (%dbg-history-session)))
+    (debug-step session 2)
+    (let ((two (%dbg-snapshot session)))
+      (debug-step session 4)
+      (debug-step-back session 2)
+      (debug-step-back session 2)
+      (fiveam:is (equal two (%dbg-snapshot session))))))
+
+(fiveam:test debug-step-back-needs-history
+  (fiveam:signals error (debug-step-back (%dbg-session)))
+  (fiveam:is (search "history is off" (debug-command (%dbg-session) "back"))))
+
+(fiveam:test debug-step-back-refuses-a-device-without-save
+  (let ((session (%dbg-history-session)))
+    (attach-device (debug-session-machine session) 'plain :id 9)
+    (debug-step session 1)
+    (fiveam:signals error (debug-step-back session 1))
+    (fiveam:is (search "no :save" (debug-command session "back")))))
+
+(fiveam:test debug-command-back
+  (let ((session (%dbg-history-session)))
+    (debug-command session "step 3")
+    (fiveam:is (search "Stopped: back  steps=2" (debug-command session "back 2")))
+    (fiveam:is (search "bad count" (debug-command session "back 0")))
+    (fiveam:is (search "bad count" (debug-command session "back 2 cycles")))))
+
+;;; Cycle budgets
+
+(defun %dbg-program-session (source)
+  (let* ((a (assemble source :machine 'emu-test-machine :origin #x100))
+         (m (make-machine 'emu-test-machine)))
+    (load-program m a)
+    (make-debug-session m :assembly a)))
+
+(fiveam:test debug-step-cycles-stops-when-the-budget-is-spent
+  (let ((session (%dbg-session)))
+    (multiple-value-bind (reason steps) (debug-step-cycles session 3)
+      (fiveam:is (eq :step reason))
+      (fiveam:is (= 3 steps))
+      (fiveam:is (= 3 (machine-cycles (debug-session-machine session)))))))
+
+(fiveam:test debug-step-cycles-overshoots-by-at-most-one-instruction
+  (let ((session (%dbg-program-session "pen
+        pen
+        hlt")))
+    (multiple-value-bind (reason steps) (debug-step-cycles session 1)
+      (fiveam:is (eq :step reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 5 (machine-cycles (debug-session-machine session)))))))
+
+(fiveam:test debug-step-cycles-ignores-breakpoints
+  (let ((session (%dbg-session)))
+    (debug-break session "count.loop")
+    (fiveam:is (= 3 (nth-value 1 (debug-step-cycles session 3))))))
+
+(fiveam:test debug-step-cycles-stops-on-a-trap
+  (let ((session (%dbg-session)))
+    (multiple-value-bind (reason steps) (debug-step-cycles session 100)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 9 steps)))))
+
+(fiveam:test debug-step-cycles-stops-on-a-watchpoint
+  (let ((session (%dbg-session)))
+    (debug-watch session "x")
+    (multiple-value-bind (reason steps) (debug-step-cycles session 5)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps)))))
+
+(fiveam:test debug-step-cycles-guards-runaway-programs
+  (let ((session (%dbg-session)))
+    (multiple-value-bind (reason steps) (debug-step-cycles session 100 :max-steps 2)
+      (fiveam:is (eq :max-steps reason))
+      (fiveam:is (= 2 steps)))))
+
+(fiveam:test debug-continue-cycles-stops-at-the-budget
+  (let ((session (%dbg-session)))
+    (multiple-value-bind (reason steps) (debug-continue session :cycles 3)
+      (fiveam:is (eq :max-cycles reason))
+      (fiveam:is (= 3 steps)))))
+
+(fiveam:test debug-continue-cycles-yields-to-a-breakpoint
+  (let ((session (%dbg-session)))
+    (debug-break session "count.loop")
+    (multiple-value-bind (reason steps) (debug-continue session :cycles 10)
+      (fiveam:is (eq :breakpoint reason))
+      (fiveam:is (= 1 steps)))))
+
+(fiveam:test debug-continue-cycles-runs-an-idle-machine-to-the-budget
+  (let ((session (%dbg-program-session "slp
+        hlt")))
+    (fiveam:is (eq :max-cycles (debug-continue session :cycles 5)))
+    (fiveam:is (eq :idle (debug-continue (%dbg-program-session "slp
+        hlt"))))))
+
+(fiveam:test cycle-budgets-need-declared-costs
+  (let ((session (make-debug-session (make-machine 'dbg-bank-test-machine))))
+    (fiveam:signals error (debug-step-cycles session 5))
+    (fiveam:signals error (debug-continue session :cycles 5))
+    (fiveam:is (search "declares no (cycles n)" (debug-command session "step 5 cycles")))))
+
+(fiveam:test debug-command-cycle-budgets
+  (let ((session (%dbg-session)))
+    (fiveam:is (search "steps=3" (debug-command session "step 3 cycles")))
+    (fiveam:is (search "Stopped: max-cycles" (debug-command session "continue 2 cycles")))))
+
+(fiveam:test debug-command-rejects-a-bad-step-count
+  (let ((session (%dbg-session)))
+    (dolist (line '("step -3" "step 0" "step foo" "step 2 foo" "continue 3" "continue foo cycles"))
+      (fiveam:is (search "bad count" (debug-command session line)) "~A" line))
+    (fiveam:is (= 0 (machine-cycles (debug-session-machine session))))))

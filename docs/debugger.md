@@ -19,12 +19,13 @@ See [`debugger.lisp`](../examples/debugger.lisp).
 ## Sessions
 
 ```lisp
-(make-debug-session machine &key assembly pc memory lexer)
+(make-debug-session machine &key assembly pc memory lexer history)
 ```
 
 `machine` is already running or loaded. `assembly` supplies label, `.equ`,
 and source information. `:pc` and `:memory` override the machine defaults;
-`:lexer` parses breakpoint expressions.
+`:lexer` parses breakpoint expressions. `:history` enables
+[step back](#step-back); it is off by default.
 
 ## Breakpoints
 
@@ -73,21 +74,51 @@ PC advancement, and debugger inspection do not trigger one. See the
 
 ```lisp
 (debug-step session &optional n)
-(debug-continue session &key max-steps)
+(debug-step-cycles session cycles &key max-steps)
+(debug-continue session &key max-steps cycles)
 (debug-continue-to session where &key scope bank max-steps)
 ```
 
 | Reason | Meaning |
 | --- | --- |
-| `:step`, `:until` | Requested steps or target completed. |
+| `:step`, `:until` | Requested steps, cycles, or target completed. |
 | `:breakpoint`, `:watchpoint` | A stop condition matched. |
 | `:trap`, `:fault`, `:decode-failure` | Execution stopped in the emulator. |
 | `:idle`, `:max-steps` | Machine cannot wake, or the step guard fired. |
+| `:max-cycles` | `debug-continue :cycles` spent its budget. |
+
+`debug-step-cycles` steps until `cycles` have been spent, ignoring
+breakpoints like `debug-step`. `debug-continue :cycles` also stops at
+breakpoints and keeps running an idle machine to spend the budget. Either can
+overshoot by one instruction's cost. Both signal on a machine that declares no
+`(cycles n)`; see [Emulator](emulator.md#cycle-costs-and-clock-speed).
 
 Continuing from a breakpoint executes at least one more step before
 checking it again. `debug-step` reports an idle step as `:step`. Direct
 stepping signals storage faults; continue returns `:fault` and the
 condition.
+
+## Step back
+
+```lisp
+(make-debug-session machine :history 1000)
+(debug-step-back session &optional n)
+```
+
+`debug-step-back` undoes `n` steps and returns `:back` and the number undone,
+or `:history-start` when fewer were recorded. The session snapshots the
+machine (see [Snapshots](snapshots.md)) at the start of every step or
+continue command and every 256 steps, keeping at least `:history` steps.
+Step back restores the nearest earlier snapshot and replays forward.
+
+- It signals when history is off, or when a device on the bus has no `:save`
+  hook.
+- Restoring rebuilds device objects, so references a host holds to them go
+  stale.
+- Replay runs device side effects again and assumes deterministic
+  semantics.
+- Change machine state between commands, not during them: `debug-set-bank`
+  or `signal-interrupt` before the next command is captured.
 
 ## Inspection (read-only)
 
@@ -130,7 +161,9 @@ and prints until `quit` or end of input.
 | `break ADDR\|LABEL [if EXPR]` | Add a breakpoint, optionally conditional. |
 | `watch TARGET [r\|w\|rw]` | Watch a register, stack entry, label, or address. |
 | `delete ID\|ADDR`, `info break` | Remove or list stops. |
-| `step [N]`, `continue`, `until ADDR\|LABEL` | Control execution. |
+| `step [N]`, `step N cycles` | Execute instructions, or until a cycle budget is spent. |
+| `continue`, `continue N cycles`, `until ADDR\|LABEL` | Run to a stop condition. |
+| `back [N]` | Undo steps. |
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `bank REGION N` | Map a bank. |
@@ -141,5 +174,4 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-The debugger has no reverse execution, cycle-budget continue command, or
-writable inspection command. Use [Emulator](emulator.md) for cycle budgets.
+The debugger has no reverse continue or writable inspection command.

@@ -30,9 +30,14 @@
 ;;;; expression with EVAL-EXPR against live register/flag values and the
 ;;;; attached assembly's symbols.
 ;;;;
+;;;; STEP-BACK replays from checkpoints: a session created with :HISTORY
+;;;; snapshots the machine (MACHINE-SNAPSHOT) at the start of every execution
+;;;; command and every *DEBUG-CHECKPOINT-INTERVAL* steps, and DEBUG-STEP-BACK
+;;;; restores the nearest earlier snapshot and replays forward to the target.
+;;;; Cycle budgets reuse the same step loop and %RUN-LOOP's stop predicate.
+;;;;
 ;;;; SCOPE -- read-only inspection only, apart from switching a banked
-;;;; region's current bank; no poke/`set register` command. Reverse/step-back
-;;;; execution and cycle-budgeted stepping are out of scope.
+;;;; region's current bank; no poke/`set register` command.
 
 (in-package #:lasm)
 
@@ -75,22 +80,27 @@
   (watch-hit nil)               ; first WATCH-HIT of the running instruction
   (condition-error nil)         ; error from a breakpoint condition, stops the run
   (lexer 'default)
+  (history nil :type (or null (integer 1))) ; steps of step-back history kept; NIL is off
+  (step-count 0 :type (integer 0))          ; steps executed on this session's timeline
+  (checkpoints nil :type list)              ; (step-count . snapshot), newest first
   (next-id 1 :type (integer 1))
   (last-x-address nil))         ; so a bare `x` without an address continues from the last one
 
-(defun make-debug-session (machine &key assembly pc memory (lexer 'default))
+(defun make-debug-session (machine &key assembly pc memory (lexer 'default) history)
   "Create a DEBUG-SESSION wrapping MACHINE (a live MACHINE instance,
 storage.lisp), optionally with the ASSEMBLY that produced its program for
 label breakpoints, symbol listing, and source-line context. PC/MEMORY
 override the usual by-convention resolution (%RESOLVE-PC/%RESOLVE-MEMORY,
 emulator.lisp), same as STEP-MACHINE's own keywords -- resolved once here,
-not on every command. LEXER tokenizes breakpoint conditions."
+not on every command. LEXER tokenizes breakpoint conditions. HISTORY, a step
+count, enables DEBUG-STEP-BACK over at least that many steps; NIL (the
+default) records nothing."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (pc (%resolve-pc machine-name pc))
          (memory (%resolve-memory machine-name memory))
          (cell-width (%machine-cell-width machine-name memory)))
     (%make-debug-session
-     :machine machine :assembly assembly :pc pc :memory memory :lexer lexer
+     :machine machine :assembly assembly :pc pc :memory memory :lexer lexer :history history
      :cell-width cell-width :hex-digits (%listing-hex-digits cell-width))))
 
 ;;; Breakpoints
@@ -407,106 +417,226 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
 
 ;;; Execution
 ;;;
-;;; DEBUG-STEP/DEBUG-CONTINUE/DEBUG-CONTINUE-TO return (VALUES REASON STEPS
-;;; [CONDITION]). A trap or fault supplies the condition as the third value; a
-;;; :WATCHPOINT stop supplies its WATCH-HIT, and a :BREAKPOINT stop the error
-;;; from its condition, if that failed.
+;;; DEBUG-STEP/DEBUG-STEP-CYCLES/DEBUG-CONTINUE/DEBUG-CONTINUE-TO return
+;;; (VALUES REASON STEPS [CONDITION]). A trap or fault supplies the condition as
+;;; the third value; a :WATCHPOINT stop supplies its WATCH-HIT, and a
+;;; :BREAKPOINT stop the error from its condition, if that failed.
 ;;; DEBUG-STEP reports :STEP after N steps rather than :MAX-STEPS.
 ;;;
-;;; #110: an idle STEP-MACHINE result is not a stop condition here either --
+;;; An idle STEP-MACHINE result is not a stop condition here either --
 ;;; DEBUG-STEP counts it as one of its N steps (so single-stepping through a
 ;;; sleeping machine just burns steps one at a time, same as any other
 ;;; instruction), and DEBUG-CONTINUE/DEBUG-CONTINUE-TO forward %RUN-LOOP's
 ;;; own :IDLE straight through (see %RUN-UNTIL below) exactly like :TRAP/
 ;;; :DECODE-FAILURE.
+;;;
+;;; STEP-COUNT is the session's position on its step timeline: every step that
+;;; ran counts (idle, trap and fault steps included), a decode failure does not.
+
+(defvar *debug-checkpoint-interval* 256
+  "Steps between the checkpoints a session with a HISTORY records mid-run.")
 
 (defun %pc (session)
   (sref (debug-session-machine session) (debug-session-pc session)))
+
+(defun %checkpoint (session)
+  "Record a snapshot at SESSION's current step count, discarding any recorded
+beyond it and any older than its HISTORY. Does nothing when history is off."
+  (let ((history (debug-session-history session))
+        (now (debug-session-step-count session)))
+    (when history
+      (let ((checkpoints (remove-if (lambda (c) (>= (car c) now))
+                                    (debug-session-checkpoints session)))
+            (tail nil))
+        (cl:push (cons now (machine-snapshot (debug-session-machine session))) checkpoints)
+        (setf tail (member (- now history) checkpoints :key #'car :test #'>=))
+        (when tail (setf (cdr tail) nil))
+        (setf (debug-session-checkpoints session) checkpoints)))))
+
+(defun %count-step (session)
+  "Count one executed step, checkpointing at every interval boundary."
+  (let ((now (incf (debug-session-step-count session))))
+    (when (and (debug-session-history session) (zerop (mod now *debug-checkpoint-interval*)))
+      (%checkpoint session))))
+
+(defun %step-while (session more-p)
+  "Step SESSION's machine while MORE-P, called with the steps taken and the
+cycles spent so far, is true. Returns (VALUES REASON STEPS [CONDITION]) as
+DEBUG-STEP does."
+  (let* ((machine (debug-session-machine session))
+         (pc (debug-session-pc session))
+         (memory (debug-session-memory session))
+         (start-cycles (machine-cycles machine))
+         (steps 0))
+    (setf (debug-session-watch-hit session) nil)
+    (%checkpoint session)
+    (unwind-protect
+         (loop
+           (unless (funcall more-p steps (- (machine-cycles machine) start-cycles))
+             (return (values :step steps)))
+           (handler-case
+               (progn
+                 (%arm session)
+                 (let ((result (handler-bind ((storage-error
+                                                (lambda (c)
+                                                  (declare (ignore c))
+                                                  (%count-step session))))
+                                 (step-machine machine :pc pc :memory memory))))
+                   (%disarm session)
+                   (when (eq result :decode-failure)
+                     (return (values :decode-failure steps)))
+                   (incf steps)
+                   (%count-step session)
+                   (let ((hit (debug-session-watch-hit session)))
+                     (when hit
+                       (return (values :watchpoint steps hit))))))
+             (lasm-trap (c)
+               (%count-step session)
+               (return (values :trap (1+ steps) c)))))
+      (%disarm session))))
 
 (defun debug-step (session &optional (n 1))
   "Execute up to N instructions on SESSION's machine one at a time, stopping
 early on a trap, decode failure or watchpoint hit. Returns (VALUES REASON
 STEPS [CONDITION]): REASON is :STEP (all N executed), :TRAP, :DECODE-FAILURE
 or :WATCHPOINT; STEPS is the number of instructions actually executed."
-  (let ((machine (debug-session-machine session))
-        (pc (debug-session-pc session))
-        (memory (debug-session-memory session)))
-    (setf (debug-session-watch-hit session) nil)
-    (unwind-protect
-         (dotimes (i n (values :step n))
-           (handler-case
-               (progn
-                 (%arm session)
-                 (multiple-value-bind (result) (step-machine machine :pc pc :memory memory)
-                   (%disarm session)
-                   (when (eq result :decode-failure)
-                     (return-from debug-step (values :decode-failure i)))
-                   (let ((hit (debug-session-watch-hit session)))
-                     (when hit
-                       (return-from debug-step (values :watchpoint (1+ i) hit))))))
-             (lasm-trap (c) (return-from debug-step (values :trap (1+ i) c)))))
-      (%disarm session))))
+  (%step-while session (lambda (steps cycles)
+                         (declare (ignore cycles))
+                         (< steps n))))
 
-(defun %run-until (session stop-reason stop-p &key (max-steps 10000))
+(defun %require-cycle-costs (session)
+  "Signal unless SESSION's machine declares (cycles n) on some instruction."
+  (let ((descriptor (machine-descriptor (debug-session-machine session))))
+    (unless (loop for variants being the hash-values of (machine-descriptor-instructions descriptor)
+                    thereis (some #'instruction-descriptor-cycles variants))
+      (error "machine ~(~A~) declares no (cycles n) -- cycle budgets need per-instruction costs"
+             (machine-descriptor-name descriptor)))))
+
+(defun debug-step-cycles (session cycles &key (max-steps (max 10000 cycles)))
+  "Execute instructions on SESSION's machine until CYCLES cycles have been
+spent (overshooting by at most one instruction's cost), stopping early as
+DEBUG-STEP does. Breakpoints are ignored. Returns (VALUES REASON STEPS
+[CONDITION]): REASON is :STEP (budget spent), :MAX-STEPS when MAX-STEPS
+instructions ran without spending it, or an early stop. Signals when the
+machine declares no (cycles n)."
+  (%require-cycle-costs session)
+  (let ((spent 0))
+    (multiple-value-bind (reason steps condition)
+        (%step-while session (lambda (steps cycles-spent)
+                               (setf spent cycles-spent)
+                               (and (< steps max-steps) (< spent cycles))))
+      (values (if (and (eq reason :step) (< spent cycles)) :max-steps reason)
+              steps condition))))
+
+(defun debug-step-back (session &optional (n 1))
+  "Undo the last N executed steps by restoring the nearest earlier checkpoint
+and replaying forward. Returns (VALUES REASON UNDONE): REASON is :BACK, or
+:HISTORY-START when fewer than N steps were recorded. Signals when SESSION
+keeps no history, or a device on the bus has no :SAVE hook -- restoring would
+reset it and replay could not reproduce its state."
+  (let ((history (debug-session-history session))
+        (machine (debug-session-machine session)))
+    (unless history
+      (error "step-back history is off -- create the session with :history N"))
+    (unless (typep n '(integer 1))
+      (error "bad step count ~S" n))
+    (loop for device across (machine-devices machine)
+          when (and device (null (device-descriptor-save (device-descriptor device))))
+            do (error "device ~(~A~) has no :save hook, so it cannot be stepped back over"
+                      (device-descriptor-name (device-descriptor device))))
+    (let ((checkpoints (debug-session-checkpoints session))
+          (now (debug-session-step-count session)))
+      (when (null checkpoints)
+        (return-from debug-step-back (values :history-start 0)))
+      (let* ((target (max (- now n) (car (car (last checkpoints)))))
+             (base (find-if (lambda (c) (<= (car c) target)) checkpoints))
+             (pc (debug-session-pc session))
+             (memory (debug-session-memory session)))
+        (restore-snapshot machine (cdr base))
+        (dotimes (i (- target (car base)))
+          (declare (ignore i))
+          (handler-case (step-machine machine :pc pc :memory memory)
+            ((or lasm-trap storage-error) ())))
+        (setf (debug-session-step-count session) target
+              (debug-session-checkpoints session)
+              (remove-if (lambda (c) (> (car c) target)) checkpoints))
+        ;; TODO: a full snapshot per checkpoint costs O(memory); diff-based checkpoints if long histories get slow (#245)
+        (values (if (= (- now target) n) :back :history-start)
+                (- now target))))))
+
+(defun %run-until (session stop-p &key (max-steps 10000) (idle-stop t))
   "Shared body of DEBUG-CONTINUE/DEBUG-CONTINUE-TO: %RUN-LOOP (emulator.lisp)
 against SESSION's machine, remapped from %RUN-LOOP's own reason vocabulary
-into the debugger's (see this section's header comment)."
-  (let ((machine (debug-session-machine session)))
+into the debugger's (see this section's header comment). STOP-P is called
+after each step and returns the stop reason (a keyword) or NIL to keep going."
+  (let ((machine (debug-session-machine session))
+        (start (debug-session-step-count session))
+        (stopped nil))
     (setf (debug-session-watch-hit session) nil
           (debug-session-condition-error session) nil)
+    (%checkpoint session)
     (multiple-value-bind (reason steps condition)
         (unwind-protect
              (progn
                (%arm session)
                (%run-loop machine :pc (debug-session-pc session) :memory (debug-session-memory session)
-                                  :max-steps max-steps :stop-reason stop-reason
+                                  :max-steps max-steps :stop-reason :stop
                                   :stop-p (lambda ()
                                             (%disarm session)
                                             (cond ((debug-session-watch-hit session) t)
-                                                  ((funcall stop-p) t)
+                                                  ((setf stopped (funcall stop-p)) t)
                                                   (t (%arm session) nil)))
-                                  :idle-stop t))
+                                  :on-step (and (debug-session-history session)
+                                                (lambda (cost)
+                                                  (declare (ignore cost))
+                                                  (%count-step session)))
+                                  :idle-stop idle-stop))
           (%disarm session))
-      (when (eq reason stop-reason)
+      (setf (debug-session-step-count session) (+ start steps))
+      (when (eq reason :stop)
         (cond ((debug-session-watch-hit session)
                (return-from %run-until
                  (values :watchpoint steps (debug-session-watch-hit session))))
               ((debug-session-condition-error session)
                (return-from %run-until
-                 (values reason steps (debug-session-condition-error session))))))
-      (values (case reason
-                (:trap :trap)
-                (:fault :fault)
-                (:decode-failure :decode-failure)
-                (:idle :idle) ; #110 -- the machine went idle with nothing left to wake it
-                (:max-steps :max-steps)
-                (t reason)) ; STOP-REASON itself (:BREAKPOINT or :UNTIL), passed through
-              steps condition))))
+                 (values stopped steps (debug-session-condition-error session))))))
+      (values (if (eq reason :stop) stopped reason) steps condition))))
 
-(defun debug-continue (session &key (max-steps 10000))
+(defun debug-continue (session &key max-steps cycles)
   "Run SESSION's machine until it hits a breakpoint whose condition holds or a
 watchpoint, traps, hits a decode failure, goes idle with nothing left to wake
-it (#110), or MAX-STEPS instructions have executed with none of those
-happening (a runaway-program guard, mirroring RUN's own). Returns (VALUES
-REASON STEPS [CONDITION]) -- REASON one of :BREAKPOINT, :WATCHPOINT, :TRAP,
-:FAULT, :DECODE-FAILURE, :IDLE, :MAX-STEPS. A condition that fails to evaluate
-stops the run as :BREAKPOINT with its error as CONDITION.
+it, or MAX-STEPS instructions have executed with none of those happening (a
+runaway-program guard, mirroring RUN's own; default 10000, or CYCLES if
+larger). CYCLES adds a budget: the run also stops once that many cycles have
+been spent, overshooting by at most one instruction's cost, and an idle
+machine keeps running to spend it. Returns (VALUES REASON STEPS [CONDITION])
+-- REASON one of :BREAKPOINT, :WATCHPOINT, :TRAP, :FAULT, :DECODE-FAILURE,
+:IDLE, :MAX-CYCLES, :MAX-STEPS. A condition that fails to evaluate stops the
+run as :BREAKPOINT with its error as CONDITION. Signals when CYCLES is given
+and the machine declares no (cycles n).
 
 STOP-P is checked *after* each step executes (%RUN-LOOP's own contract), so
 continuing from a PC that is itself a breakpoint runs past it rather than
 re-triggering immediately -- the same behaviour gdb's `continue` has when
 already stopped on a breakpoint."
-  (let ((breakpoints (debug-session-breakpoints session)))
-    (%run-until session :breakpoint
+  (when cycles (%require-cycle-costs session))
+  (let* ((breakpoints (debug-session-breakpoints session))
+         (machine (debug-session-machine session))
+         (start-cycles (machine-cycles machine)))
+    (%run-until session
                 (lambda ()
                   (flet ((hit-p (key)
                            (let ((bp (gethash key breakpoints)))
                              (and bp (%breakpoint-triggered-p session bp)))))
                     (let ((pc (%pc session)))
-                      (or (hit-p (cons pc nil))
-                          (let ((bank (%mapped-bank session pc)))
-                            (and bank (hit-p (cons pc bank))))))))
-                :max-steps max-steps)))
+                      (cond ((or (hit-p (cons pc nil))
+                                 (let ((bank (%mapped-bank session pc)))
+                                   (and bank (hit-p (cons pc bank)))))
+                             :breakpoint)
+                            ((and cycles (>= (- (machine-cycles machine) start-cycles) cycles))
+                             :max-cycles)))))
+                :max-steps (or max-steps (if cycles (max 10000 cycles) 10000))
+                :idle-stop (null cycles))))
 
 (defun debug-continue-to (session where &key scope bank (max-steps 10000))
   "Like DEBUG-CONTINUE, but stops at WHERE (an address or label,
@@ -517,10 +647,11 @@ place of DEBUG-CONTINUE's :BREAKPOINT."
   (multiple-value-bind (address region bank)
       (%resolve-breakpoint-address session where :scope scope :bank bank)
     (declare (ignore region))
-    (%run-until session :until
+    (%run-until session
                 (lambda ()
                   (and (= (%pc session) address)
-                       (or (null bank) (eql bank (%mapped-bank session address)))))
+                       (or (null bank) (eql bank (%mapped-bank session address)))
+                       :until))
                 :max-steps max-steps)))
 
 ;;; Inspection (read-only)
@@ -706,6 +837,16 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
          (target (string-trim " " (if colon (subseq text (1+ colon)) text))))
     (values (or (%parse-integer-maybe target) target) bank)))
 
+(defun %count-arg (text command)
+  "TEXT as (VALUES COUNT CYCLES-P): empty is 1, otherwise a positive `N` or
+`N cycles`. Signals for anything else."
+  (multiple-value-bind (number word) (%split-command text)
+    (let ((count (if (zerop (length text)) 1 (%parse-integer-maybe number))))
+      (unless (and count (plusp count)
+                   (or (zerop (length word)) (string-equal word "cycles")))
+        (error "~A: bad count ~S" command text))
+      (values count (plusp (length word))))))
+
 (defun %breakpoint-address-text (session address bank)
   (if bank
       (format nil "~2,'0D:~V,'0X" bank (debug-session-addr-digits session) address)
@@ -777,7 +918,10 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   info banks         list banked regions and their current bank
   info sym           list symbols (requires an attached assembly)
   step [N]           execute N instructions (default 1)
+  step N cycles      execute until N cycles have been spent
+  back [N]           undo the last N steps (needs a session created with :history)
   continue           run until a breakpoint, watchpoint, trap, or decode failure
+  continue N cycles  as continue, also stopping once N cycles have been spent
   until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
                      LABEL takes an `in GLOBAL` scope like break)
   print EXPR         print a register, alias or flag, or evaluate an expression
@@ -866,11 +1010,22 @@ this call."
                           (format nil "No assembly attached to this session.~%")))
                      (t (format nil "info: unknown subcommand ~S (try break/reg/banks/sym)" rest))))
                   ((string-equal cmd "step")
-                   (let ((n (or (%parse-integer-maybe rest) 1)))
-                     (multiple-value-bind (reason steps condition) (debug-step session n)
+                   (multiple-value-bind (n cycles-p) (%count-arg rest "step")
+                     (multiple-value-bind (reason steps condition)
+                         (if cycles-p (debug-step-cycles session n) (debug-step session n))
                        (%stop-text session reason steps condition))))
+                  ((string-equal cmd "back")
+                   (multiple-value-bind (n cycles-p) (%count-arg rest "back")
+                     (when cycles-p (error "back: bad count ~S" rest))
+                     (multiple-value-bind (reason undone) (debug-step-back session n)
+                       (%stop-text session reason undone nil))))
                   ((string-equal cmd "continue")
-                   (multiple-value-bind (reason steps condition) (debug-continue session)
+                   (multiple-value-bind (reason steps condition)
+                       (if (zerop (length rest))
+                           (debug-continue session)
+                           (multiple-value-bind (n cycles-p) (%count-arg rest "continue")
+                             (unless cycles-p (error "continue: bad count ~S" rest))
+                             (debug-continue session :cycles n)))
                      (%stop-text session reason steps condition)))
                   ((string-equal cmd "until")
                    (if (zerop (length rest))
@@ -929,7 +1084,7 @@ this call."
           (text (if (eq body :quit) (format nil "Bye.~%") body)))
       (values (if stream (progn (write-string text stream) nil) text) quit-p))))
 
-(defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-db) "))
+(defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-dbg) "))
   "A thin read/dispatch/print loop over DEBUG-COMMAND -- the ticket's
 reference command-line front end. Reads one line at a time from INPUT,
 dispatches it through DEBUG-COMMAND, writes the response to OUTPUT, and

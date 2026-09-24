@@ -38,21 +38,25 @@
 (definstruction sixtyfoo ldx
   (modes immediate)
   (encoding (opcode #xA2) (operand :mode))
-  (semantics (set! x operand) (set-flags! (z (zero? x)))))
+  (semantics (set! x operand) (set-flags! (z (zero? x))))
+  (cycles 2))
 
 (definstruction sixtyfoo dex
   (encoding (opcode #xCA))
-  (semantics (set! x (wrap-value (1- x) 8)) (set-flags! (z (zero? x)))))
+  (semantics (set! x (wrap-value (1- x) 8)) (set-flags! (z (zero? x))))
+  (cycles 2))
 
 (definstruction sixtyfoo bne
   (modes relative)
   (encoding (opcode #xD0) (operand :mode))
-  (semantics (when (zerop z) (set! pc (+ pc operand)))))
+  (semantics (when (zerop z) (set! pc (+ pc operand))))
+  (cycles 3))
 
 (definstruction sixtyfoo sta
   (modes absolute)
   (encoding (opcode #x8D) (operand :mode))
-  (semantics (setf (mref machine 'ram operand) x)))
+  (semantics (setf (mref machine 'ram operand) x))
+  (cycles 4))
 
 (definstruction sixtyfoo hlt
   (encoding (opcode #x00))
@@ -65,7 +69,8 @@
   ;; A DEBUG-SESSION carries the machine plus (optionally) the assembly that
   ;; produced its program -- the latter is what lets a label like ".loop"
   ;; resolve to an address for `break`.
-  (let ((session (make-debug-session machine :assembly assembly)))
+  ;; :HISTORY keeps checkpoints so `back` can undo steps.
+  (let ((session (make-debug-session machine :assembly assembly :history 1000)))
 
     (format t "~&== Every command below goes through DEBUG-COMMAND, string in, ==~%")
     (format t "== text out -- exactly what a DEBUGGER-REPL loop dispatches. ==~2%")
@@ -74,7 +79,9 @@
     ;; (`count.loop`) or as `.loop in count`.
     ;; `if` makes the breakpoint conditional; `watch` stops after an
     ;; instruction reads or writes a register, flag or memory address.
+    ;; `step N cycles` runs until N cycles are spent; `back N` undoes N steps.
     (dolist (command '("break count.loop if x == 1" "info break" "continue"
-                        "where" "delete 1" "watch x" "continue" "info break"
+                        "where" "step 4 cycles" "where" "back 2" "where"
+                        "delete 1" "watch x" "continue" "info break"
                         "delete 2" "continue" "info reg" "x/4 $1000" "print x"))
-      (format t "(lasm-db) ~A~%~A" command (debug-command session command)))))
+      (format t "(lasm-dbg) ~A~%~A" command (debug-command session command)))))
