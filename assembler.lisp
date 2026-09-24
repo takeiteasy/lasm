@@ -91,6 +91,9 @@ of the instruction declares. Undefined labels are not this condition -- they
 surface as UNRESOLVED-LABEL from EVAL-EXPR, since that condition already
 names exactly this failure."))
 
+(define-condition assertion-error (assembly-error) ()
+  (:documentation "Signalled by a failed .assert or a reached .error."))
+
 (defun %signal-assembly-error (line column fmt args)
   (error 'assembly-error :message (apply #'format nil fmt args) :line line :column column))
 
@@ -752,6 +755,43 @@ operand is always one bare expression, never an addressing-mode pattern."
         (%parse-error (aref tokens next-i) "Unexpected trailing token in directive operand"))
       ast)))
 
+(defun %assert-statement-p (statement)
+  (let ((mnemonic (statement-mnemonic statement)))
+    (and mnemonic (string-equal mnemonic ".assert"))))
+
+(defun %error-statement-p (statement)
+  (let ((mnemonic (statement-mnemonic statement)))
+    (and mnemonic (string-equal mnemonic ".error"))))
+
+(defun %message-operand (operand statement)
+  "The string OPERAND of STATEMENT's .assert or .error."
+  (let ((tokens (operand-tokens operand)))
+    (unless (and (= 1 (length tokens)) (eq (token-type (aref tokens 0)) :string))
+      (%assembly-error (statement-line statement) "~A: expected a quoted message"
+                       (statement-mnemonic statement)))
+    (token-value (aref tokens 0))))
+
+(defun %assert-parts (statement)
+  "Returns (VALUES condition-ast message) for a .assert STATEMENT."
+  (let ((operands (statement-operands statement))
+        (line (statement-line statement)))
+    (when (statement-mode-suffix statement)
+      (%assembly-error line ".assert: a mode suffix is not valid here"))
+    (unless (<= 1 (length operands) 2)
+      (%assembly-error line ".assert: expected a condition and an optional message"))
+    (values (%directive-operand-ast (first operands))
+            (and (second operands) (%message-operand (second operands) statement)))))
+
+(defun %signal-user-error (statement)
+  "Signal ASSERTION-ERROR with the message of a reached .error STATEMENT."
+  (let ((operands (statement-operands statement))
+        (line (statement-line statement)))
+    (when (statement-mode-suffix statement)
+      (%assembly-error line ".error: a mode suffix is not valid here"))
+    (unless (= 1 (length operands))
+      (%assembly-error line ".error: expected a quoted message"))
+    (error 'assertion-error :message (%message-operand (first operands) statement) :line line)))
+
 (defun %directive-args (statement directive)
   "Parse STATEMENT's operands (parser.lisp) into a list of EXPR-* ASTs, one
 per operand, after checking their count against DIRECTIVE's arity: exactly
@@ -937,8 +977,9 @@ symbol ~S is not yet defined"
            (make-expr-number :value value))
          ast))
     (expr-unary
-     (setf (expr-unary-operand ast)
-           (%capture-set-values (expr-unary-operand ast) symbols set-names line))
+     (unless (eq (expr-unary-op ast) :defined)
+       (setf (expr-unary-operand ast)
+             (%capture-set-values (expr-unary-operand ast) symbols set-names line)))
      ast)
     (expr-binary
      (setf (expr-binary-left ast)
@@ -1088,7 +1129,7 @@ symbol ~S is not yet defined"
           (loop for statement in statements
                 for mnemonic = (statement-mnemonic statement)
                 when (and mnemonic (not (find-directive-descriptor mnemonic))
-                          (not (%include-statement-p statement)))
+                          (not (%assert-statement-p statement)))
                   sum (max 0 (1- (length (remove-duplicates
                                          (mapcar #'instruction-descriptor-size
                                                  (find-instruction-variants machine mnemonic)))))))))
@@ -1226,6 +1267,15 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                       (%apply-assign-directive statement directive address symbols info scope directive-symbols)
                     (when (and mode-symbols (gethash name set-names))
                       (setf (gethash name mode-symbols) value))))
+                 ((%assert-statement-p statement)
+                  (setf scope (%bind-label! statement symbols info address scope directive-symbols))
+                  (multiple-value-bind (ast message) (%assert-parts statement)
+                    (cl:push (list :assert address
+                                   (%capture-set-values (%qualify-locals! ast scope line)
+                                                        symbols set-names line)
+                                   message line *current-definition-line*
+                                   *current-source-unit* *current-definition-unit*)
+                             sized)))
                  (t
                   (setf scope (%bind-label! statement symbols info address scope directive-symbols))
                   (when mnemonic
@@ -1497,9 +1547,15 @@ ordered by region then bank; overlapping output in one bank is an error."
                                                 (:instruction (fifth entry))
                                                 (:emit (sixth entry))
                                                 (:reserve (fourth entry))
+                                                (:assert (fifth entry))
                                                 (:bank (third entry))))))
           (ecase (first entry)
             (:bank (setf *layout-bank* (second entry)))
+            (:assert
+             (destructuring-bind (kind address ast message line definition-line unit definition-unit) entry
+               (declare (ignore kind definition-line unit definition-unit))
+               (when (zerop (eval-expr ast :symbols symbols :pc address))
+                 (error 'assertion-error :message (or message "assertion failed") :line line))))
             (:instruction
              (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
                (declare (ignore kind definition-line unit definition-unit))
@@ -1587,18 +1643,21 @@ needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
 
 (defun %build-listing (sized-entries)
   "SIZED-ENTRIES in address order in, LISTING-LINE list in address order out
--- see %SIZED-ENTRY-LISTING-LINE. :BANK entries produce no line; they set the
-bank the following lines are tagged with."
+-- see %SIZED-ENTRY-LISTING-LINE. :ASSERT entries produce no line; :BANK
+entries produce none either, but set the bank the following lines are tagged
+with."
   (let ((*layout-bank* nil) lines)
     (dolist (entry sized-entries)
-      (if (eq (first entry) :bank)
-          (setf *layout-bank* (second entry))
-          (let* ((line (%sized-entry-listing-line entry))
-                 (region (%bank-region-at (listing-line-address line))))
-            (when region
-              (setf (listing-line-region line) (memory-region-name region)
-                    (listing-line-bank line) *layout-bank*))
-            (cl:push line lines))))
+      (case (first entry)
+        (:bank (setf *layout-bank* (second entry)))
+        (:assert)
+        (t
+         (let* ((line (%sized-entry-listing-line entry))
+                (region (%bank-region-at (listing-line-address line))))
+           (when region
+             (setf (listing-line-region line) (memory-region-name region)
+                   (listing-line-bank line) *layout-bank*))
+           (cl:push line lines)))))
     (nreverse lines)))
 
 ;;; Entry points

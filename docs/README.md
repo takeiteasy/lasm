@@ -14,7 +14,8 @@
 - [Instructions](instructions.md) — `definstruction`, encoding, semantics
 - [Directives](directives.md) — `defdirective`, data, layout, `.equ` and `.set`
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
-- [Conditional assembly](conditionals.md) — `.if`/`.elseif`/`.else`/`.endif`, constant conditions
+- [Conditional assembly](conditionals.md) — `.if`/`.ifdef`/`.elseif`/`.else`/`.endif`, constant conditions
+- [Assertions](assertions.md) — `.assert` and `.error`
 - [Includes](includes.md) — `.include`, path resolution, nesting, cycle guard
 - [Assembler](assembler.md) — `assemble`, label resolution, mode selection, encoded bytes
 - [Snapshots](snapshots.md) — `machine-snapshot`/`restore-snapshot`, versioned snapshot files

@@ -72,7 +72,7 @@ name collision, invocation, or over-deep expansion."))
   "True when NAME is a directive or a conditional, macro or include keyword."
   (or (find-directive-descriptor name)
       (%conditional-mnemonic (make-statement :mnemonic name))
-      (member name '(".macro" ".endm" ".include") :test #'string-equal)))
+      (member name '(".macro" ".endm" ".include" ".assert" ".error") :test #'string-equal)))
 
 (defun %macro-symbol-key (name localp)
   (cons name (and localp t)))

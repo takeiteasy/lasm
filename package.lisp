@@ -379,6 +379,7 @@
    #:assembly-listing
    #:assembly-source
    #:assembly-error
+   #:assertion-error
    #:listing-line
    #:listing-line-p
    #:listing-line-address

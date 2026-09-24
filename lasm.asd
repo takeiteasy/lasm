@@ -74,6 +74,7 @@
                (:file "macro")
                (:file "assembler")
                (:file "conditional")
+               (:file "assertion")
                (:file "diagnostic")
                (:file "emulator")
                (:file "disassembler")
