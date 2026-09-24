@@ -228,7 +228,7 @@ and prints until `quit` or end of input.
 | Command | Effect |
 | --- | --- |
 | `break ADDR\|LABEL [if EXPR]` | Add a breakpoint, optionally conditional. |
-| `watch TARGET [r\|w\|rw]` | Watch a register, stack entry, label, or address. `watch STACK.depth` takes `w` or `rw`. |
+| `watch TARGET [r\|w\|rw]` | Watch a register, stack entry (`N` may be an expression, evaluated once when the watch is set), label, or address. `watch STACK.depth` takes `w` or `rw`. |
 | `delete ID\|ADDR`, `info break` | Remove or list stops. |
 | `step [N]`, `step N cycles` | Execute instructions, or until a cycle budget is spent. |
 | `continue`, `continue N cycles`, `until ADDR\|LABEL` | Run to a stop condition. |
@@ -237,7 +237,7 @@ and prints until `quit` or end of input.
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. Usable inside expressions and conditions. |
-| `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
+| `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. `N` may be an expression. |
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |
 | `bank REGION N` | Map a bank. |

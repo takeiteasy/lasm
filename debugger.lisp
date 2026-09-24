@@ -1208,12 +1208,14 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
         (values (string-trim " " (subseq text 0 at)) (string-trim " " (subseq text (+ at 4))))
         (values text nil))))
 
-(defun %split-index (target)
-  "TARGET as (VALUES NAME INDEX): NAME[N] split apart, INDEX NIL without brackets."
-  (let* ((bracket (position #\[ target))
-         (close (and bracket (position #\] target :start bracket)))
-         (index (and close (%parse-integer-maybe (subseq target (1+ bracket) close)))))
-    (if index (values (subseq target 0 bracket) index) (values target nil))))
+(defun %split-index (session target scope)
+  "TARGET as (VALUES NAME INDEX): NAME[EXPR] split apart with EXPR evaluated,
+INDEX NIL without brackets."
+  (let ((bracket (position #\[ target)))
+    (if (and bracket (plusp bracket) (char= #\] (char target (1- (length target)))))
+        (values (subseq target 0 bracket)
+                (%eval-text session (subseq target (1+ bracket) (1- (length target))) scope))
+        (values target nil))))
 
 (defun %watch-args (text)
   "TEXT as (VALUES TARGET ACCESS), the optional trailing r/w/rw word split off."
@@ -1269,7 +1271,7 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
                                 (loop for item in items collect (%eval-text session item scope)))))
             (t
              (let ((value (%eval-text session text scope)))
-               (multiple-value-bind (name index) (%split-index target)
+               (multiple-value-bind (name index) (%split-index session target scope)
                  (format nil "~A = ~D~%" target
                          (if index
                              (debug-set session name value :index index)
@@ -1360,7 +1362,7 @@ this call."
                        "watch: missing target"
                        (multiple-value-bind (target access) (%watch-args rest)
                         (multiple-value-bind (target scope) (%split-in target)
-                         (multiple-value-bind (name index) (%split-index target)
+                         (multiple-value-bind (name index) (%split-index session target scope)
                           (let ((wp (if index
                                         (debug-watch session name :access access :index index)
                                         (multiple-value-bind (where bank) (%where-arg target)

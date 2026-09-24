@@ -1249,6 +1249,20 @@ count: ldx #3
     (fiveam:is (not (%breakpoint-triggered-p session (debug-break session 0 :condition "v[2] == 8"))))
     (fiveam:is (null (debug-session-condition-error session)))))
 
+;;; Computed indices in set and watch targets
+
+(fiveam:test debug-command-set-and-watch-computed-index
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (session (make-debug-session m)))
+    (setf (regref m 'v 0) 2)
+    (fiveam:is (search "v[v[0]] = 5" (debug-command session "set v[v[0]] = 5")))
+    (fiveam:is (= 5 (regref m 'v 2)))
+    (fiveam:is (search "v[1 + 1] = 6" (debug-command session "set v[1 + 1] = 6")))
+    (fiveam:is (= 6 (regref m 'v 2)))
+    (fiveam:is (search "at v[2]" (debug-command session "watch v[v[0]] r")))
+    (fiveam:is (search "out of range" (debug-command session "set v[v[0] + 9] = 1")))
+    (fiveam:is (search "Error" (debug-command session "watch v[nonesuch]")))))
+
 ;;; Stack depth watchpoints
 
 (fiveam:test debug-watch-stack-depth-fires-on-push-and-pop
