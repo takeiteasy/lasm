@@ -212,7 +212,8 @@ sta b"))))
                     (%types (%non-eof (tokenize "banks(x)"))))))
 
 (fiveam:test function-operators-clause
-  (fiveam:is (equal '(("bank" . :bank) ("lowcell" . :lowcell) ("highcell" . :highcell))
+  (fiveam:is (equal '(("bank" . :bank) ("lowcell" . :lowcell) ("highcell" . :highcell)
+                     ("defined" . :defined))
                     (lexer-descriptor-function-operators (find-lexer-descriptor 'default))))
   (deflexer far-syntax
     (number-formats (:dec :default))

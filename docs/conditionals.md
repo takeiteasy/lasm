@@ -23,13 +23,16 @@ handled by `preprocess` (`preprocess.lisp`) rather than `defdirective`.
 | Line | Meaning |
 |---|---|
 | `.if expr` | start a block; the branch is kept when `expr` is nonzero |
+| `.ifdef name` | start a block; the branch is kept when `name` is defined |
+| `.ifndef name` | start a block; the branch is kept when `name` is not defined |
 | `.elseif expr` | kept when no earlier branch was and `expr` is nonzero |
 | `.else` | kept when no earlier branch was |
 | `.endif` | end the block |
 
 Conditions use the full [expression syntax](parser.md), including the
 comparison and logical operators. Directive names match case-insensitively.
-`.if` and `.elseif` take exactly one expression; a mode suffix is an error.
+`.if` and `.elseif` take exactly one expression; `.ifdef` and `.ifndef` take
+exactly one name, which may be local; a mode suffix is an error.
 Blocks nest. A label on a conditional line binds as a label-only statement
 when the enclosing region is kept.
 
@@ -43,6 +46,20 @@ defined above.
 
 A skipped branch is never evaluated, so it may refer to anything. Within a
 kept condition, `&&` and `||` short-circuit, so `0 && undefined` is fine.
+
+## Defined names
+
+A name is defined when a label, `.equ`, `.set` or `name = value` of that name
+appears above in an emitting region. A name defined later, or only in a
+skipped branch, is not defined. `defined(name)` gives the same test inside an
+expression, so `.if defined(x) && x > 2` is valid when `x` is undefined:
+
+```asm
+.ifndef LOADED          ; include guard
+.equ LOADED, 1
+.include "lib.asm"
+.endif
+```
 
 ## Macros and includes
 

@@ -281,6 +281,15 @@ jmp start")))
   (fiveam:is (eq :highcell (expr-unary-op (%expr "highcell($12345678)"))))
   (fiveam:signals parse-failure (%expr "lowcell(a")))
 
+(fiveam:test defined-takes-a-label
+  (let ((ast (%expr "defined(a)")))
+    (fiveam:is (eq :defined (expr-unary-op ast)))
+    (fiveam:is (expr-label-p (expr-unary-operand ast)))))
+
+(fiveam:test defined-rejects-a-non-label
+  (fiveam:signals parse-failure (%expr "defined(1)"))
+  (fiveam:signals parse-failure (%expr "defined(*)")))
+
 (fiveam:test angle-brackets-are-prefix-in-operand-position-and-comparison-after
   (fiveam:is (eq :lo (expr-unary-op (%expr "<a"))))
   (fiveam:is (eq :hi (expr-unary-op (%expr ">a"))))

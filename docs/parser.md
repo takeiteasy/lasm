@@ -143,7 +143,7 @@ Comparisons and logical operators are consumed by
 
 `name(expr)` operators are spelled by the lexer's
 [`function-operators`](lexer.md#clauses) clause; the default lexer provides
-`bank`, `lowcell` and `highcell`.
+`bank`, `lowcell`, `highcell` and `defined`.
 
 #### `bank(label)`
 
@@ -168,6 +168,14 @@ signals `assembly-error`.
 `:cell-width` bits up. On a 16-bit-cell machine, `.cell lowcell($12345678),
 highcell($12345678)` emits `$5678, $1234`. Both need a target machine and
 signal `assembly-error` from `eval-expr-constant`.
+
+#### `defined(name)`
+
+`defined(name)` folds to 1 when `name` is defined and 0 otherwise, without
+evaluating it. The operand must be a plain or local name, not `*` or an
+expression. In a [`.if`](conditionals.md) condition, `name` is defined when a
+constant or label of that name appears above; elsewhere it is defined when it
+is in the final symbol table.
 
 ### Location counter
 
@@ -195,7 +203,7 @@ or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
 (defstruct expr-location)             ; the "*" location-counter symbol (#15)
                                        ; -- no slots; it IS the value
 (defstruct expr-unary op operand)     ; op: :neg :pos :lognot :not :lo :hi :bank
-                                       ;     :lowcell :highcell
+                                       ;     :lowcell :highcell :defined
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash :percent
                                        ;     :lt :gt :le :ge :eq :ne :andand :oror

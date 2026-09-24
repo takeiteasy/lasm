@@ -363,3 +363,104 @@ later: nop" :machine 'instr-test-machine)))
     (fiveam:signals conditional-error
       (assemble ".include \"open-if.asm\"
 .endif" :machine 'instr-test-machine))))
+
+;;; .ifdef, .ifndef and defined()
+
+(defun %ifdef-cells (source)
+  (assembly-cells (assemble source :machine 'instr-test-machine)))
+
+(fiveam:test ifdef-tests-a-constant-defined-above
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".equ x, 1
+.ifdef x
+    nop
+.endif")))
+  (fiveam:is (equalp #() (%ifdef-cells ".ifdef x
+    nop
+.endif"))))
+
+(fiveam:test ifndef-inverts-ifdef
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".ifndef x
+    nop
+.endif")))
+  (fiveam:is (equalp #() (%ifdef-cells ".equ x, 1
+.ifndef x
+    nop
+.endif"))))
+
+(fiveam:test ifdef-supports-else-and-elseif
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".ifdef x
+    ldx #1
+.elseif 1
+    nop
+.else
+    ldx #2
+.endif"))))
+
+(fiveam:test ifdef-sees-a-label-defined-above
+  (fiveam:is (equalp #(#xEA #xEA) (%ifdef-cells "start: nop
+.ifdef start
+    nop
+.endif"))))
+
+(fiveam:test ifdef-does-not-see-a-name-defined-below
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".ifdef later
+    ldx #1
+.endif
+later: nop"))))
+
+(fiveam:test ifdef-qualifies-local-labels
+  (fiveam:is (equalp #(#xEA #xEA) (%ifdef-cells "main: nop
+.loop:
+.ifdef .loop
+    nop
+.endif"))))
+
+(fiveam:test ifdef-sees-set-and-assignment-names
+  (fiveam:is (equalp #(#xEA #xEA) (%ifdef-cells ".set a, 1
+b = 2
+.ifdef a
+    nop
+.endif
+.ifdef b
+    nop
+.endif"))))
+
+(fiveam:test ifdef-requires-a-single-name
+  (fiveam:signals conditional-error (%ifdef-cells ".ifdef
+.endif"))
+  (fiveam:signals conditional-error (%ifdef-cells ".ifdef 1
+.endif"))
+  (fiveam:signals conditional-error (%ifdef-cells ".ifdef a, b
+.endif")))
+
+(fiveam:test ifdef-block-balances-in-a-macro-body
+  (fiveam:signals macro-error
+    (%ifdef-cells ".macro open
+.ifdef x
+.endm")))
+
+(fiveam:test defined-operator-in-a-condition
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".equ x, 3
+.if defined(x) && x > 2
+    nop
+.endif
+.if defined(y) && y > 2
+    ldx #1
+.endif"))))
+
+(fiveam:test defined-guards-an-undefined-name-in-a-condition
+  (fiveam:is (equalp #(#xEA) (%ifdef-cells ".if defined(y) && y
+    ldx #1
+.else
+    nop
+.endif"))))
+
+(fiveam:test macro-name-cannot-be-a-conditional-keyword
+  (fiveam:signals macro-error (%ifdef-cells ".macro .ifdef
+.endm")))
+
+(fiveam:test ifndef-include-guard-includes-a-file-once
+  (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
+    (fiveam:is (equalp #(#xEA)
+                       (assembly-cells (assemble ".include \"guarded.asm\"
+.include \"guarded.asm\"" :machine 'instr-test-machine))))))

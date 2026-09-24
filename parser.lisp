@@ -98,8 +98,9 @@
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :not :lo :hi
-                                             ;          :bank :lowcell :highcell
-                                             ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION)
+                                             ;          :bank :lowcell :highcell :defined
+                                             ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION,
+                                             ; :defined's an EXPR-LABEL)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
                                              ;          :lt :gt :le :ge :eq :ne :andand :oror
@@ -149,6 +150,8 @@
          (when (and (eq (token-value tok) :bank)
                     (not (or (expr-label-p inner) (expr-location-p inner))))
            (%parse-error tok "~A() takes a label or *" (token-text tok)))
+         (when (and (eq (token-value tok) :defined) (not (expr-label-p inner)))
+           (%parse-error tok "~A() takes a name" (token-text tok)))
          (let ((close (%tok tokens next-i end)))
            (unless (eq (%punct-value close) :rparen)
              (%parse-error close "Expected closing parenthesis, found ~:[end of expression~;~:*~S~]"
@@ -351,10 +354,11 @@ and listings. Signals LEX-ERROR or PARSE-FAILURE with source context."
          unit)))))
 
 (defun %conditional-mnemonic (statement)
-  "The conditional-assembly keyword STATEMENT's mnemonic spells (:IF :ELSEIF
-:ELSE :ENDIF), or NIL."
+  "The conditional-assembly keyword STATEMENT's mnemonic spells (:IF :IFDEF
+:IFNDEF :ELSEIF :ELSE :ENDIF), or NIL."
   (let ((mnemonic (statement-mnemonic statement)))
     (and mnemonic
-         (cdr (assoc mnemonic '((".if" . :if) (".elseif" . :elseif)
+         (cdr (assoc mnemonic '((".if" . :if) (".ifdef" . :ifdef) (".ifndef" . :ifndef)
+                                (".elseif" . :elseif)
                                 (".else" . :else) (".endif" . :endif))
                      :test #'string-equal)))))

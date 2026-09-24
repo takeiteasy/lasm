@@ -68,6 +68,12 @@ name collision, invocation, or over-deep expansion."))
       (%macro-error line ".macro: duplicate parameter name"))
     (values name params defaults)))
 
+(defun %reserved-mnemonic-p (name)
+  "True when NAME is a directive or a conditional, macro or include keyword."
+  (or (find-directive-descriptor name)
+      (%conditional-mnemonic (make-statement :mnemonic name))
+      (member name '(".macro" ".endm" ".include") :test #'string-equal)))
+
 (defun %macro-symbol-key (name localp)
   (cons name (and localp t)))
 

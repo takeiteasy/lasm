@@ -70,7 +70,7 @@ their own for a conventional dialect.
   `label-suffix`, `"#"`, or `"="`; `deflexer` rejects any other spelling. A
   `nil`/omitted clause disables hole prefixes.
 - `(function-operators (spelling operator)...)` — the `default` lexer sets
-  `("bank" :bank) ("lowcell" :lowcell) ("highcell" :highcell)`. Each
+  `("bank" :bank) ("lowcell" :lowcell) ("highcell" :highcell) ("defined" :defined)`. Each
   spelling names one of the [function operators](parser.md#function-operators).
   An identifier matching a spelling (any case) and followed by `(` lexes as
   a `:function-operator` token whose `value` is the operator keyword;

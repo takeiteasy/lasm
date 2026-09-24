@@ -5861,6 +5861,17 @@ present, so an error comes from the ENCODING under test."
                      (assembly-cells (assemble ".byte lowcell($1234), highcell($1234)"
                                                :machine 'varying-hole-byte-test-machine)))))
 
+(fiveam:test defined-tests-the-symbol-table
+  (let ((symbols (make-hash-table :test 'equal)))
+    (setf (gethash "a" symbols) 1)
+    (fiveam:is (= 1 (eval-expr (%expr "defined(a)") :symbols symbols)))
+    (fiveam:is (= 0 (eval-expr (%expr "defined(b)") :symbols symbols)))
+    (fiveam:is (= 0 (eval-expr (%expr "defined(a)"))))))
+
+(fiveam:test defined-inside-a-logical-operator
+  (let ((symbols (make-hash-table :test 'equal)))
+    (fiveam:is (= 0 (eval-expr (%expr "defined(x) && x > 1") :symbols symbols)))))
+
 (fiveam:test lowcell-and-highcell-need-a-machine
   (fiveam:signals assembly-error (eval-expr-constant (%expr "lowcell(1)")))
   (fiveam:signals assembly-error (eval-expr-constant (%expr "highcell(1)"))))
