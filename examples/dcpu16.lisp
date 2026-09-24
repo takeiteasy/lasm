@@ -180,3 +180,9 @@ result: .byte 0  ; one 16-bit cell -- .word would reserve two (#53)")
       (assert (= 1005 (regref m 'reg 0)))
       (assert (= 1005 (mref m 'ram (gethash "result" (assembly-symbols assembly)))))
       (format t "~%All assertions passed.~%"))))
+
+;; lowcell()/highcell() split a 32-bit value into two 16-bit cells.
+(let ((cells (assembly-cells
+              (assemble ".byte lowcell($12345678), highcell($12345678)" :machine 'dcpu16foo))))
+  (format t "~%lowcell/highcell of $12345678: ~{$~4,'0X~^ ~}~%" (coerce cells 'list))
+  (assert (equalp #(#x5678 #x1234) cells)))

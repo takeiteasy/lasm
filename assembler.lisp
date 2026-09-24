@@ -1644,6 +1644,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
     ;; (operand/assignment folding) and %BIND-SYMBOL!'s alias-collision
     ;; check, for the whole of this assembly.
     (let* ((cell-width (%machine-cell-width machine memory))
+           (*cell-width* cell-width)
            (endian (%machine-endian machine memory))
            (*banked-regions*
              (let ((element (descriptor-element (find-machine-descriptor machine)

@@ -5831,3 +5831,32 @@ present, so an error comes from the ENCODING under test."
                             (for-choice (src nb-deep nb-far nb-idx) (operand x1 :width 1) (operand x2 :width 1)))
                           (semantics nil)))))))
     (fiveam:is (search "varies in hole count" text))))
+
+;;; lowcell()/highcell() and comparison operators
+
+(fiveam:test lowcell-and-highcell-split-by-the-machine-cell-width
+  (fiveam:is (equalp #(#x5678 #x1234)
+                     (assembly-cells (assemble ".cell lowcell($12345678), highcell($12345678)"
+                                               :machine 'wordaddr-test-machine))))
+  (fiveam:is (equalp #(#x34 #x12)
+                     (assembly-cells (assemble ".byte lowcell($1234), highcell($1234)"
+                                               :machine 'varying-hole-byte-test-machine)))))
+
+(fiveam:test lowcell-and-highcell-need-a-machine
+  (fiveam:signals assembly-error (eval-expr-constant (%expr "lowcell(1)")))
+  (fiveam:signals assembly-error (eval-expr-constant (%expr "highcell(1)"))))
+
+(fiveam:test comparison-operators-fold-to-one-or-zero
+  (fiveam:is (equalp #(1 0 1 0 1 1 0 1 1 0)
+                     (assembly-cells
+                      (assemble ".byte 2 > 1, 1 > 2, 1 < 2, 2 < 1, 2 >= 2, 2 <= 2, 1 == 2, 1 != 2, 1 | 2 == 3, $F & 1 == 0"
+                                :machine 'varying-hole-byte-test-machine)))))
+
+(fiveam:test angle-bracket-delimiters-survive-comparison-operators
+  (dolist (case '(("nbd <1, 2>" #(11 1 1 2))
+                  ("nbd <(1 > 0), 2>" #(11 1 1 2))
+                  ("nbd <1 < 2, 3>" #(11 1 1 3))
+                  ("nbd <3 - 1, [2, 3]>" #(11 2 2 2 3))))
+    (destructuring-bind (source cells) case
+      (fiveam:is (equalp cells (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine)))
+                 "~A" source))))

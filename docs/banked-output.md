@@ -43,7 +43,7 @@ far:    hlt
 
 The label must lie in a banked region; a main-image label or an
 `.equ`/`.set` name signals `assembly-error`. The operator's spelling is the
-lexer's [`bank-operator`](lexer.md#clauses) clause.
+lexer's [`function-operators`](lexer.md#clauses) clause.
 
 ## `bank(*)`
 

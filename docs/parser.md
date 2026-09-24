@@ -97,26 +97,45 @@ doesn't recognize as an operator).
 
 | Level | Operators |
 |---|---|
-| 1 | `\|` |
-| 2 | `^` |
-| 3 | `&` |
-| 4 | `<<` `>>` |
-| 5 | `+` `-` |
-| 6 | `*` `/` `%` |
-| 7 | prefix `-` `+` `~` `<` `>` |
-| 8 | primary: number, label, location counter, `bank( label )`, `bank( * )`, `( expr )` |
+| 1 | `<` `>` `<=` `>=` `==` `!=` |
+| 2 | `\|` |
+| 3 | `^` |
+| 4 | `&` |
+| 5 | `<<` `>>` |
+| 6 | `+` `-` |
+| 7 | `*` `/` `%` |
+| 8 | prefix `-` `+` `~` `<` `>` |
+| 9 | primary: number, label, location counter, function operator, `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
 the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
 regardless of the target machine's `:cell-width` — they're a byte-packing
 convenience, not an encoding-width-relative operator. On a wide-cell
-machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`.
+machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`. For a
+split relative to the cell width, use
+[`lowcell`/`highcell`](#lowcellexpr--highcellexpr).
 
-### `bank(label)`
+### Comparisons
+
+`<` `>` `<=` `>=` `==` `!=` fold to `1` when true and `0` when false. They
+bind looser than every other operator, so `a & m == 0` reads as
+`(a & m) == 0`, and they are left-associative.
+
+`<` and `>` are prefix low/high-byte operators in operand position and
+comparisons after an operand: `<a` is the low byte, `a < b` a comparison, and
+`a < <b` both. Addressing-mode patterns that use `<`/`>` as delimiters still
+match; see [Addressing modes](modes.md#matching-and-backtracking).
+
+### Function operators
+
+`name(expr)` operators are spelled by the lexer's
+[`function-operators`](lexer.md#clauses) clause; the default lexer provides
+`bank`, `lowcell` and `highcell`.
+
+#### `bank(label)`
 
 `bank(label)` folds to the bank a label was defined in under
-[`.bank`](banked-output.md#bank). The spelling comes from the lexer's
-[`bank-operator`](lexer.md#clauses) clause. The operand must be a label
+[`.bank`](banked-output.md#bank). The operand must be a label
 (local labels included). Forward references work like any other label.
 
 ```
@@ -129,6 +148,15 @@ signals `assembly-error`.
 
 `bank(*)` folds to the bank of the current address; see
 [`bank(*)`](banked-output.md#bank-1).
+
+#### `lowcell(expr)` / `highcell(expr)`
+
+`lowcell` keeps the low `:cell-width` bits of a value and `highcell` the next
+`:cell-width` bits up. On a 16-bit-cell machine, `.cell lowcell($12345678),
+highcell($12345678)` emits `$5678, $1234`. Both need a target machine and
+signal `assembly-error` from `eval-expr-constant`.
+
+### Location counter
 
 A bare `*` in primary position is the location-counter symbol (`expr-location`
 below, #15) rather than multiplication: `%parse-primary` only reaches that
@@ -154,8 +182,10 @@ or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
 (defstruct expr-location)             ; the "*" location-counter symbol (#15)
                                        ; -- no slots; it IS the value
 (defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi :bank
+                                       ;     :lowcell :highcell
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash :percent
+                                       ;     :lt :gt :le :ge :eq :ne
 ```
 
 `expr-label-localp` is set from the lexer's `local-label-prefix` (`token-localp`,

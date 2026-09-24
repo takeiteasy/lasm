@@ -98,9 +98,11 @@
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi :bank
+                                             ;          :lowcell :highcell
                                              ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
+                                             ;          :lt :gt :le :ge :eq :ne
 
 ;;; Shared error helper
 
@@ -114,8 +116,9 @@
 ;; Left-associative binary operator precedence, lowest-binding first. All
 ;; unary operators bind tighter than any binary operator.
 (defparameter *binary-precedence*
-  '((:pipe . 1) (:caret . 2) (:amp . 3) (:shl . 4) (:shr . 4)
-    (:plus . 5) (:minus . 5) (:star . 6) (:slash . 6) (:percent . 6)))
+  '((:lt . 1) (:gt . 1) (:le . 1) (:ge . 1) (:eq . 1) (:ne . 1)
+    (:pipe . 2) (:caret . 3) (:amp . 4) (:shl . 5) (:shr . 5)
+    (:plus . 6) (:minus . 6) (:star . 7) (:slash . 7) (:percent . 7)))
 
 (defparameter *unary-ops*
   '((:minus . :neg) (:plus . :pos) (:tilde . :lognot) (:lt . :lo) (:gt . :hi)))
@@ -138,17 +141,18 @@
                (1+ i)))
       ((eq (token-type tok) :location-counter)
        (values (make-expr-location) (1+ i)))
-      ((eq (token-type tok) :bank-operator)
+      ((eq (token-type tok) :function-operator)
        (unless (eq (%punct-value (%tok tokens (1+ i) end)) :lparen)
          (%parse-error tok "Expected \"(\" after ~A" (token-text tok)))
        (multiple-value-bind (inner next-i) (%parse-binary tokens (+ i 2) end 0)
-         (unless (or (expr-label-p inner) (expr-location-p inner))
+         (when (and (eq (token-value tok) :bank)
+                    (not (or (expr-label-p inner) (expr-location-p inner))))
            (%parse-error tok "~A() takes a label or *" (token-text tok)))
          (let ((close (%tok tokens next-i end)))
            (unless (eq (%punct-value close) :rparen)
              (%parse-error close "Expected closing parenthesis, found ~:[end of expression~;~:*~S~]"
                             (and close (token-text close))))
-           (values (make-expr-unary :op :bank :operand inner) (1+ next-i)))))
+           (values (make-expr-unary :op (token-value tok) :operand inner) (1+ next-i)))))
       ((eq (%punct-value tok) :star)
        ;; The location-counter symbol (#15): "*" in operand/primary position
        ;; is the current address, not multiplication -- precedence climbing
@@ -267,8 +271,9 @@ from START on, with one :HOLE-PREFIX token whose value is the identifier."
       (setf label (token-value (aref tokens pos))
             label-localp (token-localp (aref tokens pos)))
       (incf pos 2))
-    (when (and (< pos len) (eq (token-type (aref tokens pos)) :bank-operator))
-      (setf (token-type (aref tokens pos)) :identifier))
+    (when (and (< pos len) (eq (token-type (aref tokens pos)) :function-operator))
+      (setf (token-type (aref tokens pos)) :identifier
+            (token-value (aref tokens pos)) (token-text (aref tokens pos))))
     (setf tokens (%collapse-hole-prefixes tokens pos hole-prefix-separator)
           len (length tokens))
     (cond

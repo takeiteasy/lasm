@@ -69,17 +69,20 @@ their own for a conventional dialect.
   prefix"](modes.md#forcing-one-hole-with-a-prefix)). It must be the
   `label-suffix`, `"#"`, or `"="`; `deflexer` rejects any other spelling. A
   `nil`/omitted clause disables hole prefixes.
-- `(bank-operator string)` — e.g. `"bank"` (the `default` lexer's setting).
-  The identifier spelling of the [`bank()`](parser.md#banklabel)
-  operator. An identifier matching it (any case) and followed by `(` lexes
-  as a `:bank-operator` token; otherwise it is an ordinary identifier. It
-  must be a valid identifier under `ident-chars`. A `nil`/omitted clause
-  disables the operator.
+- `(function-operators (spelling operator)...)` — the `default` lexer sets
+  `("bank" :bank) ("lowcell" :lowcell) ("highcell" :highcell)`. Each
+  spelling names one of the [function operators](parser.md#function-operators).
+  An identifier matching a spelling (any case) and followed by `(` lexes as
+  a `:function-operator` token whose `value` is the operator keyword;
+  otherwise it is an ordinary identifier. Spellings must be valid
+  identifiers under `ident-chars` and unique. An omitted clause disables
+  every function operator.
 - `(location-counter string)` — one optional nonempty punctuation spelling,
   such as `"$"` or `"."`. It denotes the current address when it is a
   complete token. `$FF` remains a hex number and `.loop` remains an
-  identifier. `*` remains available in every lexer. Operator, comment,
-  string, and label delimiters cannot be used as the alias.
+  identifier. `*` remains available in every lexer. Operator (including any
+  prefix of one, such as `!`), comment, string, and label delimiters cannot
+  be used as the alias.
 
 ## Tokens
 
@@ -99,8 +102,9 @@ their own for a conventional dialect.
 
 Punctuation tokens carry a keyword `value`: `:plus :minus :star :slash :percent :amp
 :pipe :caret :tilde :shl :shr :lparen :rparen :lbracket :rbracket :comma :lt
-:gt :hash :equals`. Two-character operators (`<<`, `>>`) win maximal munch
-over their single-character prefixes. `#` has no meaning to the lexer itself
+:gt :le :ge :eq :ne :hash :equals`. Two-character operators (`<<`, `>>`,
+`<=`, `>=`, `==`, `!=`) win maximal munch over their single-character
+prefixes. `#` has no meaning to the lexer itself
 — it is recognized so addressing-mode literal patterns (e.g. 6502-style
 immediate `#expr`) have a token to match against once `defmode` exists (M2).
 `[`/`]` (`:lbracket`/`:rbracket`) likewise have no meaning to the expression

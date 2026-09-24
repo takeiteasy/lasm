@@ -194,11 +194,16 @@ sta b"))))
   (fiveam:is (null (lexer-descriptor-hole-prefix-separator
                     (build-lexer-descriptor 'no-prefix '((label-suffix ":")))))))
 
-(fiveam:test bank-operator-lexes-only-before-a-paren
-  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+(fiveam:test function-operator-lexes-only-before-a-paren
+  (fiveam:is (equal '(:function-operator :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "bank(x)")))))
-  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+  (fiveam:is (equal '(:function-operator :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "BANK (x)")))))
+  (fiveam:is (equal '(:function-operator :punctuation :number :punctuation)
+                    (%types (%non-eof (tokenize "lowcell(1)")))))
+  (fiveam:is (equal '(:function-operator :punctuation :number :punctuation)
+                    (%types (%non-eof (tokenize "HighCell(1)")))))
+  (fiveam:is (equal '(:identifier) (%types (%non-eof (tokenize "lowcell")))))
   (fiveam:is (equal '(:identifier :punctuation)
                     (%types (%non-eof (tokenize "bank +")))))
   (fiveam:is (equal '(:identifier :label-suffix)
@@ -206,23 +211,44 @@ sta b"))))
   (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "banks(x)"))))))
 
-(fiveam:test bank-operator-clause
-  (fiveam:is (equal "bank" (lexer-descriptor-bank-operator (find-lexer-descriptor 'default))))
+(fiveam:test function-operators-clause
+  (fiveam:is (equal '(("bank" . :bank) ("lowcell" . :lowcell) ("highcell" . :highcell))
+                    (lexer-descriptor-function-operators (find-lexer-descriptor 'default))))
   (deflexer far-syntax
     (number-formats (:dec :default))
     (ident-chars :alnum "_")
-    (bank-operator "far"))
-  (fiveam:is (equal '(:bank-operator :punctuation :identifier :punctuation)
+    (function-operators ("far" :bank) ("lo" :lowcell)))
+  (fiveam:is (equal '(:function-operator :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "far(x)" :lexer 'far-syntax)))))
+  (fiveam:is (equal '(:lowcell)
+                    (subseq (mapcar #'token-value (%non-eof (tokenize "lo(x)" :lexer 'far-syntax))) 0 1)))
   (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "bank(x)" :lexer 'far-syntax)))))
   (deflexer no-bank-syntax
     (number-formats (:dec :default))
     (ident-chars :alnum "_"))
-  (fiveam:is (null (lexer-descriptor-bank-operator (find-lexer-descriptor 'no-bank-syntax))))
+  (fiveam:is (null (lexer-descriptor-function-operators (find-lexer-descriptor 'no-bank-syntax))))
   (fiveam:is (equal '(:identifier :punctuation :identifier :punctuation)
                     (%types (%non-eof (tokenize "bank(x)" :lexer 'no-bank-syntax)))))
   (fiveam:signals error
-    (build-lexer-descriptor 'bad-bank '((ident-chars :alnum "_") (bank-operator "1st"))))
+    (build-lexer-descriptor 'bad-op '((ident-chars :alnum "_") (function-operators ("1st" :bank)))))
   (fiveam:signals error
-    (build-lexer-descriptor 'bad-bank '((ident-chars :alnum "_") (bank-operator "a-b")))))
+    (build-lexer-descriptor 'bad-op '((ident-chars :alnum "_") (function-operators ("a-b" :bank)))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-op '((function-operators ("x" :nonsense)))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-op '((function-operators ("x" :bank) ("X" :lowcell))))))
+
+(fiveam:test comparison-punctuators-use-maximal-munch
+  (fiveam:is (equal '(:le :ge :eq :ne :lt :gt :equals :shl :shr)
+                    (mapcar #'token-value (%non-eof (tokenize "<= >= == != < > = << >>")))))
+  (fiveam:is (equal '(:lt :equals 1)
+                    (subseq (mapcar #'token-value (%non-eof (tokenize "< = 1"))) 0 3))))
+
+(fiveam:test location-counter-cannot-shadow-a-punctuator
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-lc '((location-counter "!"))))
+  (fiveam:signals error
+    (build-lexer-descriptor 'bad-lc '((location-counter "<="))))
+  (fiveam:finishes
+    (build-lexer-descriptor 'ok-lc '((location-counter "$")))))

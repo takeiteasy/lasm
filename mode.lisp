@@ -680,32 +680,45 @@ element on the winning path whose pick was decided by declaration order."
                              (setf last-failure-token (%tok tokens i end)
                                    last-message (format nil "Expected an alias of register bank ~S"
                                                         register)))))
-                (handler-case
-                    (multiple-value-bind (ast next-i-hole)
-                        (parse-expression tokens :start start :end end)
-                      (try ast next-i-hole)
-                      ;; The expression parser intentionally remains greedy. A literal
-                      ;; plus immediately following this hole is the one contextual
-                      ;; separator for which mode matching retries a shorter prefix.
-                      (when (and (first rest-elements)
-                                 (eq (first (first rest-elements)) :literal)
-                                 (string= (second (first rest-elements)) "+"))
-                        (loop for split from (1+ start) below next-i-hole
-                              when (eq (%punct-value (%tok tokens split end)) :plus)
-                              do (handler-case
-                                     (multiple-value-bind (short short-next)
-                                         (parse-expression tokens :start start :end split)
-                                       (when (= short-next split)
-                                         (try short short-next)))
-                                   (parse-failure () nil))))
-                      (if best
-                          (values-list best)
-                          (values nil nil nil nil last-failure-token last-message)))
-                  (parse-failure (c)
-                    (values nil nil nil nil
-                            (make-token :line (lasm-syntax-error-line c)
-                                        :column (lasm-syntax-error-column c))
-                            (lasm-syntax-error-message c)))))))
+                (flet ((retry-shorter (predicate upto)
+                         ;; Retry shorter expressions ending before a "+", "<" or ">"
+                         ;; that a delimiter literal may own rather than the operator.
+                         (loop for split from (1+ start) below upto
+                               when (funcall predicate (%punct-value (%tok tokens split end)))
+                               do (handler-case
+                                      (multiple-value-bind (short short-next)
+                                          (parse-expression tokens :start start :end split)
+                                        (when (= short-next split)
+                                          (try short short-next)))
+                                    (parse-failure () nil)))))
+                  (handler-case
+                      (multiple-value-bind (ast next-i-hole)
+                          (handler-case (parse-expression tokens :start start :end end)
+                            (parse-failure (c)
+                              ;; A trailing "<"/">" delimiter parses as a comparison
+                              ;; with no right operand.
+                              (retry-shorter (lambda (p) (member p '(:lt :gt))) end)
+                              (if best (return-from %match-mode-elements (values-list best)) (error c))))
+                        (try ast next-i-hole)
+                        ;; The expression parser intentionally remains greedy. A literal
+                        ;; plus, less-than or greater-than immediately following this
+                        ;; hole is a contextual separator for which mode matching
+                        ;; retries a shorter prefix.
+                        (when (and (first rest-elements)
+                                   (eq (first (first rest-elements)) :literal))
+                          (let ((literal (second (first rest-elements))))
+                            (cond ((string= literal "+")
+                                   (retry-shorter (lambda (p) (eq p :plus)) next-i-hole))
+                                  ((member literal '("<" ">") :test #'string=)
+                                   (retry-shorter (lambda (p) (member p '(:lt :gt))) next-i-hole)))))
+                        (if best
+                            (values-list best)
+                            (values nil nil nil nil last-failure-token last-message)))
+                    (parse-failure (c)
+                      (values nil nil nil nil
+                              (make-token :line (lasm-syntax-error-line c)
+                                          :column (lasm-syntax-error-column c))
+                              (lasm-syntax-error-message c))))))))
           (:one-of
            (let* ((tok (%tok tokens i end))
                   (alt-prefix (and tok (eq (token-type tok) :hole-prefix)

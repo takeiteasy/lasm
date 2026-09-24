@@ -273,3 +273,32 @@ jmp start")))
   (let ((statement (first (parse "bank (x)"))))
     (fiveam:is (equal "bank" (statement-mnemonic statement)))
     (fiveam:is (= 1 (length (statement-operands statement))))))
+
+(fiveam:test function-operators-parse-to-unaries
+  (let ((ast (%expr "lowcell(a + 1)")))
+    (fiveam:is (eq :lowcell (expr-unary-op ast)))
+    (fiveam:is (expr-binary-p (expr-unary-operand ast))))
+  (fiveam:is (eq :highcell (expr-unary-op (%expr "highcell($12345678)"))))
+  (fiveam:signals parse-failure (%expr "lowcell(a")))
+
+(fiveam:test angle-brackets-are-prefix-in-operand-position-and-comparison-after
+  (fiveam:is (eq :lo (expr-unary-op (%expr "<a"))))
+  (fiveam:is (eq :hi (expr-unary-op (%expr ">a"))))
+  (let ((ast (%expr "a < b")))
+    (fiveam:is (eq :lt (expr-binary-op ast))))
+  (let ((ast (%expr "a < <b")))
+    (fiveam:is (eq :lt (expr-binary-op ast)))
+    (fiveam:is (eq :lo (expr-unary-op (expr-binary-right ast)))))
+  (fiveam:is (equal '(:le :ge :eq :ne :gt)
+                    (mapcar (lambda (text) (expr-binary-op (%expr text)))
+                            '("a <= b" "a >= b" "a == b" "a != b" "a > b")))))
+
+(fiveam:test comparisons-bind-below-every-other-operator
+  (let ((ast (%expr "a & m == 0")))
+    (fiveam:is (eq :eq (expr-binary-op ast)))
+    (fiveam:is (eq :amp (expr-binary-op (expr-binary-left ast)))))
+  (let ((ast (%expr "a | b < c | d")))
+    (fiveam:is (eq :lt (expr-binary-op ast))))
+  (let ((ast (%expr "1 < 2 < 3")))
+    (fiveam:is (eq :lt (expr-binary-op ast)))
+    (fiveam:is (eq :lt (expr-binary-op (expr-binary-left ast))))))

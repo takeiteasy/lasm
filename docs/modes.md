@@ -281,8 +281,10 @@ different things — [Varying hole counts across
 alternatives](#varying-hole-counts-across-alternatives) above is exactly
 this shape, one alternative's own extra hole holding the offset. Spelling
 that second hole `"+"`-separated, so it reads as `[register + offset]`.
-When a mode's next literal is `+`, matching retries expression boundaries at
-that operator; ordinary expression parsing remains greedy elsewhere.
+When a mode's next literal is `+`, `<` or `>`, matching retries expression
+boundaries at that operator, so `"<" expr ">"` still matches `<a + 1>`
+despite `>` also being the comparison operator; ordinary expression parsing
+remains greedy elsewhere.
 
 Disassembly mirrors this split: a byte-encoded machine's decoded word
 renders a `one-of`'s first alternative unless its descriptor declares a

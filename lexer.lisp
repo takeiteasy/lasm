@@ -18,7 +18,8 @@
 
 (defstruct token
   type    ; :identifier :number :string :punctuation :label-suffix :newline :eof
-          ; :bank-operator (the bank-operator spelling followed by "(")
+          ; :function-operator (a function-operators spelling followed by "(";
+          ; VALUE is the operator keyword)
           ; :hole-prefix (built by the parser from NAME + hole-prefix-separator)
   value   ; parsed value: string (identifier/string), integer (number),
           ; keyword (punctuation/label-suffix)
@@ -52,7 +53,7 @@
   ident-extra-chars     ; string of non-alphanumeric chars allowed in identifiers
   line-continuation     ; string, or nil to disable line continuation
   location-counter     ; optional standalone spelling of the location counter
-  bank-operator         ; identifier spelling of the bank(label) operator, or nil
+  function-operators    ; alist of (spelling . keyword) for NAME( operators
   hole-prefix-separator ; string, or nil to disable per-hole forcing prefixes
                         ; -- separates a suffix name from the operand it
                         ; forces, e.g. the ":" in "#w:5". Must lex as its
@@ -104,10 +105,48 @@
       (error "Unsupported ident-chars class ~S (only :alnum is implemented)" class))
     extra))
 
+;; Fixed punctuator table, checked in this order (two-char operators before
+;; their single-char prefixes, so "<<"/"<=" win maximal munch over "<").
+;; "#" has no meaning to the lexer or expression parser -- it is here so
+;; addressing-mode literal patterns (LASM-plan.md sec. 3.4's immediate mode,
+;; "#" expr) have a token to match against once #9 implements DEFMODE. "="
+;; likewise has no meaning to the expression parser (it's absent from both
+;; *BINARY-PRECEDENCE* and *UNARY-OPS*, parser.lisp) -- it exists only so
+;; %PARSE-LINE (parser.lisp, #35) can recognize "name = value" as sugar for
+;; ".equ name, value".
+;; "[" / "]" (#103) have no meaning to the lexer or expression parser either,
+;; same as "#" above -- they exist so an addressing-mode pattern (defmode,
+;; mode.lisp's ONE-OF alternatives) has tokens to match e.g. an indirect
+;; "[" expr "]" operand form against.
+(defparameter *punctuators*
+  '(("<<" . :shl) (">>" . :shr)
+    ("<=" . :le) (">=" . :ge) ("==" . :eq) ("!=" . :ne)
+    ("|" . :pipe) ("^" . :caret) ("&" . :amp)
+    ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash)
+    ("%" . :percent) ("~" . :tilde)
+    ("(" . :lparen) (")" . :rparen) ("[" . :lbracket) ("]" . :rbracket)
+    ("," . :comma) ("#" . :hash)
+    ("<" . :lt) (">" . :gt) ("=" . :equals)))
+
+(defparameter *function-operator-keywords* '(:bank :lowcell :highcell))
+
+(defun parse-function-operators-clause (name entries)
+  (let (seen)
+    (mapcar (lambda (entry)
+              (unless (and (consp entry) (= 2 (length entry))
+                           (member (second entry) *function-operator-keywords*))
+                (error "DEFLEXER ~S: function-operators entry ~S must be (spelling ~{~S~^ | ~})"
+                       name entry *function-operator-keywords*))
+              (when (member (first entry) seen :test #'equalp)
+                (error "DEFLEXER ~S: duplicate function operator ~S" name (first entry)))
+              (cl:push (first entry) seen)
+              (cons (first entry) (second entry)))
+            entries)))
+
 (defun build-lexer-descriptor (name clauses)
   (let (comment-styles number-formats label-suffix local-label-prefix
         string-delim (ident-extra-chars "") line-continuation mode-suffix-separator
-        hole-prefix-separator bank-operator
+        hole-prefix-separator function-operators
         location-counter location-counter-clause-p)
     (dolist (clause clauses)
       (case (first clause)
@@ -120,7 +159,7 @@
         (line-continuation (setf line-continuation (second clause)))
         (mode-suffix-separator (setf mode-suffix-separator (second clause)))
         (hole-prefix-separator (setf hole-prefix-separator (second clause)))
-        (bank-operator (setf bank-operator (second clause)))
+        (function-operators (setf function-operators (parse-function-operators-clause name (rest clause))))
         (location-counter
          (setf location-counter-clause-p t location-counter (second clause))
          (unless (= 2 (length clause))
@@ -143,23 +182,25 @@ characters already listed in ident-chars" name mode-suffix-separator))
                    (or (equal hole-prefix-separator label-suffix)
                        (find hole-prefix-separator '("#" "=") :test #'string=)))
         (error "DEFLEXER ~S: hole-prefix-separator ~S must be the label-suffix, \"#\" or \"=\"" name hole-prefix-separator)))
-    (when bank-operator
-      (unless (and (stringp bank-operator) (plusp (length bank-operator))
-                   (or (alpha-char-p (char bank-operator 0))
-                       (find (char bank-operator 0) ident-extra-chars))
-                   (every (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)))
-                          bank-operator))
-        (error "DEFLEXER ~S: bank-operator ~S must be a valid identifier" name bank-operator)))
+    (dolist (entry function-operators)
+      (let ((spelling (car entry)))
+        (unless (and (stringp spelling) (plusp (length spelling))
+                     (or (alpha-char-p (char spelling 0))
+                         (find (char spelling 0) ident-extra-chars))
+                     (every (lambda (c) (or (alphanumericp c) (find c ident-extra-chars)))
+                            spelling))
+          (error "DEFLEXER ~S: function operator ~S must be a valid identifier" name spelling))))
     (when (find #\Null ident-extra-chars)
       (error "DEFLEXER ~S: NUL is reserved for scoped symbol keys" name))
     (when location-counter-clause-p
       (unless (and (stringp location-counter) (plusp (length location-counter))
                    (every (lambda (c) (and (graphic-char-p c) (not (alphanumericp c))))
                           location-counter)
-                   (not (member location-counter
-                                '("+" "-" "*" "/" "%" "&" "|" "^" "~"
-                                  "<" ">" "<<" ">>" "(" ")" "[" "]" "," "#" "=")
-                                :test #'string=))
+                   (notany (lambda (entry)
+                             (and (<= (length location-counter) (length (car entry)))
+                                  (string= location-counter (car entry)
+                                           :end2 (length location-counter))))
+                           *punctuators*)
                    (not (equal location-counter label-suffix))
                    (not (equal location-counter string-delim))
                    (not (equal location-counter line-continuation))
@@ -173,7 +214,7 @@ characters already listed in ident-chars" name mode-suffix-separator))
                             :ident-extra-chars ident-extra-chars
                             :line-continuation line-continuation
                             :location-counter location-counter
-                            :bank-operator bank-operator
+                            :function-operators function-operators
                             :mode-suffix-separator mode-suffix-separator
                             :hole-prefix-separator hole-prefix-separator)))
 
@@ -187,13 +228,14 @@ characters already listed in ident-chars" name mode-suffix-separator))
      (ident-chars :alnum extra-chars-string)
      (line-continuation string)
      (location-counter string)
-     (bank-operator string)
+     (function-operators (spelling operator)...)
      (mode-suffix-separator string)
      (hole-prefix-separator string)
 
-BANK-OPERATOR is the identifier spelling of the bank(label) operator. An
-identifier matching it (case-insensitively) and followed by \"(\" lexes as a
-:BANK-OPERATOR token. NIL or omitted disables the operator.
+FUNCTION-OPERATORS names the NAME(expr) operators, each OPERATOR one of
+:BANK, :LOWCELL or :HIGHCELL. An identifier matching a SPELLING
+(case-insensitively) and followed by \"(\" lexes as a :FUNCTION-OPERATOR
+token. Omitted disables them all.
 
 HOLE-PREFIX-SEPARATOR separates a suffix name from the operand hole it
 forces, e.g. the \":\" in \"#w:5\". It must be the label-suffix, \"#\" or \"=\".
@@ -221,7 +263,7 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   (line-continuation "\\")
   (mode-suffix-separator ".")
   (hole-prefix-separator ":")
-  (bank-operator "bank"))
+  (function-operators ("bank" :bank) ("lowcell" :lowcell) ("highcell" :highcell)))
 
 ;;; Tokenizer
 
@@ -376,15 +418,14 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
               do (vector-push-extend ch chars) (%advance state))
         (let* ((text (coerce chars 'simple-string))
                (prefix (lexer-descriptor-local-label-prefix descriptor))
-               (operator (lexer-descriptor-bank-operator descriptor)))
-          (make-token :type (if (and operator (string-equal text operator)
-                                     (eql #\( (loop for k from 0
-                                                    for ch = (%peek state k)
-                                                    unless (member ch '(#\Space #\Tab))
-                                                      return ch)))
-                                :bank-operator
-                                :identifier)
-                      :value text :text text :line line :column col
+               (operator (and (eql #\( (loop for k from 0
+                                              for ch = (%peek state k)
+                                              unless (member ch '(#\Space #\Tab))
+                                                return ch))
+                              (cdr (assoc text (lexer-descriptor-function-operators descriptor)
+                                          :test #'string-equal)))))
+          (make-token :type (if operator :function-operator :identifier)
+                      :value (or operator text) :text text :line line :column col
                       :localp (and prefix (plusp (length prefix))
                                    (>= (length text) (length prefix))
                                    (string= prefix text :end2 (length prefix)))))))))
@@ -405,28 +446,6 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
       (let ((line (lex-state-line state)) (col (lex-state-col state)))
         (%advance state (length suf))
         (make-token :type :label-suffix :value :label-suffix :text suf :line line :column col)))))
-
-;; Fixed punctuator table, checked in this order (two-char operators before
-;; their single-char prefixes, so "<<"/">>" win maximal munch over "<"/">").
-;; "#" has no meaning to the lexer or expression parser -- it is here so
-;; addressing-mode literal patterns (LASM-plan.md sec. 3.4's immediate mode,
-;; "#" expr) have a token to match against once #9 implements DEFMODE. "="
-;; likewise has no meaning to the expression parser (it's absent from both
-;; *BINARY-PRECEDENCE* and *UNARY-OPS*, parser.lisp) -- it exists only so
-;; %PARSE-LINE (parser.lisp, #35) can recognize "name = value" as sugar for
-;; ".equ name, value".
-;; "[" / "]" (#103) have no meaning to the lexer or expression parser either,
-;; same as "#" above -- they exist so an addressing-mode pattern (defmode,
-;; mode.lisp's ONE-OF alternatives) has tokens to match e.g. an indirect
-;; "[" expr "]" operand form against.
-(defparameter *punctuators*
-  '(("<<" . :shl) (">>" . :shr)
-    ("|" . :pipe) ("^" . :caret) ("&" . :amp)
-    ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash)
-    ("%" . :percent) ("~" . :tilde)
-    ("(" . :lparen) (")" . :rparen) ("[" . :lbracket) ("]" . :rbracket)
-    ("," . :comma) ("#" . :hash)
-    ("<" . :lt) (">" . :gt) ("=" . :equals)))
 
 (defun %match-punctuation (state descriptor)
   (declare (ignore descriptor))

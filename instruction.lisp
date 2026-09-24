@@ -316,6 +316,9 @@ than each caller assuming a byte opcode."
 (defvar *register-aliases* nil)
 (defvar *register-alias-elements* nil)
 
+;; Target cell width in bits, bound by the assembler for lowcell()/highcell().
+(defvar *cell-width* nil)
+
 ;; Label key -> bank (NIL for a label in the main image), bound by the
 ;; assembler for bank(label). NIL outside of ASSEMBLE-STATEMENTS.
 (defvar *label-banks* nil)
@@ -401,7 +404,14 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
          ;; Fixed 8-bit split, independent of the machine's :CELL-WIDTH (#67) --
          ;; a byte-packing convenience, not a cell-width-relative operator.
          (:lo (logand v #xff))
-         (:hi (logand (ash v -8) #xff)))))
+         (:hi (logand (ash v -8) #xff))
+         ((:lowcell :highcell)
+          (unless *cell-width*
+            (error 'assembly-error
+                   :message (format nil "~(~A~)() needs a target machine" (expr-unary-op ast))))
+          (if (eq (expr-unary-op ast) :lowcell)
+              (ldb (byte *cell-width* 0) v)
+              (ldb (byte *cell-width* *cell-width*) v))))))
     (expr-binary
      (let ((l (eval-expr (expr-binary-left ast) :symbols symbols :pc pc))
            (r (eval-expr (expr-binary-right ast) :symbols symbols :pc pc)))
@@ -415,7 +425,13 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
          (:minus (- l r))
          (:star (* l r))
          (:slash (truncate l r))
-         (:percent (rem l r)))))))
+         (:percent (rem l r))
+         (:lt (if (< l r) 1 0))
+         (:gt (if (> l r) 1 0))
+         (:le (if (<= l r) 1 0))
+         (:ge (if (>= l r) 1 0))
+         (:eq (if (= l r) 1 0))
+         (:ne (if (/= l r) 1 0)))))))
 
 (defun eval-expr-constant (ast &key pc)
   "Fold AST to an integer with no symbol table -- the constant-only case of
