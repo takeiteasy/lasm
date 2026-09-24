@@ -91,7 +91,9 @@ whether or not it is mapped in, leaving the mapping and PC untouched.
 Signals if ORIGIN is not in a banked region or CELLS run past its end.
 
 An ASSEMBLY that placed output in banks with .BANK also has each of those
-banks filled, without changing the mapping, when BANK is not given."
+banks filled, without changing the mapping, when BANK is not given. Signals
+if main-image output lies in a banked window whose mapped bank the assembly
+also has an image for, since that image would replace it."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
@@ -103,6 +105,8 @@ banks filled, without changing the mapping, when BANK is not given."
         (unless (= target-width source-width)
           (error "LOAD-PROGRAM on machine ~S: assembly's cell width (~D) does not ~
 match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
+    (when (and assembly-p (not bank))
+      (%check-main-image-banks machine memory cells))
     (if bank
         (%load-into-bank machine memory origin data bank)
         (let ((address origin))
@@ -117,6 +121,24 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
               (%load-into-bank machine memory (bank-image-origin image)
                                (bank-image-cells image) (bank-image-bank image))))))
     machine))
+
+(defun %check-main-image-banks (machine memory assembly)
+  "Signal if ASSEMBLY's main-image output lies in a banked window of MEMORY
+whose mapped bank ASSEMBLY also has an image for."
+  (let ((element (descriptor-element (machine-descriptor machine) memory)))
+    (loop for (owner . region) in (%banked-regions (machine-descriptor machine))
+          for name = (memory-region-name region)
+          for bank = (current-bank machine name)
+          when (and (eq owner element) (assembly-bank-image assembly name bank))
+            do (dolist (l (assembly-listing assembly))
+                 (when (and (null (listing-line-region l))
+                            (plusp (listing-line-size l))
+                            (<= (listing-line-address l) (memory-region-end region))
+                            (< (memory-region-start region)
+                               (+ (listing-line-address l) (listing-line-size l))))
+                   (error "LOAD-PROGRAM: main-image output at ~D lands in bank ~D of ~(~A~), ~
+which the assembly's bank image replaces"
+                          (listing-line-address l) bank name))))))
 
 (defun %record-loaded-banks (machine memory origin length)
   "Note the mapped bank of each banked region of MEMORY that LENGTH cells

@@ -30,7 +30,9 @@ target memory. A plain sequence starts at `0` unless `:origin` is supplied.
 
 An assembly's [bank images](banked-output.md) load without changing the
 current mapping. `:bank n` loads a selected bank without changing the
-mapping or PC; it requires the image to fit the banked region.
+mapping or PC; it requires the image to fit the banked region. Main-image
+output in a window whose mapped bank the assembly also images signals an
+error; see [Loading](banked-output.md#loading).
 
 ## `step-machine`
 

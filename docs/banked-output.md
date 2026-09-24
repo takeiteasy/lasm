@@ -98,7 +98,7 @@ then start at the region's address. See [Binary output](binary-output.md).
 `load-program` with such an assembly loads the main image as usual, then fills
 every bank image without changing the mapping. The PC comes from the main
 image's origin. Main-image cells inside a banked window land in the bank
-mapped at load time, which the machine remembers for disassembly. See [Emulator](emulator.md#load-program).
+mapped at load time, which the machine remembers for disassembly. A bank image replaces its whole window, so `load-program` signals an error when main-image output lies in a window whose mapped bank the assembly also has an image for. See [Emulator](emulator.md#load-program).
 
 ## Disassembly
 

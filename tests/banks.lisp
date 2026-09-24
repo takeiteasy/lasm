@@ -606,3 +606,48 @@ far:    .byte 1
       (fiveam:is (eql 2 (gethash 'romx (machine-loaded-banks m))))
       (setf (sref m 'pc) #x4002)
       (fiveam:is (search ".byte" (debug-where-text session :context 1))))))
+
+;;; Main image vs bank image at load
+
+(fiveam:test load-program-rejects-main-output-in-a-bank-it-also-images
+  (let ((a (%bank-assembly "        .org $4000
+        .byte 1
+        .bank 0
+        .org $4010
+        nop"))
+        (m (make-machine 'bank-asm-machine)))
+    (fiveam:signals error (load-program m a))
+    (fiveam:is (= 0 (bank-peek m 'romx 0 #x4000)))
+    (fiveam:is (= 0 (sref m 'pc)))))
+
+(fiveam:test load-program-allows-main-output-in-another-bank
+  (let ((a (%bank-assembly "        .org $4000
+        .byte 1
+        .bank 1
+        .org $4010
+        nop"))
+        (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (fiveam:is (= 1 (bank-peek m 'romx 0 #x4000)))))
+
+(fiveam:test load-program-checks-the-mapping-at-load
+  (let ((source "        .org $4000
+        .byte 1
+        .bank ~D
+        .org $4010
+        nop")
+        (m (make-machine 'bank-asm-machine)))
+    (setf (current-bank m 'romx) 1)
+    (fiveam:signals error (load-program m (%bank-assembly (format nil source 1))))
+    (fiveam:finishes (load-program m (%bank-assembly (format nil source 0))))))
+
+(fiveam:test load-program-ignores-main-padding-across-a-window
+  (let ((a (%bank-assembly "        nop
+        .org $5000
+        nop
+        .bank 0
+        .org $4000
+        hlt"))
+        (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (fiveam:is (= 1 (bank-peek m 'romx 0 #x4000)))))
