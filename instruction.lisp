@@ -3287,7 +3287,8 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                                                                        (mode-hole-tuple-hole-sources tuple)))
                            (alternatives-gensym (gensym "WORD-ALTERNATIVES"))
                            (combos (%expand-word-combos specs)))
-                     (%check-word-one-of-relative specs mode tuple-hole-alternatives
+                      (declare (ignore combos))
+                      (%check-word-one-of-relative specs mode tuple-hole-alternatives
                                                    (mode-hole-tuple-hole-sources tuple) machine name)
                       (setf bindings (nconc bindings (list (list alternatives-gensym alternatives-form))))
                       (setf forms

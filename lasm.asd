@@ -39,6 +39,12 @@
                (:file "debugger"))
   :in-order-to ((test-op (test-op #:lasm/test))))
 
+;; Tests leave variables unused on purpose; muffle the compiler's style warnings
+;; while building them.
+(defun lasm-quiet-compile (thunk)
+  (proclaim '(sb-ext:muffle-conditions style-warning))
+  (funcall thunk))
+
 (asdf:defsystem #:lasm/test
   :description "Tests for lasm"
   :author "George Watson <gigolo@hotmail.co.uk>"
@@ -47,6 +53,7 @@
   ;; every slot reader is exported -- test-only, #:lasm stays dependency-free.
   :depends-on (#:lasm #:fiveam #:closer-mop)
   :pathname "tests/"
+  :around-compile "asdf-user::lasm-quiet-compile"
   :serial t
   :components ((:file "suites")
                (:file "package")
