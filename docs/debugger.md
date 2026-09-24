@@ -98,18 +98,31 @@ checking it again. `debug-step` reports an idle step as `:step`. Direct
 stepping signals storage faults; continue returns `:fault` and the
 condition.
 
-## Step back
+## Step back and reverse continue
 
 ```lisp
 (make-debug-session machine :history 1000)
 (debug-step-back session &optional n)
+(debug-reverse-continue session)
+(debug-reverse-continue-to session where &key scope bank)
 ```
 
 `debug-step-back` undoes `n` steps and returns `:back` and the number undone,
-or `:history-start` when fewer were recorded. The session snapshots the
-machine (see [Snapshots](snapshots.md)) at the start of every step or
-continue command and every 256 steps, keeping at least `:history` steps.
-Step back restores the nearest earlier snapshot and replays forward.
+or `:history-start` when fewer were recorded. The session checkpoints the
+machine at the start of every step or continue command and every 256 steps,
+keeping at least `:history` steps.[^checkpoints] Step back restores the
+nearest earlier checkpoint and replays forward.
+
+`debug-reverse-continue` runs backwards to the latest earlier step where a
+breakpoint holds or a watchpoint fired. `debug-reverse-continue-to` runs back
+to the latest earlier step at an address or label. Both return the reason and
+the steps undone. The step the session is at never counts as a hit.
+
+| Reason | Meaning |
+| --- | --- |
+| `:breakpoint`, `:watchpoint` | The latest earlier hit. A watchpoint stops after the access, in the state a forward `continue` stops in, and returns its `watch-hit`. |
+| `:until` | The latest earlier step at the address. |
+| `:history-start` | No earlier hit. The session is at its oldest recorded step. |
 
 - It signals when history is off, or when a device on the bus has no `:save`
   hook.
@@ -181,6 +194,7 @@ and prints until `quit` or end of input.
 | `step [N]`, `step N cycles` | Execute instructions, or until a cycle budget is spent. |
 | `continue`, `continue N cycles`, `until ADDR\|LABEL` | Run to a stop condition. |
 | `back [N]` | Undo steps. |
+| `reverse-continue`, `rc`, `reverse-until ADDR\|LABEL` | Run back to the previous hit or address. |
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
@@ -193,7 +207,9 @@ and prints until `quit` or end of input.
 Addresses accept decimal, `$` or `0x` hexadecimal, and `0b` binary. A bank
 address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
-## Limitations
-
-The debugger has no reverse continue.
+[^checkpoints]: A checkpoint is a full [snapshot](snapshots.md) (an anchor,
+    every 16th) or a delta holding the registers, devices and other small
+    state plus the memory and bank cells changed since the previous
+    checkpoint. History is kept back to an anchor, so it can exceed `:history`.
+    Reverse continue replays one checkpoint segment at a time, newest first.
 

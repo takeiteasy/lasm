@@ -275,3 +275,12 @@
     (reset other)
     (restore-snapshot other (machine-snapshot (make-machine 'snapshot-bank-machine)))
     (fiveam:is (null (gethash 'window (machine-loaded-banks other))))))
+
+(fiveam:test snapshot-without-cells-restores-small-state-and-keeps-memory
+  (let ((m (%dirty))
+        (other (%fresh)))
+    (setf (mref other 'ram 5) 99)
+    (%restore-snapshot other (%machine-snapshot m nil) nil)
+    (fiveam:is (= 42 (sref other 'a)))
+    (fiveam:is (= 99 (mref other 'ram 5)))
+    (fiveam:is (null (search ":RUNS" (prin1-to-string (%machine-snapshot m nil)))))))

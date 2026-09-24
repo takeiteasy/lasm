@@ -607,6 +607,20 @@ far:    .byte 1
       (setf (sref m 'pc) #x4002)
       (fiveam:is (search ".byte" (debug-where-text session :context 1))))))
 
+(fiveam:test debug-step-back-restores-an-unmapped-bank-write
+  (let* ((a (%bank-assembly "        nop
+        nop
+        nop"))
+         (m (make-machine 'bank-asm-machine))
+         (session (progn (load-program m a) (make-debug-session m :assembly a :history 10))))
+    (debug-step session)
+    (debug-set session #x4010 5 :bank 1)
+    (debug-step session)
+    (debug-step-back session 1)
+    (fiveam:is (= 5 (bank-peek m 'romx 1 #x4010)))
+    (debug-step-back session 1)
+    (fiveam:is (= 0 (bank-peek m 'romx 1 #x4010)))))
+
 ;;; Main image vs bank image at load
 
 (fiveam:test load-program-rejects-main-output-in-a-bank-it-also-images

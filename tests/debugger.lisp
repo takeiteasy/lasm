@@ -640,7 +640,7 @@ count: ldx #3
     (dotimes (i 10) (debug-step session 1))
     (multiple-value-bind (reason undone) (debug-step-back session 100)
       (fiveam:is (eq :history-start reason))
-      (fiveam:is (<= 3 undone 4)))))
+      (fiveam:is (<= 3 undone (+ 3 *debug-anchor-interval*))))))
 
 (fiveam:test debug-step-forward-after-back-is-deterministic
   (let ((session (%dbg-history-session)))
@@ -676,6 +676,152 @@ count: ldx #3
     (fiveam:is (search "Stopped: back  steps=2" (debug-command session "back 2")))
     (fiveam:is (search "bad count" (debug-command session "back 0")))
     (fiveam:is (search "bad count" (debug-command session "back 2 cycles")))))
+
+;;; Diff checkpoints
+
+(fiveam:test debug-step-back-restores-memory-across-delta-and-anchor-checkpoints
+  (let ((*debug-checkpoint-interval* 1)
+        (*debug-anchor-interval* 2)
+        (session (%dbg-history-session)))
+    (let ((snapshots (loop repeat 9
+                           collect (%dbg-snapshot session)
+                           do (debug-step session 1))))
+      (loop for expected in (reverse snapshots)
+            do (debug-step-back session 1)
+               (fiveam:is (equal expected (%dbg-snapshot session)))))))
+
+(fiveam:test debug-delta-checkpoint-stores-only-the-changed-cells
+  (let ((*debug-anchor-interval* 16)
+        (session (%dbg-history-session)))
+    (debug-step session 1)
+    (debug-set session #x300 7)
+    (debug-step session 1)
+    (let ((newest (first (debug-session-checkpoints session))))
+      (fiveam:is (not (checkpoint-anchor-p newest)))
+      (fiveam:is (equalp '((:memory ram) (#x300 . #(7)))
+                        (first (checkpoint-diff newest))))
+      (fiveam:is (null (search ":RUNS" (prin1-to-string (checkpoint-snapshot newest))))))))
+
+(fiveam:test debug-step-back-trims-history-to-an-anchor
+  (let ((*debug-checkpoint-interval* 1)
+        (*debug-anchor-interval* 3)
+        (session (%dbg-history-session :history 4)))
+    (dotimes (i 8) (debug-step session 1))
+    (fiveam:is (checkpoint-anchor-p (car (last (debug-session-checkpoints session)))))
+    (let ((expected (%dbg-snapshot session)))
+      (debug-step session 1)
+      (debug-step-back session 1)
+      (fiveam:is (equal expected (%dbg-snapshot session))))))
+
+;;; Reverse continue
+
+(defun %dbg-snapshots-at (session steps)
+  "Run SESSION forward to its last step in STEPS, returning (STEP . SNAPSHOT) for each."
+  (let ((now 0))
+    (loop for step in steps
+          do (debug-step session (- step now))
+             (setf now step)
+          collect (cons step (%dbg-snapshot session)))))
+
+(fiveam:test debug-reverse-continue-visits-each-earlier-breakpoint-hit
+  (let* ((session (%dbg-history-session))
+         (states (%dbg-snapshots-at session '(2 4 6))))
+    (debug-step session 3)
+    (debug-break session #x103)
+    (loop for (step . snapshot) in (reverse states)
+          do (multiple-value-bind (reason undone) (debug-reverse-continue session)
+               (fiveam:is (eq :breakpoint reason))
+               (fiveam:is (= step (debug-session-step-count session)))
+               (fiveam:is (plusp undone))
+               (fiveam:is (equal snapshot (%dbg-snapshot session)))))
+    (multiple-value-bind (reason undone) (debug-reverse-continue session)
+      (fiveam:is (eq :history-start reason))
+      (fiveam:is (= 2 undone))
+      (fiveam:is (= 0 (debug-session-step-count session))))))
+
+(fiveam:test debug-reverse-continue-crosses-checkpoint-segments
+  (let* ((*debug-checkpoint-interval* 2)
+         (*debug-anchor-interval* 2)
+         (session (%dbg-history-session))
+         (states (%dbg-snapshots-at session '(2 4 6))))
+    (debug-step session 3)
+    (debug-break session #x103)
+    (dolist (state (reverse states))
+      (debug-reverse-continue session)
+      (fiveam:is (equal (cdr state) (%dbg-snapshot session))))))
+
+(fiveam:test debug-reverse-continue-does-not-stop-where-it-starts
+  (let ((session (%dbg-history-session)))
+    (debug-break session #x103)
+    (debug-continue session)
+    (multiple-value-bind (reason undone) (debug-reverse-continue session)
+      (fiveam:is (eq :history-start reason))
+      (fiveam:is (= 2 undone)))))
+
+(fiveam:test debug-reverse-continue-skips-a-false-condition
+  (let* ((session (%dbg-history-session))
+         (states (%dbg-snapshots-at session '(2 4 6))))
+    (debug-step session 3)
+    (debug-break session #x103 :condition "x == 1")
+    (fiveam:is (eq :breakpoint (debug-reverse-continue session)))
+    (fiveam:is (= 4 (debug-session-step-count session)))
+    (fiveam:is (equal (cdr (assoc 4 states)) (%dbg-snapshot session)))))
+
+(fiveam:test debug-reverse-continue-stops-after-a-watchpoint-access
+  (let ((session (%dbg-history-session)))
+    (debug-step session 9)
+    (let ((expected (progn (debug-step-back session 1) (%dbg-snapshot session))))
+      (debug-step session 1)
+      (debug-watch session #x10)
+      (multiple-value-bind (reason undone hit) (debug-reverse-continue session)
+        (fiveam:is (eq :watchpoint reason))
+        (fiveam:is (= 1 undone))
+        (fiveam:is (= #x10 (watchpoint-address (watch-hit-watchpoint hit))))
+        (fiveam:is (= 0 (watch-hit-old hit)))
+        (fiveam:is (= 8 (debug-session-step-count session)))
+        (fiveam:is (equal expected (%dbg-snapshot session)))))))
+
+(fiveam:test debug-reverse-continue-to-stops-at-the-address
+  (let ((session (%dbg-history-session)))
+    (debug-step session 9)
+    (multiple-value-bind (reason undone) (debug-reverse-continue-to session ".loop" :scope "count")
+      (fiveam:is (eq :until reason))
+      (fiveam:is (= 4 undone))
+      (fiveam:is (= 5 (debug-session-step-count session))))
+    (debug-reverse-continue-to session #x100)
+    (fiveam:is (= 0 (debug-session-step-count session)))
+    (fiveam:is (eq :history-start (debug-reverse-continue-to session #x999)))))
+
+(fiveam:test debug-reverse-continue-then-continue-reaches-the-same-hit
+  (let ((session (%dbg-history-session)))
+    (debug-break session #x103)
+    (debug-continue session)
+    (debug-continue session)
+    (let ((expected (%dbg-snapshot session)))
+      (debug-continue session)
+      (debug-reverse-continue session)
+      (fiveam:is (equal expected (%dbg-snapshot session)))
+      (fiveam:is (= 4 (debug-session-step-count session))))))
+
+(fiveam:test debug-reverse-continue-needs-history
+  (fiveam:signals error (debug-reverse-continue (%dbg-session)))
+  (fiveam:is (search "history is off" (debug-command (%dbg-session) "rc"))))
+
+(fiveam:test debug-reverse-continue-with-nothing-run-stops-at-the-start
+  (multiple-value-bind (reason undone) (debug-reverse-continue (%dbg-history-session))
+    (fiveam:is (eq :history-start reason))
+    (fiveam:is (= 0 undone))))
+
+(fiveam:test debug-command-reverse-continue-and-until
+  (let ((session (%dbg-history-session)))
+    (debug-command session "break 0x103")
+    (debug-command session "step 6")
+    (fiveam:is (search "Stopped: breakpoint  steps=2" (debug-command session "reverse-continue")))
+    (fiveam:is (search "Stopped: breakpoint  steps=2" (debug-command session "rc")))
+    (fiveam:is (search "Stopped: history-start" (debug-command session "rc")))
+    (debug-command session "step 4")
+    (fiveam:is (search "Stopped: until  steps=1" (debug-command session "reverse-until .loop in count")))
+    (fiveam:is (search "missing address" (debug-command session "reverse-until")))))
 
 ;;; Cycle budgets
 

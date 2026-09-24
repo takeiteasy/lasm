@@ -31,9 +31,12 @@
 ;;;; attached assembly's symbols.
 ;;;;
 ;;;; STEP-BACK replays from checkpoints: a session created with :HISTORY
-;;;; snapshots the machine (MACHINE-SNAPSHOT) at the start of every execution
-;;;; command and every *DEBUG-CHECKPOINT-INTERVAL* steps, and DEBUG-STEP-BACK
-;;;; restores the nearest earlier snapshot and replays forward to the target.
+;;;; checkpoints the machine at the start of every execution command and every
+;;;; *DEBUG-CHECKPOINT-INTERVAL* steps, and DEBUG-STEP-BACK restores the
+;;;; nearest earlier checkpoint and replays forward to the target. A checkpoint
+;;;; is a full snapshot (an anchor, every *DEBUG-ANCHOR-INTERVAL*th) or a delta
+;;;; of the memory cells changed since the previous one. DEBUG-REVERSE-CONTINUE
+;;;; replays segment by segment, newest first, for the latest earlier stop.
 ;;;; Cycle budgets reuse the same step loop and %RUN-LOOP's stop predicate.
 ;;;;
 ;;;; WRITES -- DEBUG-SET stores into registers, flags, stack slots and memory
@@ -65,6 +68,12 @@
 
 (defstruct watch-hit watchpoint access old new)
 
+(defstruct checkpoint
+  (step 0 :type (integer 0))
+  (snapshot nil)                        ; full for an anchor, without memory and bank cells for a delta
+  (anchor-p nil)
+  (diff nil))                           ; delta only: (array-key . ((start . new-cells) ...)) since the previous checkpoint
+
 (defstruct (debug-session (:constructor %make-debug-session))
   (machine nil :type machine)
   (assembly nil)                ; optional ASSEMBLY -- symbols + source context
@@ -82,7 +91,8 @@
   (lexer 'default)
   (history nil :type (or null (integer 1))) ; steps of step-back history kept; NIL is off
   (step-count 0 :type (integer 0))          ; steps executed on this session's timeline
-  (checkpoints nil :type list)              ; (step-count . snapshot), newest first
+  (checkpoints nil :type list)              ; CHECKPOINTs, newest first
+  (shadow nil :type list)                   ; (array-key . copy) as of the newest checkpoint; NIL forces an anchor
   (next-id 1 :type (integer 1))
   (last-x-address nil))         ; so a bare `x` without an address continues from the last one
 
@@ -481,18 +491,72 @@ hook, so watchpoints do not fire."
 (defun %pc (session)
   (sref (debug-session-machine session) (debug-session-pc session)))
 
+(defvar *debug-anchor-interval* 16
+  "Checkpoints between the full-snapshot anchors of a session's history.")
+
+(defun %memory-arrays (machine)
+  "The memory and bank cell arrays of MACHINE, as (KEY . ARRAY)."
+  (let ((descriptor (machine-descriptor machine))
+        (result '()))
+    (dolist (element (machine-descriptor-elements descriptor))
+      (when (eq (storage-element-kind element) :memory)
+        (cl:push (cons (list :memory (storage-element-name element))
+                       (gethash (storage-element-name element) (machine-slots machine)))
+                 result)))
+    (loop for (nil . region) in (%banked-regions descriptor)
+          for banks = (cdr (gethash (memory-region-name region) (machine-banks machine)))
+          do (loop for array across banks
+                   for i from 0
+                   do (cl:push (cons (list :bank (memory-region-name region) i) array) result)))
+    (nreverse result)))
+
+(defun %diff-spans (old new)
+  "The runs of NEW that differ from OLD, as (START . CELLS), copied into OLD."
+  (let ((spans '())
+        (i 0)
+        (end (length new)))
+    (loop
+      (let ((start (mismatch old new :start1 i :start2 i)))
+        (unless start (return))
+        (setf i start)
+        (loop while (and (< i end) (/= (aref old i) (aref new i))) do (incf i))
+        (cl:push (cons start (subseq new start i)) spans)
+        (replace old new :start1 start :end1 i :start2 start)))
+    (nreverse spans)))
+
 (defun %checkpoint (session)
-  "Record a snapshot at SESSION's current step count, discarding any recorded
+  "Record a checkpoint at SESSION's current step count, discarding any recorded
 beyond it and any older than its HISTORY. Does nothing when history is off."
   (let ((history (debug-session-history session))
         (now (debug-session-step-count session)))
     (when history
-      (let ((checkpoints (remove-if (lambda (c) (>= (car c) now))
-                                    (debug-session-checkpoints session)))
-            (tail nil))
-        (cl:push (cons now (machine-snapshot (debug-session-machine session))) checkpoints)
-        (setf tail (member (- now history) checkpoints :key #'car :test #'>=))
-        (when tail (setf (cdr tail) nil))
+      (let* ((machine (debug-session-machine session))
+             (old (debug-session-checkpoints session))
+             (checkpoints (remove-if (lambda (c) (>= (checkpoint-step c) now)) old))
+             (deltas (position-if #'checkpoint-anchor-p checkpoints)))
+        (when (/= (length old) (length checkpoints))
+          (setf (debug-session-shadow session) nil))
+        (cl:push
+         (if (or (null (debug-session-shadow session)) (null deltas)
+                 (>= deltas (1- *debug-anchor-interval*)))
+             (progn
+               (setf (debug-session-shadow session)
+                     (loop for (key . array) in (%memory-arrays machine)
+                           collect (cons key (copy-seq array))))
+               (make-checkpoint :step now :anchor-p t :snapshot (machine-snapshot machine)))
+             (make-checkpoint
+              :step now :snapshot (%machine-snapshot machine nil)
+              :diff (loop for (key . array) in (%memory-arrays machine)
+                          for spans = (%diff-spans (cdr (assoc key (debug-session-shadow session)
+                                                              :test #'equal))
+                                                   array)
+                          when spans collect (cons key spans))))
+         checkpoints)
+        ;; TODO: O(memory) compare per checkpoint, dirty-cell tracking if checkpointing gets slow (#252)
+        (let ((tail (member-if (lambda (c) (and (checkpoint-anchor-p c)
+                                                (<= (checkpoint-step c) (- now history))))
+                               checkpoints)))
+          (when tail (setf (cdr tail) nil)))
         (setf (debug-session-checkpoints session) checkpoints)))))
 
 (defun %count-step (session)
@@ -570,41 +634,149 @@ machine declares no (cycles n)."
       (values (if (and (eq reason :step) (< spent cycles)) :max-steps reason)
               steps condition))))
 
+(defun %require-replayable (session)
+  "Signal unless SESSION keeps history and every device on its bus can be saved."
+  (unless (debug-session-history session)
+    (error "step-back history is off -- create the session with :history N"))
+  (loop for device across (machine-devices (debug-session-machine session))
+        when (and device (null (device-descriptor-save (device-descriptor device))))
+          do (error "device ~(~A~) has no :save hook, so it cannot be stepped back over"
+                    (device-descriptor-name (device-descriptor device)))))
+
+(defun %restore-checkpoint (session checkpoint)
+  "Put SESSION's machine in the state CHECKPOINT recorded: its anchor, then the
+memory deltas up to it."
+  (let* ((machine (debug-session-machine session))
+         (chain (member checkpoint (debug-session-checkpoints session)))
+         (anchor (find-if #'checkpoint-anchor-p chain))
+         (deltas (reverse (ldiff chain (member anchor chain)))))
+    (restore-snapshot machine (checkpoint-snapshot anchor))
+    (when deltas
+      (let ((arrays (%memory-arrays machine)))
+        (dolist (delta deltas)
+          (loop for (key . spans) in (checkpoint-diff delta)
+                for array = (cdr (assoc key arrays :test #'equal))
+                do (dolist (span spans)
+                     (replace array (cdr span) :start1 (car span))))))
+      (%restore-snapshot machine (checkpoint-snapshot checkpoint) nil))
+    (setf (debug-session-shadow session) nil)))
+
+(defun %replay (session checkpoint target &key watch on-step)
+  "Restore CHECKPOINT and step forward to step TARGET, ignoring traps and
+faults. ON-STEP is called with each step number after it runs; WATCH arms the
+watchpoints around each step, leaving any hit in SESSION's WATCH-HIT."
+  (%restore-checkpoint session checkpoint)
+  (let ((machine (debug-session-machine session))
+        (pc (debug-session-pc session))
+        (memory (debug-session-memory session)))
+    (unwind-protect
+         (loop for step from (1+ (checkpoint-step checkpoint)) to target
+               do (when watch
+                    (setf (debug-session-watch-hit session) nil)
+                    (%arm session))
+                  (handler-case (step-machine machine :pc pc :memory memory)
+                    ((or lasm-trap storage-error) ()))
+                  (when watch (%disarm session))
+                  (when on-step (funcall on-step step)))
+      (when watch (%disarm session)))))
+
+(defun %travel (session target)
+  "Move SESSION to step TARGET, no later than its current step, dropping the
+checkpoints beyond it."
+  (let ((base (find-if (lambda (c) (<= (checkpoint-step c) target))
+                       (debug-session-checkpoints session))))
+    (%replay session base target)
+    (setf (debug-session-step-count session) target
+          (debug-session-checkpoints session)
+          (remove-if (lambda (c) (> (checkpoint-step c) target)) (debug-session-checkpoints session)))))
+
 (defun debug-step-back (session &optional (n 1))
   "Undo the last N executed steps by restoring the nearest earlier checkpoint
 and replaying forward. Returns (VALUES REASON UNDONE): REASON is :BACK, or
 :HISTORY-START when fewer than N steps were recorded. Signals when SESSION
 keeps no history, or a device on the bus has no :SAVE hook -- restoring would
 reset it and replay could not reproduce its state."
-  (let ((history (debug-session-history session))
-        (machine (debug-session-machine session)))
-    (unless history
-      (error "step-back history is off -- create the session with :history N"))
-    (unless (typep n '(integer 1))
-      (error "bad step count ~S" n))
-    (loop for device across (machine-devices machine)
-          when (and device (null (device-descriptor-save (device-descriptor device))))
-            do (error "device ~(~A~) has no :save hook, so it cannot be stepped back over"
-                      (device-descriptor-name (device-descriptor device))))
-    (let ((checkpoints (debug-session-checkpoints session))
-          (now (debug-session-step-count session)))
-      (when (null checkpoints)
-        (return-from debug-step-back (values :history-start 0)))
-      (let* ((target (max (- now n) (car (car (last checkpoints)))))
-             (base (find-if (lambda (c) (<= (car c) target)) checkpoints))
-             (pc (debug-session-pc session))
-             (memory (debug-session-memory session)))
-        (restore-snapshot machine (cdr base))
-        (dotimes (i (- target (car base)))
-          (declare (ignore i))
-          (handler-case (step-machine machine :pc pc :memory memory)
-            ((or lasm-trap storage-error) ())))
-        (setf (debug-session-step-count session) target
-              (debug-session-checkpoints session)
-              (remove-if (lambda (c) (> (car c) target)) checkpoints))
-        ;; TODO: a full snapshot per checkpoint costs O(memory); diff-based checkpoints if long histories get slow (#245)
-        (values (if (= (- now target) n) :back :history-start)
-                (- now target))))))
+  (%require-replayable session)
+  (unless (typep n '(integer 1))
+    (error "bad step count ~S" n))
+  (let ((checkpoints (debug-session-checkpoints session))
+        (now (debug-session-step-count session)))
+    (when (null checkpoints)
+      (return-from debug-step-back (values :history-start 0)))
+    (let ((target (max (- now n) (checkpoint-step (car (last checkpoints))))))
+      (%travel session target)
+      (values (if (= (- now target) n) :back :history-start)
+              (- now target)))))
+
+(defun %reverse-until (session stop-p)
+  "Move SESSION back to the latest earlier step where STOP-P, called with the
+machine at that step, returns a reason, or where a watchpoint fired running
+into it. Returns (VALUES REASON UNDONE [HIT]) as DEBUG-REVERSE-CONTINUE does."
+  (%require-replayable session)
+  (let* ((now (debug-session-step-count session))
+         (checkpoints (debug-session-checkpoints session))
+         (oldest (car (last checkpoints)))
+         (upper (1- now)))
+    (flet ((match ()
+             (setf (debug-session-condition-error session) nil)
+             (let ((reason (if (debug-session-watch-hit session) :watchpoint (funcall stop-p))))
+               (and reason (list reason (or (debug-session-watch-hit session)
+                                            (debug-session-condition-error session))))))
+           (land (step reason hit)
+             (%travel session step)
+             (return-from %reverse-until (values reason (- now step) hit))))
+      (when (or (null oldest) (>= (checkpoint-step oldest) now))
+        (return-from %reverse-until (values :history-start 0)))
+      (dolist (checkpoint checkpoints)
+        (let ((found nil))
+          (when (< (checkpoint-step checkpoint) upper)
+            (%replay session checkpoint upper :watch t
+                     :on-step (lambda (step)
+                                (let ((m (match)))
+                                  (when m (setf found (cons step m))))))
+            (when found
+              (land (car found) (second found) (third found))))
+          (setf upper (min upper (checkpoint-step checkpoint)))))
+      (%restore-checkpoint session oldest)
+      (setf (debug-session-watch-hit session) nil)
+      (let ((m (match)))
+        (if m
+            (land (checkpoint-step oldest) (first m) (second m))
+            (land (checkpoint-step oldest) :history-start nil))))))
+
+(defun %breakpoint-stop (session)
+  "T when a breakpoint that holds is at SESSION's PC in the mapped bank."
+  (let ((breakpoints (debug-session-breakpoints session))
+        (pc (%pc session)))
+    (flet ((hit-p (key)
+             (let ((bp (gethash key breakpoints)))
+               (and bp (%breakpoint-triggered-p session bp)))))
+      (or (hit-p (cons pc nil))
+          (let ((bank (%mapped-bank session pc)))
+            (and bank (hit-p (cons pc bank))))))))
+
+(defun debug-reverse-continue (session)
+  "Run SESSION backwards to the latest earlier step where a breakpoint whose
+condition holds is at the PC, or where a watchpoint fired. The step SESSION is
+at now never counts. Returns (VALUES REASON UNDONE [CONDITION]): REASON is
+:BREAKPOINT (CONDITION is the error from a condition that failed to
+evaluate), :WATCHPOINT (CONDITION is the WATCH-HIT, the same state a forward
+continue stops in) or :HISTORY-START, leaving SESSION at its oldest recorded
+step. Signals as DEBUG-STEP-BACK does."
+  (%reverse-until session (lambda () (and (%breakpoint-stop session) :breakpoint))))
+
+(defun debug-reverse-continue-to (session where &key scope bank)
+  "Like DEBUG-REVERSE-CONTINUE, but stops at the latest earlier step with the
+PC at WHERE (DEBUG-CONTINUE-TO's target), with REASON :UNTIL in place of
+:BREAKPOINT."
+  (multiple-value-bind (address region bank)
+      (%resolve-breakpoint-address session where :scope scope :bank bank)
+    (declare (ignore region))
+    (%reverse-until session
+                    (lambda ()
+                      (and (= (%pc session) address)
+                           (or (null bank) (eql bank (%mapped-bank session address)))
+                           :until)))))
 
 (defun %run-until (session stop-p &key (max-steps 10000) (idle-stop t))
   "Shared body of DEBUG-CONTINUE/DEBUG-CONTINUE-TO: %RUN-LOOP (emulator.lisp)
@@ -662,21 +834,13 @@ continuing from a PC that is itself a breakpoint runs past it rather than
 re-triggering immediately -- the same behaviour gdb's `continue` has when
 already stopped on a breakpoint."
   (when cycles (%require-cycle-costs session))
-  (let* ((breakpoints (debug-session-breakpoints session))
-         (machine (debug-session-machine session))
+  (let* ((machine (debug-session-machine session))
          (start-cycles (machine-cycles machine)))
     (%run-until session
                 (lambda ()
-                  (flet ((hit-p (key)
-                           (let ((bp (gethash key breakpoints)))
-                             (and bp (%breakpoint-triggered-p session bp)))))
-                    (let ((pc (%pc session)))
-                      (cond ((or (hit-p (cons pc nil))
-                                 (let ((bank (%mapped-bank session pc)))
-                                   (and bank (hit-p (cons pc bank)))))
-                             :breakpoint)
-                            ((and cycles (>= (- (machine-cycles machine) start-cycles) cycles))
-                             :max-cycles)))))
+                  (cond ((%breakpoint-stop session) :breakpoint)
+                        ((and cycles (>= (- (machine-cycles machine) start-cycles) cycles))
+                         :max-cycles)))
                 :max-steps (or max-steps (if cycles (max 10000 cycles) 10000))
                 :idle-stop (null cycles))))
 
@@ -968,6 +1132,8 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   step [N]           execute N instructions (default 1)
   step N cycles      execute until N cycles have been spent
   back [N]           undo the last N steps (needs a session created with :history)
+  reverse-continue   run back to the previous breakpoint or watchpoint hit (alias rc)
+  reverse-until ADDR|LABEL  run back to the previous visit of ADDR/LABEL
   continue           run until a breakpoint, watchpoint, trap, or decode failure
   continue N cycles  as continue, also stopping once N cycles have been spent
   until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
@@ -1081,6 +1247,17 @@ this call."
                      (when cycles-p (error "back: bad count ~S" rest))
                      (multiple-value-bind (reason undone) (debug-step-back session n)
                        (%stop-text session reason undone nil))))
+                  ((or (string-equal cmd "reverse-continue") (string-equal cmd "rc"))
+                   (multiple-value-bind (reason undone condition) (debug-reverse-continue session)
+                     (%stop-text session reason undone condition)))
+                  ((string-equal cmd "reverse-until")
+                   (if (zerop (length rest))
+                       "reverse-until: missing address or label"
+                       (multiple-value-bind (reason undone condition)
+                           (multiple-value-bind (target scope) (%split-in rest)
+                             (multiple-value-bind (where bank) (%where-arg target)
+                               (debug-reverse-continue-to session where :bank bank :scope scope)))
+                         (%stop-text session reason undone condition))))
                   ((string-equal cmd "continue")
                    (multiple-value-bind (reason steps condition)
                        (if (zerop (length rest))

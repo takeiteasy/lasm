@@ -80,10 +80,10 @@ table:  .byte $A2, $03  ; data whose bits decode as `ldx #3`")
     ;; (`count.loop`) or as `.loop in count`.
     ;; `if` makes the breakpoint conditional; `watch` stops after an
     ;; instruction reads or writes a register, flag or memory address.
-    ;; `step N cycles` runs until N cycles are spent; `back N` undoes N steps.
+    ;; `step N cycles` runs until N cycles are spent; `back N` undoes N steps, `rc` runs back to the previous stop.
     ;; `set` stores an expression in a register, flag, stack slot or memory.
     (dolist (command '("break count.loop if x == 1" "info break" "continue"
-                        "where" "step 4 cycles" "where" "back 2" "where"
+                        "where" "step 4 cycles" "where" "back 2" "where" "rc"
                         "delete 1" "watch x" "continue" "info break"
                         "delete 2" "set x = 2" "continue" "info reg" "x/4 $1000" "print x"))
       (format t "(lasm-dbg) ~A~%~A" command (debug-command session command)))
