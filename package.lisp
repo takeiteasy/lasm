@@ -364,6 +364,14 @@
    #:assembly
    #:assembly-p
    #:assembly-cells
+   #:assembly-banks
+   #:assembly-bank-image
+   #:bank-image
+   #:bank-image-p
+   #:bank-image-region
+   #:bank-image-bank
+   #:bank-image-origin
+   #:bank-image-cells
    #:assembly-cell-width
    #:assembly-origin
    #:assembly-symbols
@@ -380,6 +388,8 @@
    #:listing-line-kind
    #:listing-line-descriptor
    #:listing-line-file
+   #:listing-line-region
+   #:listing-line-bank
    #:symbol-info
    #:symbol-info-p
    #:symbol-info-name
@@ -390,6 +400,8 @@
    #:symbol-info-value
    #:symbol-info-line
    #:symbol-info-definition-line
+   #:symbol-info-region
+   #:symbol-info-bank
    #:lasm-syntax-error-definition-line
 
    ;; Emulator
@@ -473,6 +485,8 @@
    #:debug-continue-to
    #:debug-state-text
    #:debug-memory-text
+   #:debug-banks-text
+   #:debug-set-bank
    #:debug-where-text
    #:debug-command
    #:debugger-repl))

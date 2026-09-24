@@ -1,9 +1,9 @@
 # Directives
 
 `defdirective` declares an assembler directive: a named-parameter list plus
-exactly one action form from a small fixed vocabulary. LASM ships eight
+exactly one action form from a small fixed vocabulary. LASM ships nine
 built-in directives (in `directive.lisp`): `.org`, `.byte`, `.word`, `.cell`,
-`.dat`, `.res`, `.equ`, `.set`. The assembler (see [Assembler](assembler.md))
+`.dat`, `.res`, `.bank`, `.equ`, `.set`. The assembler (see [Assembler](assembler.md))
 dispatches a statement to a directive by mnemonic, the same way it dispatches
 to an instruction's addressing-mode variants — a directive statement is
 otherwise an ordinary `statement` (see [Statement grammar & expression
@@ -17,6 +17,7 @@ the default lexer's `ident-chars`.
 (defdirective ".cell" (&rest values) (emit 1 values))
 (defdirective ".dat"  (&rest values) (emit 1 values))
 (defdirective ".res"  (count)        (reserve count))
+(defdirective ".bank" (n)            (select-bank! n))
 (defdirective ".equ"  (name value)   (assign name value))
 (defdirective ".set"  (name value)   (reassign name value))
 ```
@@ -36,6 +37,8 @@ including zero. `action-form` must be exactly one of:
 - `(set-origin! value-name)` — move the assembler's address counter (and, if
   no earlier statement has occupied an address yet, the assembly's own
   `origin` — see "`.org`" below) to `value-name`. Zero layout size.
+- `(select-bank! value-name)` — place later output that lands in a banked
+  region in that bank. Zero layout size; see [Banked output](banked-output.md).
 - `(reserve value-name)` — advance the address counter by `value-name`
   cells (the machine's own addressable unit, #53 — bytes on every
   byte-addressed machine, the only kind before this), zero-filled.
@@ -183,6 +186,14 @@ of cells sitting in the middle of the code path (no jump/skip instruction is
 part of the core semantics vocabulary), a `.res` run belongs in a data area
 the program's control flow doesn't traverse — see
 [`examples/directives.lisp`](../examples/directives.lisp).
+
+## `.bank`
+
+```lisp
+.bank 2   ; later output in a banked region goes to bank 2
+```
+
+See [Banked output](banked-output.md).
 
 ## `.equ`
 

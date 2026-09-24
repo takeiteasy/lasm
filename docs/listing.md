@@ -49,14 +49,15 @@ source lines attached.
 ## Lookup
 
 ```lisp
-(listing-line-at assembly address)             ; => listing-line, or NIL
+(listing-line-at assembly address &key region bank) ; => listing-line, or NIL
 (listing-lines-for-source-line assembly line &key file) ; => list of listing-line
 ```
 
 `listing-line-at` is the address→line direction and always returns at most
 one entry — an address belongs to at most one statement's
 `[address, address + size)` run, or falls in a gap (a forward `.org`'s pad)
-and returns `nil`.
+and returns `nil`. `region` and `bank` select an entry placed in a bank
+(see [Banked output](banked-output.md)); by default only main-image entries match.
 
 `listing-lines-for-source-line` is the reverse direction, and returns a
 **list**, because one source line can emit several statements. Expanded
@@ -74,7 +75,7 @@ follow-up if that ever matters.
 ## `assembly-data-regions`
 
 ```lisp
-(assembly-data-regions assembly) ; => ((start . end) ...)
+(assembly-data-regions assembly &key region bank) ; => ((start . end) ...)
 ```
 
 The cell ranges (`end` exclusive) that `assembly`'s `.byte`, `.word` and

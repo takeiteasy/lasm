@@ -4,7 +4,7 @@ A gdb-like interactive debugger (#76, M7), built directly on the emulator's
 existing `step-machine`/`run` primitives — not a second execution engine. A
 `debug-session` wraps a live `machine` (and, optionally, the `assembly` that
 produced its program) with breakpoints, step/continue commands, and
-read-only inspection of registers/flags/stacks/memory driven off the
+inspection of registers/flags/stacks/memory (plus switching banks) driven off the
 machine's own declared storage elements — consistent with LASM's
 storage-abstraction pillar.
 
@@ -143,7 +143,27 @@ instructions at it (via `disassemble-memory`, passing the attached
 assembly's `symbol-info` so labels resolve in the output), and — when an
 assembly is attached — the originating source line (via `listing-line-at`).
 
-Inspection is read-only: there is no `set register`/poke command.
+Inspection is read-only, apart from [switching banks](#banks): there is no
+`set register`/poke command.
+
+## Banks
+
+```lisp
+(debug-banks-text session &key stream)         ; each banked region's current bank
+(debug-set-bank session region bank)           ; map a bank in
+(debug-memory-text session address count &key bank stream)
+```
+
+`debug-banks-text` lists every [banked region](machine-model.md#bank-switching)
+with its address range and current bank out of its bank count.
+`debug-set-bank` maps a bank in and signals `bank-out-of-range` for an invalid
+one. `debug-memory-text :bank n` dumps bank `n` of the region containing
+`address` through `bank-peek`, mapped or not; it signals before printing if
+the address is not in a banked region or the range runs past its end.
+
+`where` finds the source line for a PC in a banked region from the mapped
+bank's [listing entries](banked-output.md#listings-and-symbols). A label
+breakpoint stops whichever bank is mapped when the address executes.
 
 ## Command dispatcher and REPL
 
@@ -167,12 +187,15 @@ Commands:
 | `delete ID\|ADDR` | remove a breakpoint |
 | `info break` | list breakpoints |
 | `info reg` | dump registers/flags/stacks |
+| `info banks` | list banked regions and their current bank |
 | `info sym` | list symbols (needs an attached assembly) |
 | `step [N]` | execute N instructions (default 1) |
 | `continue` | run until a breakpoint, trap, or decode failure |
 | `until ADDR\|LABEL` | run until a target is reached |
 | `print NAME` | print a register, register alias or flag's value |
 | `x/N ADDR` | dump N memory cells starting at ADDR |
+| `x/N BANK:ADDR` | dump N cells of a bank of the banked region at ADDR |
+| `bank REGION N` | map bank N into a banked region |
 | `where` | show pc, current instruction, and source context |
 | `help` | list commands |
 | `quit` | end the session |

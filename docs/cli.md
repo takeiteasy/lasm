@@ -25,7 +25,7 @@ defined, the default lexer is used.
 
 | Command | Does | Options |
 | --- | --- | --- |
-| `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex` |
+| `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME` |
 | `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N` |
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END` |
 | `listing FILE` | prints the assembly listing | `--symbols` |
@@ -34,6 +34,12 @@ Every command takes `-m FILE` (required), `--machine-name`, `--lexer`,
 `--memory` (the memory element to target), and `--origin N` (decimal, `$hex`
 or `0xhex`; `assemble`, `run`, `listing` and `disassemble`). `-h` prints the
 usage.
+
+With [banked output](banked-output.md), `assemble` writes the physical layout;
+`--bank N` writes bank `N` alone (`--region` names the region when several
+have output), starting at the region's address in HEX. Disassemble a bank's
+binary with `--origin` set to the region's start. `listing` shows every bank
+with `BB:AAAA` addresses; `run` loads every bank.
 
 `assemble` defaults `OUT` to `FILE` with a `.bin` or `.hex` extension; see
 [Binary output](binary-output.md) for the formats. `run` prints the stop reason,

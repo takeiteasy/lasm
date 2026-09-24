@@ -17,6 +17,7 @@
 
 commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
+                    [--bank N] [--region NAME]
   run FILE          assemble and run          [--max-steps N] [--cycles N]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate]
                     [--data-region START:END]...
@@ -27,6 +28,8 @@ options:
   --machine-name NAME    machine to use when FILE defines several
   --lexer NAME           lexer to use when FILE defines several
   --memory NAME          memory element to target
+  --bank N               write only bank N of a banked region (assemble)
+  --region NAME          banked region for --bank when there are several
   -h, --help             show this help
 ")
 
@@ -35,6 +38,7 @@ options:
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
+    ("--bank" . :bank) ("--region" . :region)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)))
 
 (defparameter *cli-repeatable-options*
@@ -166,11 +170,15 @@ the calling image."
          (path (or (getf options :output)
                    (namestring (make-pathname :type extension :defaults file))))
          (assembly (%cli-assemble file machine lexer options))
-         (memory (%cli-memory options)))
+         (memory (%cli-memory options))
+         (bank (%cli-option-integer options :bank "--bank"))
+         (region (and (getf options :region)
+                      (intern (string-upcase (getf options :region)) '#:lasm))))
     (funcall (if (string= format "hex") #'write-intel-hex #'write-binary)
-             assembly path :machine machine :memory memory)
+             assembly path :machine machine :memory memory :bank bank :region region)
     (format out "wrote ~A (~D bytes)~%" path
-            (length (assembly-bytes assembly :machine machine :memory memory)))
+            (length (assembly-bytes assembly :machine machine :memory memory
+                                             :bank bank :region region)))
     0))
 
 (defun %cli-command-run (file machine lexer options out)

@@ -88,7 +88,10 @@ ORIGIN. A :DEVICE region's :WRITE is likewise never called.
 
 BANK loads CELLS into that bank of the banked region containing ORIGIN,
 whether or not it is mapped in, leaving the mapping and PC untouched.
-Signals if ORIGIN is not in a banked region or CELLS run past its end."
+Signals if ORIGIN is not in a banked region or CELLS run past its end.
+
+An ASSEMBLY that placed output in banks with .BANK also has each of those
+banks filled, without changing the mapping, when BANK is not given."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
@@ -107,7 +110,11 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
                      (%poke machine memory address cell)
                      (incf address))
                data)
-          (setf (sref machine 'pc) origin)))
+          (setf (sref machine 'pc) origin)
+          (when assembly-p
+            (dolist (image (assembly-banks cells))
+              (%load-into-bank machine memory (bank-image-origin image)
+                               (bank-image-cells image) (bank-image-bank image))))))
     machine))
 
 (defun %load-into-bank (machine memory origin data bank)

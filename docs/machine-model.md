@@ -277,6 +277,8 @@ banked `:rom` keeps its `:on-write` policy.
   `:bank` argument to fill an unmapped bank — see [Emulator](emulator.md).
 - Inside instruction semantics, `(set-bank! region n)` switches banks — see
   [Semantics vocabulary](semantics.md).
+- `.bank` places assembled output in a bank — see
+  [Banked output](banked-output.md).
 
 A mapper chip is a `:device` region whose `:write` switches banks:
 

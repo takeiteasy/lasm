@@ -25,6 +25,14 @@ A `cell-width` that is not a multiple of 8 signals for both formats.
 Gaps left by `.org` and `.res` are already zero-filled in the cells, so the
 output is one contiguous run starting at the assembly's `origin`.
 
+## Banks
+
+An assembly with [banked output](banked-output.md) writes the main image
+followed by each banked region's banks, 0 up to the highest used, each padded
+to the region's size. `:bank N` writes only that bank (`:region` names the
+region when several have output); Intel HEX records then start at the
+region's address.
+
 ## Intel HEX
 
 Records carry up to 16 data bytes and are followed by an end-of-file record.
@@ -39,11 +47,11 @@ labels resolve to.
 ## Entry points
 
 ```lisp
-(assembly-bytes ASSEMBLY &key machine memory endian)
+(assembly-bytes ASSEMBLY &key machine memory endian bank region)
 (bytes-to-cells BYTES CELL-WIDTH &key (endian :little))
-(write-binary ASSEMBLY PATH &key machine memory endian)
-(hex-text ASSEMBLY &key stream machine memory endian)
-(write-intel-hex ASSEMBLY PATH &key machine memory endian)
+(write-binary ASSEMBLY PATH &key machine memory endian bank region)
+(hex-text ASSEMBLY &key stream machine memory endian bank region)
+(write-intel-hex ASSEMBLY PATH &key machine memory endian bank region)
 ```
 
 `assembly-bytes` returns the byte vector both writers use; `bytes-to-cells` is

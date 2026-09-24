@@ -68,7 +68,7 @@ or a decodable-as-data byte is the caller's own policy.
 (disassemble-cells cells &key machine (origin 0) end symbols symbol-info
                               (lexer 'default) (labels t) (suffixes t) memory data-regions)
 (disassemble-assembly assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
-                                    (data-regions :auto))
+                                    (data-regions :auto) bank region)
 (disassemble-memory machine &key memory start count symbols symbol-info
                                  (lexer 'default) (labels t) (suffixes t) data-regions)
 ```
@@ -137,6 +137,9 @@ cell rendered as `.byte`; an instruction never spans a region boundary.
 [`assembly-data-regions`](listing.md#assembly-data-regions) — the cells the
 assembly's own `.byte`/`.word`/`.res` statements occupy. Pass `nil` to decode
 everything, or a list to override.
+
+`:bank` (with `:region` when several regions have output) disassembles that
+bank's [image](banked-output.md#bank-images) at the region's addresses.
 
 ### Rendering
 

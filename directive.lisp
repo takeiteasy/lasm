@@ -33,9 +33,9 @@
 (defstruct directive-descriptor
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | :variadic
-  action      ; :set-origin | :emit | :reserve | :assign | :reassign
+  action      ; :set-origin | :select-bank | :emit | :reserve | :assign | :reassign
   width       ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
-              ; NIL for :set-origin / :reserve / :assign / :reassign
+              ; NIL for :set-origin / :select-bank / :reserve / :assign / :reassign
   endian)     ; :emit only: overrides the machine's endian order, or NIL
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
@@ -76,20 +76,21 @@ symbols bound by the parameter list (%PARSE-DIRECTIVE-PARAMS) -- the action
 form must reference exactly these symbols, in order, as its arguments, so
 DEFDIRECTIVE can compile the action without evaluating arbitrary Lisp.
 Returns (VALUES action width). Handles the one-argument actions
-(SET-ORIGIN!, RESERVE); EMIT and ASSIGN take two arguments and are parsed
+(SET-ORIGIN!, SELECT-BANK!, RESERVE); EMIT and ASSIGN take two arguments and are parsed
 by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
   (unless (and (consp action-form) (= (length action-form) 2)
                (equal (rest action-form) param-names))
     (error "Malformed DEFDIRECTIVE action ~S -- expected one of (set-origin! ~
-~S), (reserve ~S) referencing this directive's own parameter"
-           action-form (first param-names) (first param-names)))
+~S), (select-bank! ~S), (reserve ~S) referencing this directive's own parameter"
+           action-form (first param-names) (first param-names) (first param-names)))
   (destructuring-bind (head arg) action-form
     (declare (ignore arg))
     (case head
       (set-origin! (values :set-origin nil))
+      (select-bank! (values :select-bank nil))
       (reserve (values :reserve nil))
       (t (error "Unknown DEFDIRECTIVE action head ~S -- expected SET-ORIGIN!, ~
-EMIT, RESERVE, or ASSIGN" head)))))
+SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
 
 (defun %parse-emit-action (action-form param-names)
   "EMIT is one of the two actions taking two arguments (a literal width,
@@ -135,6 +136,9 @@ referencing PARAMS' own parameter name(s), in order:
                               counter; must fold to a label-free constant at
                               layout time (the assembler has no symbol table
                               yet in pass 1). Zero layout size.
+  (select-bank! n)         -- N is the bank that later output landing in a
+                              banked region is placed in; must fold to a
+                              label-free constant. Zero layout size.
   (reserve count)          -- advance the address counter by COUNT cells
                               (#53 -- a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
@@ -163,6 +167,7 @@ E.g.:
   (defdirective \".byte\" (&rest values) (emit 1 values))
   (defdirective \".word\" (&rest values) (emit 2 values))
   (defdirective \".res\"  (count)        (reserve count))
+  (defdirective \".bank\" (n)            (select-bank! n))
   (defdirective \".equ\"  (name value)   (assign name value))
   (defdirective \".set\"  (name value)   (reassign name value))
 
@@ -193,6 +198,7 @@ anything -- see this file's header comment."
 ;; address, and addresses were always cell-indexed, so .ORG itself needs no
 ;; change at all.
 (defdirective ".res"  (count)        (reserve count))
+(defdirective ".bank" (n)            (select-bank! n))
 (defdirective ".equ"  (name value)   (assign name value))
 (defdirective ".set"  (name value)   (reassign name value))
 ;; .CELL/.DAT (#65): plain aliases for .BYTE -- same width-1 :EMIT action, so

@@ -25,7 +25,8 @@
 ;;;; re-triggering immediately -- this is deliberate, the same behaviour
 ;;;; gdb's `continue` has when already stopped on a breakpoint.
 ;;;;
-;;;; SCOPE -- read-only inspection only; no poke/`set register` command.
+;;;; SCOPE -- read-only inspection only, apart from switching a banked
+;;;; region's current bank; no poke/`set register` command.
 ;;;; Watchpoints, reverse/step-back execution, conditional breakpoints, and
 ;;;; cycle-budgeted stepping are all
 ;;;; explicitly out of scope for this ticket; see the follow-up tickets filed
@@ -251,7 +252,38 @@ TEXT/DISASSEMBLY-TEXT."
                      (:memory nil)))))) ; memory is inspected via DEBUG-MEMORY-TEXT/x, not dumped whole here
     (if stream (progn (write-string body stream) nil) body)))
 
-(defun debug-memory-text (session address count &key stream)
+(defun %session-banked-region (session address)
+  "The banked MEMORY-REGION of SESSION's memory that contains ADDRESS, or NIL."
+  (let ((element (descriptor-element (machine-descriptor (debug-session-machine session))
+                                     (debug-session-memory session))))
+    (find-if (lambda (r) (and (memory-region-banks r)
+                              (<= (memory-region-start r) address (memory-region-end r))))
+             (storage-element-regions element))))
+
+(defun debug-banks-text (session &key stream)
+  "One line per banked region on SESSION's machine: its name, address range
+and current bank out of its bank count. Returns a string when STREAM is NIL
+(default); otherwise writes to STREAM and returns NIL."
+  (let* ((machine (debug-session-machine session))
+         (digits (debug-session-addr-digits session))
+         (body (with-output-to-string (s)
+                 (loop for (nil . region) in (%banked-regions (machine-descriptor machine))
+                       do (format s "~(~A~)~10T~V,'0X-~V,'0X  bank ~D/~D~%"
+                                  (memory-region-name region)
+                                  digits (memory-region-start region)
+                                  digits (memory-region-end region)
+                                  (current-bank machine (memory-region-name region))
+                                  (memory-region-banks region))))))
+    (when (zerop (length body))
+      (setf body (format nil "No banked regions.~%")))
+    (if stream (progn (write-string body stream) nil) body)))
+
+(defun debug-set-bank (session region bank)
+  "Map BANK into banked region REGION on SESSION's machine. Signals
+BANK-OUT-OF-RANGE for a bank the region lacks."
+  (setf (current-bank (debug-session-machine session) region) bank))
+
+(defun debug-memory-text (session address count &key bank stream)
   "Render COUNT cells of SESSION's machine's memory starting at ADDRESS, in
 rows of 8, each row labelled by address (ADDR-DIGITS) with each cell padded
 to SESSION's own HEX-DIGITS, sized from the memory's actual cell width.
@@ -260,19 +292,42 @@ Returns a string when STREAM is NIL
 
 #107: reads via MPEEK, not MREF -- a hex dump is inspection, not an actual
 CPU access, so it must not trigger a :DEVICE region's :READ side effects
-merely by displaying memory."
+merely by displaying memory.
+
+BANK dumps that bank of the banked region containing ADDRESS via BANK-PEEK,
+mapped in or not. Signals, before writing anything, if ADDRESS is not in a
+banked region or the range runs past its end."
   (let* ((machine (debug-session-machine session))
-         (memory (debug-session-memory session))
+         (region (and bank
+                      (or (%session-banked-region session address)
+                          (error "address ~D is not in a banked region" address))))
+         (peek (if bank
+                   (progn
+                     (when (> (+ address count -1) (memory-region-end region))
+                       (error "~D cells at ~D run past the end of region ~(~A~)"
+                              count address (memory-region-name region)))
+                     (lambda (a) (bank-peek machine (memory-region-name region) bank a)))
+                   (lambda (a) (mpeek machine (debug-session-memory session) a))))
          (addr-digits (debug-session-addr-digits session))
          (cell-digits (debug-session-hex-digits session))
          (body (with-output-to-string (s)
                  (loop for row-start from address below (+ address count) by 8
                        do (format s "~V,'0X:" addr-digits row-start)
                           (loop for a from row-start below (min (+ row-start 8) (+ address count))
-                                do (format s " ~V,'0X" cell-digits (mpeek machine memory a)))
+                                do (format s " ~V,'0X" cell-digits (funcall peek a)))
                           (format s "~%")))))
     (setf (debug-session-last-x-address session) (+ address count))
     (if stream (progn (write-string body stream) nil) body)))
+
+(defun %pc-listing-line (session assembly pc)
+  "The listing line for PC: the one in the mapped bank when PC lies in a
+banked region, else (or failing that) the main image's."
+  (let ((region (%session-banked-region session pc)))
+    (or (and region
+             (let ((name (memory-region-name region)))
+               (listing-line-at assembly pc :region name
+                                            :bank (current-bank (debug-session-machine session) name))))
+        (listing-line-at assembly pc))))
 
 (defun debug-where-text (session &key (context 4) (stream nil))
   "Render SESSION's current stop point: the PC, its disassembled instruction
@@ -292,7 +347,7 @@ NIL."
          (body (with-output-to-string (s)
                  (format s "pc = ~V,'0X~%" (debug-session-addr-digits session) pc)
                  (when session-assembly
-                   (let ((line (listing-line-at session-assembly pc)))
+                   (let ((line (%pc-listing-line session session-assembly pc)))
                      (when (and line (assembly-source session-assembly))
                        (let ((source-line (nth (1- (listing-line-line line))
                                                 (%split-source-lines (assembly-source session-assembly)))))
@@ -343,12 +398,15 @@ as one (%PARSE-INTEGER-MAYBE), otherwise the raw string as a label name."
   delete ID|ADDR     remove a breakpoint (by id first, falling back to address)
   info break         list breakpoints
   info reg           dump registers/flags/stacks
+  info banks         list banked regions and their current bank
   info sym           list symbols (requires an attached assembly)
   step [N]           execute N instructions (default 1)
   continue           run until a breakpoint, trap, or decode failure
   until ADDR|LABEL   run until ADDR/LABEL is reached
   print NAME         print a register, register alias or flag's value
   x/N ADDR           dump N memory cells starting at ADDR
+  x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
+  bank REGION N      map bank N into a banked region
   where              show pc, current instruction, and source context
   help               this text
   quit               end the session
@@ -395,11 +453,12 @@ this call."
                                         (breakpoint-label bp))))
                             (format nil "No breakpoints.~%"))))
                      ((string-equal rest "reg") (debug-state-text session))
+                     ((string-equal rest "banks") (debug-banks-text session))
                      ((string-equal rest "sym")
                       (if (debug-session-assembly session)
                           (symbols-text (debug-session-assembly session))
                           (format nil "No assembly attached to this session.~%")))
-                     (t (format nil "info: unknown subcommand ~S (try break/reg/sym)" rest))))
+                     (t (format nil "info: unknown subcommand ~S (try break/reg/banks/sym)" rest))))
                   ((string-equal cmd "step")
                    (let ((n (or (%parse-integer-maybe rest) 1)))
                      (multiple-value-bind (reason steps) (debug-step session n)
@@ -438,12 +497,25 @@ this call."
                             (format nil "~A = ~A~%" rest (%register-value-text machine element)))
                            (t (format nil "print: ~A is not a register or flag" rest))))))
                   ((and (>= (length cmd) 2) (string-equal (subseq cmd 0 2) "x/"))
-                   (let ((n (or (%parse-integer-maybe (subseq cmd 2)) 8))
-                         (address (and (plusp (length rest)) (%parse-integer-maybe rest))))
+                   (let* ((n (or (%parse-integer-maybe (subseq cmd 2)) 8))
+                          (colon (position #\: rest))
+                          (bank (and colon (%parse-integer-maybe (subseq rest 0 colon))))
+                          (address (and (plusp (length rest))
+                                        (%parse-integer-maybe (if colon (subseq rest (1+ colon)) rest)))))
                      (cond
                        ((zerop (length rest)) "x/N: missing address")
-                       ((null address) (format nil "x/N: bad address ~S" rest))
-                       (t (debug-memory-text session address n)))))
+                       ((or (null address) (and colon (null bank)))
+                        (format nil "x/N: bad address ~S" rest))
+                       (t (debug-memory-text session address n :bank bank)))))
+                  ((string-equal cmd "bank")
+                   (multiple-value-bind (region-text bank-text) (%split-command rest)
+                     (let ((bank (%parse-integer-maybe bank-text))
+                           (region (and (plusp (length region-text))
+                                        (find-symbol (string-upcase region-text) :lasm))))
+                       (if (and region bank)
+                           (progn (debug-set-bank session region bank)
+                                  (format nil "~(~A~) bank ~D~%" region bank))
+                           "bank: usage: bank REGION N"))))
                   ((string-equal cmd "where") (debug-where-text session))
                   ((string-equal cmd "quit") :quit)
                   (t (format nil "Unknown command ~S -- try \"help\"" cmd))))

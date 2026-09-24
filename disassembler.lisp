@@ -514,8 +514,12 @@ of round-trip fidelity."
                                         (%machine-cell-width machine memory) data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
 
+(defun %required-bank-image (assembly region bank)
+  (or (assembly-bank-image assembly region bank)
+      (error "assembly has no output in bank ~D of ~(~A~)" bank region)))
+
 (defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
-                                           (data-regions :auto))
+                                           (data-regions :auto) bank region)
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
 ORIGIN, SYMBOLS, and SYMBOL-INFO (#37) off it directly -- the natural way to
 round-trip ASSEMBLE's own output, and the reason its label substitution
@@ -525,20 +529,31 @@ MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
 (emulator.lisp) for the same mismatch.
 
 DATA-REGIONS (#82) defaults to :AUTO, ASSEMBLY-DATA-REGIONS (listing.lisp);
-pass NIL to decode everything, or an explicit list to override."
+pass NIL to decode everything, or an explicit list to override.
+
+BANK (with REGION, which may be omitted when ASSEMBLY has output in a single
+banked region) disassembles that bank's image, placed at the region's
+addresses, instead of the main image."
   (unless machine (error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
+  (when bank
+    (setf region (%bank-image-region assembly region)))
   (let ((target-width (%machine-cell-width machine memory))
         (source-width (assembly-cell-width assembly)))
     (unless (= target-width source-width)
       (error "DISASSEMBLE-ASSEMBLY on machine ~S: assembly's cell width (~D) does not ~
 match the machine's cell width (~D)" machine source-width target-width)))
-  (disassemble-cells (assembly-cells assembly)
-                      :machine machine :origin (assembly-origin assembly)
+  (disassemble-cells (if bank
+                          (bank-image-cells (%required-bank-image assembly region bank))
+                          (assembly-cells assembly))
+                      :machine machine
+                      :origin (if bank
+                                  (bank-image-origin (%required-bank-image assembly region bank))
+                                  (assembly-origin assembly))
                       :symbols (assembly-symbols assembly)
                       :symbol-info (assembly-symbol-info assembly)
                       :lexer lexer :labels labels :suffixes suffixes :memory memory
                       :data-regions (if (eq data-regions :auto)
-                                        (assembly-data-regions assembly)
+                                        (assembly-data-regions assembly :region region :bank bank)
                                         data-regions)))
 
 (defun disassemble-memory (machine &key memory start count symbols symbol-info (lexer 'default)

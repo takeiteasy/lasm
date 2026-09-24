@@ -159,7 +159,9 @@ ever non-NIL for :INSTRUCTION."
   source-unit
   (definition-line nil :type (or null (integer 0)))
   (kind :instruction :type keyword)
-  (descriptor nil :type (or null instruction-descriptor)))
+  (descriptor nil :type (or null instruction-descriptor))
+  (region nil :type (or null symbol))   ; banked region and bank the entry
+  (bank nil :type (or null (integer 0)))) ; is placed in; NIL for the main image
 
 (defstruct symbol-info
   "Metadata for a bound symbol. QUALIFIED-NAME is readable; local hash keys
@@ -174,12 +176,22 @@ DEFINITION-LINE its macro body line when applicable."
   (value 0 :type integer)
   (line 0 :type (integer 0))
   (definition-line nil :type (or null (integer 0)))
-  (order 0 :type (integer 0)))
+  (order 0 :type (integer 0))
+  (region nil :type (or null symbol))   ; banked region and bank a label is
+  (bank nil :type (or null (integer 0)))) ; placed in; NIL for the main image
 
 (defvar *current-definition-line* nil)
 (defvar *current-invocation-line* nil)
 (defvar *current-source-unit* nil)
 (defvar *current-definition-unit* nil)
+
+;; The output a .BANK section places in one bank of a banked region: CELLS
+;; spans the whole region window, starting at address ORIGIN.
+(defstruct bank-image
+  (region nil :type symbol)
+  (bank 0 :type (integer 0))
+  (origin 0 :type (integer 0))
+  (cells nil :type (or null vector)))
 
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
@@ -193,6 +205,7 @@ DEFINITION-LINE its macro body line when applicable."
                                        ; error
   (cell-width 8 :type (integer 1))
   (origin 0 :type (integer 0))
+  (banks nil :type list)                ; BANK-IMAGEs, by region then bank
   (symbols nil :type (or null hash-table))  ; string -> final value
   (symbol-info nil :type (or null hash-table))  ; internal key -> SYMBOL-INFO
                                                  ; (#37) -- scope/kind metadata
@@ -208,6 +221,38 @@ DEFINITION-LINE its macro body line when applicable."
                                          ; (#25) -- LISTING-TEXT degrades to
                                          ; an entry-ordered listing with no
                                          ; source column in that case
+
+;;; Bank placement: .BANK N routes output landing in a banked region of the
+;;; target memory to bank N of that region; all other output is the main image.
+
+(defvar *banked-regions* nil
+  "The banked MEMORY-REGIONs of the memory being assembled for.")
+
+(defvar *layout-bank* nil
+  "The bank selected by the latest .BANK, or NIL before any.")
+
+(defun %bank-region-at (address)
+  "The banked region ADDRESS lies in while a bank is selected, else NIL."
+  (and *layout-bank*
+       (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
+                *banked-regions*)))
+
+(defun %entry-bank-region (address size line finalp)
+  "The banked region an entry of SIZE cells at ADDRESS lands in, or NIL for
+the main image. Once layout has converged, signals if the entry straddles
+the region's edge or the selected bank does not exist."
+  (let ((region (%bank-region-at address)))
+    (when (and *layout-bank* (plusp size) (not region))
+      (setf region (%bank-region-at (+ address size -1))))
+    (when (and region finalp)
+      (when (or (< address (memory-region-start region))
+                (> (+ address size -1) (memory-region-end region)))
+        (%assembly-error line "output crosses the boundary of banked region ~(~A~)"
+                         (memory-region-name region)))
+      (when (>= *layout-bank* (memory-region-banks region))
+        (%assembly-error line ".bank ~D is out of range for region ~(~A~) (~D bank~:P)"
+                         *layout-bank* (memory-region-name region) (memory-region-banks region))))
+    region))
 
 ;;; Pass 1: layout -- size every statement, bind every label, choose modes
 
@@ -750,7 +795,7 @@ labels. Return NIL when a known forward label has no provisional value yet."
                              (statement-mnemonic statement)
                              (%display-symbol-key (unresolved-label-name c))))))))
 
-(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp directive-symbols labels previous)
+(defun %apply-origin-directive (statement directive address asm-origin emitted-p scope finalp directive-symbols labels previous main-end)
   "Apply a :SET-ORIGIN directive (.ORG) at layout time. Returns (VALUES
 new-address new-asm-origin): before any statement has occupied an address
 (EMITTED-P NIL), .ORG moves both the address counter and the assembly's own
@@ -764,16 +809,19 @@ layout pass (see %LAYOUT) can turn what was a legal forward pad into an
 apparent backward move, and that must not fail until the widths have
 actually converged -- a trial pass instead clamps forward (MAX VALUE ADDRESS)
 so layout can keep iterating. A \"*\" in the operand (#15) resolves against
-ADDRESS -- the counter's value *before* this .ORG moves it."
+ADDRESS -- the counter's value *before* this .ORG moves it. EMITTED-P and
+MAIN-END describe the main image only: a .ORG into a banked region (see
+%BANK-REGION-AT) may move anywhere and never moves the assembly's origin."
   (let ((value (%directive-constant-arg statement directive address scope directive-symbols labels previous)))
     (cond
       ((null value) (values address asm-origin))
+      ((%bank-region-at value) (values value asm-origin))
       ((not emitted-p) (values value value))
-      ((>= value address) (values value asm-origin))
+      ((>= value main-end) (values value asm-origin))
       (finalp (%assembly-error (statement-line statement)
                                 ".org cannot move the address counter backward (from ~D to ~D)"
-                                address value))
-      (t (values address asm-origin)))))
+                                main-end value))
+      (t (values main-end asm-origin)))))
 
 ;;; Local-label scoping (#16) -- qualify a local name against its nearest
 ;;; preceding global label before it ever reaches the (flat) symbol table.
@@ -812,6 +860,10 @@ call made idempotent some other way."
   (dolist (ast asts) (%qualify-locals! ast scope line))
   asts)
 
+(defun %bank-region-name (address)
+  (let ((region (%bank-region-at address)))
+    (and region (memory-region-name region))))
+
 (defun %bind-symbol! (symbols info qualified-name name value line kind scope localp &optional rebindp directive-symbols)
   "Bind a symbol and its metadata. REBINDP permits replacing assignments only."
   (when (and *register-aliases* (nth-value 1 (gethash name *register-aliases*)))
@@ -832,7 +884,9 @@ call made idempotent some other way."
                            :scope scope
                            :kind kind :localp localp :value value :line line
                            :definition-line *current-definition-line*
-                           :order (hash-table-count info))))
+                           :order (hash-table-count info)
+                           :region (and (eq kind :label) (%bank-region-name value))
+                           :bank (and (eq kind :label) (%bank-region-name value) *layout-bank*))))
 
 (defun %bind-label! (statement symbols info address scope directive-symbols)
   "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS (and its
@@ -1005,6 +1059,10 @@ symbol ~S is not yet defined"
                   (add (after i) (before i))
                   (operand statement directive i (after i))
                   (setf emitted-p t))
+                 (:select-bank
+                  (setf (aref directives i) statement)
+                  (add (after i) (before i))
+                  (operand statement directive i (after i)))
                  ((:assign :reassign)
                   (add (after i) (before i))
                   (walk-expr (%qualify-locals!
@@ -1072,7 +1130,7 @@ through so %ENCODE can read a hole's own matched ONE-OF alternative's
 -- %ENCODE dispatches on the leading keyword. A .ORG statement (directive.lisp)
 contributes no entry -- it only moves the address counter (and, before
 anything else has been laid out, ASM-ORIGIN -- see %APPLY-ORIGIN-DIRECTIVE).
-FINAL-ADDRESS is the address counter's value after the last statement;
+FINAL-ADDRESS is the end of the main image (banked output excluded);
 ASM-ORIGIN is ORIGIN unless a leading .ORG moved it.
 
 PREV-SYMBOLS is the previous pass's completed symbol table (NIL on the very
@@ -1112,6 +1170,8 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
         (new-floors (copy-seq floors))
         (address origin)
         (asm-origin origin)
+        (main-end origin)
+        (*layout-bank* nil)
         (emitted-p nil)
         (scope nil)
         sized
@@ -1145,10 +1205,26 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                  ((and directive (eq (directive-descriptor-action directive) :set-origin))
                   (multiple-value-bind (new-address new-origin)
                       (%apply-origin-directive statement directive address asm-origin
-                                                emitted-p scope finalp directive-symbols labels prev-symbols)
-                    (setf address new-address asm-origin new-origin))
+                                                emitted-p scope finalp directive-symbols labels prev-symbols
+                                                main-end)
+                    (setf address new-address asm-origin new-origin)
+                    (unless (%bank-region-at address) (setf main-end address)))
                   (setf (aref effects i) address)
                   (setf scope (%bind-label! statement symbols info address scope directive-symbols)))
+                 ((and directive (eq (directive-descriptor-action directive) :select-bank))
+                  (setf scope (%bind-label! statement symbols info address scope directive-symbols))
+                  (unless *banked-regions*
+                    (%assembly-error line ".bank: the target memory has no banked region"))
+                  (let ((bank (%directive-constant-arg statement directive address
+                                                       scope directive-symbols labels prev-symbols)))
+                    (setf (aref effects i) bank)
+                    (when bank
+                      (unless (>= bank 0)
+                        (%assembly-error line ".bank: bank must not be negative"))
+                      (setf *layout-bank* bank)
+                      (cl:push (list :bank bank line *current-definition-line*
+                                     *current-source-unit* *current-definition-unit*)
+                               sized))))
                  ;; Assignments contribute no SIZED entry or address space.
                  ;; A label on the same line binds first and sets local scope.
                  ((and directive (member (directive-descriptor-action directive)
@@ -1174,8 +1250,9 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                                                "~A: count must not be negative" mnemonic))
                             (cl:push (list :reserve address count line *current-definition-line*
                                            *current-source-unit* *current-definition-unit*) sized)
-                            (incf address count)
-                            (setf emitted-p t)))
+                            (let ((region (%entry-bank-region address count line finalp)))
+                              (incf address count)
+                              (unless region (setf emitted-p t main-end address)))))
                          (:emit
                           (let* ((asts (mapcar (lambda (ast)
                                                  (%capture-set-values ast symbols set-names line))
@@ -1185,8 +1262,9 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                             (cl:push (list :emit address width (directive-descriptor-endian directive)
                                            asts line *current-definition-line*
                                            *current-source-unit* *current-definition-unit*) sized)
-                            (incf address (* width (length asts)))
-                            (setf emitted-p t)))))
+                            (let ((region (%entry-bank-region address (* width (length asts)) line finalp)))
+                              (incf address (* width (length asts)))
+                              (unless region (setf emitted-p t main-end address)))))))
                       (t
                        (when (%include-statement-p statement)
                          (%include-error line ".include is not expanded; run ~
@@ -1208,12 +1286,13 @@ EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                                           line choices *current-definition-line*
                                           *current-source-unit* *current-definition-unit*)
                                     sized)
-                           (let ((size (instruction-descriptor-size descriptor)))
+                           (let* ((size (instruction-descriptor-size descriptor))
+                                  (region (%entry-bank-region address size line finalp)))
                              (setf (aref new-floors i) size)
                              (cl:push size widths)
-                             (incf address size))
-                           (setf emitted-p t))))))))))
-    (values symbols (nreverse sized) address asm-origin new-floors (nreverse widths) info effects)))
+                             (incf address size)
+                             (unless region (setf emitted-p t main-end address))))))))))))
+    (values symbols (nreverse sized) main-end asm-origin new-floors (nreverse widths) info effects)))
 
 (defun %layout (statements machine origin cell-width)
   "Returns (VALUES symbols sized-entries final-address asm-origin info) --
@@ -1379,64 +1458,108 @@ an operand resolves against the address of the entry it's *in* -- for
 itself); for :EMIT (e.g. \".byte 1, *, 3\") each value gets *its own*
 element address, not the directive statement's address, so \".word *, *\"
 emits two different words. ENDIAN (#66) governs :EMIT's own
-%ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding."
-  (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width)))
-    (dolist (entry sized-entries)
-      (let ((*current-definition-line* (nth (- (length entry) 3) entry))
-            (*current-source-unit* (nth (- (length entry) 2) entry))
-            (*current-definition-unit* (car (last entry)))
-            (*current-invocation-line* (and (nth (- (length entry) 3) entry)
-                                            (ecase (first entry)
-                                              (:instruction (fifth entry))
-                                              (:emit (sixth entry))
-                                              (:reserve (fourth entry))))))
-       (ecase (first entry)
-        (:instruction
-         (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
-           (declare (ignore kind definition-line unit definition-unit))
-           (let* ((mode (instruction-descriptor-mode descriptor))
-                  (relative-holes (instruction-descriptor-relative-holes descriptor))
-                  (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
-             (loop for value in values
-                   for relativep in relative-holes
-                   for i from 0
-                   when relativep
-                     do (setf (nth i values)
-                              (%relative-offset address descriptor i value line cell-width)))
-             (%check-register-operand-range! descriptor values line)
-             (%check-strict-operand-range! descriptor mode values line cell-width choices)
-             (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
-                    (shadow nil)
-                    (removedp nil))
-               (multiple-value-setq (shadow removedp) (%shadowing-descriptor descriptor encoded))
-               (when shadow
-                 (%assembly-error line (if removedp
-                                           "~A: this encoding is the removed instruction ~A"
-                                           "~A: this encoding decodes as ~A")
-                                  (instruction-descriptor-name descriptor)
-                                  (instruction-descriptor-name shadow)))
-               (loop with i = (- address origin)
-                     for cell in encoded
-                     do (setf (aref cells i) cell) (incf i))))))
-        (:emit
-         (destructuring-bind (kind address width entry-endian asts line definition-line unit definition-unit) entry
-           (declare (ignore kind line definition-line unit definition-unit))
-           (loop with i = (- address origin)
-                 for ast in asts
-                 do (dolist (cell (%encode-value-cells
-                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width
-                                    (or entry-endian endian)))
-                      (setf (aref cells i) cell) (incf i)))))
-        (:reserve
-         ;; Zero-filled -- %MAKE-GROWABLE-CELLS/%ENSURE-CELLS-LENGTH already
-         ;; zero-initialize every element, so there is nothing to write here
-         ;; beyond making sure the run is covered (relevant when a .RESERVE
-         ;; is the very last statement, so no later write grows the vector
-         ;; past it).
-         (destructuring-bind (kind address count line definition-line unit definition-unit) entry
-           (declare (ignore kind line definition-line unit definition-unit))
-           (%ensure-cells-length cells (- (+ address count) origin)))))))
-    (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)))
+%ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding.
+
+A :BANK entry (.BANK) selects the bank for the entries after it. An entry
+landing in a banked region while a bank is selected is written to that bank's
+BANK-IMAGE instead. Returns (VALUES main-cells bank-images), the images
+ordered by region then bank; overlapping output in one bank is an error."
+  (let ((cells (%make-growable-cells (max 0 (- final-address origin)) cell-width))
+        (banks (make-hash-table :test 'equal))
+        (*layout-bank* nil))
+    (labels ((bank-target (region address size line)
+               (let* ((key (cons (memory-region-name region) *layout-bank*))
+                      (start (memory-region-start region))
+                      (entry (or (gethash key banks)
+                                 (let ((length (1+ (- (memory-region-end region) start))))
+                                   (setf (gethash key banks)
+                                         (cons (make-bank-image
+                                                :region (memory-region-name region)
+                                                :bank *layout-bank* :origin start
+                                                :cells (make-array length
+                                                                   :element-type `(unsigned-byte ,cell-width)
+                                                                   :initial-element 0))
+                                               (make-array length :element-type 'bit
+                                                                  :initial-element 0)))))))
+                 (loop for i from (- address start) repeat size
+                       do (when (= 1 (sbit (cdr entry) i))
+                            (%assembly-error line "output overlaps earlier output at ~D in bank ~D of ~(~A~)"
+                                             (+ start i) *layout-bank* (memory-region-name region)))
+                          (setf (sbit (cdr entry) i) 1))
+                 (values (bank-image-cells (car entry)) (- address start))))
+             (target (address size line)
+               (let ((region (%bank-region-at address)))
+                 (cond (region (bank-target region address size line))
+                       ((< address origin)
+                        (%assembly-error line "output at ~D lies below the assembly's origin ~D"
+                                         address origin))
+                       (t (values cells (- address origin)))))))
+      (dolist (entry sized-entries)
+        (let ((*current-definition-line* (nth (- (length entry) 3) entry))
+              (*current-source-unit* (nth (- (length entry) 2) entry))
+              (*current-definition-unit* (car (last entry)))
+              (*current-invocation-line* (and (nth (- (length entry) 3) entry)
+                                              (ecase (first entry)
+                                                (:instruction (fifth entry))
+                                                (:emit (sixth entry))
+                                                (:reserve (fourth entry))
+                                                (:bank (third entry))))))
+          (ecase (first entry)
+            (:bank (setf *layout-bank* (second entry)))
+            (:instruction
+             (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
+               (declare (ignore kind definition-line unit definition-unit))
+               (let* ((mode (instruction-descriptor-mode descriptor))
+                      (relative-holes (instruction-descriptor-relative-holes descriptor))
+                      (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
+                 (loop for value in values
+                       for relativep in relative-holes
+                       for i from 0
+                       when relativep
+                         do (setf (nth i values)
+                                  (%relative-offset address descriptor i value line cell-width)))
+                 (%check-register-operand-range! descriptor values line)
+                 (%check-strict-operand-range! descriptor mode values line cell-width choices)
+                 (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
+                        (shadow nil)
+                        (removedp nil))
+                   (multiple-value-setq (shadow removedp) (%shadowing-descriptor descriptor encoded))
+                   (when shadow
+                     (%assembly-error line (if removedp
+                                               "~A: this encoding is the removed instruction ~A"
+                                               "~A: this encoding decodes as ~A")
+                                      (instruction-descriptor-name descriptor)
+                                      (instruction-descriptor-name shadow)))
+                   (multiple-value-bind (target-cells start) (target address (length encoded) line)
+                     (loop with i = start
+                           for cell in encoded
+                           do (setf (aref target-cells i) cell) (incf i)))))))
+            (:emit
+             (destructuring-bind (kind address width entry-endian asts line definition-line unit definition-unit) entry
+               (declare (ignore kind definition-line unit definition-unit))
+               (multiple-value-bind (target-cells start) (target address (* width (length asts)) line)
+                 (loop with i = start
+                       for ast in asts
+                       do (dolist (cell (%encode-value-cells
+                                          (eval-expr ast :symbols symbols :pc (+ address (- i start)))
+                                          width cell-width (or entry-endian endian)))
+                            (setf (aref target-cells i) cell) (incf i))))))
+            (:reserve
+             ;; Zero-filled -- the arrays are zero-initialized, so nothing is
+             ;; written beyond covering the run (relevant when a .RESERVE is
+             ;; the very last statement, so no later write grows the main
+             ;; vector past it).
+             (destructuring-bind (kind address count line definition-line unit definition-unit) entry
+               (declare (ignore kind definition-line unit definition-unit))
+               (if (%bank-region-at address)
+                   (target address count line)
+                   (%ensure-cells-length cells (- (+ address count) origin)))))))))
+    (values (make-array (length cells) :element-type `(unsigned-byte ,cell-width) :initial-contents cells)
+            (loop for region in *banked-regions*
+                  append (sort (loop for key being the hash-keys of banks using (hash-value entry)
+                                     when (eq (car key) (memory-region-name region))
+                                       collect (car entry))
+                               #'< :key #'bank-image-bank)))))
 
 ;;; Listing (#25) -- retain %LAYOUT's address<->statement mapping instead of
 ;;; discarding it once %ENCODE has run. See listing.lisp for the rendering
@@ -1470,8 +1593,19 @@ needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
 
 (defun %build-listing (sized-entries)
   "SIZED-ENTRIES in address order in, LISTING-LINE list in address order out
--- see %SIZED-ENTRY-LISTING-LINE."
-  (mapcar #'%sized-entry-listing-line sized-entries))
+-- see %SIZED-ENTRY-LISTING-LINE. :BANK entries produce no line; they set the
+bank the following lines are tagged with."
+  (let ((*layout-bank* nil) lines)
+    (dolist (entry sized-entries)
+      (if (eq (first entry) :bank)
+          (setf *layout-bank* (second entry))
+          (let* ((line (%sized-entry-listing-line entry))
+                 (region (%bank-region-at (listing-line-address line))))
+            (when region
+              (setf (listing-line-region line) (memory-region-name region)
+                    (listing-line-bank line) *layout-bank*))
+            (cl:push line lines))))
+    (nreverse lines)))
 
 ;;; Entry points
 
@@ -1514,6 +1648,10 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
     ;; check, for the whole of this assembly.
     (let* ((cell-width (%machine-cell-width machine memory))
            (endian (%machine-endian machine memory))
+           (*banked-regions*
+             (let ((element (descriptor-element (find-machine-descriptor machine)
+                                                (%resolve-memory machine memory))))
+               (remove-if-not #'memory-region-banks (storage-element-regions element))))
             (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine)))
             (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
       (handler-bind ((lasm-syntax-error
@@ -1538,11 +1676,13 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                                    (source-unit-text *current-definition-unit*)))))))
         (multiple-value-bind (symbols sized final-address asm-origin info)
             (%layout (expand-macros statements machine) machine origin cell-width)
-          (make-assembly :cells (%encode sized symbols asm-origin final-address cell-width endian)
+          (multiple-value-bind (cells bank-images)
+              (%encode sized symbols asm-origin final-address cell-width endian)
+           (make-assembly :cells cells :banks bank-images
                          :cell-width cell-width
                          :origin asm-origin :symbols symbols :symbol-info info
                          :listing (%build-listing sized) :source source
-                         :source-unit source-unit))))))
+                         :source-unit source-unit)))))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then

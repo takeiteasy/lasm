@@ -57,6 +57,9 @@ silently placing every cell one address too far apart, which is what would
 happen if a program assembled against a byte-addressed memory element were
 loaded into a word-addressed one with no other symptom.
 
+An `assembly` with [banked output](banked-output.md) also fills each of its
+bank images, without changing the mapping.
+
 With `:bank n`, `cells` load into bank `n` of the banked region containing
 `origin`, whether or not that bank is mapped. The mapping and the PC are left
 unchanged. It signals if `origin` is not in a banked region, if the image

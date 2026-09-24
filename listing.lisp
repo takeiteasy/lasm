@@ -35,14 +35,21 @@
 
 ;;; Lookup
 
-(defun listing-line-at (assembly address)
+(defun %same-image-p (line region bank)
+  (and (eq (listing-line-region line) region)
+       (eql (listing-line-bank line) bank)))
+
+(defun listing-line-at (assembly address &key region bank)
   "The LISTING-LINE in ASSEMBLY-LISTING whose [ADDRESS-of-entry,
 ADDRESS-of-entry + SIZE) run contains ADDRESS, or NIL if ADDRESS falls in a
-gap (e.g. a forward .ORG's pad) or past the end. A linear scan over
-ASSEMBLY-LISTING -- fine at the program sizes LASM currently targets; a
-follow-up ticket tracks an address-indexed structure if that ever matters."
-  (find-if (lambda (l) (<= (listing-line-address l) address
-                            (1- (+ (listing-line-address l) (listing-line-size l)))))
+gap (e.g. a forward .ORG's pad) or past the end. REGION and BANK select an
+entry placed in that bank of a banked region; by default only main-image
+entries match. A linear scan over ASSEMBLY-LISTING -- fine at the program
+sizes LASM currently targets; a follow-up ticket tracks an address-indexed
+structure if that ever matters."
+  (find-if (lambda (l) (and (%same-image-p l region bank)
+                            (<= (listing-line-address l) address
+                                (1- (+ (listing-line-address l) (listing-line-size l))))))
             (assembly-listing assembly)))
 
 (defun listing-lines-for-source-line (assembly line &key file)
@@ -60,13 +67,15 @@ contribute entries from each occurrence."
 
 ;;; Data regions (#82)
 
-(defun assembly-data-regions (assembly)
+(defun assembly-data-regions (assembly &key region bank)
   "The (START . END) cell ranges, END exclusive, ASSEMBLY's .byte/.word/.res
 statements occupy, ascending, adjacent runs merged -- the :DATA-REGIONS
-DISASSEMBLE-ASSEMBLY passes by default. Empty when ASSEMBLY-LISTING is NIL."
+DISASSEMBLE-ASSEMBLY passes by default. REGION and BANK select a bank's
+image instead of the main one. Empty when ASSEMBLY-LISTING is NIL."
   (let (regions)
     (dolist (l (assembly-listing assembly))
-      (when (and (member (listing-line-kind l) '(:emit :reserve))
+      (when (and (%same-image-p l region bank)
+                 (member (listing-line-kind l) '(:emit :reserve))
                  (plusp (listing-line-size l)))
         (let ((start (listing-line-address l))
               (end (+ (listing-line-address l) (listing-line-size l))))
@@ -87,11 +96,27 @@ an ellipsis) when its SIZE exceeds it -- a large .RES run would otherwise
 spill a single line across the whole listing width for no diagnostic
 benefit, since every shown cell would be the same zero.")
 
+(defun assembly-bank-image (assembly region bank)
+  "ASSEMBLY's BANK-IMAGE for BANK of REGION, or NIL if nothing was placed there."
+  (find-if (lambda (image) (and (eq (bank-image-region image) region)
+                                (eql (bank-image-bank image) bank)))
+           (assembly-banks assembly)))
+
+(defun %listing-address-text (line)
+  "LINE's address column: AAAA, or BB:AAAA for an entry in a bank."
+  (if (listing-line-bank line)
+      (format nil "~2,'0X:~4,'0X" (listing-line-bank line) (listing-line-address line))
+      (format nil "~4,'0X" (listing-line-address line))))
+
 (defun %listing-cells (assembly line)
-  "LINE's own encoded cells, sliced out of ASSEMBLY-CELLS -- see this file's
-header comment on why LISTING-LINE stores no cells of its own."
-  (let* ((cells (assembly-cells assembly))
-         (origin (assembly-origin assembly))
+  "LINE's own encoded cells, sliced out of ASSEMBLY-CELLS (or its bank's
+image) -- see this file's header comment on why LISTING-LINE stores no cells
+of its own."
+  (let* ((image (and (listing-line-bank line)
+                     (assembly-bank-image assembly (listing-line-region line)
+                                          (listing-line-bank line))))
+         (cells (if image (bank-image-cells image) (assembly-cells assembly)))
+         (origin (if image (bank-image-origin image) (assembly-origin assembly)))
          (start (- (listing-line-address line) origin)))
     (coerce (subseq cells start (+ start (listing-line-size line))) 'list)))
 
@@ -143,7 +168,7 @@ data-only line's own text with blank columns when a line has no entry."
           for entries = (gethash n by-line)
           do (if entries
                  (dolist (entry entries)
-                   (%listing-row stream (format nil "~4,'0X" (listing-line-address entry))
+                   (%listing-row stream (%listing-address-text entry)
                                  (%listing-cells-text assembly entry digits) text))
                  (%listing-row stream "" "" text)))))
 
@@ -152,7 +177,7 @@ data-only line's own text with blank columns when a line has no entry."
 text to index into, so this just walks ASSEMBLY-LISTING in address order
 with the source column omitted entirely."
   (dolist (l (assembly-listing assembly))
-    (%listing-row stream (format nil "~4,'0X" (listing-line-address l))
+    (%listing-row stream (%listing-address-text l)
                   (%listing-cells-text assembly l digits) nil)))
 
 (defun %listing-entry-index (assembly)
@@ -179,7 +204,7 @@ with the source column omitted entirely."
                            text)
           do (if entries
                  (dolist (entry entries)
-                   (%listing-row stream (format nil "~4,'0X" (listing-line-address entry))
+                   (%listing-row stream (%listing-address-text entry)
                                  (%listing-cells-text assembly entry digits) marked))
                  (%listing-row stream "" "" marked))
              (dolist (child (gethash line (source-unit-children unit)))
@@ -314,7 +339,7 @@ are ordered by their global's own SYMBOL-INFO-LINE."
 LISTING-TEXT's own address rendering), or plain decimal for an assignment (not an
 address, so hex width has no natural meaning)."
   (if (eq (symbol-info-kind info) :label)
-      (format nil "~V,'0X" digits (symbol-info-value info))
+      (format nil "~@[~2,'0X:~]~V,'0X" (symbol-info-bank info) digits (symbol-info-value info))
       (format nil "~D" (symbol-info-value info))))
 
 (defun symbols-text (assembly &key stream)
