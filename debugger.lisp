@@ -217,9 +217,11 @@ with REASON :UNTIL in place of DEBUG-CONTINUE's :BREAKPOINT."
 
 (defun %register-value-text (machine element)
   (if (> (storage-element-count element) 1)
-      (format nil "[~{~D~^ ~}]"
+      (format nil "[~{~A~^ ~}]"
               (loop for i below (storage-element-count element)
-                    collect (regref machine (storage-element-name element) i)))
+                    for value = (regref machine (storage-element-name element) i)
+                    for alias = (register-alias-at element i)
+                    collect (if alias (format nil "~A=~D" alias value) value)))
       (format nil "~D" (sref machine (storage-element-name element)))))
 
 (defun debug-state-text (session &key stream)
@@ -345,7 +347,7 @@ as one (%PARSE-INTEGER-MAYBE), otherwise the raw string as a label name."
   step [N]           execute N instructions (default 1)
   continue           run until a breakpoint, trap, or decode failure
   until ADDR|LABEL   run until ADDR/LABEL is reached
-  print NAME         print a register/flag's value
+  print NAME         print a register, register alias or flag's value
   x/N ADDR           dump N memory cells starting at ADDR
   where              show pc, current instruction, and source context
   help               this text
@@ -421,9 +423,14 @@ this call."
                        "print: missing name"
                        (let* ((machine (debug-session-machine session))
                               (descriptor (machine-descriptor machine))
-                              (element (gethash (intern (string-upcase rest) :lasm)
-                                                 (machine-descriptor-table descriptor))))
+                              (symbol (find-symbol (string-upcase rest) :lasm))
+                              (element (and symbol (gethash symbol (machine-descriptor-table descriptor))))
+                              (alias-element (gethash rest (machine-descriptor-register-alias-elements descriptor))))
                          (cond
+                           (alias-element
+                            (format nil "~A = ~D~%" rest
+                                    (regref machine (storage-element-name alias-element)
+                                            (gethash rest (machine-descriptor-register-aliases descriptor)))))
                            ((null element) (format nil "print: unknown storage element ~A" rest))
                            ((eq (storage-element-kind element) :flag)
                             (format nil "~A = ~D~%" rest (flag machine (storage-element-name element))))

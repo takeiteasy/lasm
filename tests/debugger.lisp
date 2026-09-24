@@ -198,6 +198,38 @@ loop.next: hlt" :machine 'emu-test-machine))
       (fiveam:is (search "v " text))
       (fiveam:is (search "1 0 0 4" text)))))
 
+(defmachine dbg-alias-test-machine
+  (register reg :width 8 :names (a b c d))
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(defun %dbg-alias-session ()
+  (let ((m (make-machine 'dbg-alias-test-machine)))
+    (setf (regref m 'reg 0) 1 (regref m 'reg 1) 7 (regref m 'reg 3) 4)
+    (make-debug-session m)))
+
+(fiveam:test debug-state-text-labels-aliased-bank-cells
+  (fiveam:is (search "[a=1 b=7 c=0 d=4]" (debug-state-text (%dbg-alias-session)))))
+
+(fiveam:test debug-state-text-leaves-unaliased-bank-unlabelled
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (text (debug-state-text (make-debug-session m))))
+    (fiveam:is (search "[0 0 0 0]" text))
+    (fiveam:is (not (find #\= text :start (position #\[ text) :end (position #\] text))))))
+
+(fiveam:test debug-command-print-register-alias
+  (let ((session (%dbg-alias-session)))
+    (fiveam:is (search "b = 7" (debug-command session "print b")))
+    (fiveam:is (search "B = 7" (debug-command session "print B")))))
+
+(fiveam:test debug-command-print-aliased-bank-whole
+  (fiveam:is (search "reg = [a=1 b=7 c=0 d=4]"
+                     (debug-command (%dbg-alias-session) "print reg"))))
+
+(fiveam:test debug-command-print-unknown-name-still-reports
+  (fiveam:is (search "unknown storage element zz"
+                     (debug-command (%dbg-alias-session) "print zz"))))
+
 (fiveam:test debug-memory-text-hex-width-follows-cell-width
   ;; A 16-bit-cell machine's dump uses four hex digits.
   (let* ((m (make-machine 'test-machine)) ; tests/suites.lisp: wram is 16-bit-cell

@@ -125,7 +125,9 @@ per-architecture code. A `:register` element branches on
 register (`:count > 1`, e.g. CHIP8's V0–VF or DCPU-16's A/B/C/X/Y/Z/I/J)
 reads every bank via `regref` — `sref` itself signals on a banked element, so
 a naive walk calling it on every register would crash on the first such
-machine. `:memory` elements are not dumped here (use `debug-memory-text`
+machine. A banked register declaring `:names` renders each cell as
+`alias=value` (`reg = [a=1 b=7 c=0 d=4]`); `print` accepts an alias directly
+(`print b` → `b = 7`). `:memory` elements are not dumped here (use `debug-memory-text`
 instead — there is no sane default range for "the whole address space").
 
 `debug-memory-text` pads each address to a fixed 4 hex digits (matching
@@ -173,7 +175,7 @@ Commands:
 | `step [N]` | execute N instructions (default 1) |
 | `continue` | run until a breakpoint, trap, or decode failure |
 | `until ADDR\|LABEL` | run until a target is reached |
-| `print NAME` | print a register/flag's value |
+| `print NAME` | print a register, register alias or flag's value |
 | `x/N ADDR` | dump N memory cells starting at ADDR |
 | `where` | show pc, current instruction, and source context |
 | `help` | list commands |
