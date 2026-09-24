@@ -334,6 +334,17 @@ and `(stack-ref offset)`. The explicit forms remain available to host code.
 `flag` writes `0` for `nil` or integer `0`, and `1` for `t` or any nonzero
 integer. Other values follow Lisp truthiness. It reads back as `0` or `1`.
 
+### Access hook
+
+`machine-access-hook` is `nil` or a function
+`(machine name index access value)`, called by `sref`, `regref`, `flag` and
+`mref` and their setters. `index` is the bank index (`regref`), the address
+(`mref`) or `nil`; `access` is `:read` or `:write`; `value` is the value
+read, or the wrapped value about to be written. Peeks, pokes, stack accessors
+and the emulator's own instruction fetch and PC advance do not call it. Like
+`machine-interrupt-hook` it is host wiring, and `reset` leaves it alone. The
+[debugger's watchpoints](debugger.md#watchpoints) use it.
+
 ## Conditions
 
 All signalled conditions inherit `lasm-error`: `unknown-storage`,

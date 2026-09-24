@@ -29,7 +29,7 @@ The same state `reset` clears:
 - banked regions: the mapped bank and every bank's contents
 - the device bus, holes and bus order included
 
-`machine-interrupt-hook` is host wiring and is neither saved nor changed by a
+`machine-interrupt-hook` and `machine-access-hook` are host wiring and are neither saved nor changed by a
 restore.
 
 Memory is run-length encoded as `(count . value)` runs, so a mostly-empty

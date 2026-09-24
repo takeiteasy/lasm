@@ -181,6 +181,7 @@
    #:device-signal
    #:machine-devices
    #:machine-interrupt-hook
+   #:machine-access-hook
 
    ;; Snapshots (#112)
    #:machine-snapshot
@@ -478,6 +479,25 @@
    #:breakpoint-id
    #:breakpoint-address
    #:breakpoint-label
+   #:breakpoint-condition
+   #:watchpoint
+   #:watchpoint-p
+   #:watchpoint-id
+   #:watchpoint-name
+   #:watchpoint-index
+   #:watchpoint-address
+   #:watchpoint-bank
+   #:watchpoint-access
+   #:watchpoint-label
+   #:watch-hit
+   #:watch-hit-p
+   #:watch-hit-watchpoint
+   #:watch-hit-access
+   #:watch-hit-old
+   #:watch-hit-new
+   #:debug-watch
+   #:debug-unwatch
+   #:debug-watchpoints
    #:debug-break
    #:debug-unbreak
    #:debug-breakpoints

@@ -158,7 +158,7 @@ cost)."
                                      :data (list :pc address :opcode opcode)))
             (:nop
              (let ((cost (if removedp size 1)))
-               (setf (sref machine pc) (+ address size))
+               (setf (%sref machine pc) (+ address size))
                (incf (machine-cycles machine) cost)
                (tick-devices machine cost)
                (values :nop cost))))))))
@@ -234,14 +234,14 @@ decoded, not just the values."
     (incf (machine-cycles machine) 1)
     (tick-devices machine 1)
     (return-from %step-machine-resolved (values :idle 1)))
-  (let ((address (sref machine pc)))
+  (let ((address (%sref machine pc)))
     (multiple-value-bind (descriptor values size choices)
         (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
                                          machine-name layout cell-width endian)
       (if (eq descriptor :decode-failure)
           (%undefined-opcode-step machine pc address memory machine-name layout)
           (let ((cost (%descriptor-cycle-cost descriptor)))
-            (setf (sref machine pc) (+ address size))
+            (setf (%sref machine pc) (+ address size))
             (incf (machine-cycles machine) cost)
             ;; TODO: devices tick once per instruction with its declared
             ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a

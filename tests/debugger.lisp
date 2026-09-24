@@ -267,3 +267,204 @@ loop.next: hlt" :machine 'emu-test-machine))
   (let ((session (%dbg-session)))
     (debug-step session 1) ; ldx #3
     (fiveam:is (search "3" (debug-command session "print x")))))
+
+;;; Watchpoints
+;;;
+;;; The fixture runs: ldx #3 (1), dex (2), bne (3, taken), dex, bne, dex, bne
+;;; (7, not taken), sta $10 (8), hlt.
+
+(fiveam:test debug-watch-register-write-stops-after-the-writing-instruction
+  (let ((session (%dbg-session)))
+    (debug-watch session "x")
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 0 (watch-hit-old hit)))
+      (fiveam:is (= 3 (watch-hit-new hit))))
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 3 (watch-hit-old hit)))
+      (fiveam:is (= 2 (watch-hit-new hit))))))
+
+(fiveam:test debug-watch-write-ignores-reads
+  (let ((session (%dbg-session)))
+    (debug-watch session "z" :access :read)
+    ;; ldx only writes z; bne reads it
+    (multiple-value-bind (reason steps) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 3 steps)))))
+
+(fiveam:test debug-watch-read-write-fires-on-both
+  (let ((session (%dbg-session)))
+    (debug-watch session "z" :access :read-write)
+    (fiveam:is (= 1 (nth-value 1 (debug-continue session))))))
+
+(fiveam:test debug-watch-memory-by-address-and-by-label
+  (let ((session (%dbg-session)))
+    (debug-watch session #x10)
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 8 steps))
+      (fiveam:is (= 0 (watch-hit-new hit)))))
+  (let* ((a (assemble "start: ldx #1
+data:  hlt" :machine 'emu-test-machine :origin #x100))
+         (m (make-machine 'emu-test-machine)))
+    (load-program m a)
+    (let ((wp (debug-watch (make-debug-session m :assembly a) "data" :access :read)))
+      (fiveam:is (= #x102 (watchpoint-address wp))))))
+
+(fiveam:test debug-watch-ignores-instruction-fetch-and-pc-bookkeeping
+  (let ((session (%dbg-session)))
+    (debug-watch session #x100 :access :read-write)
+    (fiveam:is (eq :trap (debug-continue session))))
+  (let ((session (%dbg-session)))
+    (debug-watch session "pc")
+    ;; only the taken branch writes pc from semantics
+    (fiveam:is (= 3 (nth-value 1 (debug-continue session))))))
+
+(fiveam:test debug-step-stops-early-on-a-watchpoint
+  (let ((session (%dbg-session)))
+    (debug-watch session "x")
+    (multiple-value-bind (reason steps) (debug-step session 5)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps)))))
+
+(fiveam:test debug-continue-to-stops-on-a-watchpoint-first
+  (let ((session (%dbg-session)))
+    (debug-watch session "x")
+    (fiveam:is (eq :watchpoint (debug-continue-to session #x106)))))
+
+(fiveam:test debug-inspection-never-trips-watchpoints
+  (let ((session (%dbg-session)))
+    (debug-watch session "x" :access :read-write)
+    (debug-command session "print x")
+    (debug-command session "info reg")
+    (debug-state-text session)
+    (fiveam:is (null (debug-session-watch-hit session)))
+    (fiveam:is (null (machine-access-hook (debug-session-machine session))))))
+
+(fiveam:test debug-watch-removes-the-hook-after-a-run
+  (let ((session (%dbg-session)))
+    (debug-watch session "x")
+    (debug-continue session)
+    (fiveam:is (null (machine-access-hook (debug-session-machine session))))))
+
+(fiveam:test debug-watch-banked-register-cell
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (session (make-debug-session m))
+         (wp (debug-watch session "v" :index 2)))
+    (fiveam:is (= 2 (watchpoint-index wp)))
+    (fiveam:is (string= "v[2]" (watchpoint-label wp)))
+    (funcall (%watch-hook session) m 'v 1 :write 5)
+    (fiveam:is (null (debug-session-watch-hit session)))
+    (funcall (%watch-hook session) m 'v 2 :write 5)
+    (fiveam:is (= 5 (watch-hit-new (debug-session-watch-hit session))))
+    (fiveam:signals error (debug-watch session "v"))
+    (fiveam:signals error (debug-watch session "v" :index 9))))
+
+(fiveam:test debug-watch-register-alias
+  (let* ((session (%dbg-alias-session))
+         (m (debug-session-machine session))
+         (wp (debug-watch session "b")))
+    (fiveam:is (= 1 (watchpoint-index wp)))
+    (fiveam:is (string= "b" (watchpoint-label wp)))
+    (funcall (%watch-hook session) m 'reg 1 :write 9)
+    (let ((hit (debug-session-watch-hit session)))
+      (fiveam:is (= 7 (watch-hit-old hit)))
+      (fiveam:is (= 9 (watch-hit-new hit))))))
+
+(fiveam:test debug-watch-rejects-bad-targets
+  (let ((session (%dbg-session)))
+    (fiveam:signals error (debug-watch session "nonesuch"))
+    (fiveam:signals error (debug-watch session "ram"))
+    (fiveam:signals error (debug-watch session "x" :access :sideways))))
+
+(fiveam:test debug-unwatch-removes-by-id-and-shares-ids-with-breakpoints
+  (let* ((session (%dbg-session))
+         (bp (debug-break session #x103))
+         (wp (debug-watch session "x")))
+    (fiveam:is (/= (breakpoint-id bp) (watchpoint-id wp)))
+    (fiveam:is (debug-unwatch session (watchpoint-id wp)))
+    (fiveam:is (null (debug-unwatch session (watchpoint-id wp))))
+    (fiveam:is (null (debug-watchpoints session)))))
+
+(fiveam:test debug-command-watch-and-delete
+  (let ((session (%dbg-session)))
+    (fiveam:is (search "Watchpoint 1 (w) at x" (debug-command session "watch x")))
+    (fiveam:is (search "(rw) at 0010" (debug-command session "watch 0x10 rw")))
+    (fiveam:is (search "1: watch (w) x" (debug-command session "info break")))
+    (fiveam:is (search "Watchpoint 1 (w) x: 0 -> 3" (debug-command session "continue")))
+    (fiveam:is (search "Deleted watchpoint 1" (debug-command session "delete 1")))
+    (fiveam:is (search "no such" (debug-command session "delete 1")))
+    (fiveam:is (search "Error" (debug-command session "watch nonesuch")))))
+
+(fiveam:test debug-command-watch-register-cell-syntax
+  (let ((session (make-debug-session (make-machine 'dbg-bank-test-machine))))
+    (fiveam:is (search "at v[2]" (debug-command session "watch v[2] r")))))
+
+;;; Conditional breakpoints
+
+(fiveam:test debug-break-condition-on-a-register
+  (let ((session (%dbg-session)))
+    (debug-break session #x102 :condition "x == 1")
+    (multiple-value-bind (reason steps) (debug-continue session)
+      (fiveam:is (eq :breakpoint reason))
+      (fiveam:is (= 5 steps))
+      (fiveam:is (= 1 (sref (debug-session-machine session) 'x))))))
+
+(fiveam:test debug-break-condition-never-true-runs-to-the-trap
+  (let ((session (%dbg-session)))
+    (debug-break session #x102 :condition "x == 9")
+    (fiveam:is (eq :trap (debug-continue session)))))
+
+(fiveam:test debug-break-condition-on-flag-label-equ-and-pc
+  (let* ((a (assemble ".equ limit, 2
+count: ldx #3
+.loop: dex
+       bne .loop
+       hlt" :machine 'emu-test-machine :origin #x100))
+         (m (make-machine 'emu-test-machine)))
+    (load-program m a)
+    (let ((session (make-debug-session m :assembly a)))
+      (debug-break session ".loop" :scope "count"
+                           :condition "x == limit && z == 0 && * == 0x102")
+      (multiple-value-bind (reason steps) (debug-continue session)
+        (fiveam:is (eq :breakpoint reason))
+        (fiveam:is (= 3 steps))))
+    (let ((session (make-debug-session (make-machine 'emu-test-machine) :assembly a)))
+      (fiveam:is (breakpoint-p (debug-break session ".loop" :scope "count"
+                                                      :condition ".loop == 0x102"))))))
+
+(fiveam:test debug-break-condition-on-register-alias
+  (let ((session (%dbg-alias-session)))
+    (fiveam:is (%breakpoint-triggered-p session (debug-break session 0 :condition "b == 7")))
+    (fiveam:is (not (%breakpoint-triggered-p session (debug-break session 0 :condition "b == 8"))))))
+
+(fiveam:test debug-break-rejects-bad-conditions-at-set-time
+  (let ((session (%dbg-session)))
+    (fiveam:signals error (debug-break session #x102 :condition "x =="))
+    (fiveam:signals error (debug-break session #x102 :condition "x 1"))
+    (fiveam:signals error (debug-break session #x102 :condition "x == 1 || bogus"))
+    (fiveam:signals error (debug-break session #x102 :condition "defined(x)"))
+    (fiveam:signals error (debug-break session #x102 :condition "bank(x)"))
+    (fiveam:signals error (debug-break session #x102 :condition "ram"))
+    (fiveam:is (null (debug-breakpoints session)))))
+
+(fiveam:test debug-break-condition-error-at-run-time-stops
+  (let ((session (%dbg-session)))
+    (debug-break session #x102 :condition "1 / (x - x) == 0")
+    (multiple-value-bind (reason steps condition) (debug-continue session)
+      (fiveam:is (eq :breakpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (typep condition 'error)))
+    (fiveam:is (search "condition error" (debug-command session "continue")))))
+
+(fiveam:test debug-command-break-if
+  (let ((session (%dbg-session)))
+    (fiveam:is (search "Breakpoint 1 at 0102"
+                       (debug-command session "break 0x102 if x == 1")))
+    (fiveam:is (search "if x == 1" (debug-command session "info break")))
+    (fiveam:is (search "steps=5" (debug-command session "continue")))
+    (fiveam:is (search "Error" (debug-command session "break 0x103 if")))
+    (fiveam:is (search "Error" (debug-command session "break 0x103 if nonesuch == 1")))))

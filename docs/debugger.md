@@ -35,7 +35,7 @@ mocking needed. `debugger-repl` is a thin read/dispatch/print loop over
 ## Sessions
 
 ```lisp
-(make-debug-session machine &key assembly pc memory)
+(make-debug-session machine &key assembly pc memory lexer)
 ```
 
 `machine` is a live `machine` instance (`make-machine`, with a program
@@ -43,12 +43,13 @@ already loaded via `load-program`). `assembly`, when given, is what a
 program's `.equ`s, labels, and source lines the debugger reads. `pc`/`memory`
 override the usual by-convention resolution (`%resolve-pc`/`%resolve-memory`,
 same as `step-machine`'s own keywords), and are resolved once at session
-creation, not re-resolved on every command.
+creation, not re-resolved on every command. `lexer` (default `'default`)
+tokenizes [breakpoint conditions](#conditional-breakpoints).
 
 ## Breakpoints
 
 ```lisp
-(debug-break session where &key scope bank) ; => breakpoint
+(debug-break session where &key scope bank condition) ; => breakpoint
 (debug-unbreak session id-or-address &key bank) ; => t or nil
 (debug-breakpoints session)              ; => list of breakpoint, by address
 ```
@@ -76,6 +77,48 @@ breakpoint only stops while that bank is mapped; an unqualified one stops
 whichever bank is mapped. `:bank` must name a bank of the region containing the
 address, and must agree with a label's own bank.
 
+## Conditional breakpoints
+
+```lisp
+(debug-break session ".loop" :scope "count" :condition "x == 1")
+```
+
+A breakpoint with a `condition` only stops while the expression is nonzero,
+checked after the step that lands on it. The expression uses the assembler's
+operators and number formats, parsed with `parse-expression`, over:
+
+- scalar registers, flags and register aliases, read live;
+- labels and `.equ`s of the attached assembly (looked up under `scope`, then
+  globally);
+- `*`, the current PC.
+
+A name that is both storage and a label is storage. `bank()`, `defined()`,
+`lowcell()` and `highcell()` are rejected. Syntax errors and unknown names
+signal from `debug-break`. An error while evaluating stops the run as
+`:breakpoint` with the error as the third value.
+
+## Watchpoints
+
+```lisp
+(debug-watch session target &key access index scope bank) ; => watchpoint
+(debug-unwatch session id)                               ; => t or nil
+(debug-watchpoints session)                              ; => list, by id
+```
+
+`target` is a scalar register, flag or register alias name, a label, or a
+memory address. A banked register takes `:index`. `access` is `:read`,
+`:write` (default) or `:read-write`. `scope` and `bank` qualify a memory
+target as for `debug-break`. Breakpoints and watchpoints share one id space.
+
+Execution stops after the instruction that made the access, with reason
+`:watchpoint` and a `watch-hit` (`watch-hit-watchpoint`, `-access`, `-old`,
+`-new`) as the third value. Instruction fetch, PC advance and the debugger's
+own inspection never trigger a watchpoint; a `:read` hit reports the value
+read for both `old` and `new`. `debug-step`, `debug-continue` and
+`debug-continue-to` all honour watchpoints. The debugger installs the
+machine's [access hook](machine-model.md#access-hook) only while an
+instruction runs, and only when watchpoints exist.
+
 ## Step and continue
 
 ```lisp
@@ -97,6 +140,7 @@ checking the machine's current PC — against the breakpoint table for
 |---|---|
 | `:step` | `debug-step` executed all `n` instructions requested |
 | `:breakpoint` | `debug-continue` stopped on a live breakpoint |
+| `:watchpoint` | a watched register, flag or address was accessed; the third value is the `watch-hit` |
 | `:until` | `debug-continue-to` reached its target |
 | `:trap` | an instruction's semantics signalled `lasm-trap` (e.g. `hlt`) |
 | `:fault` | `debug-continue` or `debug-continue-to` encountered a `storage-error`; the condition is the third return value |
@@ -191,14 +235,16 @@ Commands:
 |---|---|
 | `break ADDR\|LABEL` | set a breakpoint |
 | `break BANK:ADDR` | set a breakpoint that only stops while that bank is mapped |
-| `delete ID\|ADDR` | remove a breakpoint (every bank at an address) |
+| `break ... if EXPR` | stop only while `EXPR` is nonzero |
+| `watch TARGET [r\|w\|rw]` | watch an address, label, register, `REG[N]`, alias or flag (default `w`) |
+| `delete ID\|ADDR` | remove a breakpoint or watchpoint (every bank at an address) |
 | `delete BANK:ADDR` | remove the breakpoint at an address in one bank |
-| `info break` | list breakpoints |
+| `info break` | list breakpoints and watchpoints |
 | `info reg` | dump registers/flags/stacks |
 | `info banks` | list banked regions and their current bank |
 | `info sym` | list symbols (needs an attached assembly) |
 | `step [N]` | execute N instructions (default 1) |
-| `continue` | run until a breakpoint, trap, or decode failure |
+| `continue` | run until a breakpoint, watchpoint, trap, or decode failure |
 | `until ADDR\|LABEL` | run until a target is reached (`BANK:ADDR` waits for a bank) |
 | `print NAME` | print a register, register alias or flag's value |
 | `x/N ADDR` | dump N memory cells starting at ADDR |
@@ -221,16 +267,14 @@ from `:input` (default `*standard-input*`), writing responses to `:output`
 
 ## Scope
 
-This covers the ticket's core: address/label breakpoints, step/step-N/
-continue/continue-to-address, and read-only state inspection, plus the
-reference REPL. It does not cover, by design:
+This covers breakpoints (optionally conditional), watchpoints,
+step/step-N/continue/continue-to-address, and read-only state inspection,
+plus the reference REPL. It does not cover:
 
-- Watchpoints (break on read/write to a register or memory address).
 - Reverse/step-back execution.
-- Conditional breakpoints (`break ADDR if EXPR`).
 - Stepping/continuing by cycle budget rather than instruction count (though
   `run-for-cycles` already exists and pairs naturally with this once wired
   through — see [Emulator](emulator.md)'s cycle-cost model).
 - Writable inspection (`set register`/poke).
-
-Each is tracked as a follow-up.
+- Watchpoints on `:stack` elements.
+- Memory reads in breakpoint conditions.

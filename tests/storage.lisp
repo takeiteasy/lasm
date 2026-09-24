@@ -561,3 +561,47 @@ reset at the start of each test that reads it.")
     (eval '(defmachine bank-zero-test
             (memory ram :width 8 :addr-width 8
               (region a 0 15 :banks 0))))))
+
+;;; Access hook
+
+(defun %record-accesses (machine)
+  (let (log)
+    (setf (machine-access-hook machine)
+          (lambda (m name index access value)
+            (declare (ignore m))
+            (cl:push (list name index access value) log)))
+    (lambda () (prog1 (reverse log) (setf log nil)))))
+
+(fiveam:test access-hook-sees-register-and-flag-accesses
+  (let* ((m (make-machine 'test-machine))
+         (drain (%record-accesses m)))
+    (setf (sref m 'a) 300)
+    (sref m 'a)
+    (setf (flag m 'z) t)
+    (flag m 'z)
+    (fiveam:is (equal '((a nil :write 44) (a nil :read 44)
+                        (z nil :write 1) (z nil :read 1))
+                      (funcall drain)))))
+
+(fiveam:test access-hook-sees-memory-accesses-by-address
+  (let* ((m (make-machine 'test-machine))
+         (name (storage-element-name
+                (find :memory (machine-descriptor-elements (machine-descriptor m))
+                      :key #'storage-element-kind)))
+         (drain (%record-accesses m)))
+    (setf (mref m name 5) 7)
+    (mref m name 5)
+    (fiveam:is (equal `((,name 5 :write 7) (,name 5 :read 7)) (funcall drain)))))
+
+(fiveam:test access-hook-skips-peek-poke-and-hookless-accessors
+  (let* ((m (make-machine 'test-machine))
+         (name (storage-element-name
+                (find :memory (machine-descriptor-elements (machine-descriptor m))
+                      :key #'storage-element-kind)))
+         (drain (%record-accesses m)))
+    (%poke m name 1 9)
+    (mpeek m name 1)
+    (%mref m name 1)
+    (setf (%sref m 'a) 3)
+    (%sref m 'a)
+    (fiveam:is (null (funcall drain)))))

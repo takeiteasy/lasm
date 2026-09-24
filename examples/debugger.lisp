@@ -2,8 +2,8 @@
 ;;;;
 ;;;; #76 (M7): the debugger's machine-agnostic API and its reference
 ;;;; DEBUG-COMMAND dispatcher, driven against the same counter-loop program
-;;;; as examples/counter.lisp. Sets a breakpoint on the loop label, steps and
-;;;; continues, and inspects registers/flags/memory -- all through
+;;;; as examples/counter.lisp. Sets a conditional breakpoint on the loop label,
+;;;; adds a watchpoint, and inspects registers/flags/memory -- all through
 ;;;; DEBUG-COMMAND so this doubles as a script of what a DEBUGGER-REPL
 ;;;; session looks like. See docs/debugger.md.
 ;;;;
@@ -70,11 +70,11 @@
     (format t "~&== Every command below goes through DEBUG-COMMAND, string in, ==~%")
     (format t "== text out -- exactly what a DEBUGGER-REPL loop dispatches. ==~2%")
 
-    ;; ".loop" is a local label (LOCAL-LABEL-PREFIX "."), scoped under the
-    ;; preceding global "count" -- its qualified symbol-table name is
-    ;; "count.loop" (docs/assembler.md), which is what DEBUG-COMMAND's
-    ;; `break` (no :SCOPE argument of its own) looks up directly.
-    (dolist (command '("break count.loop" "info break" "step" "where"
-                        "continue" "where" "continue" "info reg"
-                        "x/4 $1000" "print x"))
+    ;; ".loop" is a local label at address 2. TODO: `break count.loop` does
+    ;; not resolve, so the address is used instead (#240).
+    ;; `if` makes the breakpoint conditional; `watch` stops after an
+    ;; instruction reads or writes a register, flag or memory address.
+    (dolist (command '("break 2 if x == 1" "info break" "continue"
+                        "where" "delete 1" "watch x" "continue" "info break"
+                        "delete 2" "continue" "info reg" "x/4 $1000" "print x"))
       (format t "(lasm-db) ~A~%~A" command (debug-command session command)))))

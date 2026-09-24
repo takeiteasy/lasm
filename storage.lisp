@@ -535,6 +535,12 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; this holds for the auto-installed default exactly as for anything a
   ;; host replaced it with.
   (interrupt-hook nil :type (or null function))
+  ;; NIL, or a function (machine name index access value) called on every
+  ;; SREF/REGREF/FLAG/MREF read and write. INDEX is the bank index (REGREF),
+  ;; the address (MREF), or NIL; ACCESS is :READ or :WRITE; VALUE is the
+  ;; wrapped value about to be written, or the value just read. Host wiring like
+  ;; INTERRUPT-HOOK -- RESET leaves it alone.
+  (access-hook nil :type (or null function))
   ;; #109: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp) but
   ;; not yet delivered -- a list of (DEVICE . DATA) conses, oldest first,
   ;; DEVICE possibly NIL for a software-raised (INT-style) signal. Capped at
@@ -552,6 +558,12 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; Banked regions' runtime state: region name -> (CURRENT . ARRAYS), ARRAYS
   ;; a simple-vector of one cell array per bank. Empty when no region is banked.
   (banks (make-hash-table :test 'eq)))
+
+;;; Access notification
+
+(defmacro %notify-access (machine name index access value)
+  `(let ((hook (machine-access-hook ,machine)))
+     (when hook (funcall hook ,machine ,name ,index ,access ,value))))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -750,12 +762,18 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
                                :name name))
     (values (gethash name (machine-slots machine)) element)))
 
-(defun sref (machine name)
-  "Read a scalar register or flag by NAME as an unsigned integer. Signals
-UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
+(defun %sref (machine name)
+  "SREF without access notification."
   (multiple-value-bind (slot element) (%slot-any machine name)
     (declare (ignore element))
     (aref slot 0)))
+
+(defun sref (machine name)
+  "Read a scalar register or flag by NAME as an unsigned integer. Signals
+UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
+  (let ((value (%sref machine name)))
+    (%notify-access machine name nil :read value)
+    value))
 
 (defun %slot-any (machine name)
   (let ((element (descriptor-element (machine-descriptor machine) name)))
@@ -770,9 +788,16 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
                                :name name))
     (values (gethash name (machine-slots machine)) element)))
 
-(defun (setf sref) (value machine name)
+(defun (setf %sref) (value machine name)
+  "(SETF SREF) without access notification."
   (multiple-value-bind (slot element) (%slot-any machine name)
     (setf (aref slot 0) (wrap-value value (storage-element-width element)))))
+
+(defun (setf sref) (value machine name)
+  (multiple-value-bind (slot element) (%slot-any machine name)
+    (let ((wrapped (wrap-value value (storage-element-width element))))
+      (%notify-access machine name nil :write wrapped)
+      (setf (aref slot 0) wrapped))))
 
 ;; #13: indexed access into a banked (:count > 1) register, e.g. CHIP8's
 ;; V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J. INDEX is evaluated at run time --
@@ -785,14 +810,18 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
     (unless (and (>= index 0) (< index (storage-element-count element)))
       (error 'register-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                            :name name :index index))
-    (aref slot index)))
+    (let ((value (aref slot index)))
+      (%notify-access machine name index :read value)
+      value)))
 
 (defun (setf regref) (value machine name index)
   (multiple-value-bind (slot element) (%slot machine name :register)
     (unless (and (>= index 0) (< index (storage-element-count element)))
       (error 'register-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                            :name name :index index))
-    (setf (aref slot index) (wrap-value value (storage-element-width element)))))
+    (let ((wrapped (wrap-value value (storage-element-width element))))
+      (%notify-access machine name index :write wrapped)
+      (setf (aref slot index) wrapped))))
 
 ;; #163: an interrupt :VECTOR/:MESSAGE/:SAVE place -- a scalar name read
 ;; through SREF, or (NAME INDEX) naming one bank cell read through REGREF.
@@ -823,12 +852,16 @@ declares no NAMES or INDEX is outside them."
   "Read a flag by NAME as 0 or 1."
   (multiple-value-bind (slot element) (%slot machine name :flag)
     (declare (ignore element))
-    (aref slot 0)))
+    (let ((value (aref slot 0)))
+      (%notify-access machine name nil :read value)
+      value)))
 
 (defun (setf flag) (value machine name)
   (multiple-value-bind (slot element) (%slot machine name :flag)
     (declare (ignore element))
-    (setf (aref slot 0) (if (or (null value) (and (integerp value) (zerop value))) 0 1))))
+    (let ((bit (if (or (null value) (and (integerp value) (zerop value))) 0 1)))
+      (%notify-access machine name nil :write bit)
+      (setf (aref slot 0) bit))))
 
 ;; #107: shared bounds-checked lookup for MREF/(SETF MREF)/MPEEK/%POKE --
 ;; keeps the ADDRESS-OUT-OF-RANGE check and %SLOT call in one place so the
@@ -847,8 +880,8 @@ declares no NAMES or INDEX is outside them."
   (let ((entry (gethash (memory-region-name region) (machine-banks machine))))
     (svref (cdr entry) (car entry))))
 
-(defun mref (machine name address)
-  "Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
+(defun %mref (machine name address)
+  "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
 in a :DEVICE region calls that region's READ instead of touching backing
 storage (0 when the region declares no READ); an address in a banked region
 reads the live bank; every other address -- including one in an unbanked
@@ -865,6 +898,13 @@ masked to the cell width, as writes are."
        (aref (%live-bank machine region) (- address (memory-region-start region))))
       (t (aref slot address)))))
 
+(defun mref (machine name address)
+  "Read memory element NAME on MACHINE at ADDRESS through %MREF, notifying
+the machine's ACCESS-HOOK."
+  (let ((value (%mref machine name address)))
+    (%notify-access machine name address :read value)
+    value))
+
 (defun (setf mref) (value machine name address)
   "Write memory element NAME on MACHINE at ADDRESS. #107: a store into a
 :ROM region is dropped (:ON-WRITE :IGNORE, the default) or signals
@@ -878,6 +918,7 @@ wrapped value in every case, matching plain (SETF MREF)'s existing return
 contract."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (let ((wrapped (wrap-value value (storage-element-cell-width element))))
+      (%notify-access machine name address :write wrapped)
       (cond
         ((and region (eq (memory-region-kind region) :rom))
          (when (eq (memory-region-on-write region) :error)
