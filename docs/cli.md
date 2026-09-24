@@ -73,7 +73,7 @@ returns the exit status. `lasm.ros` is a thin wrapper around it.
 
 The script needs [Roswell](https://github.com/roswell/roswell) and, like the
 library, `trivial-high-precision-timer` — see
-[Getting started](getting-started.md#roswell).
+[Getting started](getting-started.md#install).
 
 ```sh
 ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm

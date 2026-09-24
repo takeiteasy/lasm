@@ -1,17 +1,14 @@
 # Devices
 
-A `(device ...)` clause declares a peripheral addressed by instruction and
-bus index (DCPU-16's `HWN`/`HWQ`/`HWI`, ANIMA-16's device model), independent
-of [memory regions](machine-model.md#memory-regions) — a machine can declare
-a device without declaring any MMIO region, or the reverse, or both.
+A `(device ...)` clause adds a bus-addressed peripheral, independent of
+[memory regions](machine-model.md#memory-regions).
 
 ```lisp
 (defmachine devfoo
   (register pc :width 16)
-  (register a :width 16)
   (memory ram :width 8 :addr-width 16)
   (device clock :id #x0001 :version 1 :manufacturer #x1000
-          :init clock-init :tick clock-tick))
+    :init clock-init :tick clock-tick))
 ```
 
 ## `defmachine`'s `device` clause
@@ -22,122 +19,70 @@ a device without declaring any MMIO region, or the reverse, or both.
              [:save fn] [:load fn])
 ```
 
-`:id`/`:version`/`:manufacturer` (each a non-negative integer, defaulting to
-0) are the identity triple an `HWQ`-style instruction reads back — an
-instruction's own semantics decide which registers each value lands in (see
-"Semantics vocabulary" below).
-
-`:init`/`:tick`/`:receive`/`:detach`/`:save`/`:load` are all optional hooks, each a function
-*designator* — write the bare function name, not `#'name`, for the same
-reason a `:device` [region](machine-model.md#memory-regions)'s `:read`/
-`:write` are: `defmachine` quotes its whole clause body, so a `#'`-form there
-would freeze to the literal list `(function name)` instead of an actual
-function.
+Identity fields default to zero. Hooks are bare function names:
 
 | Hook | Called as | When |
-|---|---|---|
-| `:init` | `(fn machine device)` | Once, when the device is instantiated — at `make-machine`, at every `reset`, and (for a runtime-attached device) at `attach-device`. Its return value becomes the device's own `device-state`. |
-| `:tick` | `(fn machine device cycles)` | Once per `step-machine` with that step's declared cycle cost, and again for any `extra-cycles` — see "Ticking" below. |
-| `:receive` | `(fn machine device)` | An `HWI`-style message send (`device-send`). A device with no `:receive` ignores the send. |
-| `:detach` | `(fn machine device)` | Just before `detach-device` clears the device's bus slot. |
-| `:save` | `(fn machine device)` | At `machine-snapshot`; returns the device's state as readable data. |
-| `:load` | `(fn machine device data)` | At `restore-snapshot`, with what `:save` returned. See [Snapshots](snapshots.md). |
+| --- | --- | --- |
+| `:init` | `(fn machine device)` | Instantiation or reset; return value becomes device state. |
+| `:tick` | `(fn machine device cycles)` | Instruction or extra cycles pass. |
+| `:receive` | `(fn machine device)` | `device-send`. |
+| `:detach` | `(fn machine device)` | Before detachment. |
+| `:save` | `(fn machine device)` | Snapshot capture. |
+| `:load` | `(fn machine device data)` | Snapshot restore. |
 
-A device declares none of these and is still enumerable — a `:device` region
-with no `:read`/`:write` is the closest existing precedent.
-
-Every device name shares the one machine-wide namespace every other storage
-element name, register alias, and region name does — a device colliding with
-any of them is a `defmachine`-time error.
+See [Snapshots](snapshots.md) for device state. A device with no hooks is
+still enumerable.
 
 ## The bus
 
-Every declared device gets a fixed index, in declaration order, on a runtime
-`machine`'s bus. `attach-device` appends a device at runtime — either a
-second instance of an already-declared device (by name), or a wholly fresh
-one with its identity/hooks given inline:
+Declared devices receive fixed indices in declaration order.
+`attach-device` appends another instance or a new host device.
+`detach-device` leaves a hole so other indices stay stable.
 
 ```lisp
 (attach-device machine 'host-sensor :id #x0003 :version 1)
 ```
 
-A fresh name is checked against the machine's whole namespace exactly as a
-declared device's is — it may not collide with a register, alias, region, or
-another device (declared or already attached).
+| Function | Result |
+| --- | --- |
+| `device-count` | Bus size, including holes. |
+| `device-at` | Device at an index; holes signal `no-such-device`. |
+| `find-device` | First live device with a name, or `nil`. |
+| `device-info` | ID, version, and manufacturer values. |
+| `device-send` | Call the device's `:receive` hook. |
+| `tick-devices` | Tick every live device. |
 
-`detach-device` removes a device but **leaves a hole**: every other device's
-index is unaffected, and `device-count` does not shrink. A program that
-cached a device's index — the normal `HWN`-once, `HWQ`-by-index-later
-pattern — never has that index silently start addressing a different
-device after some other device detaches. A vacant or out-of-range index
-signals `no-such-device` (`device-at`, `detach-device`, `device-info`,
-`device-send`).
-
-| Function | Behavior |
-|---|---|
-| `attach-device machine name &key id version manufacturer init tick receive detach save load` | Appends a device, returns its index. |
-| `detach-device machine index` | Runs `:detach`, then clears the slot to a hole. |
-| `device-at machine index` | The `device` at `index`. Signals `no-such-device` on a hole or out-of-range index. |
-| `device-count machine` | Bus size, holes included — the high-water index bound (`HWN`). |
-| `find-device machine name` | The first live device named `name`, or `nil`. |
-| `device-info machine index` | `(values id version manufacturer)` (`HWQ`). |
-| `device-send machine index` | Calls the device's `:receive` (`HWI`). |
-| `tick-devices machine cycles` | Calls every live device's `:tick` with `cycles`. |
-
-`reset` restores the bus to its **declared** shape: any runtime-attached
-device is dropped, every hole is refilled, and every declared device's
-`:init` runs again.
+`reset` restores the declared bus and reruns each declared device's
+`:init`; runtime attachments disappear.
 
 ## Ticking
 
-`step-machine` calls `tick-devices` with the executed instruction's own
-cycle cost, once per step — including a step whose semantics signal a trap
-(device time stays in lockstep with `machine-cycles`, which is incremented
-the same way and for the same reason), but not on a decode failure, where
-nothing executed and no time elapsed. This runs identically under `run`,
-`run-for-cycles`, `run-for-duration`, and the debugger's single-instruction
-`debug-step` — every path into execution goes through `step-machine`.
-
-Cycles an instruction adds with [`extra-cycles`](emulator.md#dynamic-cycle-costs-90) tick devices a
-second time, after its semantics return. A step that traps skips that second
-tick, so its devices miss the extra cycles that `machine-cycles` still counts.
-
-A device ticks once per whole instruction, with that instruction's whole
-declared cost — a device needing intra-instruction resolution can't express
-it; a follow-up ticket tracks finer granularity.
+`step-machine` ticks devices for the instruction's declared cycles,
+including a trapping instruction. `extra-cycles` causes a second tick
+after semantics returns; a trap skips that second tick. Decode failure
+does not tick. See [Emulator](emulator.md#device-ticking).
 
 ## Semantics vocabulary
 
-The bus API is deliberately **not** bound inside `with-machine`/instruction
-semantics the way scalar registers are — the same treatment `:memory`
-elements get. An `HWN`/`HWQ`/`HWI`-style instruction calls the functions
-above directly, `machine` passed explicitly:
+Instruction semantics call bus functions with `machine` explicitly:
 
 ```lisp
-(definstruction devfoo hwq
-  (encoding (opcode #x01))
-  (semantics (multiple-value-bind (id version manufacturer) (device-info machine a)
-               (set! a id) (set! b version) (set! c manufacturer))))
+(multiple-value-bind (id version manufacturer) (device-info machine a)
+  (set! a id)
+  (set! b version)
+  (set! c manufacturer))
 ```
 
 ## Interrupt seam
 
-`device-signal machine device &optional data` calls `machine-interrupt-hook`
-— a function `(hook machine device data)` installed on a `machine` instance
-— when one is installed, and drops the signal otherwise. `reset` leaves a
-host-installed hook alone; it's host wiring (who the bus signals), not
-machine state.
+`device-signal machine device [data]` calls the installed interrupt hook,
+or drops the signal when none is installed. Machines with an `(interrupts
+...)` clause install the queue hook automatically. See
+[Interrupts](interrupts.md).
 
-On a machine declaring an `(interrupts ...)` clause, that hook is
-auto-installed to the real interrupt-delivery queue — see
-[Interrupts](interrupts.md) for the full model (queueing, masking, overflow
-policy, and `signal-interrupt`, the device-optional entry point a software
-`INT`-style instruction calls directly).
+## Limitations
 
-## Scope
-
-Saving and restoring device state is covered by [Snapshots](snapshots.md).
-
-Binding a `:device` memory region to a declared device — so one device
-object is both bus-addressed and memory-mapped — is not supported; a region
-and a device remain two independent mechanisms.
+- A device ticks once for a whole instruction cost; intra-instruction
+  timing is unavailable.
+- A bus device and a `:device` memory region are independent. One object
+  cannot serve as both through a built-in binding.

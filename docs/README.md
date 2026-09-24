@@ -11,7 +11,9 @@
 - [Lexer](lexer.md) — `deflexer` and `tokenize`
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`
 - [Addressing modes](modes.md) — `defmode` and pattern matching
+- [Per-operand modes](operand-modes.md) — `one-of`, selected alternatives, per-hole attributes
 - [Instructions](instructions.md) — `definstruction`, encoding, semantics
+- [Word-encoded instructions](word-instructions.md) — bit fields, layouts, variants, extra words
 - [Directives](directives.md) — `defdirective`, data, layout, `.equ` and `.set`
 - [Macros](macros.md) — `.macro`/`.endm`, parameter substitution, expansion
 - [Conditional assembly](conditionals.md) — `.if`/`.ifdef`/`.elseif`/`.else`/`.endif`, constant conditions
@@ -27,7 +29,3 @@
 - [Command line](cli.md) — `lasm assemble`/`run`/`disassemble`/`listing`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range
 - [Debugger](debugger.md) — breakpoints, step/continue, register/memory inspection, a reference REPL
-
-This directory covers what exists today. Planned work lives in the
-[issue tracker](https://todo.sr.ht/~takeiteasy/lasm); this directory stays
-limited to reference documentation for what's implemented.

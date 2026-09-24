@@ -1,237 +1,115 @@
-# Statement grammar & expression parser
+# Statement grammar and expression parser
 
-A fixed line/statement grammar, shared across every target machine, plus a
-precedence-climbing (Pratt) expression parser reusable at every operand
-`expr` hole an addressing mode declares.
+`parse` turns source into statements. `parse-expression` builds expression
+ASTs for [addressing modes](modes.md) and directives.
 
 ```lisp
-(parse "loop: lda #$10, x
-        sta $2000
+(parse "loop: lda #$10
         bne loop")
 ```
 
-## Scope
-
-This stops at the AST. Label references stay symbolic (`expr-label`) and
-operand token runs are handed back unparsed as raw tokens rather than
-expressions. `parse-expression` is the piece later stages call directly:
-every addressing mode declared with `defmode` matches against it via
-`match-operand-mode`/`try-match-operand-mode` — see [Addressing
-modes](modes.md). Resolving a label reference against a symbol table is the
-[Assembler](assembler.md)'s job (`eval-expr`); `eval-expr-constant` folds
-constant expressions with no label support at all.
-
 ## Statement grammar
 
-```
-line      := [label-def] [mnemonic [operands]]
-          |  [label-def] identifier "=" expr-tokens
-label-def := identifier label-suffix
-mnemonic  := identifier [mode-suffix-separator identifier]
+```text
+line      := [label] [mnemonic [operands]]
+          |  [label] identifier "=" expression
+label     := identifier label-suffix
 operands  := operand ("," operand)*
 ```
 
-One `statement` per source line; blank and comment-only lines produce none.
-A label with no mnemonic is a legal statement (a label on its own line). A
-comma inside a parenthesized *or* bracketed group does not split operands —
-`[`/`]` share the same depth counter `(`/`)` do (see [Addressing modes,
-"Per-operand modes"](modes.md#per-operand-modes)).
-
-A mnemonic's trailing "separator identifier" piece (e.g. the `.w` in
-`lda.w`, #40) is a forced addressing-mode suffix, not part of the mnemonic
-proper — split off at parse time (using the active lexer's
-`mode-suffix-separator`, [Lexer](lexer.md#mode-suffix-separator)) into the
-statement's own `mode-suffix` field, so neither `defmode`/`definstruction`
-lookups nor the assembler ever see a dotted mnemonic string. Only the
-ordinary-mnemonic line form splits a suffix off; the `identifier "="
-expr-tokens` sugar form, and label/symbol-name positions generally, are
-untouched. A mnemonic beginning with the separator itself (e.g. a directive
-like `.byte`) is left whole — there is no non-empty base to its left to
-split off. See [Addressing modes, "Forcing a mode with a mnemonic
-suffix"](modes.md#forcing-a-mode-with-a-mnemonic-suffix) for what the
-assembler does with a forced mode.
-
-The second line form — `name = value` (#35) — is pure surface sugar for
-`.equ name, value`: `%parse-line` recognizes an identifier immediately
-followed by a `:equals` token (the lexer's `=` punctuator, [Lexer](lexer.md))
-and rewrites it to a statement whose mnemonic is `.equ` with two operands
-(the name, then everything after `=`), so the assembler has exactly one
-`.equ` code path regardless of which spelling a program uses — see
-[Directives, "`.equ`"](directives.md#equ).
+Blank and comment-only lines produce no statement. `name = value` becomes
+`.equ name, value`. A mnemonic suffix such as `lda.w` is stored separately
+from the base mnemonic; a directive such as `.byte` stays whole. Commas
+inside parentheses or brackets do not split operands.
 
 ```lisp
-(defstruct statement label mnemonic operands operand-tokens mode-suffix
-                     line definition-line)
-(defstruct operand tokens)   ; raw token run — a simple-vector
+(parse string &key (lexer 'default) file)
+;; => (values statement-list source-unit)
 ```
 
-`operands` is the comma-split list above — a general statement-grammar
-product (a future comma-separated directive, e.g. `.byte 1, 2, 3`, is the
-likely consumer), but not what addressing-mode matching uses, even for a
-multi-operand instruction ([Instructions, "Repeated `(operand ...)`
-subclauses"](instructions.md)): those
-reach their several operands through a multi-hole `defmode` pattern instead,
-whose own literal commas (e.g. a two-register mode's `expr "," expr`) would
-be unmatchable against one already-comma-split `operand` at a time.
-`operand-tokens` is every token after the mnemonic, commas included,
-uncommitted to any comma split: a mode's own pattern can include a literal
-comma (e.g. `indexed-x`'s `expr "," "X"`, [Addressing modes](modes.md)), so
-matching against `operands` instead would make such a mode unmatchable.
-`match-operand-mode`/`try-match-operand-mode` take `operand-tokens`, not
-`operands`.
-
-`(parse string &key (lexer 'default) file)` tokenizes `string` with `lexer` and
-returns a list of `statement` and a source unit as a second value. `file`
-names the source in diagnostics. Signals `lex-error` or `parse-failure`.
+A `statement` keeps both comma-split `operands` and the complete
+`operand-tokens` run. Mode matching uses the complete run because a mode
+pattern can contain literal commas. `:file` names source in diagnostics.
 
 ## Expression parser
 
-`(parse-expression tokens &key (start 0) (end (length tokens)))` parses one
-expression out of a token vector between `start` and `end`, returning
-`(values ast next-index)` — so a caller matching an addressing-mode pattern
-against an operand's token run can parse just its `expr` hole and continue
-from where it left off (e.g. `parse-expression` stops cleanly at a `,` it
-doesn't recognize as an operator).
+```lisp
+(parse-expression tokens &key (start 0) (end (length tokens)))
+;; => (values ast next-index)
+```
 
-### Precedence (lowest-binding first, all left-associative)
+The parser stops at the first token outside the expression, so a mode can
+parse one `expr` hole and continue matching its remaining literals.
 
-| Level | Operators |
-|---|---|
-| 1 | `\|\|` |
+### Precedence
+
+| Low to high | Operators |
+| ---: | --- |
+| 1 | `||` |
 | 2 | `&&` |
 | 3 | `<` `>` `<=` `>=` `==` `!=` |
-| 4 | `\|` |
+| 4 | `|` |
 | 5 | `^` |
 | 6 | `&` |
 | 7 | `<<` `>>` |
 | 8 | `+` `-` |
 | 9 | `*` `/` `%` |
 | 10 | prefix `-` `+` `~` `!` `<` `>` |
-| 11 | primary: number, label, location counter, function operator, `( expr )` |
+| 11 | number, label, `*`, function call, parenthesized expression |
 
-Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
-the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
-regardless of the target machine's `:cell-width` — they're a byte-packing
-convenience, not an encoding-width-relative operator. On a wide-cell
-machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`. For a
-split relative to the cell width, use
-[`lowcell`/`highcell`](#lowcellexpr--highcellexpr).
-
-### Comparisons
-
-`<` `>` `<=` `>=` `==` `!=` fold to `1` when true and `0` when false. They
-bind looser than every arithmetic and bitwise operator, so `a & m == 0` reads as
-`(a & m) == 0`, and they are left-associative.
-
-`<` and `>` are prefix low/high-byte operators in operand position and
-comparisons after an operand: `<a` is the low byte, `a < b` a comparison, and
-`a < <b` both. Addressing-mode patterns that use `<`/`>` as delimiters still
-match; see [Addressing modes](modes.md#matching-and-backtracking).
-
-### Logical operators
-
-`&&`, `||` and prefix `!` treat any nonzero value as true and fold to `1` or
-`0`. `!` binds like the other prefix operators; `&&` and `||` bind below
-comparisons, `&&` tighter than `||`, so `a == 1 && b != 0` needs no
-parentheses. `&&` and `||` short-circuit: `0 && x` and `1 || x` never
-evaluate `x`, so an undefined `x` is not an error there.
-
-Comparisons and logical operators are consumed by
-[`.if`](conditionals.md).
+Binary operators are left-associative. Comparisons and logical operations
+return `1` or `0`. `&&` and `||` short-circuit. Prefix `<` and `>` take
+the low and next 8-bit byte; use `lowcell` and `highcell` for widths based
+on the target memory cell.
 
 ### Function operators
 
-`name(expr)` operators are spelled by the lexer's
-[`function-operators`](lexer.md#clauses) clause; the default lexer provides
-`bank`, `lowcell`, `highcell`, `defined` and `mem`.
+The default lexer recognizes these `name(expr)` functions:
 
-#### `bank(label)`
+| Function | Value |
+| --- | --- |
+| `bank(label)` | Bank containing the label. |
+| `bank(*)` | Bank of the current address. |
+| `lowcell(expr)`, `highcell(expr)` | Low or next memory-cell-width bits. |
+| `defined(name)` | `1` if the name is defined, else `0`. |
+| `mem(addr)` | Available in debugger expressions. |
 
-`bank(label)` folds to the bank a label was defined in under
-[`.bank`](banked-output.md#bank). The operand must be a label
-(local labels included). Forward references work like any other label.
-
-```
-        bnk #bank(far)      ; select the bank far lives in
-        jsr far
-```
-
-A label outside any banked region, or a name defined by `.equ`/`.set`,
-signals `assembly-error`.
-
-`bank(*)` folds to the bank of the current address; see
-[`bank(*)`](banked-output.md#bank-1).
-
-#### `lowcell(expr)` / `highcell(expr)`
-
-`lowcell` keeps the low `:cell-width` bits of a value and `highcell` the next
-`:cell-width` bits up. On a 16-bit-cell machine, `.cell lowcell($12345678),
-highcell($12345678)` emits `$5678, $1234`. Both need a target machine and
-signal `assembly-error` from `eval-expr-constant`.
-
-#### `defined(name)`
-
-`defined(name)` folds to 1 when `name` is defined and 0 otherwise, without
-evaluating it. The operand must be a plain or local name, not `*` or an
-expression. In a [`.if`](conditionals.md) condition, `name` is defined when a
-constant or label of that name appears above; elsewhere it is defined when it
-is in the final symbol table.
+`bank` requires a label in a banked region. `defined` takes a name, not an
+expression. See [Banked output](banked-output.md),
+[Conditional assembly](conditionals.md), and
+[Debugger](debugger.md#conditional-breakpoints).
 
 ### Location counter
 
-A bare `*` in primary position is the location-counter symbol (`expr-location`
-below, #15) rather than multiplication: `%parse-primary` only reaches that
-position where an operand is expected, so `lda *+2` (location counter plus 2)
-and `lda 2*3` (still multiplication, since `2` is already a complete left
-operand by the time `*` is seen) both parse as intended with no lexer
-change.
-
-A lexer's `(location-counter string)` clause adds a dedicated token that
-parses to the same `expr-location` node. For example, a configured standalone
-`$` denotes the current address while `$FF` remains a hex number.
-
-`%` returns the remainder after truncating division, including for negative
-operands (`-5 % 3` is `-2`). With the default lexer, `%101` is a binary
-literal; put a space after `%` when the modulo right operand starts with `0`
-or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
+A bare `*` where an expression starts means the current address; after a
+value it means multiplication. A lexer can declare another location-counter
+token. The assembler supplies the address when evaluating the AST; see
+[Assembler](assembler.md#location-counter).[^syntax]
 
 ### AST nodes
 
-```lisp
-(defstruct expr-number value)
-(defstruct expr-label name localp)    ; NAME unresolved
-(defstruct expr-location)             ; the "*" location-counter symbol (#15)
-                                       ; -- no slots; it IS the value
-(defstruct expr-unary op operand)     ; op: :neg :pos :lognot :not :lo :hi :bank
-                                       ;     :lowcell :highcell :defined :mem
-(defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
-                                       ;     :plus :minus :star :slash :percent
-                                       ;     :lt :gt :le :ge :eq :ne :andand :oror
-```
+| Node | Represents |
+| --- | --- |
+| `expr-number` | Numeric literal. |
+| `expr-label` | Label reference, including a local-label flag. |
+| `expr-location` | Location counter. |
+| `expr-unary` | Prefix operator or function. |
+| `expr-binary` | Binary operator. |
 
-`expr-label-localp` is set from the lexer's `local-label-prefix` (`token-localp`,
-[Lexer](lexer.md)) — true for an identifier starting with that prefix (`.` for
-the default lexer), regardless of what characters follow. The parser only
-tags the reference; scoping it to its nearest enclosing global label is the
-[Assembler](assembler.md)'s job (#16) — `eval-expr` and the symbol table
-themselves stay flat.
-
-`expr-location` folds to an address, not a symbol-table lookup: `eval-expr`
-takes it from a `:pc` argument the assembler passes at both layout and encode
-time (its own address at that point), never from `symbols`. See
-[Assembler](assembler.md#location-counter) for how each context (an
-instruction, a `.byte`/`.word` element, `.org`'s operand) supplies it.
+Labels remain symbolic until assembly. `eval-expr-constant` rejects them;
+see [Assembler](assembler.md#eval-expr).
 
 ## Conditions
 
-`parse-failure` (a subtype of `lasm-syntax-error`) is signalled on a
-malformed token stream: an empty operand, a missing mnemonic, unbalanced
-parentheses, a trailing binary operator, or any other token the grammar
-doesn't expect. Every such condition carries a line and column, and — once
-caught alongside the source text `parse` was given, which `with-source-
-context` attaches automatically — renders as a source excerpt with a caret;
-see [Diagnostics](diagnostics.md).
+`parse-failure` reports a malformed token stream with line and column.
+`parse` can also signal `lex-error`. Source excerpts come from
+[Diagnostics](diagnostics.md).
 
-## Follow-ups not covered here
+## Limitations
 
-- Directive grammar (`.org`, `.byte`/`.word`, `defdirective`).
+Directive grammar is covered by [Directives](directives.md); the parser
+does not apply directive actions or resolve labels.
+
+[^syntax]: With the default lexer, `%101` is a binary literal. Put space
+  after the modulo operator before a right operand starting with `0` or
+  `1`. For example, `13 % 5` evaluates to `3`.

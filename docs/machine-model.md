@@ -1,11 +1,7 @@
 # Machine model
 
-LASM machine state is a set of named **storage elements**, not a fixed
-notion of "registers." Each element has its own width and access discipline,
-which is what lets the same `defmachine` form describe register machines,
-stack machines, and hybrids.
-
-## `defmachine`
+`defmachine` declares storage and execution settings. A machine can combine
+registers, stacks, memory, devices, and instruction-word layouts.
 
 ```lisp
 (defmachine sixtyfoo
@@ -16,424 +12,186 @@ stack machines, and hybrids.
   (flags z n c v))
 ```
 
-`defmachine` parses its clauses into a `machine-descriptor` and registers it
-under `NAME`. Registration happens inside an `eval-when` so the descriptor
-is available **at macroexpansion time**, not only after the file is loaded —
-this matters once instruction definitions need to resolve storage names and
-widths against a machine defined earlier in the same file.
+## `defmachine`
+
+The machine descriptor is available to later `definstruction` forms during
+compilation. Names of elements, regions, devices, and register aliases share
+one namespace.
 
 ### Clauses
 
-- `(register NAME :width n [:count n] [:names (A B C ...)])` — a
-  fixed-width storage cell. `:count n` (n > 1) declares a *banked* register
-  (e.g. CHIP8's 16 `V` registers, [`examples/chip8.lisp`](../examples/chip8.lisp)).
-  A scalar register (`:count 1`, the default) is read/written by `sref`/
-  `(setf sref)` and, inside `with-machine`/instruction semantics, bound
-  directly by name (e.g. `a`). A banked register is read/written by
-  `regref`/`(setf regref)`, which take a run-time bank index and mask/wrap
-  the value to the element's own `:width` exactly like `sref` does; an
-  out-of-range index signals `register-index-out-of-range`. `sref` is
-  scalar-only and signals `unknown-storage` on a banked element. Inside
-  `with-machine`/instruction semantics, a banked register is bound as a
-  local macro taking an index, e.g. `(v idx)` reads bank `idx` of `v` and
-  `(set! (v idx) n)` writes it — see [Semantics vocabulary](semantics.md).
+| Clause | Defines | More detail |
+| --- | --- | --- |
+| `(register NAME :width n [:count n] [:names (...)])` | Scalar or banked registers and optional aliases. | [Registers](#registers) |
+| `(stack NAME :width n :depth n)` | Fixed-depth LIFO storage. | [Stacks](#stacks) |
+| `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
+| `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
+| `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
+| `(instruction-word :width n (field NAME width)...)` | Named instruction bit fields and optional layouts. | [Instruction words](#cell--vs-word-encoded-instructions) |
+| `(device NAME ...)` | Bus-addressed peripheral. | [Devices](devices.md) |
+| `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
+| `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
+| `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |
+| `(properties :key value ...)` | Literal machine properties. | [Machine families](machine-families.md#properties) |
 
-  `:names` gives each bank cell a symbolic alias, one per cell in index
-  order — CHIP8's `V0`–`VF` or DCPU-16's `A B C X Y Z I J`
-  ([`examples/dcpu16.lisp`](../examples/dcpu16.lisp)). `:count` defaults to
-  `(length names)` when `:names` is given alone; giving both requires them
-  to agree. An alias folds like an ordinary symbol in assembly source (so
-  `set a, 5` assembles identically to `set 0, 5`), resolved after the
-  symbol table on any name it doesn't already bind — a label or `.equ`
-  colliding with an alias (case-insensitively) is an assembly error rather
-  than a silent shadow. Every alias shares one machine-wide namespace with
-  every other storage element name and every other register's aliases.
+Widths and depths are positive integers. Duplicate names and unknown
+clauses fail during compilation. A child machine can inherit clauses and
+instructions; see [Machine families](machine-families.md).
 
-  The read direction — decoding a bank index back to its alias — is a
-  `definstruction` encoding subclause, not a machine-model one: see
-  [Instructions, `:register`](instructions.md#encoding-opcode-n-operand)
-  and [Disassembler, "Register-index operand
-  rendering"](disassembler.md#register-index-operand-rendering).
-- `(stack NAME :width n :depth n)` — a fixed-depth LIFO stack of `:width`-bit
-  values. Grows upward: the stack pointer starts at 0 and always equals the
-  number of live entries, incrementing on push and decrementing on pop.
-  Overflow/underflow signal `stack-overflow`/`stack-underflow`; see
-  "Conditions" below for how those interact (or currently don't) with `run`.
-  Besides the top (via `stack-push`/`stack-pop`), any live entry is readable
-  and writable by `stack-ref`/`(setf stack-ref)` — a top-relative, unsigned
-  index (`PICK`/`OVER`-style; offset 0 is the top, the same entry
-  `stack-pop` would return). This is also what the `stack-relative`
-  addressing mode (`n,S`, see [Addressing modes](modes.md)) resolves
-  against. `stack-pointer` reads or sets the number of live entries, from 0
-  through the declared depth. Moving it does not clear stored cells; raising
-  it can expose values previously popped. Invalid values signal
-  `stack-pointer-out-of-range`. A machine with only a stack (plus PC and
-  memory) is a valid, fully expressible machine — see
-  [`examples/stack.lisp`](../examples/stack.lisp), the M3 milestone's
-  validation that this abstraction isn't secretly register-shaped;
-  [`examples/hybrid.lisp`](../examples/hybrid.lisp) is M3's second
-  validation case, a stack shared between ordinary data and an implicit
-  call stack (`jsr`/`rts` pushing/popping `pc`), reaching an argument
-  underneath its own return address via `stack-ref`.
-- `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up])` — binds an
-  existing scalar register as an address pointer into a `:memory` element
-  (#166), for machines whose stack is a plain register indexed by push/pop
-  convention rather than a `(stack ...)` element — DCPU-16 and ANIMA-16, for
-  instance. `:memory` defaults to the machine's sole declared memory element
-  (an error if it declares none or more than one). `:grows` (default `:down`)
-  picks the convention: `:down` has `REGISTER` point *at* the top item — push
-  pre-decrements then stores, pop loads then post-increments; `:up` has it
-  point one *past* the top item — push stores then post-increments, pop
-  pre-decrements then loads. `push`/`pop` (see [Semantics
-  vocabulary](semantics.md)) and an `(interrupts ...)` clause's `:stack`
-  (below) both accept a stack-pointer register wherever they accept a
-  `(stack ...)` element's name. There is no overflow/underflow condition — a
-  wrapping register is the machine's own business, same as the hardware it
-  models — and the indexed address is masked to `:memory`'s `:addr-width`,
-  so `REGISTER` may be wider than the address space.
-- `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER]
-  [(region NAME start end [:kind :ram/:rom/:device] [:banks n]
-  [:on-write :ignore/:error] [:read fn] [:write fn])...])` —
-  addressable storage. `:addr-width` is the number of address bits (so the
-  element has `2^addr-width` cells); `:cell-width` is the bit width of each
-  cell and defaults to `:width` (byte-addressed). Set `:cell-width` different
-  from 8 for word-addressed memory (DCPU-16-style). `:endian` (default
-  `:little`) is the cell order of a multi-cell value: `:little`, `:big`, or
-  `(outer inner group)` — see "Cell width and the assembler" below. Out-of-range addresses signal
-  `address-out-of-range`. Memory is allocated eagerly as one array of
-  `2^addr-width` cells; a `region` declares a sub-range with different access
-  *behavior* over that same array — see "Memory regions" below.
-- `(flags NAME...)` — one or more single-bit flags.
-- `(instruction-word :width n (field NAME width)...)` — a fixed-width
-  instruction word split into named bit fields, MSB-first as declared, one
-  of them named `opcode`. Optional; a machine with no such clause keeps the
-  default opcode-byte-plus-operand-bytes encoding every earlier milestone
-  uses. See [Instructions, "Word-encoded instructions"](instructions.md#word-encoded-instructions-20)
-  for how `definstruction` fills a field, and
-  [`examples/word.lisp`](../examples/word.lisp) for a complete machine.
+### Registers
 
-  One or more `(layout NAME (field NAME width)...)` forms nested inside the
-  same clause (#64) declare *alternate* field splits for a subset of the
-  machine's opcodes — e.g. a CHIP8-shaped machine whose opcode nibble alone
-  decides whether the rest of the word splits 4/12, 4/4/8, or 4/4/4/4:
+A scalar register uses `sref`; a banked register (`:count > 1`) uses
+`regref` with an index. Writes wrap to the register's width. Inside
+semantics, a banked register binds as `(NAME index)`:
 
-  ```lisp
-  (instruction-word :width 16
-    (field opcode 4) (field x 4) (field y 4) (field n 4)   ; default: 4/4/4/4
-    (layout xnn (field opcode 4) (field x 4) (field nn 8)) ; 4/4/8
-    (layout nnn (field opcode 4) (field nnn 12)))          ; 4/12
-  ```
+```lisp
+(set! (v 3) #xff)
+```
 
-  Every layout — the default and each alternate — shares the clause's own
-  `:width` and declares an `opcode` field identical in width and shift to
-  the default's; only the fields below `opcode` vary per layout. A
-  `definstruction` names which layout it encodes against with its own
-  `(layout NAME)` encoding subclause (default when omitted) — see
-  [Instructions, "Per-instruction layouts"](instructions.md#per-instruction-layouts-64).
-  `(extra-word-order FIELD...)` inside the clause (#191) sets the order in
-  which trailing words follow the instruction word: the named fields' words
-  first, in the order listed, then any other operand's in hole order.
-  Fieldless `:trailing-word` operands follow their nearest preceding
-  field-bearing operand, keeping their local order.
-  Without it trailing words follow operand hole order. It applies to every
-  instruction on the machine, resolved through each instruction's own layout:
+`:names` assigns one alias per bank cell, such as `A B C X Y Z I J`.
+Aliases can be used in assembly source and rendered by the disassembler
+when an operand declares `:register`; see [Instructions](instructions.md#encoding).
+A label or assignment cannot reuse an alias name.
 
-  ```lisp
-  (instruction-word :width 16
-    (field av 6) (field bv 5) (field opcode 5)
-    (extra-word-order av bv))   ; `a`'s word first, though `b` is written first
-  ```
+### Stacks
 
-  A field can also be pinned to a constant with no operand hole at all via
-  `(field-value FIELD-NAME n)` — see [Instructions, "Constant discriminator
-  fields"](instructions.md#field-value-field-name-n--constant-discriminator-fields-136),
-  and [`examples/chip8word.lisp`](../examples/chip8word.lisp) for a complete
-  machine using both.
-- `(device NAME [:id n] [:version n] [:manufacturer n] [:init fn] [:tick fn]
-  [:receive fn] [:detach fn])` — a bus-addressed peripheral (#108),
-  independent of memory regions above — see [Devices](devices.md).
-- `(clock-speed n)` — the machine's nominal rate in Hz (#75). Optional; a
-  machine with no such clause can still accumulate `machine-cycles` and use
-  `run-for-cycles`, just not `run-for-duration` or `machine-elapsed-seconds`
-  (which convert a cycle count to wall-time-equivalent seconds, and so need
-  a rate to convert against). See
-  [Emulator](emulator.md#cycle-cost-model-clock-speed-and-cycle-accurate-execution-75).
-- `(interrupts :vector reg :message reg :save (name...) [:stack name]
-  [:queue n] [:on-overflow policy] [:mask-when fn] [:mask-flag name]
-  [:cycles n] [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])` — the interrupt-delivery model
-  (#109): a vector register, what's saved/restored around delivery, a
-  pending-signal queue, and optional masking — see
-  [Interrupts](interrupts.md). `:stack` accepts either a `(stack ...)`
-  element or a `(stack-pointer ...)`-bound register (#166, above).
+A fixed `(stack ...)` holds `:depth` values. `stack-ref` addresses live
+entries from the top (`0` is the top), while `stack-pointer` reads or sets
+the number of live entries. Moving the pointer does not clear stored cells.
+Overflow and underflow signal storage conditions.
 
-- `(undefined-opcode :fault/:nop/:trap)` — what a step does on an opcode with
-  no instruction (default `:fault`) — see
-  [Machine families](machine-families.md#undefined-opcodes).
-- `(properties :key value ...)` — literal per-machine data, read with
-  `machine-property` — see [Machine families](machine-families.md#properties).
-
-A machine can extend another with `(defmachine (NAME (:extends PARENT)) ...)`,
-inheriting its clauses and instructions — see
-[Machine families](machine-families.md).
-
-Widths and depths must be positive integers; duplicate element names and
-unknown clause heads are compile-time errors. `instruction-word`'s field
-widths must sum exactly to its own `:width`, which must itself be a whole
-number of the machine's own memory cells (#53 — see "Cell width and the
-assembler" below; a whole number of 8-bit bytes on every byte-addressed
-machine, the only kind before this) — the word is still emitted as cells of
-that width in the machine's own endian order (#66), see "Cell- vs.
-word-encoded instructions" below. Every `(layout NAME ...)` alternate (#64)
-is held to
-the same field-width-sums-to-`:width` rule independently, plus the
-cross-layout checks above: layout names unique, and an `opcode` field
-identical in width and shift to the default's. Those two checks are what let
-two co-tenant descriptors at one opcode name *different* layouts (#140,
-see [Instructions, "Per-instruction
-layouts"](instructions.md#per-instruction-layouts-64)) — every layout
-shares one word size and one `opcode` position, so decode can fetch the
-opcode off the default layout alone and compare two candidates' fields
-bit-for-bit without first knowing which layout matched.
-
-### Note on naming
-
-`flags` names the `defmachine` declaration clause; the semantics operator
-that *sets* flags is named `set-flags!` instead, to avoid colliding with
-it — see [Semantics vocabulary](semantics.md).
+A `(stack-pointer REGISTER ...)` instead uses a scalar register to index
+memory. `:down` (default) points at the top and pre-decrements on push;
+`:up` points past the top and post-increments on push. The indexed address
+wraps to the memory address width. `push`/`pop` and interrupt delivery accept
+either stack form. See [Semantics vocabulary](semantics.md).
 
 ## Memory regions
 
-A memory element's `region` forms declare sub-ranges of its address space
-with distinct access behavior — `mref`/`(setf mref)` route through whichever
-region an address falls in; an address in no declared region keeps the
-element's plain, uniform behavior. `start`/`end` are both inclusive; regions
-never overlap and every name (region, register alias, storage element, or
-[device](devices.md)) shares one machine-wide namespace, checked at
-`defmachine` time.
+A memory element has `2^addr-width` addressable cells. `:cell-width` sets
+bits per cell and defaults to `:width`; `:endian` defaults to `:little`.
+Regions cover inclusive address ranges and cannot overlap:
 
 ```lisp
-(defmachine gb
-  (memory ram :width 8 :addr-width 16
-    (region bios #x0000 #x00FF :kind :rom)
-    (region vram #x8000 #x9FFF)                 ; :ram, the default
-    (region romx #x4000 #x7FFF :kind :rom :banks 8)
-    (region io   #xFF00 #xFF0F :kind :device
-                 :read io-read :write io-write)))
+(memory ram :width 8 :addr-width 16
+  (region bios #x0000 #x00ff :kind :rom)
+  (region romx #x4000 #x7fff :kind :rom :banks 8)
+  (region io #xff00 #xff0f :kind :device
+    :read io-read :write io-write))
 ```
 
-`:kind` is one of:
+| Kind | Reads | Writes |
+| --- | --- | --- |
+| `:ram` | Backing storage. | Backing storage. |
+| `:rom` | Backing storage. | Ignored by default, or `memory-write-protected` with `:on-write :error`. |
+| `:device` | `:read` hook, or `0`. | `:write` hook, or discarded. |
 
-- `:ram` (the default) — ordinary storage, identical to an address outside
-  any region. Useful to name a sub-range, or to bank it.
-- `:rom` — reads hit backing storage; writes are dropped (`:on-write
-  :ignore`, the default) or signal `memory-write-protected` (`:on-write
-  :error`). A ROM image is *burned in*, not stored by the CPU — `load-program`
-  and the debugger write through `%poke`, an internal accessor that bypasses
-  region write policy entirely, so loading a program at a ROM region's
-  origin still works.
-- `:device` — reads and writes are forwarded to `:read`/`:write` instead of
-  touching backing storage at all. A region with no `:read` reads as 0; one
-  with no `:write` discards the store. Both are function designators —
-  write the bare function name, not `#'name`: `defmachine` quotes its whole
-  clause body, so a `#'`-form there would freeze to the literal list
-  `(function name)` rather than an actual function; a bare symbol survives
-  quoting unevaluated and `funcall` resolves it at call time. `:read` is
-  called as `(funcall read machine address)`, `:write` as `(funcall write
-  machine address value)` — both the *absolute* address, not a
-  region-relative offset. A `:read` result is masked to the memory's
-  `:cell-width`, as a store is.
-
-`mpeek` reads backing storage directly, bypassing a `:device` region's
-`:read` (returning 0 there, since a device region has no backing cell of its
-own) — for inspection paths (the debugger's hex dump, disassembly) that must
-not trigger a device's read side effects merely by displaying memory.
-`mref`/instruction fetch are real accesses and always consult regions.
-
-Regions are an access-behavior overlay, not a separate storage backend:
-`reset` still zeroes the whole underlying array regardless of region, so a
-burned-in ROM image does not survive a `reset` and must be reloaded.
+Hooks are bare function names. Device hooks receive the **absolute**
+address: `(read machine address)` and `(write machine address value)`.
+`mref` and instruction fetch honor region behavior; `mpeek` reads backing
+storage for inspection without device side effects. `load-program` can fill
+ROM. `reset` clears backing storage, including ROM images.[^regions]
 
 ### Bank switching
 
-`:banks n` on a `:ram` or `:rom` region gives it `n` separate banks, each the
-size of the region, with one mapped in at a time. Bank 0 is mapped after
-`make-machine` and `reset`. `:banks` is not valid on a `:device` region. A
-banked `:rom` keeps its `:on-write` policy.
+`:banks n` gives a RAM or ROM region separate banks, with bank 0 mapped on
+creation and reset. It is unavailable for device regions.
 
 ```lisp
 (current-bank machine 'romx)              ; => 0
-(setf (current-bank machine 'romx) 3)     ; map bank 3
-(bank-peek machine 'romx 5 #x4000)        ; read bank 5, mapped or not
-(setf (bank-peek machine 'romx 5 #x4000) 9)
+(setf (current-bank machine 'romx) 3)
+(bank-peek machine 'romx 5 #x4000)        ; read an unmapped bank
 ```
 
-- `current-bank` and its `setf` take the region name. A bank index outside
-  `[0, n)` signals `bank-out-of-range`. A region that is not banked signals
-  an error.
-- `bank-peek` and its `setf` take an absolute address and reach any bank
-  without changing the mapping. The `setf` bypasses write protection.
-- `mref`, `(setf mref)`, `mpeek` and `%poke` operate on the mapped bank.
-- `reset` zeroes every bank and remaps bank 0. `load-program` takes a
-  `:bank` argument to fill an unmapped bank — see [Emulator](emulator.md).
-- Inside instruction semantics, `(set-bank! region n)` switches banks — see
-  [Semantics vocabulary](semantics.md).
-- `.bank` places assembled output in a bank — see
-  [Banked output](banked-output.md).
-
-A mapper chip is a `:device` region whose `:write` switches banks:
-
-```lisp
-(defun mapper-write (machine address value)
-  (declare (ignore address))
-  (setf (current-bank machine 'romx) value))
-```
+`bank-peek` addresses any bank without changing the mapping; its setter
+bypasses ROM protection. Normal memory access uses the mapped bank.
+`reset` clears every bank. See [Banked output](banked-output.md) for `.bank`
+and [Emulator](emulator.md#load-program) for loading a bank.
 
 ## Runtime state
 
-`(make-machine 'NAME)` instantiates a fresh runtime `machine` for a
-registered descriptor. `(reset machine)` zeroes every storage element and
-restores the [device bus](devices.md) to its declared shape; any installed
-interrupt hook is left alone — see "Interrupt seam" in that doc.
+`(make-machine 'NAME)` creates a machine. `(reset machine)` clears storage,
+cycles, pending interrupts, and idle state, and rebuilds the declared device
+bus. Host-installed access and interrupt hooks remain attached.
 
 ## Width and signedness
 
-All storage is **unsigned**, masked to its declared width on every write
-(`wrap-value`) — writing 300 to an 8-bit register stores 44, writing -1
-stores 255. Where a value should be read as two's-complement, use
-`(signed-value value width)` explicitly; there is no separate signed storage
-mode. This is a single rule, chosen once, rather than a per-element
-signed/unsigned mode.
+Storage is unsigned. Every write wraps to its declared width: `300` in an
+8-bit register becomes `44`; `-1` becomes `255`. Use
+`(signed-value value width)` to read two's-complement meaning.
 
 ## Accessors
 
-| Element kind | Read | Write |
-|---|---|---|
-| register (scalar) / flag | `(sref machine name)` / `(flag machine name)` | `(setf (sref machine name) v)` / `(setf (flag machine name) v)` |
-| register (banked, `:count > 1`) | `(regref machine name index)` | `(setf (regref machine name index) v)` |
-| stack | `(stack-pop machine name)`, `(stack-depth machine name)`, `(stack-pointer machine name)`, `(stack-ref machine name offset)` | `(stack-push machine name v)`, `(setf (stack-pointer machine name) v)`, `(setf (stack-ref machine name offset) v)` |
-| memory | `(mref machine name address)`, `(mpeek machine name address)` | `(setf (mref machine name address) v)` |
-| stack-pointer (#166) | `(sp-pop machine reg memory grows)` | `(sp-push machine reg memory grows v)` |
+| Element | Read | Write |
+| --- | --- | --- |
+| Scalar register / flag | `sref`, `flag` | `(setf sref)`, `(setf flag)` |
+| Banked register | `regref` | `(setf regref)` |
+| Fixed stack | `stack-pop`, `stack-depth`, `stack-pointer`, `stack-ref` | `stack-push`, `(setf stack-pointer)`, `(setf stack-ref)` |
+| Memory | `mref`, `mpeek` | `(setf mref)` |
+| Register stack pointer | `sp-pop` | `sp-push` |
 
-`regref` also works on a scalar (`:count 1`) register, treating it as a
-one-element bank (`index` 0); `sref` is the reverse restriction, and signals
-`unknown-storage` on a banked element rather than aliasing every index to
-one cell.
-
-`sp-push`/`sp-pop` take `memory`/`grows` explicitly rather than resolving
-them from `reg` alone, since a `(stack-pointer ...)` clause's own resolved
-values are what `push`/`pop` and interrupt delivery already have in hand at
-the call site — see [Semantics vocabulary, `push`/`pop`](semantics.md).
-
-`mpeek` is `mref`'s inspection-only sibling — see "Memory regions" above for
-what it bypasses and why.
-
-Inside a semantics body, fixed-stack accessors accept a bare stack name and
-default to the sole `(stack ...)` element: `(stack-depth)`, `(stack-pointer)`,
-and `(stack-ref offset)`. The explicit forms remain available to host code.
-
-`flag` writes `0` for `nil` or integer `0`, and `1` for `t` or any nonzero
-integer. Other values follow Lisp truthiness. It reads back as `0` or `1`.
+`regref` accepts a scalar register at index 0; `sref` rejects a banked one.
+`flag` stores `0` or `1`. Semantics can omit the fixed-stack name when the
+machine has only one fixed stack. See [Semantics vocabulary](semantics.md).
 
 ### Access hook
 
-`machine-access-hook` is `nil` or a function
-`(machine name index access value)`, called by `sref`, `regref`, `flag` and
-`mref` and their setters, and by `stack-push`, `stack-pop` and `stack-ref`.
-`index` is the bank index (`regref`), the address (`mref`), the bottom-relative
-slot (fixed stacks; slot 0 is the oldest entry), `:pointer` (a write of
-`(setf stack-pointer)`) or `nil`; `access` is `:read`
-or `:write`; `value` is the value read, or the wrapped value about to be
-written. Peeks, pokes and the emulator's own instruction fetch and PC advance
-do not call it. Like
-`machine-interrupt-hook` it is host wiring, and `reset` leaves it alone. The
-[debugger's watchpoints](debugger.md#watchpoints) use it.
+`machine-access-hook` takes `(machine name index access value)` for storage
+reads and writes. `access` is `:read` or `:write`; the index is a bank index,
+address, stack slot, `:pointer`, or `nil`. Inspection peeks, program loading,
+instruction fetch, and PC advancement do not call it. The
+[debugger](debugger.md#watchpoints) uses this hook.
 
 ## Conditions
 
-All signalled conditions inherit `lasm-error`: `unknown-storage`,
-`address-out-of-range`, `memory-write-protected` (a store into a `:rom`
-region declaring `:on-write :error` — see "Memory regions" above),
-`stack-overflow`, `stack-underflow`,
-`stack-index-out-of-range` (an out-of-range `offset` to `stack-ref`/
-`(setf stack-ref)`), `stack-pointer-out-of-range` (an invalid pointer value),
-`register-index-out-of-range` (an out-of-range
-`index` to `regref`/`(setf regref)`), `no-such-device` (see
-[Devices](devices.md)), `interrupt-queue-full` (a `signal-interrupt` past
-an `(interrupts ...)` clause's `:queue` depth with the default
-`:on-overflow :error` — see [Interrupts](interrupts.md#overflow)).
-`lasm-trap` is signalled by the `trap` semantics operator (see [Semantics
-vocabulary](semantics.md)) and, on an `:on-overflow :trap` machine, by
-`signal-interrupt` past its `:queue` depth as well; neither is a storage
-error. See [Conditions](conditions.md) for each condition's readers.
+| Condition | Typical cause |
+| --- | --- |
+| `unknown-storage` | Missing element or scalar access to a banked register. |
+| `address-out-of-range`, `memory-write-protected` | Invalid address or protected ROM write. |
+| `stack-overflow`, `stack-underflow`, `stack-index-out-of-range`, `stack-pointer-out-of-range` | Invalid fixed-stack operation. |
+| `register-index-out-of-range` | Invalid bank index. |
+| `no-such-device`, `interrupt-queue-full` | Device or interrupt error. |
 
-Storage conditions raised during a run step return `:fault`, the attempted
-step count, and the condition (see [Emulator, "Stop reasons"](emulator.md#stop-reasons)).
-Direct stepping still signals them. `interrupt-queue-full` is not a storage
-condition and continues to signal when `:on-overflow :error` is selected.
+These inherit `lasm-error`; see [Conditions](conditions.md) for readers.
+During `run`, storage faults return `:fault` and the condition. Direct
+stepping signals them. `interrupt-queue-full` still signals with the default
+overflow policy; see [Interrupts](interrupts.md#overflow).
 
 ## Cell- vs. word-encoded instructions
 
-Every machine before `instruction-word` (M1–M3) encodes one instruction as an
-opcode cell followed by fixed-width operand cells chosen by addressing
-mode — `instruction-descriptor-total-operand-width` is the cell count that
-encoding occupies. A machine declaring `instruction-word` instead encodes
-one instruction as a single fixed-width word whose bits are split into
-named fields (a DCPU-16-shaped machine, #20) — see
-[Instructions](instructions.md#word-encoded-instructions-20) for how
-`definstruction` fills those fields, including operand values that pack
-inline for a small range or escape to their own following word depending on
-the *value* being encoded, not just its addressing-mode syntax.
+A cell-encoded instruction has an opcode cell followed by operand cells.
+With `instruction-word`, opcode and inline operands share a fixed-width
+word, followed by any extra cells. Its fields are declared MSB first, must
+sum to the word width, and include `opcode`. Named `(layout NAME ...)` forms
+can provide other field splits with the same word width and opcode position.
+See [Word-encoded instructions](word-instructions.md).
 
-`instruction-descriptor-size` is the one accessor that covers both schemes —
-the total encoded cell count for one use of an instruction, cell-encoded or
-word-encoded alike. The instruction word itself (and any extra word an
-escaped operand needs) is emitted as cells at the target machine's own cell
-width, in the machine's own endian order (#66), so `assembly-cells` is
-`(vector (unsigned-byte 8))` on every byte-addressed machine and
-`(vector (unsigned-byte n))` on one declaring `:cell-width n` (#53) — see
-"Cell width and the assembler" below.
+`instruction-descriptor-size` counts the complete encoding in cells.
+`(extra-word-order FIELD...)` changes the order of extra values; otherwise
+they follow operand order. See
+[Word-encoded layouts](word-instructions.md#per-instruction-layouts).
 
 ## Cell width and the assembler
 
-`:cell-width` isn't only a storage-layer property (`mref`/`(setf mref)`
-masking and allocation, above) — the assembler resolves it too, since a
-program's labels and location counter are addresses in the *same* units
-`mref` indexes by. `assemble`/`assemble-statements`
-([Assembler](assembler.md#assemblys-cell-width)) and `load-program`
-([Emulator](emulator.md#load-program)) all resolve a machine's code cell
-width the same way: the sole memory element's `:cell-width`, or (when a
-machine declares several) their shared width if every one agrees. A machine
-declaring more than one memory element with *different* cell widths makes
-this ambiguous, and each of those entry points takes an explicit `:memory`
-argument for exactly that case — the same shape as `%default-address-width`
-(instruction.lisp) already uses to pick a sole memory element's address
-width when an addressing mode doesn't declare one.
+Labels, the location counter, and instruction sizes count the target
+memory's **cells**, regardless of their bit width. `assemble` and
+`load-program` use the sole memory element's cell width and byte order, or
+shared values when several elements agree. Pass `:memory` when they differ.
+See [Assembler](assembler.md#assemblys-cell-width).
 
-`:endian` (#66) resolves the same way, alongside `:cell-width` — a memory
-element's declared `:little` (the default) or `:big`, or the machine's
-shared endianness across several elements that agree, ambiguous the same
-way and resolved by the same explicit `:memory` argument. It governs cell
-order within one multi-cell value — an instruction operand, an
-`instruction-word`'s own encoded word and any extra word following it, and
-a `.byte`/`.word` directive's data — never which cell a *field* occupies or
-which order fields or words themselves fall in. Every encoded quantity in
-the codebase ultimately goes through `%encode-value-cells`
-(instruction.lisp) and its inverse `%fetch-cells` (decoder.lisp), so
-instructions and data always agree on endianness for a given machine.
+`:endian` controls the cells within each multi-cell value:
 
-`:endian (outer inner group)` mixes orders within one value. The value's cells,
-low-order first, are split into groups of `group` cells (an integer of at
-least 2); `outer` (`:little` or `:big`) orders the groups in memory and
-`inner` the cells inside each group. `(:big :little 2)` is PDP-endian:
-`$0A0B0C0D` is stored `0B 0A 0D 0C`; `(:little :big 2)` stores it
-`0C 0D 0A 0B`. A value of `group` cells or fewer is a single group, ordered by
-`inner`. See [`examples/mixed-endian.lisp`](../examples/mixed-endian.lisp). A
-single directive can override the machine's order with
-[`(emit width values :endian order)`](directives.md).
+| Order | Example `$0A0B0C0D` in 8-bit cells |
+| --- | --- |
+| `:little` | `0D 0C 0B 0A` |
+| `:big` | `0A 0B 0C 0D` |
+| `(:big :little 2)` | `0B 0A 0D 0C` |
+| `(:little :big 2)` | `0C 0D 0A 0B` |
 
-Word-addressed memory and bitfield/variant instruction-word encoding (see
-["Word-encoded instructions"](instructions.md#word-encoded-instructions-20))
-are independent axes and compose freely — an `instruction-word`'s `:width`
-just has to be a whole multiple of the target cell width.
-[`examples/dcpu16.lisp`](../examples/dcpu16.lisp) combines both, DCPU-16
-shaped.
+The grouped form orders groups with its first keyword and cells within a
+group with its second. Word-addressed memory and word-encoded instructions
+can be combined; see [`dcpu16.lisp`](../examples/dcpu16.lisp).
+
+[^regions]: Regions change access behavior over one backing array.
+  `:device` regions do not store values. `mpeek` reads zero there. A mapper
+  can be a device write hook that changes `current-bank`.

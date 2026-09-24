@@ -1,10 +1,7 @@
 # Interrupts
 
-An `(interrupts ...)` clause declares a machine's interrupt-delivery model
-— a vector register, what gets saved and restored around delivery, a
-pending-signal queue with a depth and overflow policy, and optional
-masking — so a machine can express `INT`/`RFI`-style instructions without
-hand-rolling delivery in Lisp semantics.
+An `(interrupts ...)` clause declares queueing, masking, and delivery for
+a machine. Devices and software instructions can signal the same queue.
 
 ```lisp
 (defmachine intfoo
@@ -12,10 +9,8 @@ hand-rolling delivery in Lisp semantics.
   (register ia :width 16)
   (register a :width 16)
   (stack sp :width 16 :depth 64)
-  (flags iaq)
   (memory ram :width 8 :addr-width 16)
-  (device clock :init clock-init :tick clock-tick)
-  (interrupts :vector ia :message a :save (pc) :mask-flag iaq))
+  (interrupts :vector ia :message a :save (pc)))
 ```
 
 ## `defmachine`'s `interrupts` clause
@@ -27,211 +22,98 @@ hand-rolling delivery in Lisp semantics.
             [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
 ```
 
-At most one per machine. `:vector`/`:message`/`:save`/`:stack`/`:mask-flag`
-name existing storage elements — validated once every other clause is
-known, so they may appear in any order relative to the elements they name.
+| Key | Effect |
+| --- | --- |
+| `:vector` | Register holding the handler address. |
+| `:message` | Register receiving signal data. |
+| `:save` | Registers and flags pushed before delivery. |
+| `:stack` | Fixed stack or register-backed stack pointer; defaults when unique. |
+| `:queue` | Pending-signal capacity, default `256`. |
+| `:on-overflow` | Error, trap, drop, or drop oldest. |
+| `:mask-when`, `:mask-flag` | Delivery gate; use at most one. |
+| `:cycles` | Delivery cost, default `0`. |
+| `:drop-on-zero-vector` | Drop signals while vector is zero; default `t`. |
+| `:mask-on-deliver` | Set the mask flag before handler execution. |
 
-| Key | Meaning |
-|---|---|
-| `:vector` | Register holding the handler address. Written into `pc` on delivery. |
-| `:message` | Register a delivered signal's data is written into. |
-| `:save` | Registers/flags pushed, in order, before `:message`/`:vector` are written. `interrupt-return` (below) pops them in reverse. |
-
-`:vector`, `:message` and each `:save` entry may be a scalar register name or
-`(name index)`, one cell of a banked register — `:message (reg 0)`, `:save (pc
-(reg 0))`. A bare banked register name is rejected; an out-of-range index is
-rejected at `defmachine` time.
-
-| Key | Meaning |
-|---|---|
-| `:stack` | Which `stack` element, or which `(stack-pointer ...)`-bound register (#166 — see [Machine model, `stack-pointer`](machine-model.md)), `:save` pushes onto/pops from. Defaults to the machine's sole `stack` element, or (with none declared) its sole stack-pointer — an error on zero or more than one candidate of whichever kind applies, same as `push`/`pop` with no stack name (see [Semantics vocabulary](semantics.md)). |
-| `:queue` | Max pending, undelivered signals. Default 256. |
-| `:on-overflow` | Policy when `signal-interrupt` would exceed `:queue` — see "Overflow" below. Default `:error`. |
-| `:mask-when` | Function designator `(machine) -> generalized boolean`. At most one of `:mask-when`/`:mask-flag`. |
-| `:mask-flag` | A flag name, read the same way. |
-| `:cycles` | Delivery's own extra `machine-cycles` cost. Default 0. |
-| `:drop-on-zero-vector` | See "Zero vector" below. Default `t`. |
-| `:mask-on-deliver` | Sets `:mask-flag` when a signal is delivered, before the handler's first instruction. Requires `:mask-flag`. Default `nil`. |
+Registers can be scalar names or indexed bank cells such as `(reg 0)`.
+`:save` order determines push order; `interrupt-return` reverses it.
 
 ## Raising an interrupt
 
-Two entry points feed the same queue:
+| Function | Use |
+| --- | --- |
+| `device-signal machine device [data]` | Signal through the machine's device hook. |
+| `signal-interrupt machine data [device]` | Signal directly from software semantics or a host. |
 
-- `device-signal machine device &optional data` (see [Devices](devices.md))
-  — a device raises its own signal through `machine-interrupt-hook`, which
-  `make-machine` auto-installs to the real queue on any machine declaring
-  `(interrupts ...)`.
-- `signal-interrupt machine data &optional device` — the device-optional
-  entry point an `INT`-style instruction's semantics call directly, the
-  same convention as the device bus API (`device-info`, `device-send`):
-  `machine` passed explicitly, not bound inside `with-machine-bindings`.
-
-```lisp
-(definstruction intfoo int
-  (encoding (opcode #x01))
-  (semantics (signal-interrupt machine a)))
-```
+A machine with an interrupt clause installs the queue hook when created.
+A software instruction can call `signal-interrupt` inside semantics.
 
 ## Overflow
 
-Checked when a signal would push the pending queue past its declared
-`:queue` depth:
-
-| `:on-overflow` | Behavior |
-|---|---|
-| `:error` (default) | Signals `interrupt-queue-full`. |
-| `:trap` | Signals `lasm-trap` with tag `:interrupt-queue-overflow` — DCPU-16's "catch fire". |
-| `:drop` | Discards the incoming signal; the queue is unchanged. |
-| `:drop-oldest` | Evicts the queue's head, then enqueues the incoming signal. |
+| Policy | When the queue is full |
+| --- | --- |
+| `:error` (default) | Signal `interrupt-queue-full`. |
+| `:trap` | Signal `lasm-trap` tagged `:interrupt-queue-overflow`. |
+| `:drop` | Ignore the incoming signal. |
+| `:drop-oldest` | Replace the oldest pending signal. |
 
 ## Zero vector
 
-DCPU-16/ANIMA-16 treat a zero interrupt-vector register as "interrupts are
-off". With `:drop-on-zero-vector t` (the default), a signal arriving while
-`:vector`'s register currently reads 0 is dropped outright, before it ever
-reaches the queue — so the queue can't silently fill (and hit
-`:on-overflow`) while a machine is in this state. Set it `nil` on a
-machine whose handler legitimately lives at address 0.
-
-Masking (below) can't express this on its own: a masked machine still
-queues normally, so a masked-and-zero-vector machine without this knob
-could fill its queue and hit `:on-overflow` despite never intending to
-receive anything.
+With `:drop-on-zero-vector t`, a signal is discarded while the vector
+register is zero. Set it to `nil` when a handler legitimately starts at
+address zero. Dropped signals never reach the queue.
 
 ## Masking
 
-`:mask-when`/`:mask-flag` gate whether the queue's head is *delivered* on
-a given step — not whether a signal may be *enqueued*. A masked machine
-still queues incoming signals, subject to `:queue`/`:on-overflow`; it
-simply doesn't pop and deliver until unmasked. A machine declaring
-neither is never masked.
+Masking delays delivery; it does not stop enqueueing. A masked queue still
+follows its capacity and overflow policy. `:mask-on-deliver` sets the named
+mask flag before the handler runs.
 
 ## Delivery
 
-A pending, unmasked signal is delivered at the very top of `step-machine`
-(see [Emulator, "Interrupt delivery"](emulator.md)), before that step's
-own fetch — so the same step both delivers the interrupt and executes the
-handler's first instruction:
+A pending unmasked signal is delivered before `step-machine` fetches:
 
-1. Pop the queue's head.
-2. Push every `:save` place, in declared order, onto `:stack`.
-3. Write the signal's data into `:message`.
-4. Set `:vector`'s value into `pc`.
-5. Add `:cycles` to `machine-cycles`, and — only when `:cycles` is
-   non-zero — tick every device with that cost.
-6. Continue into the step's ordinary fetch/decode/execute, now reading
-   from the handler.
+1. Remove the queue's head.
+2. Push `:save` places in declared order.
+3. Write data to `:message` and handler address to `pc`.
+4. Add `:cycles` and tick devices when the cost is nonzero.
+5. Fetch and execute the handler's first instruction in the same step.
 
-This happens identically under `run`/`run-for-cycles`/`run-for-duration`
-and the debugger's single-instruction `debug-step` — every path into
-execution goes through `step-machine`.
+A signal raised by a device during a step is available on the **next**
+step, after that step's delivery check. See [Emulator](emulator.md#interrupt-delivery).
 
-## Register-indexed stacks (#166)
+## Register-indexed stacks
 
-`:stack` may name a register bound by a `(stack-pointer ...)` clause instead
-of a `(stack ...)` element — the machine model this article covers throughout
-otherwise (`intfoo` above) uses a native `:stack` element, but a machine
-shaped like DCPU-16 or ANIMA-16, whose "stack" is a plain register holding an
-address into ordinary memory, declares one of these instead:
-
-```lisp
-(defmachine intfoo-pointer
-  (register pc :width 16)
-  (register ia :width 16)
-  (register a :width 16)
-  (register sp :width 16)
-  (flags iaq)
-  (memory ram :width 16 :addr-width 16 :cell-width 16)
-  (stack-pointer sp :memory ram :grows :down)
-  (interrupts :vector ia :message a :save (pc) :mask-flag iaq))
-```
-
-Delivery and `interrupt-return` push/pop through this register exactly the
-same way `push`/`pop` do (`sp-push`/`sp-pop`, not `stack-push`/`stack-pop`) —
-every other step of "Delivery" above (order, `:message`, `:vector`, `:cycles`,
-masking, overflow) is unchanged. Two differences follow directly from there
-being no `(stack ...)` element:
-
-- **No overflow/underflow condition.** A register-indexed stack has no
-  declared depth; a wrapping register is the machine's own business, same as
-  the hardware it models.
-- **Every `:save` place must fit one memory cell.** A `:pointer`-kind stack
-  pushes each `:save` place into a single cell of the bound memory, un-split
-  — `defmachine` rejects a `:save` place wider than that memory's
-  `:cell-width` up front, rather than truncating it on first delivery.
-  Splitting a wide place across cells is unscoped follow-up work.
-
-This binding also works outside `(interrupts ...)` entirely — see [Semantics
-vocabulary, `push`/`pop`](semantics.md) — so a stack-pointer register can back
-ordinary call/return instructions (`jsr`/`ret`) as well as interrupt delivery,
-sharing one register the way real hardware does.
-
-A signal raised *during* a step — a device's own `:tick` calling
-`device-signal` mid-step (see [Devices, "Ticking"](devices.md#ticking)) —
-is queued too late for that same step's own delivery check, which already
-ran before the fetch. It delivers on the *next* `step-machine` call
-instead, one step later than a signal already queued beforehand.
+`:stack` can name a register declared with `(stack-pointer ...)` instead of
+a fixed `(stack ...)`. Delivery and return use the register-backed memory
+stack with the same save order. There is no fixed-stack overflow or
+underflow condition. Each saved place must fit one memory cell. See
+[Machine model](machine-model.md#stacks).
 
 ## `interrupt-return`
 
-```lisp
-(definstruction intfoo rfi
-  (encoding (opcode #x02))
-  (semantics (interrupt-return)))
-```
+`(interrupt-return)` restores saved places in reverse order. It requires
+an interrupt clause and signals during macroexpansion without one. See
+[Semantics vocabulary](semantics.md#operators).
 
-Bound inside `with-machine-bindings` alongside `trap` (see [Semantics
-vocabulary](semantics.md)) — pops every `:save` place, in *reverse*
-declared order, restoring exactly what delivery pushed. Signals an error
-at macroexpansion time on a machine declaring no `(interrupts ...)`
-clause.
+## Waking an idle machine
 
-## Waking an idle machine (#110)
-
-The `idle` semantics primitive ([Semantics vocabulary](semantics.md)) marks
-a machine idle — `step-machine` then skips fetch/decode/execute (see
-[Emulator, "Idle steps"](emulator.md#idle-steps-110)) until something wakes
-it back up.
-
-**Delivery is what wakes it.** `deliver-pending-interrupt` clears the idle
-flag as part of delivering, exactly as it pushes state and sets `pc` — so
-an idling machine wakes and starts executing its handler in the very same
-step. A signal merely reaching the queue does *not* wake it: masking
-(above) still applies, so a masked machine keeps idling while signals pile
-up, and only wakes once unmasked and delivery actually runs.
-
-**One-step lag, same as any tick-raised signal.** A device's own `:tick`
-call to `device-signal` while the machine is idle is queued too late for
-that idle step's own delivery check, which already ran before it — same
-rule as an ordinary running step (see "Delivery" above). It delivers, and
-wakes the machine, on the *next* `step-machine` call.
-
-**The zero-vector footgun.** With the default `:drop-on-zero-vector t`, a
-machine that idles while `:vector`'s register currently reads 0 has every
-incoming signal dropped at enqueue, before it ever reaches the queue — such
-a machine can never wake on its own. (A diagnostic for this is tracked as a
-follow-up, #165.)
-
-**No `(interrupts ...)` clause is not an error.** Unlike `interrupt-return`,
-`idle` macroexpands fine on any machine — nothing on such a machine can
-wake it, but a host can call `wake-machine` (emulator.lisp) directly, and
-`run` (see [Emulator](emulator.md#run)) reports `:idle` rather than
-spinning to `:max-steps`.
+Interrupt **delivery** clears the idle flag. Enqueueing alone does not,
+so a masked machine remains idle until unmasked. A signal raised by an idle
+step's device tick wakes it on the next step. A host can call
+`wake-machine` directly. See [Emulator](emulator.md#idle-steps).
 
 ## `reset`
 
-Clears the pending queue unconditionally — it's machine state. #110's idle
-flag is the same — `reset` clears it too. The auto-installed hook is host
-wiring, same as before #109: `reset` leaves whatever is currently installed
-on `machine-interrupt-hook` alone, whether that's the auto-installed
-default or something a host replaced it with.
+`reset` clears the queue and idle flag. It leaves the installed interrupt
+hook in place as host wiring.
 
-## Scope
+## Limitations
 
-Nested-interrupt priority/depth ordering and privilege levels (gating who
-may mask or who a handler runs as) are not covered here — see the tracker
-for those as separate tickets. `trap` (the M1 halt primitive, see
-[Semantics vocabulary](semantics.md)) is untouched by this subsystem; a
-unified trap/interrupt/exception model remains future work. CPU idle/sleep
-resumed by an interrupt *is* now covered — see "Waking an idle machine"
-above.
+- An idle machine with a zero vector and the default drop policy discards
+  every signal, so it cannot wake through interrupts. A diagnostic is
+  tracked in [ticket 165](https://todo.sr.ht/~takeiteasy/lasm/165).
+- A register-backed stack saves each place in one cell; splitting wider
+  places across cells is unavailable.
+- Nested-interrupt priority, privilege levels, and a unified trap/interrupt
+  model are outside this subsystem.

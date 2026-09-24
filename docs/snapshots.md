@@ -2,8 +2,7 @@
 
 `machine-snapshot` captures a machine's runtime state as plain readable data;
 `restore-snapshot` puts it back. The same data can be written to and read
-from a file. Every machine gets this from its `defmachine` declaration — no
-per-machine code, except an optional hook for stateful devices.
+from a file. Each `defmachine` provides these operations. Stateful devices can add hooks.
 
 | Function | Behavior |
 |---|---|
@@ -37,8 +36,8 @@ address space stays small.
 
 ## Versioning and validation
 
-A snapshot carries a version (`+snapshot-version+`, currently 2), the machine
-name, the machine's storage layout and its bank layout. `restore-snapshot` checks all three
+A snapshot carries a version (`+snapshot-version+`), machine name, storage
+layout and bank layout. `restore-snapshot` checks all three
 and the payload itself before it changes anything, so a rejected snapshot
 leaves the machine untouched.
 

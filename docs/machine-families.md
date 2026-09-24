@@ -63,7 +63,7 @@ Register and memory widths, `:addr-width` (within the operand cell count),
 ## Child-only clauses
 
 - `(without-instructions MNEMONIC...)` — removes every mode of each mnemonic.
-  The assembler no longer knows it, and the removal is inherited by
+  The assembler does not recognize it, and the removal is inherited by
   descendants.
 - `(instruction-cycles (MNEMONIC n)...)` — overrides the cycle cost of every
   inherited variant of the mnemonic.
@@ -82,8 +82,8 @@ to no instruction:
 A removed instruction is skipped whole, without evaluating its operands, and
 costs one cycle per cell skipped. An opcode no instruction ever used is one
 cell (or one instruction word) and costs one cycle. On a word-encoded machine
-a removed instruction is not decoded by a `(fallback)` instruction it used to
-shadow.
+a removed instruction is not decoded by a `(fallback)` instruction it shadows
+in the parent.
 
 ## Properties
 
@@ -105,7 +105,7 @@ instruction is an error and changes nothing.
 Each machine holds its own copies of the inherited instructions; nothing is
 looked up through the parent at run time.
 
-## Limits
+## Limitations
 
 - A change to a parent's `defmachine` clauses reaches existing children only
   when their `defmachine` forms are evaluated again.

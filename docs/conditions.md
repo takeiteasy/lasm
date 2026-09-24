@@ -1,17 +1,11 @@
 # Conditions
 
-Reference for every condition type `#:lasm` signals and its readers. A
-public condition type's slot readers are public too — catch a condition
-with `handler-case`/`handler-bind` and every slot below is readable without
-reaching into `lasm::`. `tests/package.lisp` walks the condition hierarchy
-via the MOP and checks this table against the export list automatically.
+LASM condition types and their public readers. Catch a condition with
+`handler-case` or `handler-bind`; use the reader names below to inspect it.
 
-Each stage's own docs describe *when* and *why* a condition is signalled —
-[Machine model](machine-model.md#conditions) for storage, devices and
-interrupts; [Diagnostics](diagnostics.md) for syntax errors, warnings and
-opcode conflicts; [Instructions](instructions.md),
-[Assembler](assembler.md), [Macros](macros.md) for the rest. This page is
-just the reader table.
+For context, see [Machine model](machine-model.md#conditions),
+[Diagnostics](diagnostics.md), [Assembler](assembler.md), and
+[Macros](macros.md).
 
 | Condition | Parent | Readers |
 |---|---|---|
@@ -47,7 +41,3 @@ just the reader table.
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
 | `ambiguous-alternative` | `ambiguous-mode` | `ambiguous-alternative-hole`, `ambiguous-alternative-slot` |
-
-`signed-range-out-of-field` is not in this table: it's internal to
-`definstruction`'s own field-range checking, never escapes to a caller, and
-defines no readers.
