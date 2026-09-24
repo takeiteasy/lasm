@@ -98,7 +98,7 @@
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi :bank
-                                             ; (:bank's operand is an EXPR-LABEL)
+                                             ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
 
@@ -142,8 +142,8 @@
        (unless (eq (%punct-value (%tok tokens (1+ i) end)) :lparen)
          (%parse-error tok "Expected \"(\" after ~A" (token-text tok)))
        (multiple-value-bind (inner next-i) (%parse-binary tokens (+ i 2) end 0)
-         (unless (expr-label-p inner)
-           (%parse-error tok "~A() takes a label" (token-text tok)))
+         (unless (or (expr-label-p inner) (expr-location-p inner))
+           (%parse-error tok "~A() takes a label or *" (token-text tok)))
          (let ((close (%tok tokens next-i end)))
            (unless (eq (%punct-value close) :rparen)
              (%parse-error close "Expected closing parenthesis, found ~:[end of expression~;~:*~S~]"

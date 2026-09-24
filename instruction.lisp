@@ -320,14 +320,36 @@ than each caller assuming a byte opcode."
 ;; assembler for bank(label). NIL outside of ASSEMBLE-STATEMENTS.
 (defvar *label-banks* nil)
 
-(defun %eval-bank (label symbols)
-  (unless (expr-label-p label)
-    (error 'assembly-error :message "bank() takes a label"))
-  (let ((name (expr-label-name label)))
+;; .BANK N routes output landing in a banked region of the target memory to
+;; bank N of that region; all other output is the main image.
+(defvar *banked-regions* nil
+  "The banked MEMORY-REGIONs of the memory being assembled for.")
+
+(defvar *layout-bank* nil
+  "The bank selected by the latest .BANK, or NIL before any.")
+
+(defun %bank-region-at (address)
+  "The banked region ADDRESS lies in while a bank is selected, else NIL."
+  (and *layout-bank*
+       (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
+                *banked-regions*)))
+
+(defun %eval-bank-here (pc)
+  (unless pc (error 'unresolved-location))
+  (if (%bank-region-at pc)
+      *layout-bank*
+      (error 'assembly-error :message "bank(*): the current address is not in a banked region")))
+
+(defun %eval-bank (operand symbols pc)
+  (when (expr-location-p operand)
+    (return-from %eval-bank (%eval-bank-here pc)))
+  (unless (expr-label-p operand)
+    (error 'assembly-error :message "bank() takes a label or *"))
+  (let ((name (expr-label-name operand)))
     (flet ((fail (condition fmt &rest args)
              (error condition :name name
                               :message (apply #'format nil fmt (%display-symbol-key name) args)
-                              :line (expr-label-line label) :column (expr-label-column label))))
+                              :line (expr-label-line operand) :column (expr-label-column operand))))
       (multiple-value-bind (bank foundp) (and *label-banks* (gethash name *label-banks*))
         (cond
           ((and foundp bank) bank)
@@ -370,7 +392,7 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
      pc)
     (expr-unary
      (when (eq (expr-unary-op ast) :bank)
-       (return-from eval-expr (%eval-bank (expr-unary-operand ast) symbols)))
+       (return-from eval-expr (%eval-bank (expr-unary-operand ast) symbols pc)))
      (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols :pc pc)))
        (ecase (expr-unary-op ast)
          (:neg (- v))

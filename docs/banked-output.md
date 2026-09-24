@@ -45,6 +45,21 @@ The label must lie in a banked region; a main-image label or an
 `.equ`/`.set` name signals `assembly-error`. The operator's spelling is the
 lexer's [`bank-operator`](lexer.md#clauses) clause.
 
+## `bank(*)`
+
+`bank(*)` folds to the bank in effect at the current address, for code that
+needs its own bank without a label.
+
+```
+        .bank 2
+        .org $4000
+        bnk #bank(*)        ; 2
+        .byte bank(*)       ; 2
+```
+
+The address must lie in a banked region while a bank is selected; otherwise it
+signals `assembly-error`.
+
 ## Bank images
 
 ```lisp

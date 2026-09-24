@@ -259,6 +259,11 @@ jmp start")))
     (fiveam:is (eq :bank (expr-unary-op (expr-unary-operand ast)))))
   (fiveam:is (expr-binary-p (%expr "bank(a) + 1"))))
 
+(fiveam:test bank-operator-parses-the-location-counter
+  (let ((ast (%expr "bank(*)")))
+    (fiveam:is (eq :bank (expr-unary-op ast)))
+    (fiveam:is (expr-location-p (expr-unary-operand ast)))))
+
 (fiveam:test bank-operator-rejects-non-labels
   (fiveam:signals parse-failure (%expr "bank(1)"))
   (fiveam:signals parse-failure (%expr "bank(a + 1)"))

@@ -222,20 +222,7 @@ DEFINITION-LINE its macro body line when applicable."
                                          ; an entry-ordered listing with no
                                          ; source column in that case
 
-;;; Bank placement: .BANK N routes output landing in a banked region of the
-;;; target memory to bank N of that region; all other output is the main image.
-
-(defvar *banked-regions* nil
-  "The banked MEMORY-REGIONs of the memory being assembled for.")
-
-(defvar *layout-bank* nil
-  "The bank selected by the latest .BANK, or NIL before any.")
-
-(defun %bank-region-at (address)
-  "The banked region ADDRESS lies in while a bank is selected, else NIL."
-  (and *layout-bank*
-       (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
-                *banked-regions*)))
+;;; Bank placement (.BANK) state lives in instruction.lisp, beside bank().
 
 (defun %entry-bank-region (address size line finalp)
   "The banked region an entry of SIZE cells at ADDRESS lands in, or NIL for

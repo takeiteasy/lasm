@@ -104,7 +104,7 @@ doesn't recognize as an operator).
 | 5 | `+` `-` |
 | 6 | `*` `/` `%` |
 | 7 | prefix `-` `+` `~` `<` `>` |
-| 8 | primary: number, label, location counter, `bank( label )`, `( expr )` |
+| 8 | primary: number, label, location counter, `bank( label )`, `bank( * )`, `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
 the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
@@ -126,6 +126,9 @@ machine, pack two bytes into one cell with `.cell (>msg << 8) | <msg`.
 
 A label outside any banked region, or a name defined by `.equ`/`.set`,
 signals `assembly-error`.
+
+`bank(*)` folds to the bank of the current address; see
+[`bank(*)`](banked-output.md#bank-1).
 
 A bare `*` in primary position is the location-counter symbol (`expr-location`
 below, #15) rather than multiplication: `%parse-primary` only reaches that

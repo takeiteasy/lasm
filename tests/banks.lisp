@@ -364,3 +364,26 @@ x:      .byte 0
 (fiveam:test bank-operator-is-unresolved-outside-the-assembler
   (fiveam:signals unresolved-label
     (eval-expr-constant (%expr "bank(x)"))))
+
+;;; bank(*)
+
+(fiveam:test bank-here-folds-to-the-selected-bank
+  (let ((a (%bank-op-assembly "        .bank 2
+        .org $4000
+        bnk #bank(*)
+        .byte bank(*)
+here    = bank(*)
+        .byte here")))
+    (fiveam:is (equalp #(#x10 2 2 2) (%image-head a 2 4)))))
+
+(fiveam:test bank-here-errors-outside-a-banked-region
+  (fiveam:signals assembly-error
+    (%bank-op-assembly "        .byte bank(*)"))
+  (fiveam:signals assembly-error
+    (%bank-op-assembly "        .bank 1
+        .org $0100
+        .byte bank(*)")))
+
+(fiveam:test bank-here-needs-a-pc
+  (fiveam:signals unresolved-location
+    (eval-expr-constant (%expr "bank(*)"))))

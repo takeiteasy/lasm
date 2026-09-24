@@ -32,7 +32,8 @@
 one:    .byte 11, 12
         .bank 2
         .org $4000
-two:    .byte 21, 22")
+two:    .byte 21, 22
+        .byte bank(*)")
 
 (format t "~&Source:~%~A~2%" *source*)
 
@@ -51,5 +52,6 @@ two:    .byte 21, 22")
   (run m)
   (assert (= 2 (current-bank m 'romx)))
   (assert (= 21 (mref m 'ram #x4000)))
+  (assert (= 2 (mref m 'ram #x4002)))
   (format t "After running, bank ~D is mapped: ram[$4000] = ~D~%"
           (current-bank m 'romx) (mref m 'ram #x4000)))

@@ -70,7 +70,7 @@ their own for a conventional dialect.
   `label-suffix`, `"#"`, or `"="`; `deflexer` rejects any other spelling. A
   `nil`/omitted clause disables hole prefixes.
 - `(bank-operator string)` — e.g. `"bank"` (the `default` lexer's setting).
-  The identifier spelling of the [`bank(label)`](parser.md#banklabel)
+  The identifier spelling of the [`bank()`](parser.md#banklabel)
   operator. An identifier matching it (any case) and followed by `(` lexes
   as a `:bank-operator` token; otherwise it is an ordinary identifier. It
   must be a valid identifier under `ident-chars`. A `nil`/omitted clause
