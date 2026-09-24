@@ -219,7 +219,7 @@
 ;;; Coverage guard
 
 (fiveam:test snapshot-covers-every-machine-slot
-  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks))
+  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks loaded-banks))
         (host-only '(descriptor slots interrupt-hook access-hook)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))
@@ -264,3 +264,14 @@
     (setf (mref target 'ram 0) 5)
     (fiveam:signals snapshot-malformed (restore-snapshot target bad))
     (fiveam:is (= 5 (mref target 'ram 0)))))
+
+(fiveam:test snapshot-round-trips-the-loaded-bank
+  (let ((m (make-machine 'snapshot-bank-machine))
+        (other (make-machine 'snapshot-bank-machine)))
+    (setf (current-bank m 'window) 2)
+    (load-program m (make-array 20 :initial-element 1) :origin 10)
+    (restore-snapshot other (machine-snapshot m))
+    (fiveam:is (eql 2 (gethash 'window (machine-loaded-banks other))))
+    (reset other)
+    (restore-snapshot other (machine-snapshot (make-machine 'snapshot-bank-machine)))
+    (fiveam:is (null (gethash 'window (machine-loaded-banks other))))))

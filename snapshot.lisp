@@ -6,7 +6,7 @@
 
 (in-package #:lasm)
 
-(defconstant +snapshot-version+ 2)
+(defconstant +snapshot-version+ 3)
 
 (define-condition snapshot-error (lasm-error)
   ((detail :initarg :detail :reader snapshot-error-detail))
@@ -66,6 +66,7 @@
         collect (let ((state (gethash (memory-region-name region) (machine-banks machine))))
                   (list (memory-region-name region)
                         :current (car state)
+                        :loaded (gethash (memory-region-name region) (machine-loaded-banks machine))
                         :banks (map 'list #'%encode-runs (cdr state))))))
 
 (defun machine-snapshot (machine)
@@ -122,7 +123,7 @@ stored as-is and must be readable too."
     cells))
 
 (defun %decode-banks (machine saved)
-  "Validate SAVED banked-region entries; return a list of (NAME CURRENT ARRAYS)."
+  "Validate SAVED banked-region entries; return a list of (NAME CURRENT ARRAYS LOADED)."
   (unless (listp saved)
     (%snapshot-fail 'snapshot-malformed "bad banks"))
   (loop for (element . region) in (%banked-regions (machine-descriptor machine))
@@ -138,12 +139,16 @@ stored as-is and must be readable too."
                                     name (memory-region-banks region)))
                   (unless (and (integerp current) (< -1 current (memory-region-banks region)))
                     (%snapshot-fail 'snapshot-malformed "~S: bad current bank ~S" name current))
-                  (list name current
-                        (mapcar (lambda (runs)
-                                  (%decode-runs runs
-                                                (1+ (- (memory-region-end region) (memory-region-start region)))
-                                                (storage-element-cell-width element) name))
-                                banks)))))
+                  (let ((loaded (getf plist :loaded)))
+                    (unless (or (null loaded) (and (integerp loaded) (< -1 loaded (memory-region-banks region))))
+                      (%snapshot-fail 'snapshot-malformed "~S: bad loaded bank ~S" name loaded))
+                    (list name current
+                          (mapcar (lambda (runs)
+                                    (%decode-runs runs
+                                                  (1+ (- (memory-region-end region) (memory-region-start region)))
+                                                  (storage-element-cell-width element) name))
+                                  banks)
+                          loaded)))))
 
 (defun %decode-element (element saved)
   "Validate SAVED against ELEMENT and return the values to apply: a cell
@@ -255,9 +260,12 @@ MACHINE-INTERRUPT-HOOK is left as installed."
     (loop for element in (machine-descriptor-elements (machine-descriptor machine))
           for value in values
           do (%apply-element machine element value))
-    (loop for (name current arrays) in banks
+    (loop for (name current arrays loaded) in banks
           for state = (gethash name (machine-banks machine))
           do (setf (car state) current)
+             (if loaded
+                 (setf (gethash name (machine-loaded-banks machine)) loaded)
+                 (remhash name (machine-loaded-banks machine)))
              (loop for array in arrays
                    for target across (cdr state)
                    do (replace target array)))

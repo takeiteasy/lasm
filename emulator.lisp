@@ -111,11 +111,23 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
                      (incf address))
                data)
           (setf (sref machine 'pc) origin)
+          (%record-loaded-banks machine memory origin (length data))
           (when assembly-p
             (dolist (image (assembly-banks cells))
               (%load-into-bank machine memory (bank-image-origin image)
                                (bank-image-cells image) (bank-image-bank image))))))
     machine))
+
+(defun %record-loaded-banks (machine memory origin length)
+  "Note the mapped bank of each banked region of MEMORY that LENGTH cells
+loaded at ORIGIN overlap."
+  (let ((element (descriptor-element (machine-descriptor machine) memory)))
+    (loop for (owner . region) in (%banked-regions (machine-descriptor machine))
+          when (and (eq owner element)
+                    (<= origin (memory-region-end region))
+                    (< (memory-region-start region) (+ origin length)))
+            do (setf (gethash (memory-region-name region) (machine-loaded-banks machine))
+                     (current-bank machine (memory-region-name region))))))
 
 (defun %load-into-bank (machine memory origin data bank)
   (let* ((element (descriptor-element (machine-descriptor machine) memory))

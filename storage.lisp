@@ -557,7 +557,10 @@ machine's default layout -- callers hold no other kind (#64)."
   (idle nil :type boolean)
   ;; Banked regions' runtime state: region name -> (CURRENT . ARRAYS), ARRAYS
   ;; a simple-vector of one cell array per bank. Empty when no region is banked.
-  (banks (make-hash-table :test 'eq)))
+  (banks (make-hash-table :test 'eq))
+  ;; Banked region name -> the bank LOAD-PROGRAM's unbanked image was written
+  ;; into (whichever was mapped then). Cleared by RESET; not snapshotted.
+  (loaded-banks (make-hash-table :test 'eq)))
 
 ;;; Access notification
 
@@ -738,6 +741,7 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
         ((:register :flag) (fill slot 0))
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
+  (clrhash (machine-loaded-banks machine))
   (loop for entry being the hash-values of (machine-banks machine)
         do (setf (car entry) 0)
            (map nil (lambda (bank) (fill bank 0)) (cdr entry)))

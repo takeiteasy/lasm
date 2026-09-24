@@ -532,15 +532,18 @@ is NIL), as a fresh table like ASSEMBLY-SYMBOL-INFO."
              (assembly-symbol-info assembly))
     result))
 
-(defun %mapped-bank-images (assembly machine memory)
-  "(REGION . BANK) for each banked region of MEMORY whose mapped bank has an
-image in ASSEMBLY."
+(defun %banked-windows (assembly machine memory)
+  "One (REGION BANK SOURCE) per banked region of MEMORY, BANK being the mapped
+one. SOURCE is :OWN when ASSEMBLY has an image for it, :MAIN when the main
+image was loaded into it, else NIL."
   (let ((element (descriptor-element (machine-descriptor machine) memory)))
     (loop for (owner . region) in (%banked-regions (machine-descriptor machine))
           for name = (memory-region-name region)
           for bank = (current-bank machine name)
-          when (and (eq owner element) (assembly-bank-image assembly name bank))
-            collect (cons region bank))))
+          when (eq owner element)
+            collect (list region bank
+                          (cond ((assembly-bank-image assembly name bank) :own)
+                                ((eql bank (gethash name (machine-loaded-banks machine))) :main))))))
 
 (defun %subtract-range (ranges start end)
   "RANGES, (START . END) pairs with exclusive ends, minus [START, END)."
@@ -550,25 +553,38 @@ image in ASSEMBLY."
 
 (defun %live-data-regions (assembly machine memory)
   "ASSEMBLY's data regions as laid out in MACHINE's MEMORY: the main image's,
-with each banked region's window replaced by its mapped bank's."
+with each banked region's window replaced by its mapped bank's image, or
+kept only if the main image was loaded into that bank."
   (let ((regions (assembly-data-regions assembly))
-        (mapped (%mapped-bank-images assembly machine memory)))
-    (loop for (region . nil) in mapped
-          do (setf regions (%subtract-range regions (memory-region-start region)
-                                            (1+ (memory-region-end region)))))
-    (loop for (region . bank) in mapped
-          do (setf regions (append regions
-                                   (assembly-data-regions assembly :region (memory-region-name region)
-                                                                   :bank bank))))
+        (windows (%banked-windows assembly machine memory)))
+    (loop for (region nil source) in windows
+          unless (eq source :main)
+            do (setf regions (%subtract-range regions (memory-region-start region)
+                                              (1+ (memory-region-end region)))))
+    (loop for (region bank source) in windows
+          when (eq source :own)
+            do (setf regions (append regions
+                                     (assembly-data-regions assembly :region (memory-region-name region)
+                                                                     :bank bank))))
     regions))
 
 (defun %live-symbol-info (assembly machine memory)
-  "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's and
-those of each mapped bank."
-  (let ((result (%image-symbol-info assembly nil nil)))
-    (loop for (region . bank) in (%mapped-bank-images assembly machine memory)
-          do (maphash (lambda (name info) (setf (gethash name result) info))
-                      (%image-symbol-info assembly (memory-region-name region) bank)))
+  "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's
+outside banked windows, and inside each window those of its mapped bank or
+of the main image when that was loaded into it."
+  (let ((result (%image-symbol-info assembly nil nil))
+        (windows (%banked-windows assembly machine memory)))
+    (loop for (region nil source) in windows
+          unless (eq source :main)
+            do (maphash (lambda (name info)
+                          (when (<= (memory-region-start region) (symbol-info-value info)
+                                    (memory-region-end region))
+                            (remhash name result)))
+                        (%image-symbol-info assembly nil nil)))
+    (loop for (region bank source) in windows
+          when (eq source :own)
+            do (maphash (lambda (name info) (setf (gethash name result) info))
+                        (%image-symbol-info assembly (memory-region-name region) bank)))
     result))
 
 (defun %bank-image-extent (assembly image)

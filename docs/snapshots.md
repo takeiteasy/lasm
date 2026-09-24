@@ -25,7 +25,8 @@ The same state `reset` clears:
   vector and stack pointer) and memory element
 - `machine-cycles`, `machine-extra-cycles` and the idle flag
 - pending interrupts
-- banked regions: the mapped bank and every bank's contents
+- banked regions: the mapped bank, every bank's contents, and the bank
+  `load-program` wrote the main image into
 - the device bus, holes and bus order included
 
 `machine-interrupt-hook` and `machine-access-hook` are host wiring and are neither saved nor changed by a

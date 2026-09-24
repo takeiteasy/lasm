@@ -82,8 +82,8 @@ cross a data boundary.
 `disassemble-assembly` uses [assembly data regions](listing.md#assembly-data-regions)
 by default. `disassemble-memory` does the same when given `:assembly`, and
 also takes its labels from it. Inside a banked region, the mapped bank's
-regions and labels apply when the assembly has an image for it; otherwise
-the main image's do. Pass `nil` to decode everything or a range list to
+regions and labels apply when the assembly has an image for it. The main
+image's apply there only if `load-program` wrote it into that bank. Pass `nil` to decode everything or a range list to
 override. Without `:assembly`, no regions apply.
 
 ### Rendering

@@ -571,3 +571,22 @@ far:    .byte 1
     (let ((lines (disassemble-memory (debug-session-machine session) :start #x4000 :count 1
                                      :assembly (debug-session-assembly session))))
       (fiveam:is (equal "far" (disassembly-line-label (first lines)))))))
+
+(fiveam:test debug-where-applies-main-image-only-to-the-bank-it-loaded-into
+  (let* ((a (%bank-assembly "        .org $4000
+        .byte 1
+        .bank 1
+        .org $4000
+        hlt"))
+         (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (flet ((first-text ()
+             (disassembly-line-text
+              (first (disassemble-memory m :start #x4000 :count 1 :assembly a :labels nil)))))
+      (fiveam:is (search ".byte" (first-text)))
+      (setf (current-bank m 'romx) 3)
+      (fiveam:is (not (search ".byte" (first-text))))
+      (setf (current-bank m 'romx) 0)
+      (fiveam:is (search ".byte" (first-text)))
+      (reset m)
+      (fiveam:is (not (search ".byte" (first-text)))))))

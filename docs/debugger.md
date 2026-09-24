@@ -195,7 +195,5 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-- The debugger has no reverse continue.
-- `where` applies main-image data regions and labels inside a banked window
-  whose mapped bank has no image, even if the main image was loaded into a
-  different bank. ([#250](https://todo.sr.ht/~takeiteasy/lasm/250))
+The debugger has no reverse continue.
+
