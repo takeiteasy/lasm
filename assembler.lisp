@@ -242,23 +242,7 @@ the region's edge or the selected bank does not exist."
       (when (>= *layout-bank* (memory-region-banks region))
         (%assembly-error line ".bank ~D is out of range for region ~(~A~) (~D bank~:P)"
                          *layout-bank* (memory-region-name region) (memory-region-banks region))))
-    (when finalp
-      (if region
-          (pushnew (memory-region-name region) *bank-output-regions*)
-          (dolist (window *banked-regions*)
-            (when (and (plusp size)
-                       (<= address (memory-region-end window))
-                       (>= (+ address size -1) (memory-region-start window)))
-              (cl:push (cons (memory-region-name window) line) *main-window-lines*)))))
     region))
-
-(defun %check-main-image-windows ()
-  "Signal if a banked region holds both main-image output and .BANK output."
-  (dolist (entry (reverse *main-window-lines*))
-    (when (member (car entry) *bank-output-regions*)
-      (%assembly-error (cdr entry)
-                       "main-image output in banked region ~(~A~), which also holds .bank output"
-                       (car entry)))))
 
 ;;; Pass 1: layout -- size every statement, bind every label, choose modes
 
@@ -1218,8 +1202,6 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
         (asm-origin origin)
         (main-end origin)
         (*layout-bank* nil)
-        (*main-window-lines* nil)
-        (*bank-output-regions* nil)
         (*label-banks* (make-hash-table :test 'equal))
         (emitted-p nil)
         (scope nil)
@@ -1349,7 +1331,6 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                              (cl:push size widths)
                              (incf address size)
                              (unless region (setf emitted-p t main-end address))))))))))))
-    (when finalp (%check-main-image-windows))
     (values symbols (nreverse sized) main-end asm-origin new-floors (nreverse widths) info effects
             *label-banks*)))
 

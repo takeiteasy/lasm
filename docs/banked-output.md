@@ -26,9 +26,6 @@ everything else stays in the main image. There is no closing directive.
   assembly's `origin`.
 - A statement may not cross the edge of a banked region. Overlapping output
   in one bank signals `assembly-error`.
-- A banked region that receives `.bank` output may not also hold main-image
-  output, which would be output placed there before the first `.bank`.
-  This signals `assembly-error`.
 - Signals `assembly-error` on a memory with no banked region.
 
 ## `bank(label)`

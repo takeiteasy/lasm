@@ -574,7 +574,10 @@ far:    .byte 1
 
 (fiveam:test debug-where-applies-main-image-only-to-the-bank-it-loaded-into
   (let* ((a (%bank-assembly "        .org $4000
-        .byte 1"))
+        .byte 1
+        .bank 1
+        .org $4000
+        hlt"))
          (m (make-machine 'bank-asm-machine)))
     (load-program m a)
     (flet ((first-text ()
@@ -603,25 +606,3 @@ far:    .byte 1
       (fiveam:is (eql 2 (gethash 'romx (machine-loaded-banks m))))
       (setf (sref m 'pc) #x4002)
       (fiveam:is (search ".byte" (debug-where-text session :context 1))))))
-
-(fiveam:test main-image-output-may-not-share-a-banked-region-with-bank-output
-  (fiveam:signals assembly-error
-    (%bank-assembly "        .org $4000
-        .byte 1
-        .bank 1
-        .org $4010
-        .byte 2"))
-  (fiveam:signals assembly-error
-    (%bank-assembly "        .org $4000
-        nop
-        .bank 1
-        .org $4000
-        nop")))
-
-(fiveam:test main-image-output-alone-in-a-banked-region-is-allowed
-  (fiveam:finishes (%bank-assembly "        .org $4000
-        .byte 1"))
-  (fiveam:finishes (%bank-assembly "        nop
-        .bank 1
-        .org $4000
-        .byte 1")))
