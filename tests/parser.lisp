@@ -293,6 +293,17 @@ jmp start")))
                     (mapcar (lambda (text) (expr-binary-op (%expr text)))
                             '("a <= b" "a >= b" "a == b" "a != b" "a > b")))))
 
+(fiveam:test logical-operators-bind-below-comparisons
+  (let ((ast (%expr "a || b && c")))
+    (fiveam:is (eq :oror (expr-binary-op ast)))
+    (fiveam:is (eq :andand (expr-binary-op (expr-binary-right ast)))))
+  (let ((ast (%expr "a == 1 && b")))
+    (fiveam:is (eq :andand (expr-binary-op ast)))
+    (fiveam:is (eq :eq (expr-binary-op (expr-binary-left ast)))))
+  (let ((ast (%expr "!a == 0")))
+    (fiveam:is (eq :eq (expr-binary-op ast)))
+    (fiveam:is (eq :not (expr-unary-op (expr-binary-left ast))))))
+
 (fiveam:test comparisons-bind-below-every-other-operator
   (let ((ast (%expr "a & m == 0")))
     (fiveam:is (eq :eq (expr-binary-op ast)))

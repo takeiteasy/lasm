@@ -682,6 +682,25 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test eval-expr-constant-arithmetic
   (fiveam:is (= 7 (eval-expr-constant (match-operand-mode (%single-operand "#(3+4)") 'immediate)))))
 
+(fiveam:test eval-expr-constant-logical-operators
+  (flet ((value (source)
+           (eval-expr-constant (parse-expression (tokenize source)))))
+    (fiveam:is (equal '(1 0 0 0) (list (value "2 && 3") (value "2 && 0")
+                                       (value "0 && 3") (value "0 && 0"))))
+    (fiveam:is (equal '(1 1 1 0) (list (value "2 || 3") (value "2 || 0")
+                                       (value "0 || 3") (value "0 || 0"))))
+    (fiveam:is (equal '(0 1 1) (list (value "!5") (value "!0") (value "!!5"))))
+    (fiveam:is (= 1 (value "1 < 2 && 3 >= 3 || 0")))
+    (fiveam:is (= 1 (value "0 && missing || 1")))))
+
+(fiveam:test logical-operators-short-circuit
+  (flet ((value (source)
+           (eval-expr-constant (parse-expression (tokenize source)))))
+    (fiveam:is (= 0 (value "0 && missing")))
+    (fiveam:is (= 1 (value "1 || missing")))
+    (fiveam:signals unresolved-label (value "1 && missing"))
+    (fiveam:signals unresolved-label (value "0 || missing"))))
+
 (fiveam:test eval-expr-constant-modulo
   (flet ((value (source)
            (eval-expr-constant (parse-expression (tokenize source)))))

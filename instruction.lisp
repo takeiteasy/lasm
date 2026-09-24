@@ -400,6 +400,7 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
        (ecase (expr-unary-op ast)
          (:neg (- v))
          (:pos v)
+         (:not (if (zerop v) 1 0))
          (:lognot (lognot v))
          ;; Fixed 8-bit split, independent of the machine's :CELL-WIDTH (#67) --
          ;; a byte-packing convenience, not a cell-width-relative operator.
@@ -413,6 +414,16 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
               (ldb (byte *cell-width* 0) v)
               (ldb (byte *cell-width* *cell-width*) v))))))
     (expr-binary
+     (when (member (expr-binary-op ast) '(:andand :oror))
+       (let ((l (eval-expr (expr-binary-left ast) :symbols symbols :pc pc)))
+         (return-from eval-expr
+           (if (eq (expr-binary-op ast) :andand)
+               (if (and (/= l 0)
+                        (/= 0 (eval-expr (expr-binary-right ast) :symbols symbols :pc pc)))
+                   1 0)
+               (if (or (/= l 0)
+                       (/= 0 (eval-expr (expr-binary-right ast) :symbols symbols :pc pc)))
+                   1 0)))))
      (let ((l (eval-expr (expr-binary-left ast) :symbols symbols :pc pc))
            (r (eval-expr (expr-binary-right ast) :symbols symbols :pc pc)))
        (ecase (expr-binary-op ast)

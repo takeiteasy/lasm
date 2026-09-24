@@ -121,6 +121,7 @@
 (defparameter *punctuators*
   '(("<<" . :shl) (">>" . :shr)
     ("<=" . :le) (">=" . :ge) ("==" . :eq) ("!=" . :ne)
+    ("&&" . :andand) ("||" . :oror) ("!" . :bang)
     ("|" . :pipe) ("^" . :caret) ("&" . :amp)
     ("+" . :plus) ("-" . :minus) ("*" . :star) ("/" . :slash)
     ("%" . :percent) ("~" . :tilde)

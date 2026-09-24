@@ -102,8 +102,8 @@ their own for a conventional dialect.
 
 Punctuation tokens carry a keyword `value`: `:plus :minus :star :slash :percent :amp
 :pipe :caret :tilde :shl :shr :lparen :rparen :lbracket :rbracket :comma :lt
-:gt :le :ge :eq :ne :hash :equals`. Two-character operators (`<<`, `>>`,
-`<=`, `>=`, `==`, `!=`) win maximal munch over their single-character
+:gt :le :ge :eq :ne :andand :oror :bang :hash :equals`. Two-character
+operators (`<<`, `>>`, `<=`, `>=`, `==`, `!=`, `&&`, `||`) win maximal munch over their single-character
 prefixes. `#` has no meaning to the lexer itself
 — it is recognized so addressing-mode literal patterns (e.g. 6502-style
 immediate `#expr`) have a token to match against once `defmode` exists (M2).

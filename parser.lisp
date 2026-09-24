@@ -97,12 +97,12 @@
                                              ; (#15). No slots; it IS the
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
-(defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :lo :hi :bank
-                                             ;          :lowcell :highcell
+(defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :not :lo :hi
+                                             ;          :bank :lowcell :highcell
                                              ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
-                                             ;          :lt :gt :le :ge :eq :ne
+                                             ;          :lt :gt :le :ge :eq :ne :andand :oror
 
 ;;; Shared error helper
 
@@ -116,12 +116,13 @@
 ;; Left-associative binary operator precedence, lowest-binding first. All
 ;; unary operators bind tighter than any binary operator.
 (defparameter *binary-precedence*
-  '((:lt . 1) (:gt . 1) (:le . 1) (:ge . 1) (:eq . 1) (:ne . 1)
-    (:pipe . 2) (:caret . 3) (:amp . 4) (:shl . 5) (:shr . 5)
-    (:plus . 6) (:minus . 6) (:star . 7) (:slash . 7) (:percent . 7)))
+  '((:oror . 1) (:andand . 2)
+    (:lt . 3) (:gt . 3) (:le . 3) (:ge . 3) (:eq . 3) (:ne . 3)
+    (:pipe . 4) (:caret . 5) (:amp . 6) (:shl . 7) (:shr . 7)
+    (:plus . 8) (:minus . 8) (:star . 9) (:slash . 9) (:percent . 9)))
 
 (defparameter *unary-ops*
-  '((:minus . :neg) (:plus . :pos) (:tilde . :lognot) (:lt . :lo) (:gt . :hi)))
+  '((:minus . :neg) (:plus . :pos) (:tilde . :lognot) (:bang . :not) (:lt . :lo) (:gt . :hi)))
 
 (defun %tok (tokens i end)
   (when (< i end) (aref tokens i)))

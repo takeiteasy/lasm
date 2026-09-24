@@ -97,15 +97,17 @@ doesn't recognize as an operator).
 
 | Level | Operators |
 |---|---|
-| 1 | `<` `>` `<=` `>=` `==` `!=` |
-| 2 | `\|` |
-| 3 | `^` |
-| 4 | `&` |
-| 5 | `<<` `>>` |
-| 6 | `+` `-` |
-| 7 | `*` `/` `%` |
-| 8 | prefix `-` `+` `~` `<` `>` |
-| 9 | primary: number, label, location counter, function operator, `( expr )` |
+| 1 | `\|\|` |
+| 2 | `&&` |
+| 3 | `<` `>` `<=` `>=` `==` `!=` |
+| 4 | `\|` |
+| 5 | `^` |
+| 6 | `&` |
+| 7 | `<<` `>>` |
+| 8 | `+` `-` |
+| 9 | `*` `/` `%` |
+| 10 | prefix `-` `+` `~` `!` `<` `>` |
+| 11 | primary: number, label, location counter, function operator, `( expr )` |
 
 Prefix `<expr` / `>expr` are 6502-style low-/high-byte operators: `<` masks
 the low 8 bits, `>` the next 8 bits up. This split is fixed at 8 bits
@@ -118,13 +120,21 @@ split relative to the cell width, use
 ### Comparisons
 
 `<` `>` `<=` `>=` `==` `!=` fold to `1` when true and `0` when false. They
-bind looser than every other operator, so `a & m == 0` reads as
+bind looser than every arithmetic and bitwise operator, so `a & m == 0` reads as
 `(a & m) == 0`, and they are left-associative.
 
 `<` and `>` are prefix low/high-byte operators in operand position and
 comparisons after an operand: `<a` is the low byte, `a < b` a comparison, and
 `a < <b` both. Addressing-mode patterns that use `<`/`>` as delimiters still
 match; see [Addressing modes](modes.md#matching-and-backtracking).
+
+### Logical operators
+
+`&&`, `||` and prefix `!` treat any nonzero value as true and fold to `1` or
+`0`. `!` binds like the other prefix operators; `&&` and `||` bind below
+comparisons, `&&` tighter than `||`, so `a == 1 && b != 0` needs no
+parentheses. `&&` and `||` short-circuit: `0 && x` and `1 || x` never
+evaluate `x`, so an undefined `x` is not an error there.
 
 ### Function operators
 
@@ -181,11 +191,11 @@ or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
 (defstruct expr-label name localp)    ; NAME unresolved
 (defstruct expr-location)             ; the "*" location-counter symbol (#15)
                                        ; -- no slots; it IS the value
-(defstruct expr-unary op operand)     ; op: :neg :pos :lognot :lo :hi :bank
+(defstruct expr-unary op operand)     ; op: :neg :pos :lognot :not :lo :hi :bank
                                        ;     :lowcell :highcell
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash :percent
-                                       ;     :lt :gt :le :ge :eq :ne
+                                       ;     :lt :gt :le :ge :eq :ne :andand :oror
 ```
 
 `expr-label-localp` is set from the lexer's `local-label-prefix` (`token-localp`,

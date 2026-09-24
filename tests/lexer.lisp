@@ -245,6 +245,10 @@ sta b"))))
   (fiveam:is (equal '(:lt :equals 1)
                     (subseq (mapcar #'token-value (%non-eof (tokenize "< = 1"))) 0 3))))
 
+(fiveam:test logical-punctuators-use-maximal-munch
+  (fiveam:is (equal '(:andand :oror :bang :ne :amp :pipe :bang)
+                    (mapcar #'token-value (%non-eof (tokenize "&& || ! != & | !"))))))
+
 (fiveam:test location-counter-cannot-shadow-a-punctuator
   (fiveam:signals error
     (build-lexer-descriptor 'bad-lc '((location-counter "!"))))
