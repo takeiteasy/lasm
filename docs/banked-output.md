@@ -101,9 +101,25 @@ image's origin. See [Emulator](emulator.md#load-program).
 
 ## Disassembly
 
-`(disassemble-assembly assembly :machine m :bank n [:region r])` decodes that
-bank's image at the region's addresses. Each image round-trips on its own;
-`disassembly-text` does not emit `.bank` directives.
+```lisp
+(disassemble-assembly assembly :machine m :bank n [:region r])
+(disassemble-assembly assembly :machine m :bank :all)
+```
+
+`:bank n` decodes that bank's image at the region's addresses, over the
+addresses its listing entries cover. `:bank :all` returns the main image's
+lines followed by every bank image's. Each `disassembly-line` records its
+`region` and `bank` (both `nil` for the main image), and `disassembly-text`
+starts each bank image with `.bank N` and `.org ADDR`, so the whole program
+round-trips as one source. A main-image line may not follow bank lines.
+
+```lisp
+(disassembly-text (disassemble-assembly a :machine m :bank :all)
+                  :origin (assembly-origin a))
+```
+
+Each image uses only the labels defined in it. As in the main image, a label
+not on a decoded line start renders as an address.
 
 ## Tools
 

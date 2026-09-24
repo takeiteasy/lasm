@@ -45,6 +45,15 @@ two:    .byte 21, 22
   (assert (= 256 (length (assembly-bytes assembly :bank 2))))
   (assert (= (+ 3 (* 3 256)) (length (assembly-bytes assembly))))
 
+  ;; The whole banked program disassembles back to one source
+  (let* ((text (disassembly-text
+                (disassemble-assembly assembly :machine 'banksfoo :bank :all)
+                :origin (assembly-origin assembly)))
+         (again (assemble text :machine 'banksfoo)))
+    (format t "Disassembly:~%~A~%" text)
+    (assert (equalp (assembly-cells assembly) (assembly-cells again)))
+    (assert (equalp (assembly-bytes assembly) (assembly-bytes again))))
+
   (load-program m assembly)
   (assert (= 0 (current-bank m 'romx)))
   (assert (= 11 (bank-peek m 'romx 1 #x4000)))

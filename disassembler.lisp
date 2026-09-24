@@ -88,7 +88,9 @@
    (choices nil :type list)
   (choice-selections nil :type list)
   (label nil :type (or null string))                        ; a symbol bound to this address, or NIL
-  (text nil :type (or null string)))                        ; rendered source line, sans label
+  (text nil :type (or null string))                         ; rendered source line, sans label
+  (region nil :type (or null symbol))                       ; banked region and bank the line was
+  (bank nil :type (or null (integer 0))))                   ; decoded from; NIL for the main image
 
 ;;; Stage 1: decode
 
@@ -518,6 +520,58 @@ of round-trip fidelity."
   (or (assembly-bank-image assembly region bank)
       (error "assembly has no output in bank ~D of ~(~A~)" bank region)))
 
+(defun %image-symbol-info (assembly region bank)
+  "ASSEMBLY's label entries defined in one image (the main one when REGION
+is NIL), as a fresh table like ASSEMBLY-SYMBOL-INFO."
+  (let ((result (make-hash-table :test 'equal)))
+    (maphash (lambda (name info)
+               (when (and (eq (symbol-info-kind info) :label)
+                          (eq (symbol-info-region info) region)
+                          (eql (symbol-info-bank info) bank))
+                 (setf (gethash name result) info)))
+             (assembly-symbol-info assembly))
+    result))
+
+(defun %bank-image-extent (assembly image)
+  "The (VALUES START END) addresses, END exclusive, covered by IMAGE's listing
+entries; the whole window when ASSEMBLY has none for it."
+  (let ((region (bank-image-region image))
+        (bank (bank-image-bank image))
+        (start (bank-image-origin image))
+        (end (+ (bank-image-origin image) (length (bank-image-cells image))))
+        lo hi)
+    (dolist (l (assembly-listing assembly))
+      (when (and (%same-image-p l region bank) (plusp (listing-line-size l)))
+        (setf lo (min (or lo (listing-line-address l)) (listing-line-address l))
+              hi (max (or hi 0) (+ (listing-line-address l) (listing-line-size l))))))
+    (if lo (values lo hi) (values start end))))
+
+(defun %disassemble-image (assembly image &rest args &key data-regions &allow-other-keys)
+  "DISASSEMBLE-CELLS over the main image (IMAGE NIL) or one BANK-IMAGE of
+ASSEMBLY, with only that image's labels, its lines tagged with the image."
+  (let* ((region (and image (bank-image-region image)))
+         (bank (and image (bank-image-bank image)))
+         (args (loop for (key value) on args by #'cddr
+                     unless (eq key :data-regions) append (list key value)))
+         (lines
+           (multiple-value-bind (cells origin end)
+               (if image
+                   (multiple-value-bind (lo hi) (%bank-image-extent assembly image)
+                     (let ((base (bank-image-origin image)))
+                       (values (subseq (bank-image-cells image) (- lo base) (- hi base)) lo hi)))
+                   (values (assembly-cells assembly) (assembly-origin assembly) nil))
+             (apply #'disassemble-cells cells
+                    :origin origin :end end
+                    :symbols (assembly-symbols assembly)
+                    :symbol-info (%image-symbol-info assembly region bank)
+                    :data-regions (if (eq data-regions :auto)
+                                      (assembly-data-regions assembly :region region :bank bank)
+                                      data-regions)
+                    args))))
+    (dolist (l lines lines)
+      (setf (disassembly-line-region l) region
+            (disassembly-line-bank l) bank))))
+
 (defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
                                            (data-regions :auto) bank region)
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
@@ -531,30 +585,29 @@ MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
 DATA-REGIONS (#82) defaults to :AUTO, ASSEMBLY-DATA-REGIONS (listing.lisp);
 pass NIL to decode everything, or an explicit list to override.
 
-BANK (with REGION, which may be omitted when ASSEMBLY has output in a single
-banked region) disassembles that bank's image, placed at the region's
-addresses, instead of the main image."
+Only the labels defined in the decoded image are used. BANK (with REGION,
+which may be omitted when ASSEMBLY has output in a single banked region)
+disassembles that bank's image, placed at the region's addresses, over the
+addresses its listing entries cover. BANK :ALL returns the main image's lines
+followed by every bank image's, each line tagged with its REGION and BANK for
+DISASSEMBLY-TEXT."
   (unless machine (error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
-  (when bank
-    (setf region (%bank-image-region assembly region)))
   (let ((target-width (%machine-cell-width machine memory))
         (source-width (assembly-cell-width assembly)))
     (unless (= target-width source-width)
       (error "DISASSEMBLE-ASSEMBLY on machine ~S: assembly's cell width (~D) does not ~
 match the machine's cell width (~D)" machine source-width target-width)))
-  (disassemble-cells (if bank
-                          (bank-image-cells (%required-bank-image assembly region bank))
-                          (assembly-cells assembly))
-                      :machine machine
-                      :origin (if bank
-                                  (bank-image-origin (%required-bank-image assembly region bank))
-                                  (assembly-origin assembly))
-                      :symbols (assembly-symbols assembly)
-                      :symbol-info (assembly-symbol-info assembly)
-                      :lexer lexer :labels labels :suffixes suffixes :memory memory
-                      :data-regions (if (eq data-regions :auto)
-                                        (assembly-data-regions assembly :region region :bank bank)
-                                        data-regions)))
+  (flet ((image-lines (image)
+           (%disassemble-image assembly image :machine machine :lexer lexer :labels labels
+                                              :suffixes suffixes :memory memory
+                                              :data-regions data-regions)))
+    (cond
+      ((eq bank :all)
+       (append (image-lines nil)
+               (loop for image in (assembly-banks assembly) append (image-lines image))))
+      (bank
+       (image-lines (%required-bank-image assembly (%bank-image-region assembly region) bank)))
+      (t (image-lines nil)))))
 
 (defun disassemble-memory (machine &key memory start count symbols symbol-info (lexer 'default)
                                         (labels t) (suffixes t) data-regions)
@@ -586,15 +639,27 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
   "Render LINES (DISASSEMBLY-LINE list) as re-assemblable source text: a
 leading \".org <origin>\" when ORIGIN is given and non-zero, each line's own
 label on its own line immediately before it, and each line's rendered TEXT
-indented by INDENT. Returns the text as a string when STREAM is NIL
-(default); otherwise writes to STREAM and returns NIL."
+indented by INDENT. Lines from a bank image start with \".bank N\" (when the
+bank changes) and \".org <address>\"; since .BANK has no closing directive, a
+main-image line may not follow them. Returns the text as a string when STREAM
+is NIL (default); otherwise writes to STREAM and returns NIL."
   (let ((body (with-output-to-string (s)
                 (when (and origin (/= origin 0))
                   (format s ".org ~D~%" origin))
-                (dolist (l lines)
-                  (when (disassembly-line-label l)
-                    (format s "~A:~%" (disassembly-line-label l)))
-                  (format s "~A~A~%" indent (disassembly-line-text l))))))
+                (let ((image (cons nil nil)) bank)
+                  (dolist (l lines)
+                    (let ((key (cons (disassembly-line-region l) (disassembly-line-bank l))))
+                      (unless (equal key image)
+                        (cond ((null (car key))
+                               (error "DISASSEMBLY-TEXT: a main-image line follows bank output"))
+                              (t (unless (eql (cdr key) bank)
+                                   (format s ".bank ~D~%" (cdr key)))
+                                 (format s ".org ~D~%" (disassembly-line-address l))
+                                 (setf bank (cdr key))))
+                        (setf image key)))
+                    (when (disassembly-line-label l)
+                      (format s "~A:~%" (disassembly-line-label l)))
+                    (format s "~A~A~%" indent (disassembly-line-text l)))))))
     (if stream (progn (write-string body stream) nil) body)))
 
 (defun print-disassembly (lines &key (stream *standard-output*) origin)

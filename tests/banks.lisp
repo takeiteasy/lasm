@@ -461,3 +461,65 @@ far:    nop" :machine 'bank-asm-machine))
     (debug-set-bank session 'romx 2)
     (setf (sref (debug-session-machine session) 'pc) #x3FFF)
     (fiveam:is (eq :until (debug-continue-to session "far" :max-steps 1)))))
+
+;;; Whole-program disassembly
+
+(defparameter *bank-roundtrip-source*
+  "        nop
+        .bank 2
+        .org $4000
+far:    hlt
+        .byte 7, 8
+        .bank 1
+        .org $4000
+near:   nop
+        .res 2
+        .bank 3
+        .org $4010
+        .res 3")
+
+(defun %round-trip (source labels)
+  (let* ((a (%bank-assembly source))
+         (text (disassembly-text
+                (disassemble-assembly a :machine 'bank-asm-machine :bank :all :labels labels)
+                :origin (assembly-origin a))))
+    (values a (%bank-assembly text) text)))
+
+(defun %same-images-p (a b)
+  (and (equalp (assembly-cells a) (assembly-cells b))
+       (= (length (assembly-banks a)) (length (assembly-banks b)))
+       (every (lambda (x y) (and (eq (bank-image-region x) (bank-image-region y))
+                                 (= (bank-image-bank x) (bank-image-bank y))
+                                 (equalp (bank-image-cells x) (bank-image-cells y))))
+              (assembly-banks a) (assembly-banks b))))
+
+(fiveam:test bank-disassembly-round-trips-without-labels
+  (multiple-value-bind (a b text) (%round-trip *bank-roundtrip-source* nil)
+    (fiveam:is (%same-images-p a b))
+    (fiveam:is (search ".bank 2" text))
+    (fiveam:is (search ".bank 3" text))))
+
+(fiveam:test bank-disassembly-round-trips-with-labels
+  (multiple-value-bind (a b text) (%round-trip *bank-roundtrip-source* t)
+    (fiveam:is (%same-images-p a b))
+    (fiveam:is (search "far:" text))
+    (fiveam:is (search "near:" text))))
+
+(fiveam:test bank-disassembly-only-labels-its-own-image
+  (let* ((a (%bank-assembly))
+         (text (disassembly-text
+                (disassemble-assembly a :machine 'bank-asm-machine :bank 1)
+                :origin #x4000)))
+    (fiveam:is (not (search "far:" text)))))
+
+(fiveam:test bank-disassembly-covers-the-listing-extent-only
+  (let ((lines (disassemble-assembly (%bank-assembly) :machine 'bank-asm-machine :bank 2)))
+    (fiveam:is (= 3 (length lines)))
+    (fiveam:is (equal '(romx . 2) (cons (disassembly-line-region (first lines))
+                                        (disassembly-line-bank (first lines)))))))
+
+(fiveam:test disassembly-text-rejects-main-lines-after-a-bank
+  (let ((a (%bank-assembly)))
+    (fiveam:signals error
+      (disassembly-text (append (disassemble-assembly a :machine 'bank-asm-machine :bank 2)
+                                (disassemble-assembly a :machine 'bank-asm-machine))))))

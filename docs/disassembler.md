@@ -103,6 +103,7 @@ memory's contents), gets the same fix described under "Rendering" below.
 | `values` | Decoded operand values, in the mode's hole order. |
 | `label` | A symbol name bound to this line's own address (only when `:symbols`/`:symbol-info` names it and `:labels` is true), or `nil`. |
 | `text` | The rendered source line, not including its label. |
+| `region`, `bank` | The banked region and bank the line was decoded from, or `nil` for the main image. |
 
 ### Decode failure, mid-stream
 
@@ -139,7 +140,9 @@ assembly's own `.byte`/`.word`/`.res` statements occupy. Pass `nil` to decode
 everything, or a list to override.
 
 `:bank` (with `:region` when several regions have output) disassembles that
-bank's [image](banked-output.md#bank-images) at the region's addresses.
+bank's [image](banked-output.md#bank-images) at the region's addresses;
+`:bank :all` disassembles the main image and every bank image. See
+[Banked output](banked-output.md#disassembly).
 
 ### Rendering
 
@@ -285,7 +288,8 @@ variant or `one-of` alternative, and the lexer declares a
 `disassembly-text` renders `lines` as re-assemblable source: an leading
 `.org <origin>` when `origin` is given and non-zero, each line's own label
 on its own line immediately before it, and each line's rendered text
-indented. Returns a string when `stream` is `nil` (the default); otherwise
+indented. Lines tagged with a bank (`disassembly-line-region`/`-bank`) start
+with `.bank N` and `.org ADDR`. Returns a string when `stream` is `nil` (the default); otherwise
 writes to `stream`. `print-disassembly` instead renders an
 address/cells/text listing for humans — *not* re-assemblable source. It pads
 each cell to the line's `cell-width` in hex digits.
