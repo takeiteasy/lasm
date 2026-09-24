@@ -385,34 +385,97 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
         (%poke machine memory address value))
     (if bank (bank-peek machine (memory-region-name region) bank address) (mpeek machine memory address))))
 
+(defun %stack-target (session target)
+  "The name of the fixed stack TARGET on SESSION, or signals."
+  (let ((name (and (stringp target) (%resolve-storage session target nil t))))
+    (unless (and name (%stack-name-p (debug-session-machine session) name))
+      (error "~A is not a fixed stack" target))
+    name))
+
+(defun %set-stack-contents (machine name values)
+  "Replace stack NAME's live entries with VALUES, bottom first. Signals, leaving
+the stack untouched, unless VALUES are integers that fit its depth."
+  (let ((depth (storage-element-depth (descriptor-element (machine-descriptor machine) name)))
+        (count (length values)))
+    (unless (every #'integerp values)
+      (error "cannot store ~S -- expected integers" values))
+    (when (> count depth)
+      (error "~D values do not fit stack ~(~A~) (depth ~D)" count name depth))
+    (setf (stack-pointer machine name) count)
+    (loop for value in values
+          for offset downfrom (1- count)
+          do (setf (stack-ref machine name offset) value))
+    (loop for offset downfrom (1- count) to 0 collect (stack-ref machine name offset))))
+
 (defun debug-set (session target value &key index scope bank)
   "Store integer VALUE, wrapped to the cell width, in TARGET on SESSION's
 machine and return the stored value. TARGET is a register, flag or register
 alias name (a banked register takes INDEX), a fixed stack name with INDEX
 picking a live bottom-relative slot, a label, or a memory address; SCOPE and
-BANK qualify a memory target as in DEBUG-BREAK. Memory is poked, so a :ROM
-region is writable and a :DEVICE region signals. Never notifies the access
-hook, so watchpoints do not fire."
+BANK qualify a memory target as in DEBUG-BREAK. A fixed stack name with INDEX
+:DEPTH sets its depth to VALUE (cells a grown stack uncovers keep their old
+values); with a list VALUE it replaces the live entries, bottom first, and
+returns the stored list. Memory is poked, so a :ROM region is writable and a
+:DEVICE region signals -- see DEBUG-WRITE for a CPU-faithful store. Never
+notifies the access hook, so watchpoints do not fire."
+  (let ((machine (debug-session-machine session)))
+    (cond
+      ((eq index :depth)
+       (unless (integerp value)
+         (error "cannot set depth to ~S -- expected an integer" value))
+       (let ((name (%stack-target session target)))
+         (%without-hook (machine) (setf (stack-pointer machine name) value))))
+      ((listp value)
+       (when index (error "cannot store a list in ~A[~A]" target index))
+       (let ((name (%stack-target session target)))
+         (%without-hook (machine) (%set-stack-contents machine name value))))
+      ((not (integerp value))
+       (error "cannot store ~S -- expected an integer" value))
+      (t
+       (multiple-value-bind (name slot) (and (stringp target) (%resolve-storage session target index t))
+         (%without-hook (machine)
+           (cond
+             ((null name)
+              (multiple-value-bind (address region bank)
+                  (%resolve-breakpoint-address session target :scope scope :bank bank)
+                (declare (ignore region))
+                (%set-memory session address bank value)))
+             ((%stack-name-p machine name)
+              (let ((depth (stack-depth machine name)))
+                (unless (and (integerp slot) (< slot depth))
+                  (error "stack ~A has no live slot ~A" target (if (integerp slot) slot "-- name one as NAME[N]")))
+                (setf (stack-ref machine name (- depth 1 slot)) value)))
+             (slot (setf (regref machine name slot) value))
+             ((eq (storage-element-kind (descriptor-element (machine-descriptor machine) name)) :flag)
+              (setf (flag machine name) value))
+             (t (setf (sref machine name) value)))))))))
+
+(defun debug-write (session where value &key scope bank)
+  "Store integer VALUE at memory address or label WHERE through the machine's
+own write path, as the CPU would: a :ROM region drops it (or signals, with
+:ON-WRITE :ERROR) and a :DEVICE region's WRITE runs. SCOPE and BANK qualify
+WHERE as in DEBUG-BREAK; a BANK other than the mapped one signals. Returns
+(VALUES CELL STORED-P): the cell now at WHERE (for a device region, the wrapped
+value written) and whether it holds VALUE. Never notifies the access hook."
   (unless (integerp value)
     (error "cannot store ~S -- expected an integer" value))
-  (let ((machine (debug-session-machine session)))
-    (multiple-value-bind (name slot) (and (stringp target) (%resolve-storage session target index t))
+  (when (and (stringp where) (%resolve-storage session where nil t))
+    (error "write only targets memory -- use set for ~A" where))
+  (let ((machine (debug-session-machine session))
+        (memory (debug-session-memory session)))
+    (multiple-value-bind (address region-name bank)
+        (%resolve-breakpoint-address session where :scope scope :bank bank)
+      (declare (ignore region-name))
+      (when (and bank (/= bank (%mapped-bank session address)))
+        (error "bank ~D is not mapped at address ~D" bank address))
       (%without-hook (machine)
-        (cond
-          ((null name)
-           (multiple-value-bind (address region bank)
-               (%resolve-breakpoint-address session target :scope scope :bank bank)
-             (declare (ignore region))
-             (%set-memory session address bank value)))
-          ((%stack-name-p machine name)
-           (let ((depth (stack-depth machine name)))
-             (unless (and (integerp slot) (< slot depth))
-               (error "stack ~A has no live slot ~A" target (if (integerp slot) slot "-- name one as NAME[N]")))
-             (setf (stack-ref machine name (- depth 1 slot)) value)))
-          (slot (setf (regref machine name slot) value))
-          ((eq (storage-element-kind (descriptor-element (machine-descriptor machine) name)) :flag)
-           (setf (flag machine name) value))
-          (t (setf (sref machine name) value)))))))
+        (setf (mref machine memory address) value)
+        (let* ((element (descriptor-element (machine-descriptor machine) memory))
+               (region (%region-at element address))
+               (cell (if (and region (eq (memory-region-kind region) :device))
+                         (wrap-value value (storage-element-cell-width element))
+                         (mpeek machine memory address))))
+          (values cell (= cell (wrap-value value (storage-element-cell-width element)))))))))
 
 (defun debug-unwatch (session id)
   "Remove the watchpoint with ID from SESSION. Returns T if one was removed."
@@ -1115,6 +1178,82 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
                               :test #'string-equal))))
       (if access (values target access) (values text :write)))))
 
+(defun %split-assignment (text)
+  "TEXT as (VALUES TARGET SCOPE EXPRESSION) around its first =, or NIL when
+either side is blank."
+  (let* ((equals (position #\= text))
+         (target (and equals (string-trim " " (subseq text 0 equals))))
+         (expression (and equals (string-trim " " (subseq text (1+ equals))))))
+    (when (and equals (plusp (length target)) (plusp (length expression)))
+      (multiple-value-bind (target scope) (%split-in target)
+        (values target scope expression)))))
+
+(defun %list-items (text)
+  "The comma-separated items of a bracketed list TEXT such as \"[1, mem(2), 3]\",
+or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
+  (if (and (> (length text) 1) (char= (char text 0) #\[) (char= (char text (1- (length text))) #\]))
+      (let ((depth 0) (start 1) items)
+        (loop for i from 1 below (length text)
+              for c = (char text i)
+              do (case c
+                   (#\( (incf depth))
+                   (#\) (decf depth))
+                   ((#\, #\]) (when (zerop depth)
+                                (cl:push (string-trim " " (subseq text start i)) items)
+                                (setf start (1+ i))))))
+        (setf items (nreverse items))
+        (if (equal items '("")) '() items))
+      :none))
+
+(defun %eval-text (session text scope)
+  (multiple-value-bind (test values readers) (%compile-condition session text scope)
+    (%eval-condition session test values readers)))
+
+(defun %depth-target (session target)
+  "The stack named by TARGET of the form NAME.depth, or NIL when TARGET is not
+that form or NAME is not storage. Signals when NAME is storage but no stack."
+  (let ((dot (position #\. target :from-end t)))
+    (when (and dot (string-equal (subseq target (1+ dot)) "depth"))
+      (let ((base (subseq target 0 dot)))
+        (when (%resolve-storage session base nil t)
+          (%stack-target session base)
+          base)))))
+
+(defun %command-set (session rest)
+  (multiple-value-bind (target scope text) (%split-assignment rest)
+    (if (null target)
+        "set: usage: set TARGET = EXPR"
+        (let ((items (%list-items text))
+              (stack (%depth-target session target)))
+          (cond
+            (stack
+             (format nil "~A = ~D~%" target
+                     (debug-set session stack (%eval-text session text scope) :index :depth)))
+            ((listp items)
+             (format nil "~A = [~{~D~^, ~}]~%" target
+                     (debug-set session target
+                                (loop for item in items collect (%eval-text session item scope)))))
+            (t
+             (let ((value (%eval-text session text scope)))
+               (multiple-value-bind (name index) (%split-index target)
+                 (format nil "~A = ~D~%" target
+                         (if index
+                             (debug-set session name value :index index)
+                             (multiple-value-bind (where bank) (%where-arg target)
+                               (debug-set session where value :bank bank :scope scope))))))))))))
+
+(defun %command-write (session rest)
+  (multiple-value-bind (target scope text) (%split-assignment rest)
+    (cond
+      ((null target) "write: usage: write TARGET = EXPR")
+      ((listp (%list-items text)) (error "write only targets memory -- use set for a stack"))
+      (t
+       (let ((value (%eval-text session text scope)))
+         (multiple-value-bind (where bank) (%where-arg target)
+           (multiple-value-bind (cell stored-p)
+               (debug-write session where value :bank bank :scope scope)
+             (format nil "~A = ~D~:[ (dropped)~;~]~%" target cell stored-p))))))))
+
 (defparameter *debug-help-text*
   "Commands:
   break ADDR|LABEL   set a breakpoint (LABEL may be a local, e.g. count.loop)
@@ -1123,6 +1262,9 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   break ... if EXPR  stop only while EXPR (registers, flags, labels, *, mem(ADDR)) is nonzero
   watch TARGET [r|w|rw]  stop when ADDR, LABEL, REG, REG[N], STACK, STACK[N] or a flag is accessed
   set TARGET = EXPR  store EXPR in a register, flag, REG[N], STACK[N], ADDR, BANK:ADDR or LABEL
+  set STACK.depth = EXPR  set a fixed stack's depth
+  set STACK = [EXPR, ...]  replace a fixed stack's entries, bottom first
+  write TARGET = EXPR  store EXPR at ADDR, BANK:ADDR or LABEL as the CPU would (ROM policy, device WRITE)
   delete ID|ADDR     remove a breakpoint or watchpoint (by id first, falling back to address)
   delete BANK:ADDR   remove the breakpoint at ADDR in one bank
   info break         list breakpoints and watchpoints
@@ -1187,23 +1329,8 @@ this call."
                                                                      :scope scope)))))
                            (format nil "Watchpoint ~D (~A) at ~A~%" (watchpoint-id wp)
                                    (%access-text access) (watchpoint-label wp))))))))
-                  ((string-equal cmd "set")
-                   (let ((equals (position #\= rest)))
-                     (if (or (null equals) (zerop (length (string-trim " " (subseq rest 0 equals))))
-                             (zerop (length (string-trim " " (subseq rest (1+ equals))))))
-                         "set: usage: set TARGET = EXPR"
-                         (multiple-value-bind (target scope)
-                             (%split-in (string-trim " " (subseq rest 0 equals)))
-                           (multiple-value-bind (test values readers)
-                               (%compile-condition session (subseq rest (1+ equals)) scope)
-                             (let ((value (%eval-condition session test values readers)))
-                               (multiple-value-bind (name index) (%split-index target)
-                                 (format nil "~A = ~D~%" target
-                                         (if index
-                                             (debug-set session name value :index index)
-                                             (multiple-value-bind (where bank) (%where-arg target)
-                                               (debug-set session where value
-                                                          :bank bank :scope scope)))))))))))
+                  ((string-equal cmd "set") (%command-set session rest))
+                  ((string-equal cmd "write") (%command-write session rest))
                   ((string-equal cmd "delete")
                    (if (zerop (length rest))
                        "delete: missing id or address"

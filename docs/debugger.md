@@ -110,7 +110,12 @@ condition.
 `debug-step-back` undoes `n` steps and returns `:back` and the number undone,
 or `:history-start` when fewer were recorded. The session checkpoints the
 machine at the start of every step or continue command and every 256 steps,
-keeping at least `:history` steps.[^checkpoints] Step back restores the
+keeping at least `:history` steps.## Limitations
+
+- `STACK.depth` is write-only: `print`, conditions, and `watch` cannot read
+  it. See [#254](https://todo.sr.ht/~takeiteasy/lasm/254).
+
+[^checkpoints] Step back restores the
 nearest earlier checkpoint and replays forward.
 
 `debug-reverse-continue` runs backwards to the latest earlier step where a
@@ -131,7 +136,7 @@ the steps undone. The step the session is at never counts as a hit.
 - Replay runs device side effects again and assumes deterministic
   semantics.
 - Change machine state between commands, not during them: `debug-set`,
-  `debug-set-bank`, or `signal-interrupt` before the next command is captured.
+  `debug-write`, `debug-set-bank`, or `signal-interrupt` before the next command is captured.
 
 ## Inspection
 
@@ -152,6 +157,7 @@ the mapped bank.
 
 ```lisp
 (debug-set session target value &key index scope bank)
+(debug-write session where value &key scope bank)
 ```
 
 `target` is a register, flag, or alias name (`:index` picks a banked
@@ -162,6 +168,35 @@ width; `debug-set` returns the stored value.
 Memory is poked directly: a `:rom` region is writable, and a `:device`
 region signals. A write never notifies the access hook, so watchpoints do not
 fire.
+
+### Stacks
+
+| Call | Effect |
+| --- | --- |
+| `(debug-set session "ds" 2 :index :depth)` | Set the depth. Cells a grown stack uncovers keep their old values. |
+| `(debug-set session "ds" '(1 2 3))` | Replace the entries, bottom first. `'()` clears the stack. |
+
+A depth outside `0..:depth`, or a list that is too long or holds a
+non-integer, signals and leaves the stack untouched. Both forms need a
+fixed `(stack ...)`.
+
+A `(stack-pointer REG ...)` machine has no fixed stack: `REG` is a plain
+register and the stack is memory. Push or pop by hand with
+`set REG = N` and a memory `set`.
+
+### CPU-faithful memory writes
+
+`debug-write` stores through the machine's own write path, as a CPU store
+would. A `:rom` region drops the value, or signals `memory-write-protected`
+with `:on-write :error`, and a `:device` region's `write` hook runs. It
+returns the cell now at `where` and whether it holds `value`. A `:bank` other
+than the mapped one signals. It targets memory only; registers, flags, and
+stacks use `debug-set`. It suppresses the access hook, like `debug-set`.
+
+```
+(lasm-dbg) write $10 = 5
+$10 = 0 (dropped)
+```
 
 ## Banks
 
@@ -198,11 +233,13 @@ and prints until `quit` or end of input.
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
+| `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
+| `write TARGET = EXPR` | Store to memory through the CPU write path. |
 | `bank REGION N` | Map a bank. |
 | `help`, `quit` | Show commands or end the session. |
 
 `set` evaluates `EXPR` like a breakpoint condition, so `set x = x + 1` and
-`set pc = count.loop` work.
+`set pc = count.loop` work. `set ds = [x, x + 1]` evaluates each item.
 
 Addresses accept decimal, `$` or `0x` hexadecimal, and `0b` binary. A bank
 address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
@@ -212,4 +249,3 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
     state plus the memory and bank cells changed since the previous
     checkpoint. History is kept back to an anchor, so it can exceed `:history`.
     Reverse continue replays one checkpoint segment at a time, newest first.
-

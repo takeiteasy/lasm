@@ -508,6 +508,7 @@
    #:debug-memory-text
    #:debug-banks-text
    #:debug-set
+   #:debug-write
    #:debug-set-bank
    #:debug-where-text
    #:debug-command
