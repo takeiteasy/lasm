@@ -6,7 +6,7 @@
 
 (in-package #:lasm)
 
-(defconstant +snapshot-version+ 1)
+(defconstant +snapshot-version+ 2)
 
 (define-condition snapshot-error (lasm-error)
   ((detail :initarg :detail :reader snapshot-error-detail))
@@ -56,9 +56,21 @@
                 :state (funcall save machine device))
           (list (device-descriptor-name (device-descriptor device)))))))
 
+(defun %bank-shape (descriptor)
+  (loop for (nil . region) in (%banked-regions descriptor)
+        collect (list (memory-region-name region) (memory-region-start region)
+                      (memory-region-end region) (memory-region-banks region))))
+
+(defun %snapshot-banks (machine)
+  (loop for (nil . region) in (%banked-regions (machine-descriptor machine))
+        collect (let ((state (gethash (memory-region-name region) (machine-banks machine))))
+                  (list (memory-region-name region)
+                        :current (car state)
+                        :banks (map 'list #'%encode-runs (cdr state))))))
+
 (defun machine-snapshot (machine)
   "MACHINE's runtime state as a plain-data list tree: storage, cycle
-counters, idle flag, pending interrupts and the device bus (holes and bus
+counters, idle flag, pending interrupts, banked regions and the device bus (holes and bus
 order included). A device contributes state only when it declares a :SAVE
 hook, which must return data readable by READ. Interrupt signal data is
 stored as-is and must be readable too."
@@ -67,6 +79,7 @@ stored as-is and must be readable too."
           :version +snapshot-version+
           :machine (machine-descriptor-name descriptor)
           :shape (mapcar #'%element-shape (machine-descriptor-elements descriptor))
+          :bank-shape (%bank-shape descriptor)
           :cycles (machine-cycles machine)
           :extra-cycles (machine-extra-cycles machine)
           :idle (machine-idle machine)
@@ -76,6 +89,7 @@ stored as-is and must be readable too."
                                      (cons (and (car entry) (device-index (car entry)))
                                            (cdr entry)))
                                    (machine-interrupt-queue machine))
+          :banks (%snapshot-banks machine)
           :devices (map 'list (lambda (device) (%snapshot-device machine device))
                         (machine-devices machine)))))
 
@@ -89,6 +103,47 @@ stored as-is and must be readable too."
 (defun %check-cell (value width what)
   (unless (and (integerp value) (<= 0 value) (< value (ash 1 width)))
     (%snapshot-fail 'snapshot-malformed "~A: ~S does not fit ~D bits" what value width)))
+
+(defun %decode-runs (runs size cell-width name)
+  "Validate RUNS and expand them to a SIZE-cell array of CELL-WIDTH-bit cells."
+  (let ((cells (make-array size :element-type `(unsigned-byte ,cell-width)))
+        (pos 0))
+    (unless (listp runs)
+      (%snapshot-fail 'snapshot-malformed "~S: runs must be a list" name))
+    (dolist (run runs)
+      (unless (and (consp run) (integerp (car run)) (plusp (car run))
+                   (<= (+ pos (car run)) size))
+        (%snapshot-fail 'snapshot-malformed "~S: bad run ~S" name run))
+      (%check-cell (cdr run) cell-width name)
+      (fill cells (cdr run) :start pos :end (+ pos (car run)))
+      (incf pos (car run)))
+    (unless (= pos size)
+      (%snapshot-fail 'snapshot-malformed "~S: runs cover ~D of ~D cells" name pos size))
+    cells))
+
+(defun %decode-banks (machine saved)
+  "Validate SAVED banked-region entries; return a list of (NAME CURRENT ARRAYS)."
+  (unless (listp saved)
+    (%snapshot-fail 'snapshot-malformed "bad banks"))
+  (loop for (element . region) in (%banked-regions (machine-descriptor machine))
+        collect (let* ((name (memory-region-name region))
+                       (entry (assoc name saved))
+                       (plist (cdr entry))
+                       (current (getf plist :current))
+                       (banks (getf plist :banks)))
+                  (unless entry
+                    (%snapshot-fail 'snapshot-malformed "missing banked region ~S" name))
+                  (unless (and (listp banks) (= (length banks) (memory-region-banks region)))
+                    (%snapshot-fail 'snapshot-malformed "~S: expected ~D banks"
+                                    name (memory-region-banks region)))
+                  (unless (and (integerp current) (< -1 current (memory-region-banks region)))
+                    (%snapshot-fail 'snapshot-malformed "~S: bad current bank ~S" name current))
+                  (list name current
+                        (mapcar (lambda (runs)
+                                  (%decode-runs runs
+                                                (1+ (- (memory-region-end region) (memory-region-start region)))
+                                                (storage-element-cell-width element) name))
+                                banks)))))
 
 (defun %decode-element (element saved)
   "Validate SAVED against ELEMENT and return the values to apply: a cell
@@ -113,23 +168,8 @@ list for registers/flags, (CELLS . SP) for a stack, a cell vector for memory."
          (dolist (v cells) (%check-cell v (storage-element-width element) name))
          (cons cells sp)))
       (:memory
-       (let* ((runs (getf plist :runs))
-              (cell-width (storage-element-cell-width element))
-              (size (ash 1 (storage-element-addr-width element)))
-              (cells (make-array size :element-type `(unsigned-byte ,cell-width)))
-              (pos 0))
-         (unless (listp runs)
-           (%snapshot-fail 'snapshot-malformed "~S: runs must be a list" name))
-         (dolist (run runs)
-           (unless (and (consp run) (integerp (car run)) (plusp (car run))
-                        (<= (+ pos (car run)) size))
-             (%snapshot-fail 'snapshot-malformed "~S: bad run ~S" name run))
-           (%check-cell (cdr run) cell-width name)
-           (fill cells (cdr run) :start pos :end (+ pos (car run)))
-           (incf pos (car run)))
-         (unless (= pos size)
-           (%snapshot-fail 'snapshot-malformed "~S: runs cover ~D of ~D cells" name pos size))
-         cells)))))
+       (%decode-runs (getf plist :runs) (ash 1 (storage-element-addr-width element))
+                     (storage-element-cell-width element) name)))))
 
 (defun %resolve-device-descriptor (machine name)
   "The descriptor NAME denotes on MACHINE: a declared one, or that of a
@@ -144,7 +184,7 @@ runtime-attached device already on the bus."
 
 (defun %validate-snapshot (machine snapshot)
   "Signal on anything wrong with SNAPSHOT; return (VALUES ELEMENT-VALUES
-DEVICE-PLAN) ready to apply."
+DEVICE-PLAN BANK-VALUES) ready to apply."
   (let ((descriptor (machine-descriptor machine)))
     (let ((version (%snapshot-field snapshot :version)))
       (unless (eql version +snapshot-version+)
@@ -158,6 +198,10 @@ DEVICE-PLAN) ready to apply."
                    (mapcar #'%element-shape (machine-descriptor-elements descriptor)))
       (%snapshot-fail 'snapshot-machine-mismatch
                       "snapshot storage layout differs from machine ~S"
+                      (machine-descriptor-name descriptor)))
+    (unless (equal (%snapshot-field snapshot :bank-shape) (%bank-shape descriptor))
+      (%snapshot-fail 'snapshot-machine-mismatch
+                      "snapshot bank layout differs from machine ~S"
                       (machine-descriptor-name descriptor)))
     (let* ((saved (%snapshot-field snapshot :elements))
            (values (loop for element in (machine-descriptor-elements descriptor)
@@ -185,7 +229,7 @@ DEVICE-PLAN) ready to apply."
       (dolist (key '(:cycles :extra-cycles))
         (unless (typep (%snapshot-field snapshot key) 'unsigned-byte)
           (%snapshot-fail 'snapshot-malformed "bad ~S" key)))
-      (values values plan))))
+      (values values plan (%decode-banks machine (%snapshot-field snapshot :banks))))))
 
 ;;; Restore
 
@@ -207,10 +251,16 @@ The device bus is rebuilt at its saved shape: holes stay holes, and each
 device is re-INIT'd and then given its saved state through :LOAD. A device
 attached at runtime must already be on MACHINE's bus to be restored.
 MACHINE-INTERRUPT-HOOK is left as installed."
-  (multiple-value-bind (values plan) (%validate-snapshot machine snapshot)
+  (multiple-value-bind (values plan banks) (%validate-snapshot machine snapshot)
     (loop for element in (machine-descriptor-elements (machine-descriptor machine))
           for value in values
           do (%apply-element machine element value))
+    (loop for (name current arrays) in banks
+          for state = (gethash name (machine-banks machine))
+          do (setf (car state) current)
+             (loop for array in arrays
+                   for target across (cdr state)
+                   do (replace target array)))
     (setf (machine-cycles machine) (%snapshot-field snapshot :cycles)
           (machine-extra-cycles machine) (%snapshot-field snapshot :extra-cycles)
           (machine-idle machine) (%snapshot-field snapshot :idle))

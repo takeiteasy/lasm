@@ -92,8 +92,8 @@ widths against a machine defined earlier in the same file.
   models — and the indexed address is masked to `:memory`'s `:addr-width`,
   so `REGISTER` may be wider than the address space.
 - `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER]
-  [(region NAME start end [:kind :ram/:rom/:device] [:on-write :ignore/:error]
-  [:read fn] [:write fn])...])` —
+  [(region NAME start end [:kind :ram/:rom/:device] [:banks n]
+  [:on-write :ignore/:error] [:read fn] [:write fn])...])` —
   addressable storage. `:addr-width` is the number of address bits (so the
   element has `2^addr-width` cells); `:cell-width` is the bit width of each
   cell and defaults to `:width` (byte-addressed). Set `:cell-width` different
@@ -216,6 +216,7 @@ never overlap and every name (region, register alias, storage element, or
   (memory ram :width 8 :addr-width 16
     (region bios #x0000 #x00FF :kind :rom)
     (region vram #x8000 #x9FFF)                 ; :ram, the default
+    (region romx #x4000 #x7FFF :kind :rom :banks 8)
     (region io   #xFF00 #xFF0F :kind :device
                  :read io-read :write io-write)))
 ```
@@ -223,7 +224,7 @@ never overlap and every name (region, register alias, storage element, or
 `:kind` is one of:
 
 - `:ram` (the default) — ordinary storage, identical to an address outside
-  any region. Only useful to name a sub-range, e.g. for later banking.
+  any region. Useful to name a sub-range, or to bank it.
 - `:rom` — reads hit backing storage; writes are dropped (`:on-write
   :ignore`, the default) or signal `memory-write-protected` (`:on-write
   :error`). A ROM image is *burned in*, not stored by the CPU — `load-program`
@@ -251,8 +252,39 @@ not trigger a device's read side effects merely by displaying memory.
 Regions are an access-behavior overlay, not a separate storage backend:
 `reset` still zeroes the whole underlying array regardless of region, so a
 burned-in ROM image does not survive a `reset` and must be reloaded.
-Bank-switched regions (a region whose backing changes at runtime) are not
-yet supported.
+
+### Bank switching
+
+`:banks n` on a `:ram` or `:rom` region gives it `n` separate banks, each the
+size of the region, with one mapped in at a time. Bank 0 is mapped after
+`make-machine` and `reset`. `:banks` is not valid on a `:device` region. A
+banked `:rom` keeps its `:on-write` policy.
+
+```lisp
+(current-bank machine 'romx)              ; => 0
+(setf (current-bank machine 'romx) 3)     ; map bank 3
+(bank-peek machine 'romx 5 #x4000)        ; read bank 5, mapped or not
+(setf (bank-peek machine 'romx 5 #x4000) 9)
+```
+
+- `current-bank` and its `setf` take the region name. A bank index outside
+  `[0, n)` signals `bank-out-of-range`. A region that is not banked signals
+  an error.
+- `bank-peek` and its `setf` take an absolute address and reach any bank
+  without changing the mapping. The `setf` bypasses write protection.
+- `mref`, `(setf mref)`, `mpeek` and `%poke` operate on the mapped bank.
+- `reset` zeroes every bank and remaps bank 0. `load-program` takes a
+  `:bank` argument to fill an unmapped bank — see [Emulator](emulator.md).
+- Inside instruction semantics, `(set-bank! region n)` switches banks — see
+  [Semantics vocabulary](semantics.md).
+
+A mapper chip is a `:device` region whose `:write` switches banks:
+
+```lisp
+(defun mapper-write (machine address value)
+  (declare (ignore address))
+  (setf (current-bank machine 'romx) value))
+```
 
 ## Runtime state
 

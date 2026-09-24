@@ -219,10 +219,48 @@
 ;;; Coverage guard
 
 (fiveam:test snapshot-covers-every-machine-slot
-  (let ((covered '(cycles extra-cycles idle devices interrupt-queue))
+  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks))
         (host-only '(descriptor slots interrupt-hook)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))
         (fiveam:is (or (member (symbol-name name) covered :test #'string=)
                        (member (symbol-name name) host-only :test #'string=))
                    "machine slot ~S is neither snapshotted nor listed as host-only" name)))))
+
+;;; Banked regions
+
+(defmachine snapshot-bank-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region window 16 31 :banks 3)))
+
+(defmachine snapshot-other-bank-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region window 16 31 :banks 4)))
+
+(fiveam:test snapshot-round-trips-banks
+  (let ((source (make-machine 'snapshot-bank-machine))
+        (target (make-machine 'snapshot-bank-machine)))
+    (setf (bank-peek source 'window 0 16) 1
+          (bank-peek source 'window 2 31) 9
+          (current-bank source 'window) 2)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (= 2 (current-bank target 'window)))
+    (fiveam:is (= 1 (bank-peek target 'window 0 16)))
+    (fiveam:is (= 9 (mref target 'ram 31)))))
+
+(fiveam:test snapshot-rejects-changed-bank-layout
+  (let ((snapshot (machine-snapshot (make-machine 'snapshot-other-bank-machine)))
+        (target (make-machine 'snapshot-bank-machine)))
+    (fiveam:signals snapshot-machine-mismatch (restore-snapshot target snapshot))))
+
+(fiveam:test snapshot-rejects-bad-bank-state-untouched
+  (let* ((good (machine-snapshot (make-machine 'snapshot-bank-machine)))
+         (bad (%with-field good :banks
+                           (list (list 'window :current 3
+                                       :banks (getf (cdr (first (getf (cdr good) :banks))) :banks)))))
+         (target (make-machine 'snapshot-bank-machine)))
+    (setf (mref target 'ram 0) 5)
+    (fiveam:signals snapshot-malformed (restore-snapshot target bad))
+    (fiveam:is (= 5 (mref target 'ram 0)))))

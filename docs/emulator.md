@@ -35,7 +35,7 @@ operand width when more than one memory element is declared.
 ## `load-program`
 
 ```lisp
-(load-program MACHINE cells &key memory origin)
+(load-program MACHINE cells &key memory origin bank)
 ```
 
 `cells` is an `assembly` (see [Assembler](assembler.md)) or any sequence of
@@ -56,6 +56,11 @@ declared `:cell-width` — `load-program` signals otherwise, rather than
 silently placing every cell one address too far apart, which is what would
 happen if a program assembled against a byte-addressed memory element were
 loaded into a word-addressed one with no other symptom.
+
+With `:bank n`, `cells` load into bank `n` of the banked region containing
+`origin`, whether or not that bank is mapped. The mapping and the PC are left
+unchanged. It signals if `origin` is not in a banked region, if the image
+runs past the region's end, or (`bank-out-of-range`) if `n` is invalid.
 
 ## `step-machine`
 

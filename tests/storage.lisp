@@ -466,3 +466,98 @@ reset at the start of each test that reads it.")
 (fiveam:test region-device-read-masks-to-cell-width
   (let ((m (make-machine 'region-read-mask-machine)))
     (fiveam:is (= #xFF (mref m 'ram 0)))))
+
+;;; Banked regions. Addresses 0-15 are plain, 16-31 a banked :RAM (3 banks),
+;;; 32-47 a banked :ROM (2 banks, :ON-WRITE :ERROR), 48 a mapper register
+;;; whose write selects ROM bank.
+
+(defun %bank-test-mapper-write (machine address value)
+  (declare (ignore address))
+  (setf (current-bank machine 'brom) value))
+
+(defmachine bank-test-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region bram 16 31 :banks 3)
+    (region brom 32 47 :kind :rom :on-write :error :banks 2)
+    (region mapper 48 48 :kind :device :write %bank-test-mapper-write)))
+
+(fiveam:test banked-ram-banks-are-isolated
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (mref m 'ram 16) 11)
+    (setf (current-bank m 'bram) 2)
+    (fiveam:is (= 0 (mref m 'ram 16)))
+    (setf (mref m 'ram 16) 22)
+    (setf (current-bank m 'bram) 0)
+    (fiveam:is (= 11 (mref m 'ram 16)))
+    (setf (current-bank m 'bram) 2)
+    (fiveam:is (= 22 (mref m 'ram 16)))
+    (fiveam:is (= 2 (current-bank m 'bram)))))
+
+(fiveam:test banked-region-leaves-plain-memory-alone
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (mref m 'ram 5) 9)
+    (setf (current-bank m 'bram) 1)
+    (fiveam:is (= 9 (mref m 'ram 5)))))
+
+(fiveam:test banked-rom-write-policy-applies
+  (let ((m (make-machine 'bank-test-machine)))
+    (fiveam:signals memory-write-protected (setf (mref m 'ram 32) 1))
+    (%poke m 'ram 32 5)
+    (fiveam:is (= 5 (mref m 'ram 32)))
+    (setf (current-bank m 'brom) 1)
+    (fiveam:is (= 0 (mref m 'ram 32)))))
+
+(fiveam:test bank-index-out-of-range
+  (let ((m (make-machine 'bank-test-machine)))
+    (fiveam:signals bank-out-of-range (setf (current-bank m 'bram) 3))
+    (fiveam:signals bank-out-of-range (setf (current-bank m 'bram) -1))
+    (fiveam:signals bank-out-of-range (bank-peek m 'bram 3 16))
+    (fiveam:is (= 0 (current-bank m 'bram)))))
+
+(fiveam:test bank-api-rejects-unbanked-region
+  (let ((m (make-machine 'bank-test-machine)))
+    (fiveam:signals error (current-bank m 'mapper))
+    (fiveam:signals error (current-bank m 'nonesuch))
+    (fiveam:signals address-out-of-range (bank-peek m 'bram 0 40))))
+
+(fiveam:test mpeek-and-poke-use-live-bank
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (current-bank m 'bram) 1)
+    (%poke m 'ram 17 7)
+    (fiveam:is (= 7 (mpeek m 'ram 17)))
+    (fiveam:is (= 7 (bank-peek m 'bram 1 17)))
+    (fiveam:is (= 0 (bank-peek m 'bram 0 17)))))
+
+(fiveam:test bank-peek-reaches-unmapped-banks
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (bank-peek m 'brom 1 40) 300)
+    (fiveam:is (= 44 (bank-peek m 'brom 1 40)))
+    (fiveam:is (= 0 (mref m 'ram 40)))
+    (setf (current-bank m 'brom) 1)
+    (fiveam:is (= 44 (mref m 'ram 40)))))
+
+(fiveam:test device-write-can-switch-banks
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (bank-peek m 'brom 1 32) 99)
+    (setf (mref m 'ram 48) 1)
+    (fiveam:is (= 1 (current-bank m 'brom)))
+    (fiveam:is (= 99 (mref m 'ram 32)))))
+
+(fiveam:test reset-clears-banks-and-selection
+  (let ((m (make-machine 'bank-test-machine)))
+    (setf (bank-peek m 'bram 2 20) 5)
+    (setf (current-bank m 'bram) 2)
+    (reset m)
+    (fiveam:is (= 0 (current-bank m 'bram)))
+    (fiveam:is (= 0 (bank-peek m 'bram 2 20)))))
+
+(fiveam:test defmachine-rejects-bad-banks
+  (fiveam:signals error
+    (eval '(defmachine bank-on-device-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :kind :device :banks 2)))))
+  (fiveam:signals error
+    (eval '(defmachine bank-zero-test
+            (memory ram :width 8 :addr-width 8
+              (region a 0 15 :banks 0))))))

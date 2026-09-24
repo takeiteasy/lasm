@@ -74,6 +74,15 @@ memory ~S on machine ~S"
                      (register-index-out-of-range-index c)
                      (storage-error-name c) (storage-error-machine c)))))
 
+;; Signalled by (SETF CURRENT-BANK) and the BANK-PEEK accessors for a bank
+;; index outside a banked region's [0, banks) range. NAME is the region.
+(define-condition bank-out-of-range (storage-error)
+  ((bank :initarg :bank :reader bank-out-of-range-bank))
+  (:report (lambda (c s)
+             (format s "Bank ~S out of range for region ~S on machine ~S"
+                     (bank-out-of-range-bank c)
+                     (storage-error-name c) (storage-error-machine c)))))
+
 ;; #108: signalled by DEVICE-AT's checked callers (DETACH-DEVICE, DEVICE-
 ;; INFO, DEVICE-SEND) for a bus INDEX that is out of range or a detached
 ;; hole (DETACH-DEVICE leaves one rather than compacting the bus, so a
@@ -153,8 +162,7 @@ memory ~S on machine ~S"
 ;; this once, at DEFMACHINE time, so %REGION-AT never has to worry about
 ;; more than one match).
 ;;   :RAM    -- ordinary backing-array storage, same as no region at all.
-;;              Only useful to attach a name to a sub-range for documentation
-;;              purposes, or (a follow-up ticket) later banking.
+;;              Useful to name a sub-range, or to bank it with :BANKS.
 ;;   :ROM    -- reads hit backing storage; writes are dropped (:ON-WRITE
 ;;              :IGNORE, the default) or signal MEMORY-WRITE-PROTECTED
 ;;              (:ON-WRITE :ERROR). LOAD-PROGRAM/the debugger burn a ROM
@@ -176,11 +184,15 @@ memory ~S on machine ~S"
 ;;              to a plain function-designator pair rather than a device
 ;;              object so #108's device model can layer over this hook
 ;;              without this ticket knowing devices exist.
+;; BANKS, on a :RAM or :ROM region, replaces the region's window of backing
+;; storage with that many separate arrays, one live at a time (machine.lisp's
+;; MACHINE-BANKS holds them and the live index). NIL when not banked.
 (defstruct memory-region
   (name nil :type symbol)
   (start nil :type (integer 0))
   (end nil :type (integer 0))
   (kind :ram :type (member :ram :rom :device))
+  (banks nil :type (or null (integer 1)))
   (on-write :ignore :type (member :ignore :error))     ; :rom only
   (read nil :type (or null symbol function))           ; :device only
   (write nil :type (or null symbol function)))         ; :device only
@@ -536,7 +548,10 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; PENDING-INTERRUPT (interrupt.lisp) on delivery, or by WAKE-MACHINE
   ;; (emulator.lisp) directly. Machine state, like INTERRUPT-QUEUE above --
   ;; RESET clears it.
-  (idle nil :type boolean))
+  (idle nil :type boolean)
+  ;; Banked regions' runtime state: region name -> (CURRENT . ARRAYS), ARRAYS
+  ;; a simple-vector of one cell array per bank. Empty when no region is banked.
+  (banks (make-hash-table :test 'eq)))
 
 ;; Slot representations:
 ;;   :register / :flag -> a one-element (simple-vector 1) box holding an
@@ -649,6 +664,24 @@ machine descriptor or a machine name -- or DEFAULT."
      (symbol (find-machine-descriptor thing)))
    key default))
 
+;; Bank storage: one array per bank, sized to the region's window.
+(defun %banked-regions (descriptor)
+  (loop for element in (machine-descriptor-elements descriptor)
+        when (eq (storage-element-kind element) :memory)
+          append (loop for region in (storage-element-regions element)
+                       when (memory-region-banks region)
+                         collect (cons element region))))
+
+(defun %allocate-banks (machine)
+  (loop for (element . region) in (%banked-regions (machine-descriptor machine))
+        do (let ((size (1+ (- (memory-region-end region) (memory-region-start region))))
+                 (type `(unsigned-byte ,(storage-element-cell-width element))))
+             (setf (gethash (memory-region-name region) (machine-banks machine))
+                   (cons 0 (coerce (loop repeat (memory-region-banks region)
+                                         collect (make-array size :element-type type
+                                                                  :initial-element 0))
+                                   'simple-vector))))))
+
 (defun make-machine (name)
   "Instantiate runtime state for the machine descriptor registered under NAME."
   (let ((descriptor (find-machine-descriptor name)))
@@ -656,6 +689,7 @@ machine descriptor or a machine name -- or DEFAULT."
       (dolist (element (machine-descriptor-elements descriptor))
         (setf (gethash (storage-element-name element) (machine-slots m))
               (make-storage-slot element)))
+      (%allocate-banks m)
       ;; #108: seed the bus from every declared (device ...) clause, in
       ;; declaration order -- that order becomes each device's fixed index.
       (dolist (device-descriptor (machine-descriptor-devices descriptor))
@@ -692,6 +726,9 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
         ((:register :flag) (fill slot 0))
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
+  (loop for entry being the hash-values of (machine-banks machine)
+        do (setf (car entry) 0)
+           (map nil (lambda (bank) (fill bank 0)) (cdr entry)))
   (setf (machine-cycles machine) 0)
   (setf (machine-extra-cycles machine) 0)
   (let ((devices (machine-devices machine)))
@@ -805,18 +842,28 @@ declares no NAMES or INDEX is outside them."
                                     :name name :address address))
     (values slot element (%region-at element address))))
 
+(defun %live-bank (machine region)
+  "The cell array of REGION's currently selected bank."
+  (let ((entry (gethash (memory-region-name region) (machine-banks machine))))
+    (svref (cdr entry) (car entry))))
+
 (defun mref (machine name address)
   "Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
 in a :DEVICE region calls that region's READ instead of touching backing
-storage (0 when the region declares no READ); every other address --
-including one in a :RAM or :ROM region -- reads backing storage directly.
-A device read is masked to the cell width, as writes are."
+storage (0 when the region declares no READ); an address in a banked region
+reads the live bank; every other address -- including one in an unbanked
+:RAM or :ROM region -- reads backing storage directly. A device read is
+masked to the cell width, as writes are."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
-    (if (and region (eq (memory-region-kind region) :device))
-        (let ((read (memory-region-read region)))
-          (wrap-value (if read (funcall read machine address) 0)
-                      (storage-element-cell-width element)))
-        (aref slot address))))
+    (cond
+      ((null region) (aref slot address))
+      ((eq (memory-region-kind region) :device)
+       (let ((read (memory-region-read region)))
+         (wrap-value (if read (funcall read machine address) 0)
+                     (storage-element-cell-width element))))
+      ((memory-region-banks region)
+       (aref (%live-bank machine region) (- address (memory-region-start region))))
+      (t (aref slot address)))))
 
 (defun (setf mref) (value machine name address)
   "Write memory element NAME on MACHINE at ADDRESS. #107: a store into a
@@ -824,10 +871,11 @@ A device read is masked to the cell width, as writes are."
 MEMORY-WRITE-PROTECTED (:ON-WRITE :ERROR); a store into a :DEVICE region
 calls that region's WRITE instead of touching backing storage (discarded
 when the region declares no WRITE), passed the same cell-width-wrapped
-value every other memory write receives. Use %POKE to bypass region write
-policy entirely -- LOAD-PROGRAM and the debugger burn a ROM image in that
-way. Returns the wrapped value in every case, matching plain (SETF MREF)'s
-existing return contract."
+value every other memory write receives; a store into a banked :RAM region
+writes the live bank. Use %POKE to bypass region write policy entirely --
+LOAD-PROGRAM and the debugger burn a ROM image in that way. Returns the
+wrapped value in every case, matching plain (SETF MREF)'s existing return
+contract."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (let ((wrapped (wrap-value value (storage-element-cell-width element))))
       (cond
@@ -838,29 +886,88 @@ existing return contract."
         ((and region (eq (memory-region-kind region) :device))
          (let ((write (memory-region-write region)))
            (when write (funcall write machine address wrapped))))
+        ((and region (memory-region-banks region))
+         (setf (aref (%live-bank machine region) (- address (memory-region-start region))) wrapped))
         (t (setf (aref slot address) wrapped)))
       wrapped)))
 
 (defun mpeek (machine name address)
-  "Read memory element NAME on MACHINE at ADDRESS directly from backing
-storage, bypassing any #107 region -- a :DEVICE region's READ is never
-called (returning 0, since a device region has no backing cell of its own),
-and a :ROM region's read-only status is irrelevant since this never writes.
-For inspection paths (the debugger's hex dump, disassembly) that must not
-trigger a device's read side effects merely by displaying memory."
+  "Read memory element NAME on MACHINE at ADDRESS directly from storage,
+bypassing any #107 region policy -- a :DEVICE region's READ is never called
+(returning 0, since a device region has no backing cell of its own), and a
+:ROM region's read-only status is irrelevant since this never writes. An
+address in a banked region reads the live bank. For inspection paths (the
+debugger's hex dump, disassembly) that must not trigger a device's read
+side effects merely by displaying memory."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (declare (ignore element))
-    (if (and region (eq (memory-region-kind region) :device))
-        0
-        (aref slot address))))
+    (cond
+      ((null region) (aref slot address))
+      ((eq (memory-region-kind region) :device) 0)
+      ((memory-region-banks region)
+       (aref (%live-bank machine region) (- address (memory-region-start region))))
+      (t (aref slot address)))))
 
 (defun %poke (machine name address value)
-  "Write memory element NAME on MACHINE at ADDRESS directly into backing
-storage, bypassing any #107 region's write policy -- a :ROM region accepts
-this store and a :DEVICE region's WRITE is never called. For LOAD-PROGRAM
-and the debugger: a ROM image is burned in, not stored by the CPU."
-  (multiple-value-bind (slot element) (%memory-slot-checked machine name address)
-    (setf (aref slot address) (wrap-value value (storage-element-cell-width element)))))
+  "Write memory element NAME on MACHINE at ADDRESS directly into storage,
+bypassing any #107 region's write policy -- a :ROM region accepts this
+store and a :DEVICE region's WRITE is never called. An address in a banked
+region writes the live bank. For LOAD-PROGRAM and the debugger: a ROM image
+is burned in, not stored by the CPU."
+  (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
+    (let ((wrapped (wrap-value value (storage-element-cell-width element))))
+      (if (and region (memory-region-banks region))
+          (setf (aref (%live-bank machine region) (- address (memory-region-start region))) wrapped)
+          (setf (aref slot address) wrapped)))))
+
+;;; Bank switching
+
+(defun %banked-region-entry (machine region)
+  "The (REGION-STRUCT . BANK-STATE) for banked region name REGION on MACHINE."
+  (let ((state (gethash region (machine-banks machine))))
+    (unless state
+      (error "~S is not a banked region on machine ~S"
+             region (machine-descriptor-name (machine-descriptor machine))))
+    (cons (cdr (find region (%banked-regions (machine-descriptor machine))
+                     :key (lambda (entry) (memory-region-name (cdr entry)))))
+          state)))
+
+(defun %check-bank (machine region bank count)
+  (unless (and (integerp bank) (< -1 bank count))
+    (error 'bank-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                              :name region :bank bank)))
+
+(defun current-bank (machine region)
+  "The index of the bank currently mapped into banked region REGION."
+  (car (cdr (%banked-region-entry machine region))))
+
+(defun (setf current-bank) (bank machine region)
+  "Map BANK into banked region REGION. Signals BANK-OUT-OF-RANGE unless
+0 <= BANK < the region's :BANKS."
+  (let ((state (cdr (%banked-region-entry machine region))))
+    (%check-bank machine region bank (length (cdr state)))
+    (setf (car state) bank)))
+
+(defun %bank-cell-index (machine region bank address)
+  "The bank array and offset for absolute ADDRESS in bank BANK of REGION."
+  (destructuring-bind (struct . state) (%banked-region-entry machine region)
+    (%check-bank machine region bank (length (cdr state)))
+    (unless (<= (memory-region-start struct) address (memory-region-end struct))
+      (error 'address-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
+                                   :name region :address address))
+    (values (svref (cdr state) bank) (- address (memory-region-start struct)))))
+
+(defun bank-peek (machine region bank address)
+  "The cell at absolute ADDRESS in bank BANK of banked region REGION, live
+or not. Never touches the live mapping."
+  (multiple-value-bind (cells index) (%bank-cell-index machine region bank address)
+    (aref cells index)))
+
+(defun (setf bank-peek) (value machine region bank address)
+  "Store VALUE, wrapped to the cell width, at absolute ADDRESS in bank BANK
+of banked region REGION, bypassing the region's write policy."
+  (multiple-value-bind (cells index) (%bank-cell-index machine region bank address)
+    (setf (aref cells index) (wrap-value value (second (array-element-type cells))))))
 
 (defun stack-push (machine name value)
   (multiple-value-bind (slot element) (%slot machine name :stack)

@@ -30,6 +30,8 @@
    #:stack-pointer-out-of-range-value
    #:register-index-out-of-range
    #:register-index-out-of-range-index
+   #:bank-out-of-range
+   #:bank-out-of-range-bank
    #:no-such-device
    #:no-such-device-machine
    #:no-such-device-index
@@ -88,6 +90,7 @@
    #:memory-region-start
    #:memory-region-end
    #:memory-region-kind
+   #:memory-region-banks
    #:memory-region-on-write
    #:memory-region-read
    #:memory-region-write
@@ -153,6 +156,8 @@
    #:regref
    #:mref
    #:mpeek
+   #:current-bank
+   #:bank-peek
    #:stack-push
    #:stack-pop
    #:stack-depth

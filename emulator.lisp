@@ -70,7 +70,7 @@ pass :PC explicitly" machine-name)))))
 
 ;;; Loading
 
-(defun load-program (machine cells &key memory origin)
+(defun load-program (machine cells &key memory origin bank)
   "Write CELLS (an ASSEMBLY, or any sequence of (unsigned-byte n)) into
 MACHINE's MEMORY element starting at ORIGIN, and set MACHINE's PC register
 to ORIGIN. MEMORY defaults per %RESOLVE-MEMORY. ORIGIN defaults to CELLS'
@@ -84,7 +84,11 @@ too far apart with no other symptom.
 
 #107: writes via %POKE, not MREF -- a ROM image is burned in here, not
 stored by the CPU, so this ignores any :ROM region's write protection at
-ORIGIN. A :DEVICE region's :WRITE is likewise never called."
+ORIGIN. A :DEVICE region's :WRITE is likewise never called.
+
+BANK loads CELLS into that bank of the banked region containing ORIGIN,
+whether or not it is mapped in, leaving the mapping and PC untouched.
+Signals if ORIGIN is not in a banked region or CELLS run past its end."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
@@ -96,13 +100,31 @@ ORIGIN. A :DEVICE region's :WRITE is likewise never called."
         (unless (= target-width source-width)
           (error "LOAD-PROGRAM on machine ~S: assembly's cell width (~D) does not ~
 match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
-    (let ((address origin))
-      (map nil (lambda (cell)
-                 (%poke machine memory address cell)
-                 (incf address))
-           data))
-    (setf (sref machine 'pc) origin)
+    (if bank
+        (%load-into-bank machine memory origin data bank)
+        (let ((address origin))
+          (map nil (lambda (cell)
+                     (%poke machine memory address cell)
+                     (incf address))
+               data)
+          (setf (sref machine 'pc) origin)))
     machine))
+
+(defun %load-into-bank (machine memory origin data bank)
+  (let* ((element (descriptor-element (machine-descriptor machine) memory))
+         (region (find-if (lambda (r)
+                            (and (memory-region-banks r)
+                                 (<= (memory-region-start r) origin (memory-region-end r))))
+                          (storage-element-regions element))))
+    (unless region
+      (error "LOAD-PROGRAM :BANK ~S: address ~S of memory ~S is not in a banked region"
+             bank origin memory))
+    (when (> (+ origin (length data) -1) (memory-region-end region))
+      (error "LOAD-PROGRAM :BANK ~S: ~D cells at ~S run past the end of region ~S"
+             bank (length data) origin (memory-region-name region)))
+    (loop for cell across (coerce data 'vector)
+          for address from origin
+          do (setf (bank-peek machine (memory-region-name region) bank address) cell))))
 
 ;;; Cycle cost
 

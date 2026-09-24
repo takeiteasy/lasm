@@ -26,6 +26,7 @@ The same state `reset` clears:
   vector and stack pointer) and memory element
 - `machine-cycles`, `machine-extra-cycles` and the idle flag
 - pending interrupts
+- banked regions: the mapped bank and every bank's contents
 - the device bus, holes and bus order included
 
 `machine-interrupt-hook` is host wiring and is neither saved nor changed by a
@@ -36,15 +37,15 @@ address space stays small.
 
 ## Versioning and validation
 
-A snapshot carries a version (`+snapshot-version+`, currently 1), the machine
-name and the machine's storage layout. `restore-snapshot` checks all three
+A snapshot carries a version (`+snapshot-version+`, currently 2), the machine
+name, the machine's storage layout and its bank layout. `restore-snapshot` checks all three
 and the payload itself before it changes anything, so a rejected snapshot
 leaves the machine untouched.
 
 | Condition | Signalled when |
 |---|---|
 | `snapshot-version-mismatch` | The snapshot's version is not `+snapshot-version+`. |
-| `snapshot-machine-mismatch` | The snapshot is for another machine, or the storage layout differs. |
+| `snapshot-machine-mismatch` | The snapshot is for another machine, or the storage or bank layout differs. |
 | `snapshot-malformed` | The payload is structurally invalid, a value does not fit its cell, or a file is not a readable snapshot. |
 | `snapshot-device-unknown` | A saved device is neither declared on the machine nor already attached. |
 

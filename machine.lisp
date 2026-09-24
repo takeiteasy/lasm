@@ -116,7 +116,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
                             reg name (mapcar #'storage-element-name memories)))))))
         (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
 
-;; #107: (region NAME start end [:kind :ram/:rom/:device] [:on-write
+;; #107: (region NAME start end [:kind :ram/:rom/:device] [:banks n] [:on-write
 ;; :ignore/:error] [:read fn] [:write fn]) -- one sub-range of a memory
 ;; element with distinct access behavior. NAME is validated as a symbol
 ;; here; PARSE-MEMORY-CLAUSE cross-checks it against every other name in the
@@ -125,7 +125,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
 ;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
 ;; alone knows the element's address range.
 (defun %parse-memory-region-form (form context)
-  (destructuring-bind (head name start end &key (kind :ram) (on-write :ignore) read write) form
+  (destructuring-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write) form
     (unless (eq head 'region)
       (error "~A: expected (region name start end ...), got ~S" context form))
     (unless (symbolp name)
@@ -138,6 +138,11 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
       (error "~A region ~S: start ~D must not be greater than end ~D" context name start end))
     (unless (member kind '(:ram :rom :device))
       (error "~A region ~S: :kind must be :RAM, :ROM or :DEVICE, got ~S" context name kind))
+    (when banks
+      (unless (and (integerp banks) (plusp banks))
+        (error "~A region ~S: :banks must be a positive integer, got ~S" context name banks))
+      (when (eq kind :device)
+        (error "~A region ~S: :banks does not apply to a :DEVICE region" context name)))
     (unless (member on-write '(:ignore :error))
       (error "~A region ~S: :on-write must be :IGNORE or :ERROR, got ~S" context name on-write))
     (unless (or (eq on-write :ignore) (eq kind :rom))
@@ -148,7 +153,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
         (error "~A region ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" context name (car fn) (cdr fn))))
-    (make-memory-region :name name :start start :end end :kind kind
+    (make-memory-region :name name :start start :end end :kind kind :banks banks
                          :on-write on-write :read read :write write)))
 
 ;; Cross-region checks (#107): unique names and non-overlapping ranges,
@@ -1006,7 +1011,7 @@ and the parent's instructions are copied in."
      (register NAME :width n [:count n] [:names (A B C ...)])
      (stack NAME :width n :depth n)
      (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
-       (region NAME start end [:kind :ram/:rom/:device]
+       (region NAME start end [:kind :ram/:rom/:device] [:banks n]
                               [:on-write :ignore/:error] [:read fn] [:write fn])...)
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
@@ -1048,6 +1053,12 @@ address falls in; MPEEK reads backing storage directly, bypassing a
 :DEVICE region's :READ, for inspection paths that must not trigger device
 side effects. A region name shares the same machine-wide namespace as every
 other storage element name and register alias.
+
+A :RAM or :ROM region's :BANKS n gives it n separate banks of storage, one
+mapped in at a time (bank 0 after MAKE-MACHINE and RESET). CURRENT-BANK and
+its SETF switch banks from host code or a :DEVICE region's :WRITE; SET-BANK!
+does the same inside instruction semantics. BANK-PEEK reads or writes any
+bank, mapped or not. See docs/machine-model.md.
 
 A :DEVICE region's :READ/:WRITE are function designators -- write the bare
 function name (e.g. :READ MY-DEVICE-READ), not #'MY-DEVICE-READ: DEFMACHINE

@@ -21,7 +21,7 @@
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
 operators SET!, MREF, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
-SET-FLAGS!, TRAP, EXTRA-CYCLES, and
+SET-BANK!, SET-FLAGS!, TRAP, EXTRA-CYCLES, and
 INTERRUPT-RETURN.
 
 #108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
@@ -108,6 +108,8 @@ these for a run-time-computed index."
                                                  (stack-pointer-descriptor-memory sp)
                                                  (stack-pointer-descriptor-grows sp))))
              (pointer-names (mapcar #'first pointer-alist))
+             (bank-names (mapcar (lambda (entry) (memory-region-name (cdr entry)))
+                                 (%banked-regions descriptor)))
              (sole-stack (cond
                            ((= (length stack-names) 1) (first stack-names))
                            ((and (null stack-names) (= (length pointer-names) 1)) (first pointer-names))))
@@ -195,6 +197,11 @@ clause declared" machine-name)))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (error ',fixed-stack-error))
                           `(%stack-ref ,',machine-var ',target ,offset)))
+                      (set-bank! (region bank)
+                        (unless (member region ',bank-names)
+                          (error "SET-BANK! on machine ~S: ~S is not a banked region"
+                                 ',machine-name region))
+                        `(setf (current-bank ,',machine-var ',region) ,bank))
                       (set-flags! (&rest assignments)
                         `(progn ,@(mapcar (lambda (a)
                                              `(setf (flag ,',machine-var ',(first a)) ,(second a)))

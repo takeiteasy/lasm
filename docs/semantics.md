@@ -76,6 +76,12 @@ the sole stack-pointer become the default instead. A machine declaring more
 than one candidate of whichever kind applies (or none at all) signals an
 error when the `push`/`pop` form is macroexpanded (not merely when it runs)
 if the name is left out — name one explicitly in that case.
+- `(set-bank! region n)` — map bank `n` into the banked memory region
+  `region` (see [Bank switching](machine-model.md#bank-switching)). `region`
+  must name a banked region of the machine; anything else signals an error
+  when the form is macroexpanded. An out-of-range `n` signals
+  `bank-out-of-range` when it runs. Read the mapped bank with the
+  `current-bank` function, e.g. `(current-bank machine 'romx)`.
 - `(set-flags! (flag-name form)...)` — set each named flag to the result of
   evaluating `form`, e.g. `(set-flags! (c (> r 255)) (z (zero? a)))`.
   Integer `0` clears a flag; nonzero integers set it.

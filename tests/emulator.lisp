@@ -1507,3 +1507,50 @@ nop" :machine 'cycle-test-machine)))
   (fiveam:is (page-crossed? #xFF #x100))
   (fiveam:is (page-crossed? #x10 #x1010 4096))
   (fiveam:is (not (page-crossed? #x1000 #x1FFF 4096))))
+
+;;; Banked regions: instructions that switch banks.
+
+(defmachine bank-emu-test-machine
+  (register pc :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 8
+    (region window #x100 #x10F :banks 2)))
+
+(definstruction bank-emu-test-machine bnk
+  (modes immediate)
+  (encoding (opcode #x01) (operand :mode))
+  (semantics (set-bank! window operand)))
+
+(definstruction bank-emu-test-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(fiveam:test load-program-into-unmapped-bank
+  (let ((m (make-machine 'bank-emu-test-machine)))
+    (setf (sref m 'pc) 7)
+    (load-program m (vector 4 5 6) :origin #x100 :bank 1)
+    (fiveam:is (= 7 (sref m 'pc)))
+    (fiveam:is (= 0 (mref m 'ram #x100)))
+    (setf (current-bank m 'window) 1)
+    (fiveam:is (= 6 (mref m 'ram #x102)))))
+
+(fiveam:test load-program-bank-rejects-bad-targets
+  (let ((m (make-machine 'bank-emu-test-machine)))
+    (fiveam:signals error (load-program m (vector 1) :origin 0 :bank 0))
+    (fiveam:signals error (load-program m (make-array 17 :initial-element 1) :origin #x100 :bank 0))
+    (fiveam:signals bank-out-of-range (load-program m (vector 1) :origin #x100 :bank 2))))
+
+(fiveam:test bank-switch-instruction-runs
+  (let ((m (make-machine 'bank-emu-test-machine)))
+    (load-program m (assemble "bnk #1
+hlt" :machine 'bank-emu-test-machine))
+    (run m)
+    (fiveam:is (= 1 (current-bank m 'window)))))
+
+(fiveam:test bank-switch-to-bad-bank-faults
+  (let ((m (make-machine 'bank-emu-test-machine)))
+    (load-program m (assemble "bnk #5
+hlt" :machine 'bank-emu-test-machine))
+    (multiple-value-bind (reason steps condition) (run m)
+      (declare (ignore steps))
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (typep condition 'bank-out-of-range)))))

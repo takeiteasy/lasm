@@ -229,3 +229,17 @@
     (fiveam:is (zerop (stack-depth)))
     (fiveam:is (/= 0 (sref m 'sp)))
     (fiveam:is (= 9 (pop sp)))))
+
+(fiveam:test set-bank-switches-region-bank
+  (with-machine (m bank-test-machine)
+    (set-bank! bram 2)
+    (fiveam:is (= 2 (current-bank m 'bram)))
+    (setf (mref m 'ram 16) 3)
+    (set-bank! bram 0)
+    (fiveam:is (= 0 (mref m 'ram 16)))))
+
+(fiveam:test set-bank-rejects-unbanked-region-at-expansion
+  (dolist (region '(mapper nonesuch))
+    (fiveam:signals error
+      (eval `(let ((m (make-machine 'bank-test-machine)))
+               (with-machine-bindings (m bank-test-machine) (set-bank! ,region 1)))))))
