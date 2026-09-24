@@ -3652,9 +3652,27 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 
 ;;; Encoding / execution
 
+(defun %cell-significance-order (endian width)
+  "The significance (0 = low-order) of each cell of a WIDTH-cell value, in
+ascending address order. ENDIAN is :LITTLE, :BIG, or (OUTER INNER GROUP): the
+value's cells, low-order first, split into groups of GROUP cells; OUTER orders
+the groups in memory, INNER the cells within each group. (:BIG :LITTLE 2) is
+PDP-endian."
+  (ecase (if (consp endian) :grouped endian)
+    (:little (loop for i below width collect i))
+    (:big (loop for i from (1- width) downto 0 collect i))
+    (:grouped
+     (destructuring-bind (outer inner group) endian
+       (let ((groups (loop for start from 0 below width by group
+                           collect (loop for i from start below (min width (+ start group))
+                                         collect i))))
+         (loop for g in (if (eq outer :big) (reverse groups) groups)
+               append (if (eq inner :big) (reverse g) g)))))))
+
 (defun %encode-value-cells (value width cell-width &optional (endian :little))
   "Split (already-evaluated integer) VALUE into WIDTH (unsigned-byte
-CELL-WIDTH) cells in ENDIAN order (#66: :LITTLE, the default, or :BIG),
+CELL-WIDTH) cells in ENDIAN order (#66: :LITTLE, the default, :BIG, or a
+(OUTER INNER GROUP) list -- see %CELL-SIGNIFICANCE-ORDER),
 wrapping each with WRAP-VALUE (storage.lisp) like every other encoded
 quantity in this codebase. Shared by ENCODE-INSTRUCTION below and the
 assembler's .BYTE/.WORD directive encoding (assembler.lisp, #14), so
@@ -3662,9 +3680,10 @@ instruction operands and directive data can't drift apart in how they lay
 cells down. The returned list is always in ascending address order --
 ENDIAN only chooses which cell is the low-order one, never reorders which
 cell goes at which address."
-  (loop for i below width
-        for shift = (if (eq endian :big) (- width 1 i) i)
-        collect (wrap-value (ash value (* (- cell-width) shift)) cell-width)))
+  (let ((order (and (consp endian) (%cell-significance-order endian width))))
+    (loop for i below width
+          for shift = (cond (order (cl:pop order)) ((eq endian :big) (- width 1 i)) (t i))
+          collect (wrap-value (ash value (* (- cell-width) shift)) cell-width))))
 
 (defun %word-emit-order (descriptor choices)
   "Hole indices in field order, with fieldless words following their owner."

@@ -91,15 +91,15 @@ widths against a machine defined earlier in the same file.
   wrapping register is the machine's own business, same as the hardware it
   models — and the indexed address is masked to `:memory`'s `:addr-width`,
   so `REGISTER` may be wider than the address space.
-- `(memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
+- `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER]
   [(region NAME start end [:kind :ram/:rom/:device] [:on-write :ignore/:error]
   [:read fn] [:write fn])...])` —
   addressable storage. `:addr-width` is the number of address bits (so the
   element has `2^addr-width` cells); `:cell-width` is the bit width of each
   cell and defaults to `:width` (byte-addressed). Set `:cell-width` different
   from 8 for word-addressed memory (DCPU-16-style). `:endian` (default
-  `:little`) is which cell of a multi-cell value is the low-order one — see
-  "Cell width and the assembler" below. Out-of-range addresses signal
+  `:little`) is the cell order of a multi-cell value: `:little`, `:big`, or
+  `(outer inner group)` — see "Cell width and the assembler" below. Out-of-range addresses signal
   `address-out-of-range`. Memory is allocated eagerly as one array of
   `2^addr-width` cells; a `region` declares a sub-range with different access
   *behavior* over that same array — see "Memory regions" below.
@@ -362,6 +362,16 @@ which order fields or words themselves fall in. Every encoded quantity in
 the codebase ultimately goes through `%encode-value-cells`
 (instruction.lisp) and its inverse `%fetch-cells` (decoder.lisp), so
 instructions and data always agree on endianness for a given machine.
+
+`:endian (outer inner group)` mixes orders within one value. The value's cells,
+low-order first, are split into groups of `group` cells (an integer of at
+least 2); `outer` (`:little` or `:big`) orders the groups in memory and
+`inner` the cells inside each group. `(:big :little 2)` is PDP-endian:
+`$0A0B0C0D` is stored `0B 0A 0D 0C`; `(:little :big 2)` stores it
+`0C 0D 0A 0B`. A value of `group` cells or fewer is a single group, ordered by
+`inner`. See [`examples/mixed-endian.lisp`](../examples/mixed-endian.lisp). A
+single directive can override the machine's order with
+[`(emit width values :endian order)`](directives.md).
 
 Word-addressed memory and bitfield/variant instruction-word encoding (see
 ["Word-encoded instructions"](instructions.md#word-encoded-instructions-20))

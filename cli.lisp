@@ -192,7 +192,9 @@ the calling image."
 (defun %cli-command-disassemble (file machine lexer options out)
   (let* ((memory (%cli-memory options))
          (cell-width (%machine-cell-width machine memory))
-         (endian (if (> cell-width 8) (%machine-endian machine memory) :little))
+         (endian (if (> cell-width 8)
+                       (%endian-byte-order (%machine-endian machine memory))
+                       :little))
          (origin (or (%cli-option-integer options :origin "--origin") 0))
          (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian)
                                    :machine machine :origin origin :lexer lexer :memory memory

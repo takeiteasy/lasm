@@ -1472,3 +1472,31 @@ next: wnop" :machine 'word-relative-test-machine)))
   (fiveam:signals file-error
     (assemble-file (merge-pathnames "no-such-file.asm" *fixture-directory*)
                    :machine 'instr-test-machine)))
+
+;;; Mixed endian and per-directive :endian (#145)
+
+(defmachine pdp-endian-test-machine
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 8 :endian (:big :little 2)))
+
+(defdirective ".long" (&rest values) (emit 4 values))
+(defdirective ".beword" (&rest values) (emit 2 values :endian :big))
+(defdirective ".pdpword" (&rest values) (emit 4 values :endian (:big :little 2)))
+
+(fiveam:test pdp-endian-machine-lays-out-directives
+  (fiveam:is (equalp #(#x0B #x0A #x0D #x0C)
+                     (assembly-cells (assemble ".long $0A0B0C0D" :machine 'pdp-endian-test-machine))))
+  (fiveam:is (equalp #(#x0B #x0A) (assembly-cells (assemble ".word $0A0B" :machine 'pdp-endian-test-machine)))))
+
+(fiveam:test directive-endian-overrides-machine-order
+  (fiveam:is (equalp #(#x12 #x34)
+                     (assembly-cells (assemble ".beword $1234" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x12 #x34)
+                     (assembly-cells (assemble ".beword $1234" :machine 'pdp-endian-test-machine))))
+  (fiveam:is (equalp #(#x0B #x0A #x0D #x0C)
+                     (assembly-cells (assemble ".pdpword $0A0B0C0D" :machine 'instr-test-machine)))))
+
+(fiveam:test directive-endian-rejects-bad-specs
+  (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :endian :middle)))
+  (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :endian)))
+  (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :order :big))))

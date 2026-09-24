@@ -1063,7 +1063,7 @@ SYMBOLS itself cannot. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line choices definition-line unit definition-unit)
-  (:emit        address width asts line definition-line unit definition-unit)
+  (:emit        address width endian asts line definition-line unit definition-unit)
   (:reserve     address count line definition-line unit definition-unit)
 CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
 hole-aligned matched-alternative list for the chosen descriptor, threaded
@@ -1182,7 +1182,8 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                                                (%qualify-locals-in-asts!
                                                 (%directive-args statement directive) scope line)))
                                  (width (directive-descriptor-width directive)))
-                            (cl:push (list :emit address width asts line *current-definition-line*
+                            (cl:push (list :emit address width (directive-descriptor-endian directive)
+                                           asts line *current-definition-line*
                                            *current-source-unit* *current-definition-unit*) sized)
                             (incf address (* width (length asts)))
                             (setf emitted-p t)))))
@@ -1371,7 +1372,7 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
             (*current-invocation-line* (and (nth (- (length entry) 3) entry)
                                             (ecase (first entry)
                                               (:instruction (fifth entry))
-                                              (:emit (fifth entry))
+                                              (:emit (sixth entry))
                                               (:reserve (fourth entry))))))
        (ecase (first entry)
         (:instruction
@@ -1397,12 +1398,13 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
                      for cell in encoded
                      do (setf (aref cells i) cell) (incf i))))))
         (:emit
-         (destructuring-bind (kind address width asts line definition-line unit definition-unit) entry
+         (destructuring-bind (kind address width entry-endian asts line definition-line unit definition-unit) entry
            (declare (ignore kind line definition-line unit definition-unit))
            (loop with i = (- address origin)
                  for ast in asts
                  do (dolist (cell (%encode-value-cells
-                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width endian))
+                                    (eval-expr ast :symbols symbols :pc (+ origin i)) width cell-width
+                                    (or entry-endian endian)))
                       (setf (aref cells i) cell) (incf i)))))
         (:reserve
          ;; Zero-filled -- %MAKE-GROWABLE-CELLS/%ENSURE-CELLS-LENGTH already
@@ -1433,8 +1435,8 @@ needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
                             :source-unit unit :file (and unit (source-unit-file unit))
                             :kind kind :descriptor descriptor)))
     (:emit
-     (destructuring-bind (kind address width asts line definition-line unit definition-unit) entry
-       (declare (ignore definition-unit))
+     (destructuring-bind (kind address width endian asts line definition-line unit definition-unit) entry
+       (declare (ignore definition-unit endian))
        (make-listing-line :address address :size (* width (length asts))
                           :line line :definition-line definition-line
                           :source-unit unit :file (and unit (source-unit-file unit)) :kind kind)))

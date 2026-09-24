@@ -9,12 +9,20 @@
   value)
 
 (defun %check-endian (value name)
-  "#66: VALUE must be :LITTLE or :BIG -- the only two cell orderings
-%ENCODE-VALUE-CELLS/%FETCH-CELLS (instruction.lisp/decoder.lisp) know how to
-lay a multi-cell value down in."
-  (unless (member value '(:little :big))
-    (error "memory ~S :endian must be :LITTLE or :BIG, got ~S" name value))
+  "#66: VALUE must be :LITTLE, :BIG, or (OUTER INNER GROUP) -- OUTER and INNER
+each :LITTLE or :BIG, GROUP an integer of at least 2 (see
+%CELL-SIGNIFICANCE-ORDER, instruction.lisp)."
+  (unless (or (member value '(:little :big))
+              (and (consp value) (= (length value) 3)
+                   (member (first value) '(:little :big))
+                   (member (second value) '(:little :big))
+                   (integerp (third value)) (>= (third value) 2)))
+    (error "~S :endian must be :LITTLE, :BIG or (OUTER INNER GROUP), got ~S" name value))
   value)
+
+(defun %endian-byte-order (endian)
+  "The :LITTLE or :BIG order of the bytes inside one cell under ENDIAN."
+  (if (consp endian) (second endian) endian))
 
 (defun parse-register-clause (name-form)
   ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
@@ -657,7 +665,8 @@ memoizes below."
        (error "Machine ~S: no memory element declared" (machine-descriptor-name descriptor)))
       ((null (rest mem-elements))
        (storage-element-endian (first mem-elements)))
-      (t (let ((endians (remove-duplicates (mapcar #'storage-element-endian mem-elements))))
+      (t (let ((endians (remove-duplicates (mapcar #'storage-element-endian mem-elements)
+                                            :test #'equal)))
            (if (null (rest endians))
                (first endians)
                (error "Machine ~S: more than one memory element declared with ~

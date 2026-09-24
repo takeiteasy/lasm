@@ -16,7 +16,7 @@
 (defun %output-endian (cell-bytes machine memory endian)
   (cond ((= cell-bytes 1) :little)
         (endian (%check-endian endian 'output))
-        (machine (%machine-endian machine memory))
+        (machine (%endian-byte-order (%machine-endian machine memory)))
         (t (error "a ~D-bit cell needs :MACHINE or :ENDIAN to order its bytes"
                   (* 8 cell-bytes)))))
 

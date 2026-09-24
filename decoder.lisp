@@ -56,7 +56,7 @@ can use one HANDLER-CASE for both cell sources."
 (defun %fetch-cells (read-cell address width-cells cell-width &optional (endian :little))
   "Read WIDTH-CELLS cells starting at ADDRESS through READ-CELL as one
 unsigned integer, each cell CELL-WIDTH bits wide, in ENDIAN order (#66:
-:LITTLE, the default, or :BIG) -- the exact inverse of %ENCODE-VALUE-CELLS
+:LITTLE, the default, :BIG, or an (OUTER INNER GROUP) list) -- the exact inverse of %ENCODE-VALUE-CELLS
 (instruction.lisp). Shared by an instruction word itself, every extra word
 following it, and %DECODE-CELL-INSTRUCTION's ordinary operand fetch.
 Formerly %FETCH-WORD (emulator.lisp), generalized to read through any
@@ -68,8 +68,9 @@ VECTOR-CELL-READER's range check and %TRY-DECODE-WORD-CANDIDATE's
 check-constants-before-fetching-an-extra-word ordering both assume reads
 never run backward or past a rejected candidate's own bounds."
   (loop with v = 0
+        with order = (and (consp endian) (%cell-significance-order endian width-cells))
         for i below width-cells
-        for shift = (if (eq endian :big) (- width-cells 1 i) i)
+        for shift = (cond (order (cl:pop order)) ((eq endian :big) (- width-cells 1 i)) (t i))
         do (setf v (logior v (ash (funcall read-cell (+ address i)) (* cell-width shift))))
         finally (return v)))
 

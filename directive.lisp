@@ -34,8 +34,9 @@
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | :variadic
   action      ; :set-origin | :emit | :reserve | :assign | :reassign
-  width)      ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
+  width       ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
               ; NIL for :set-origin / :reserve / :assign / :reassign
+  endian)     ; :emit only: overrides the machine's endian order, or NIL
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
 ;; *LEXERS* (lexer.lisp), a plain runtime hash table with no EVAL-WHEN (see
@@ -93,12 +94,15 @@ EMIT, RESERVE, or ASSIGN" head)))))
 (defun %parse-emit-action (action-form param-names)
   "EMIT is one of the two actions taking two arguments (a literal width,
 then the variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's
-one-argument shape -- handled separately. Returns (VALUES :emit width)."
-  (destructuring-bind (head width-form values-sym) action-form
-    (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names))
-      (error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S)"
+one-argument shape -- handled separately. An optional trailing :ENDIAN spec
+overrides the machine's endian order. Returns (VALUES :emit width endian)."
+  (destructuring-bind (head width-form values-sym &rest options) action-form
+    (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names)
+                 (or (null options) (and (eq (first options) :endian) (= (length options) 2))))
+      (error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S [:endian ORDER])"
              action-form (first param-names)))
-    (values :emit width-form)))
+    (values :emit width-form
+            (and options (%check-endian (second options) (first param-names))))))
 
 (defun %parse-assign-action (action-form param-names)
   "Validate ASSIGN or REASSIGN with the directive's two parameters, in order."
@@ -110,7 +114,7 @@ one-argument shape -- handled separately. Returns (VALUES :emit width)."
 
 (defun build-directive-descriptor (name params action-form)
   (multiple-value-bind (arity param-names) (%parse-directive-params params)
-    (multiple-value-bind (action width)
+    (multiple-value-bind (action width endian)
         (cond
           ((and (consp action-form) (eq (first action-form) 'emit))
            (%parse-emit-action action-form param-names))
@@ -118,7 +122,7 @@ one-argument shape -- handled separately. Returns (VALUES :emit width)."
            (values (%parse-assign-action action-form param-names) nil))
           (t (%parse-directive-action action-form param-names)))
       (make-directive-descriptor :name (string-upcase name) :arity arity
-                                  :action action :width width))))
+                                  :action action :width width :endian endian))))
 
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
@@ -135,9 +139,12 @@ referencing PARAMS' own parameter name(s), in order:
                               (#53 -- a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
                               also fold label-free.
-  (emit width values)      -- lay down (length VALUES) WIDTH-cell fields,
+  (emit width values [:endian order])
+                           -- lay down (length VALUES) WIDTH-cell fields,
                               one per value in VALUES, in the machine's own
-                              endian order (#66); layout size is WIDTH *
+                              endian order (#66), or in ORDER (:little, :big
+                              or (outer inner group)) when :endian is given;
+                              layout size is WIDTH *
                               (length VALUES); each value may reference a
                               label (resolved in pass 2, like an ordinary
                               instruction operand).

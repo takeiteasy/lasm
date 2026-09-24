@@ -117,3 +117,12 @@ hlt" :machine 'disasm-test-machine)))
     (let ((a (%cells-assembly 8 0 1 2)))
       (write-intel-hex a path)
       (fiveam:is (string= (hex-text a) (uiop:read-file-string path))))))
+
+(defmachine mixed-endian-output-test-machine
+  (register a :width 8)
+  (memory ram :width 16 :addr-width 8 :endian (:big :little 2)))
+
+(fiveam:test assembly-bytes-mixed-endian-machine-orders-bytes-by-inner-order
+  (let ((a (%cells-assembly 16 0 #x1234)))
+    (fiveam:is (equalp #(#x34 #x12)
+                       (assembly-bytes a :machine 'mixed-endian-output-test-machine)))))

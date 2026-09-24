@@ -16,7 +16,9 @@ An 8-bit cell is one byte. A wider cell splits into `cell-width / 8` bytes,
 ordered by the memory element's `:endian` ([Machine model](machine-model.md)):
 `:little` writes the low byte at the lower offset. `:machine` (with `:memory`
 when the machine has several memory elements) supplies the endianness, or pass
-`:endian` directly. A wide cell with neither signals.
+`:endian` directly. A wide cell with neither signals. A memory element with a
+grouped order such as `(:big :little 2)` orders the bytes inside each cell by
+its inner order (`:little` here).
 
 A `cell-width` that is not a multiple of 8 signals for both formats.
 

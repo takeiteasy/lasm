@@ -135,7 +135,7 @@ memory ~S on machine ~S"
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
   (cell-width nil :type (or null (integer 1)))  ; memory
-  (endian nil :type (or null keyword))          ; memory, :little or :big, #66
+  (endian nil :type (or null keyword cons))     ; memory, :little/:big or (outer inner group), #66
   ;; #107: sub-ranges of a memory element with distinct access behavior --
   ;; ROM (writes discarded or rejected), a device window (reads/writes
   ;; forwarded to handlers instead of touching backing storage). NIL on every
@@ -327,7 +327,7 @@ follow-up)."
   (width nil :type (integer 1))
   (width-cells nil :type (integer 1))
   (cell-width nil :type (integer 1))
-  (endian nil :type (or null keyword)) ; :little or :big, #66
+  (endian nil :type (or null keyword cons)) ; :little/:big or (outer inner group), #66
   (fields nil :type list)           ; (name width shift), MSB-first as declared
   ;; #191: field names, in the order their trailing words follow the
   ;; instruction word. NIL (the default) is operand-hole order. Default

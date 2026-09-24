@@ -5368,3 +5368,27 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
              0 'fallback-wide-test-machine))))
     (fiveam:is (string= "WPIN" (decoded "wpin")))
     (fiveam:is (string= "WGEN" (decoded "wgen 5")))))
+
+;;; Mixed endian (#145)
+
+(fiveam:test mixed-endian-cell-order
+  (fiveam:is (equal '(#x0B #x0A #x0D #x0C)
+                    (%encode-value-cells #x0A0B0C0D 4 8 '(:big :little 2))))
+  (fiveam:is (equal '(#x0C #x0D #x0A #x0B)
+                    (%encode-value-cells #x0A0B0C0D 4 8 '(:little :big 2))))
+  (fiveam:is (equal '(#x0B #x0A) (%encode-value-cells #x0A0B 2 8 '(:big :little 2))))
+  (fiveam:is (equal '(#x0A #x0B) (%encode-value-cells #x0A0B 2 8 '(:big :big 2))))
+  (fiveam:is (equal '(#x0C #x0B #x0A) (%encode-value-cells #x0A0B0C 3 8 '(:little :little 2))))
+  (fiveam:is (equal '(#x0A #x0C #x0B) (%encode-value-cells #x0A0B0C 3 8 '(:big :little 2)))))
+
+(fiveam:test mixed-endian-fetch-inverts-encode
+  (dolist (spec '((:big :little 2) (:little :big 2) (:big :big 3) (:little :little 3)))
+    (dolist (width '(1 2 3 4 5))
+      (let* ((value (ldb (byte (* 8 width) 0) #x0123456789))
+             (cells (coerce (%encode-value-cells value width 8 spec) 'vector)))
+        (fiveam:is (= value (%fetch-cells (lambda (a) (aref cells a)) 0 width 8 spec)))))))
+
+(fiveam:test check-endian-rejects-malformed-specs
+  (dolist (bad '((:big :middle 2) (:big :little 1) (:big) (:big :little 2 3) (:big :little :x) :pdp))
+    (fiveam:signals error (%check-endian bad 'ram)))
+  (fiveam:is (equal '(:big :little 2) (%check-endian '(:big :little 2) 'ram))))

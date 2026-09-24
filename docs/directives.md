@@ -39,10 +39,13 @@ including zero. `action-form` must be exactly one of:
 - `(reserve value-name)` — advance the address counter by `value-name`
   cells (the machine's own addressable unit, #53 — bytes on every
   byte-addressed machine, the only kind before this), zero-filled.
-- `(emit width values-name)` — lay down `(length values-name)` `width`-cell
-  fields, one per value, in the machine's own endian order (#66 — the same
-  `%encode-value-cells` an instruction operand uses, so code and data can't
-  disagree). Layout size is `width * (length values-name)`.
+- `(emit width values-name [:endian order])` — lay down
+  `(length values-name)` `width`-cell fields, one per value, in the machine's
+  own endian order (#66 — the same `%encode-value-cells` an instruction
+  operand uses, so code and data can't disagree). `:endian` overrides that
+  order for this directive: `:little`, `:big` or `(outer inner group)` (see
+  [Machine model](machine-model.md#defmachine)). Layout size is
+  `width * (length values-name)`.
 - `(assign name-name value-name)` — bind `name-name` (an identifier operand,
   not an expression) to `value-name` in the symbol table, without occupying
   any address (`.equ` below).
@@ -106,6 +109,13 @@ here: .org $8000   ; here == $8000, not the address before the move
 .word $1234          ; one two-cell field -- little-endian by default: 34 12
 .byte target         ; a label operand -- resolved at encode time, like an
 target: nop          ; ordinary instruction operand
+```
+
+A directive that always lays its data down in one order, whatever the
+machine's:
+
+```lisp
+(defdirective ".beword" (&rest values) (emit 2 values :endian :big))
 ```
 
 Variadic; zero or more comma-separated operands (`statement-operands`, see
