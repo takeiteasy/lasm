@@ -95,10 +95,19 @@ not on every command. LEXER tokenizes breakpoint conditions."
 
 ;;; Breakpoints
 
+(defun %session-symbol (session name scope)
+  "The SYMBOL-INFO for NAME in SESSION's assembly: a local under SCOPE, a
+global, or a local by its qualified spelling (\"count.loop\"). NIL if none."
+  (let ((assembly (debug-session-assembly session)))
+    (or (and scope (assembly-symbol assembly name :scope scope))
+        (assembly-symbol assembly name)
+        ;; TODO: linear scan per lookup, a readable-name index if symbol tables grow large (#243)
+        (find name (assembly-symbols-list assembly)
+              :key #'symbol-info-qualified-name :test #'string=))))
+
 (defun %resolve-breakpoint-address (session where &key scope bank)
   "WHERE as (VALUES ADDRESS REGION BANK): an integer as-is, or a label string
-resolved through ASSEMBLY-SYMBOL (listing.lisp, #37) against SESSION's attached
-ASSEMBLY. A label defined under .BANK carries its region and bank; BANK
+resolved through %SESSION-SYMBOL against SESSION's attached ASSEMBLY. A label defined under .BANK carries its region and bank; BANK
 qualifies an integer address instead, and must agree with a label's own bank.
 Signals a plain error when SESSION has no ASSEMBLY, when the name is
 unbound, or when it names an assignment rather than a :LABEL -- its value is
@@ -118,7 +127,7 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
      (let ((assembly (debug-session-assembly session)))
        (unless assembly
          (error "no assembly attached to this session -- cannot resolve label ~S" where))
-       (let ((info (assembly-symbol assembly where :scope scope)))
+       (let ((info (%session-symbol session where scope)))
          (unless info
            (error "no symbol named ~S~@[ in scope ~S~]" where scope))
          (unless (eq (symbol-info-kind info) :label)
@@ -139,10 +148,11 @@ never notify it."
        (unwind-protect (progn ,@body)
          (setf (machine-access-hook ,m) ,hook)))))
 
-(defun %resolve-storage (session name &optional index)
+(defun %resolve-storage (session name &optional index stacks)
   "NAME as a scalar register, flag or register alias on SESSION's machine,
 as (VALUES ELEMENT-NAME INDEX), or NIL when NAME is not a storage name.
-INDEX selects a cell of a banked register. Signals when NAME is storage
+INDEX selects a cell of a banked register, or with STACKS a slot of a fixed
+stack (a bare stack name gives INDEX :ANY). Signals when NAME is storage
 that cannot be read as a single value."
   (let* ((descriptor (machine-descriptor (debug-session-machine session)))
          (alias-element (gethash name (machine-descriptor-register-alias-elements descriptor)))
@@ -154,6 +164,10 @@ that cannot be read as a single value."
        (values (storage-element-name alias-element)
                (gethash name (machine-descriptor-register-aliases descriptor))))
       ((null element) nil)
+      ((and stacks (eq (storage-element-kind element) :stack))
+       (cond ((null index) (values symbol :any))
+             ((< -1 index (storage-element-depth element)) (values symbol index))
+             (t (error "slot ~D is out of range for stack ~A" index name))))
       ((eq (storage-element-kind element) :flag)
        (when index (error "~A is a flag and takes no index" name))
        (values symbol nil))
@@ -208,9 +222,7 @@ on a syntax error or an unknown name."
       (dolist (name (%condition-names ast))
         (multiple-value-bind (storage index) (%resolve-storage session name)
           (let* ((assembly (and (null storage) (debug-session-assembly session)))
-                 (info (and assembly
-                            (or (and scope (assembly-symbol assembly name :scope scope))
-                                (assembly-symbol assembly name)))))
+                 (info (and assembly (%session-symbol session name scope))))
             (cond
               (storage
                (let ((machine (debug-session-machine session)))
@@ -218,6 +230,12 @@ on a syntax error or an unknown name."
               (info (setf (gethash name values) (symbol-info-value info)))
               (t (error "unknown name ~S in condition" name))))))
       (values ast values readers))))
+
+(defun %memory-reader (session)
+  "A function from address to the cell at it in SESSION's memory, for mem()."
+  (let ((machine (debug-session-machine session))
+        (memory (debug-session-memory session)))
+    (lambda (address) (%without-hook (machine) (mpeek machine memory address)))))
 
 (defun %breakpoint-triggered-p (session bp)
   "True when BP has no condition or its condition is nonzero. An error in the
@@ -227,8 +245,9 @@ condition counts as true and is left in SESSION's CONDITION-ERROR."
           (progn
             (loop for (name . reader) in (breakpoint-readers bp)
                   do (setf (gethash name (breakpoint-values bp)) (funcall reader)))
-            (/= 0 (eval-expr (breakpoint-test bp) :symbols (breakpoint-values bp)
-                                                  :pc (%pc session))))
+            (/= 0 (let ((*memory-reader* (%memory-reader session)))
+                    (eval-expr (breakpoint-test bp) :symbols (breakpoint-values bp)
+                                                    :pc (%pc session)))))
         (error (c) (setf (debug-session-condition-error session) c) t))))
 
 (defun debug-break (session where &key scope bank condition)
@@ -237,7 +256,7 @@ condition counts as true and is left in SESSION's CONDITION-ERROR."
 address given with BANK, only stops while that bank is mapped. CONDITION, a
 string, is an expression over registers, flags, register aliases, labels and
 .equs of the attached assembly (SCOPE qualifies local labels), with * as the
-PC; the breakpoint only stops while it is nonzero. A bad condition signals
+PC and mem(ADDR) as the cell at ADDR; the breakpoint only stops while it is nonzero. A bad condition signals
 here. Returns the new BREAKPOINT. Setting a second breakpoint at the same
 address and bank replaces it (same id space, but the old entry is gone)
 rather than stacking duplicates."
@@ -305,13 +324,14 @@ then bank."
 (defun debug-watch (session target &key (access :write) index scope bank)
   "Watch TARGET on SESSION, stopping after the instruction that accesses it.
 TARGET is a scalar register, flag or register alias name (a banked register
-takes INDEX), a label, or a memory address; a name that is both storage and
-a label is storage. ACCESS is :READ, :WRITE or :READ-WRITE. SCOPE and BANK
+takes INDEX), a fixed stack name (INDEX picks a bottom-relative slot; without
+one any access to the stack), a label, or a memory address; a name that is
+both storage and a label is storage. ACCESS is :READ, :WRITE or :READ-WRITE. SCOPE and BANK
 qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
   (unless (member access '(:read :write :read-write))
     (error "bad watch access ~S -- expected :READ, :WRITE or :READ-WRITE" access))
   (multiple-value-bind (name register-index)
-      (and (stringp target) (%resolve-storage session target index))
+      (and (stringp target) (%resolve-storage session target index t))
     (let ((wp (if name
                   (make-watchpoint :id (debug-session-next-id session) :name name :index register-index :access access
                                    :label (cond ((null register-index) (string-downcase target))
@@ -340,10 +360,19 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
   "SESSION's watchpoints, ascending by id."
   (copy-list (debug-session-watchpoints session)))
 
+(defun %stack-name-p (machine name)
+  (eq (storage-element-kind (descriptor-element (machine-descriptor machine) name)) :stack))
+
+(defun %stack-slot-value (machine name slot)
+  "The live value in bottom-relative SLOT of stack NAME, or NIL when it is not live."
+  (let ((cell (%slot machine name :stack)))
+    (and (< slot (cdr cell)) (aref (car cell) slot))))
+
 (defun %watch-matches-p (session wp name index access)
   (and (or (eq (watchpoint-access wp) :read-write) (eq (watchpoint-access wp) access))
        (if (watchpoint-name wp)
-           (and (eq name (watchpoint-name wp)) (eql index (watchpoint-index wp)))
+           (and (eq name (watchpoint-name wp))
+                (or (eql index (watchpoint-index wp)) (eq (watchpoint-index wp) :any)))
            (and (eq name (debug-session-memory session))
                 (eql index (watchpoint-address wp))
                 (or (null (watchpoint-bank wp))
@@ -359,11 +388,10 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
           (setf (debug-session-watch-hit session)
                 (make-watch-hit
                  :watchpoint wp :access access :new value
-                 :old (if (eq access :read)
-                          value
-                          (if (watchpoint-name wp)
-                              (%read-storage machine name index)
-                              (mpeek machine name index))))))))))
+                 :old (cond ((eq access :read) value)
+                            ((%stack-name-p machine name) (%stack-slot-value machine name index))
+                            ((watchpoint-name wp) (%read-storage machine name index))
+                            (t (mpeek machine name index))))))))))
 
 (defun %arm (session)
   (when (debug-session-watchpoints session)
@@ -700,7 +728,7 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
     (if (eq (watch-hit-access hit) :read)
         (format nil "Watchpoint ~D (r) ~A = ~D" (watchpoint-id wp) (watchpoint-label wp)
                 (watch-hit-new hit))
-        (format nil "Watchpoint ~D (w) ~A: ~D -> ~D" (watchpoint-id wp) (watchpoint-label wp)
+        (format nil "Watchpoint ~D (w) ~A: ~:[-~;~:*~D~] -> ~D" (watchpoint-id wp) (watchpoint-label wp)
                 (watch-hit-old hit) (watch-hit-new hit)))))
 
 (defun %access-text (access)
@@ -709,6 +737,13 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
 (defun %split-if (text)
   "TEXT split at its first \" if \" as (VALUES TARGET CONDITION), CONDITION NIL without one."
   (let ((at (search " if " text :test #'char-equal)))
+    (if at
+        (values (string-trim " " (subseq text 0 at)) (string-trim " " (subseq text (+ at 4))))
+        (values text nil))))
+
+(defun %split-in (text)
+  "TEXT split at its last \" in \" as (VALUES TARGET SCOPE), SCOPE NIL without one."
+  (let ((at (search " in " text :test #'char-equal :from-end t)))
     (if at
         (values (string-trim " " (subseq text 0 at)) (string-trim " " (subseq text (+ at 4))))
         (values text nil))))
@@ -726,10 +761,11 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
 
 (defparameter *debug-help-text*
   "Commands:
-  break ADDR|LABEL   set a breakpoint
+  break ADDR|LABEL   set a breakpoint (LABEL may be a local, e.g. count.loop)
+  break .LOCAL in GLOBAL  set a breakpoint on a local label of GLOBAL
   break BANK:ADDR    set a breakpoint that only stops while that bank is mapped
-  break ... if EXPR  stop only while EXPR (registers, flags, labels, *) is nonzero
-  watch TARGET [r|w|rw]  stop when ADDR, LABEL, REG, REG[N] or a flag is accessed
+  break ... if EXPR  stop only while EXPR (registers, flags, labels, *, mem(ADDR)) is nonzero
+  watch TARGET [r|w|rw]  stop when ADDR, LABEL, REG, REG[N], STACK, STACK[N] or a flag is accessed
   delete ID|ADDR     remove a breakpoint or watchpoint (by id first, falling back to address)
   delete BANK:ADDR   remove the breakpoint at ADDR in one bank
   info break         list breakpoints and watchpoints
@@ -738,7 +774,8 @@ as a label name. A \"BANK:\" prefix supplies BANK; a non-numeric one signals."
   info sym           list symbols (requires an attached assembly)
   step [N]           execute N instructions (default 1)
   continue           run until a breakpoint, watchpoint, trap, or decode failure
-  until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank)
+  until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
+                     LABEL takes an `in GLOBAL` scope like break)
   print NAME         print a register, register alias or flag's value
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
@@ -768,15 +805,18 @@ this call."
                    (if (zerop (length rest))
                        "break: missing address or label"
                        (multiple-value-bind (target condition) (%split-if rest)
-                         (multiple-value-bind (where bank) (%where-arg target)
-                           (let ((bp (debug-break session where :bank bank :condition condition)))
+                         (multiple-value-bind (target scope) (%split-in target)
+                          (multiple-value-bind (where bank) (%where-arg target)
+                           (let ((bp (debug-break session where :bank bank :scope scope
+                                                                :condition condition)))
                              (format nil "Breakpoint ~D at ~A~%" (breakpoint-id bp)
                                      (%breakpoint-address-text session (breakpoint-address bp)
-                                                               (breakpoint-bank bp))))))))
+                                                               (breakpoint-bank bp)))))))))
                   ((string-equal cmd "watch")
                    (if (zerop (length rest))
                        "watch: missing target"
                        (multiple-value-bind (target access) (%watch-args rest)
+                        (multiple-value-bind (target scope) (%split-in target)
                          (let* ((bracket (position #\[ target))
                                 (close (and bracket (position #\] target :start bracket)))
                                 (index (and close (%parse-integer-maybe (subseq target (1+ bracket) close))))
@@ -784,9 +824,10 @@ this call."
                                         (debug-watch session (subseq target 0 bracket)
                                                      :access access :index index)
                                         (multiple-value-bind (where bank) (%where-arg target)
-                                          (debug-watch session where :access access :bank bank)))))
+                                          (debug-watch session where :access access :bank bank
+                                                                     :scope scope)))))
                            (format nil "Watchpoint ~D (~A) at ~A~%" (watchpoint-id wp)
-                                   (%access-text access) (watchpoint-label wp))))))
+                                   (%access-text access) (watchpoint-label wp)))))))
                   ((string-equal cmd "delete")
                    (if (zerop (length rest))
                        "delete: missing id or address"
@@ -831,8 +872,9 @@ this call."
                    (if (zerop (length rest))
                        "until: missing address or label"
                        (multiple-value-bind (reason steps condition)
-                           (multiple-value-bind (where bank) (%where-arg rest)
-                             (debug-continue-to session where :bank bank))
+                           (multiple-value-bind (target scope) (%split-in rest)
+                             (multiple-value-bind (where bank) (%where-arg target)
+                               (debug-continue-to session where :bank bank :scope scope)))
                          (%stop-text session reason steps condition))))
                   ((string-equal cmd "print")
                    (if (zerop (length rest))

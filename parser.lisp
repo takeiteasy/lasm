@@ -98,7 +98,7 @@
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :not :lo :hi
-                                             ;          :bank :lowcell :highcell :defined
+                                             ;          :bank :lowcell :highcell :defined :mem
                                              ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION,
                                              ; :defined's an EXPR-LABEL)
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr

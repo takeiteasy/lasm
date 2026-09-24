@@ -213,7 +213,7 @@ sta b"))))
 
 (fiveam:test function-operators-clause
   (fiveam:is (equal '(("bank" . :bank) ("lowcell" . :lowcell) ("highcell" . :highcell)
-                     ("defined" . :defined))
+                     ("defined" . :defined) ("mem" . :mem))
                     (lexer-descriptor-function-operators (find-lexer-descriptor 'default))))
   (deflexer far-syntax
     (number-formats (:dec :default))

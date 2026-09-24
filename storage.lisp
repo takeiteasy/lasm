@@ -1015,8 +1015,11 @@ of banked region REGION, bypassing the region's write policy."
     (let ((vec (car slot)) (sp (cdr slot)))
       (when (>= sp (storage-element-depth element))
         (error 'stack-overflow :machine (machine-descriptor-name (machine-descriptor machine)) :name name))
-      (setf (aref vec sp) (wrap-value value (storage-element-width element)))
-      (setf (cdr slot) (1+ sp)))))
+      (let ((wrapped (wrap-value value (storage-element-width element))))
+        (%notify-access machine name sp :write wrapped)
+        (setf (aref vec sp) wrapped)
+        (setf (cdr slot) (1+ sp))
+        wrapped))))
 
 ;; #166: register-indexed push/pop for a (stack-pointer ...) clause -- REG
 ;; holds an address into MEMORY rather than indexing a lasm :stack element.
@@ -1054,9 +1057,11 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
     (let ((vec (car slot)) (sp (cdr slot)))
       (when (<= sp 0)
         (error 'stack-underflow :machine (machine-descriptor-name (machine-descriptor machine)) :name name))
-      (let ((new-sp (1- sp)))
+      (let* ((new-sp (1- sp))
+             (value (aref vec new-sp)))
         (setf (cdr slot) new-sp)
-        (aref vec new-sp)))))
+        (%notify-access machine name new-sp :read value)
+        value))))
 
 (defun %stack-pointer (machine name)
   (multiple-value-bind (slot element) (%slot machine name :stack)
@@ -1096,7 +1101,9 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
       (unless (and (>= offset 0) (< offset sp))
         (error 'stack-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                           :name name :index offset))
-      (aref (car slot) (- sp 1 offset)))))
+      (let ((value (aref (car slot) (- sp 1 offset))))
+        (%notify-access machine name (- sp 1 offset) :read value)
+        value))))
 
 (defun (setf %stack-ref) (value machine name offset)
   (multiple-value-bind (slot element) (%slot machine name :stack)
@@ -1104,8 +1111,10 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
       (unless (and (>= offset 0) (< offset sp))
         (error 'stack-index-out-of-range :machine (machine-descriptor-name (machine-descriptor machine))
                                           :name name :index offset))
-      (setf (aref (car slot) (- sp 1 offset))
-            (wrap-value value (storage-element-width element))))))
+      (let ((wrapped (wrap-value value (storage-element-width element))))
+        (%notify-access machine name (- sp 1 offset) :write wrapped)
+        (setf (aref (car slot) (- sp 1 offset)) wrapped)
+        wrapped))))
 
 (defun stack-ref (machine name offset)
   (%stack-ref machine name offset))

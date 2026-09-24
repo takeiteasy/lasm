@@ -129,7 +129,7 @@
     ("," . :comma) ("#" . :hash)
     ("<" . :lt) (">" . :gt) ("=" . :equals)))
 
-(defparameter *function-operator-keywords* '(:bank :lowcell :highcell :defined))
+(defparameter *function-operator-keywords* '(:bank :lowcell :highcell :defined :mem))
 
 (defun parse-function-operators-clause (name entries)
   (let (seen)
@@ -265,7 +265,7 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   (mode-suffix-separator ".")
   (hole-prefix-separator ":")
   (function-operators ("bank" :bank) ("lowcell" :lowcell) ("highcell" :highcell)
-                      ("defined" :defined)))
+                      ("defined" :defined) ("mem" :mem)))
 
 ;;; Tokenizer
 

@@ -70,11 +70,11 @@
     (format t "~&== Every command below goes through DEBUG-COMMAND, string in, ==~%")
     (format t "== text out -- exactly what a DEBUGGER-REPL loop dispatches. ==~2%")
 
-    ;; ".loop" is a local label at address 2. TODO: `break count.loop` does
-    ;; not resolve, so the address is used instead (#240).
+    ;; ".loop" is a local label; it is named by its qualified spelling
+    ;; (`count.loop`) or as `.loop in count`.
     ;; `if` makes the breakpoint conditional; `watch` stops after an
     ;; instruction reads or writes a register, flag or memory address.
-    (dolist (command '("break 2 if x == 1" "info break" "continue"
+    (dolist (command '("break count.loop if x == 1" "info break" "continue"
                         "where" "delete 1" "watch x" "continue" "info break"
                         "delete 2" "continue" "info reg" "x/4 $1000" "print x"))
       (format t "(lasm-db) ~A~%~A" command (debug-command session command)))))

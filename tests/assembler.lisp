@@ -1500,3 +1500,6 @@ next: wnop" :machine 'word-relative-test-machine)))
   (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :endian :middle)))
   (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :endian)))
   (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :order :big))))
+
+(fiveam:test assembler-rejects-mem
+  (fiveam:signals assembly-error (assemble ".byte mem(1)" :machine 'emu-test-machine)))

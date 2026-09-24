@@ -68,6 +68,10 @@ Breaking on a label:
   `kind` already resolves elsewhere in the codebase; breakpoints reuse it
   rather than reintroducing it).
 
+A local label is named by its qualified spelling (`"count.loop"`, as `info sym`
+prints it) or by `where ".loop"` with `scope "count"`. A global with the
+spelling wins over a local.
+
 Setting a second breakpoint at an address that already has one replaces it —
 there is only ever one stop per address and bank.
 
@@ -90,10 +94,14 @@ operators and number formats, parsed with `parse-expression`, over:
 - scalar registers, flags and register aliases, read live;
 - labels and `.equ`s of the attached assembly (looked up under `scope`, then
   globally);
-- `*`, the current PC.
+- `*`, the current PC;
+- `mem(addr)`, the memory cell at `addr`, read without triggering watchpoints
+  or [device](machine-model.md#memory-regions) side effects.
 
 A name that is both storage and a label is storage. `bank()`, `defined()`,
-`lowcell()` and `highcell()` are rejected. Syntax errors and unknown names
+`lowcell()` and `highcell()` are rejected, and the assembler rejects `mem()`.
+A custom lexer must declare `mem` in its
+[`function-operators`](lexer.md#clauses) to use it in a condition. Syntax errors and unknown names
 signal from `debug-break`. An error while evaluating stops the run as
 `:breakpoint` with the error as the third value.
 
@@ -105,8 +113,11 @@ signal from `debug-break`. An error while evaluating stops the run as
 (debug-watchpoints session)                              ; => list, by id
 ```
 
-`target` is a scalar register, flag or register alias name, a label, or a
-memory address. A banked register takes `:index`. `access` is `:read`,
+`target` is a scalar register, flag or register alias name, a fixed stack
+name, a label, or a memory address. A banked register takes `:index`; a stack
+takes `:index` for one bottom-relative slot (0 is the oldest entry) and
+otherwise stops on any access. `stack-push` and `(setf stack-ref)` are writes;
+`stack-pop` and `stack-ref` are reads. A push reports `old` as `nil`. `access` is `:read`,
 `:write` (default) or `:read-write`. `scope` and `bank` qualify a memory
 target as for `debug-break`. Breakpoints and watchpoints share one id space.
 
@@ -235,8 +246,9 @@ Commands:
 |---|---|
 | `break ADDR\|LABEL` | set a breakpoint |
 | `break BANK:ADDR` | set a breakpoint that only stops while that bank is mapped |
+| `break .LOCAL in GLOBAL` | set a breakpoint on a local label (`until` and `watch` take it too) |
 | `break ... if EXPR` | stop only while `EXPR` is nonzero |
-| `watch TARGET [r\|w\|rw]` | watch an address, label, register, `REG[N]`, alias or flag (default `w`) |
+| `watch TARGET [r\|w\|rw]` | watch an address, label, register, `REG[N]`, alias, flag, `STACK` or `STACK[N]` (default `w`) |
 | `delete ID\|ADDR` | remove a breakpoint or watchpoint (every bank at an address) |
 | `delete BANK:ADDR` | remove the breakpoint at an address in one bank |
 | `info break` | list breakpoints and watchpoints |
@@ -276,5 +288,3 @@ plus the reference REPL. It does not cover:
   `run-for-cycles` already exists and pairs naturally with this once wired
   through — see [Emulator](emulator.md)'s cycle-cost model).
 - Writable inspection (`set register`/poke).
-- Watchpoints on `:stack` elements.
-- Memory reads in breakpoint conditions.

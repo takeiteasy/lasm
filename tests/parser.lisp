@@ -322,3 +322,8 @@ jmp start")))
   (let ((ast (%expr "1 < 2 < 3")))
     (fiveam:is (eq :lt (expr-binary-op ast)))
     (fiveam:is (eq :lt (expr-binary-op (expr-binary-left ast))))))
+
+(fiveam:test parse-mem-function-operator
+  (let ((ast (%expr "mem(0x10)")))
+    (fiveam:is (eq :mem (expr-unary-op ast)))
+    (fiveam:is (= #x10 (expr-number-value (expr-unary-operand ast))))))

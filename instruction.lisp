@@ -319,6 +319,10 @@ than each caller assuming a byte opcode."
 ;; Target cell width in bits, bound by the assembler for lowcell()/highcell().
 (defvar *cell-width* nil)
 
+;; Function from address to cell value, bound by the debugger for mem(). NIL
+;; elsewhere, where mem() is an error.
+(defvar *memory-reader* nil)
+
 ;; Names defined so far, bound by PREPROCESS for defined(name). NIL elsewhere,
 ;; where defined(name) tests the symbol table.
 (defvar *defined-names* nil)
@@ -406,6 +410,10 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
            (if (and table (nth-value 1 (gethash (expr-label-name (expr-unary-operand ast)) table)))
                1 0))))
      (let ((v (eval-expr (expr-unary-operand ast) :symbols symbols :pc pc)))
+       (when (eq (expr-unary-op ast) :mem)
+         (unless *memory-reader*
+           (error 'assembly-error :message "mem() is only available in debugger conditions"))
+         (return-from eval-expr (funcall *memory-reader* v)))
        (ecase (expr-unary-op ast)
          (:neg (- v))
          (:pos v)

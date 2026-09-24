@@ -468,3 +468,85 @@ count: ldx #3
     (fiveam:is (search "steps=5" (debug-command session "continue")))
     (fiveam:is (search "Error" (debug-command session "break 0x103 if")))
     (fiveam:is (search "Error" (debug-command session "break 0x103 if nonesuch == 1")))))
+
+;;; Local labels by qualified name and scope form
+
+(fiveam:test debug-resolves-qualified-local-names
+  (let ((session (%dbg-session)))
+    (fiveam:is (= #x102 (breakpoint-address (debug-break session "count.loop"))))
+    (fiveam:is (= #x102 (watchpoint-address (debug-watch session "count.loop"))))
+    (multiple-value-bind (reason) (debug-continue-to session "count.loop")
+      (fiveam:is (eq :until reason)))
+    (fiveam:is (breakpoint-p (debug-break session #x103 :condition "count.loop == 0x102")))
+    (fiveam:signals error (debug-break session "count.nonesuch"))))
+
+(fiveam:test debug-commands-accept-qualified-and-scoped-locals
+  (let ((session (%dbg-session)))
+    (fiveam:is (search "Breakpoint 1 at 0102" (debug-command session "break count.loop")))
+    (fiveam:is (search "Breakpoint 2 at 0102" (debug-command session "break .loop in count")))
+    (fiveam:is (search "Breakpoint 3 at 0102"
+                       (debug-command session "break .loop in count if x == 1")))
+    (fiveam:is (search "Watchpoint 4 (rw) at .loop" (debug-command session "watch .loop in count rw")))
+    (fiveam:is (search "Stopped: until" (debug-command session "until .loop in count")))
+    (fiveam:is (search "Error" (debug-command session "break .loop in nonesuch")))))
+
+;;; mem() in conditions
+
+(fiveam:test debug-break-condition-reads-memory
+  (let ((session (%dbg-session)))
+    (setf (mref (debug-session-machine session) 'ram #x200) 3)
+    (debug-break session #x102 :condition "mem(0x200) == 3")
+    (multiple-value-bind (reason steps) (debug-continue session)
+      (fiveam:is (eq :breakpoint reason))
+      (fiveam:is (= 1 steps))))
+  (let ((session (%dbg-session)))
+    (debug-break session #x102 :condition "mem(0x200 + 1) == 3")
+    (fiveam:is (eq :trap (debug-continue session)))))
+
+(fiveam:test debug-condition-memory-read-does-not-trigger-watchpoints
+  (let ((session (%dbg-session)))
+    (debug-watch session #x200 :access :read-write)
+    (debug-break session #x102 :condition "mem(0x200) == 0")
+    (fiveam:is (eq :breakpoint (debug-continue session)))))
+
+;;; Stack watchpoints
+
+(defun %dbg-stack-session ()
+  (let ((m (make-machine 'stack-test-machine)))
+    (load-program m (list #x01 5 #x01 7 #x04 #x00)) ; psh 5, psh 7, add, hlt
+    (make-debug-session m)))
+
+(fiveam:test debug-watch-stack-write-reports-slot-values
+  (let ((session (%dbg-stack-session)))
+    (let ((wp (debug-watch session "ds")))
+      (fiveam:is (string= "ds" (watchpoint-label wp))))
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (null (watch-hit-old hit)))
+      (fiveam:is (= 5 (watch-hit-new hit))))
+    (fiveam:is (search "Watchpoint 1 (w) ds: - -> 7" (debug-command session "continue")))))
+
+(fiveam:test debug-watch-stack-read-fires-on-pop
+  (let ((session (%dbg-stack-session)))
+    (debug-watch session "ds" :access :read)
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 3 steps))
+      (fiveam:is (= 7 (watch-hit-new hit))))))
+
+(fiveam:test debug-watch-stack-slot-ignores-other-slots
+  (let ((session (%dbg-stack-session)))
+    (let ((wp (debug-watch session "ds" :index 1)))
+      (fiveam:is (string= "ds[1]" (watchpoint-label wp))))
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= 7 (watch-hit-new hit))))
+    (fiveam:is (eq :trap (debug-continue session)))))
+
+(fiveam:test debug-watch-stack-command-and-bad-slot
+  (let ((session (%dbg-stack-session)))
+    (fiveam:is (search "Watchpoint 1 (w) at ds[1]" (debug-command session "watch ds[1]")))
+    (fiveam:is (search "Error" (debug-command session "watch ds[99]")))
+    (fiveam:signals error (debug-break session 0 :condition "ds == 1"))))

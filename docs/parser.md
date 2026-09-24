@@ -143,7 +143,7 @@ Comparisons and logical operators are consumed by
 
 `name(expr)` operators are spelled by the lexer's
 [`function-operators`](lexer.md#clauses) clause; the default lexer provides
-`bank`, `lowcell`, `highcell` and `defined`.
+`bank`, `lowcell`, `highcell`, `defined` and `mem`.
 
 #### `bank(label)`
 
@@ -203,7 +203,7 @@ or `1`. For example, `.byte 13 % 5, %101` emits `3, 5`.
 (defstruct expr-location)             ; the "*" location-counter symbol (#15)
                                        ; -- no slots; it IS the value
 (defstruct expr-unary op operand)     ; op: :neg :pos :lognot :not :lo :hi :bank
-                                       ;     :lowcell :highcell :defined
+                                       ;     :lowcell :highcell :defined :mem
 (defstruct expr-binary op left right) ; op: :pipe :caret :amp :shl :shr
                                        ;     :plus :minus :star :slash :percent
                                        ;     :lt :gt :le :ge :eq :ne :andand :oror
