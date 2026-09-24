@@ -248,6 +248,9 @@ checked against the field it is encoded into: an inline field's own
 the hole is `:signed`). Without strictness, a value that fits no variant
 wraps into the widest one.
 
+A `:register` hole (see [Instructions](instructions.md#encoding-opcode-n-operand)) also errors
+unconditionally when its value falls outside the named bank's `0`…`:count - 1`.
+
 **A `(choice mode)`-selected word field (#104) also errors unconditionally,
 like `relative`**, and for the same reason: once a hole's matched
 alternative has narrowed a field to a `choice`-selected variant, there is no

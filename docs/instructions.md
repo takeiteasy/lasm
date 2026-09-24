@@ -154,7 +154,8 @@ error.
   renders its decoded value as `ELEM`'s own [`:names`](machine-model.md#defmachine)
   alias instead of a bare integer. `ELEM` must declare `:names` — naming an
   unaliased bank, an unknown element, or a relative or signed hole is a
-  `definstruction`-time error, since none of those can render a real alias.
+  `definstruction`-time error, since none of those can render a real alias. An operand value outside `0`…`ELEM`'s
+  `:count - 1` is an `assembly-error`, strict mode or not.
 
 A single-hole mode needs exactly one `(operand ...)` subclause here; a mode
 with more holes (see "Repeated `(operand ...)` subclauses" below) needs one

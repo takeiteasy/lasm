@@ -849,6 +849,22 @@ hlt" :machine 'disasm-word-alias-machine))
          (a2 (assemble text :machine 'disasm-word-alias-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
+(fiveam:test assemble-byte-register-hole-out-of-range-signals-error
+  (fiveam:signals assembly-error (assemble "ldv 4, #1" :machine 'disasm-alias-machine))
+  (fiveam:signals assembly-error (assemble "ldv -1, #1" :machine 'disasm-alias-machine))
+  (fiveam:signals assembly-error (assemble ".equ n, 7
+ldv n, #1" :machine 'disasm-alias-machine))
+  (fiveam:finishes (assemble "ldv 3, #1" :machine 'disasm-alias-machine))
+  (fiveam:finishes (assemble "ldv v3, #1" :machine 'disasm-alias-machine)))
+
+(fiveam:test assemble-word-register-hole-out-of-range-signals-error
+  (fiveam:signals assembly-error (assemble "addr 4, a" :machine 'disasm-word-alias-machine))
+  (fiveam:signals assembly-error (assemble "addr a, 9" :machine 'disasm-word-alias-machine))
+  (fiveam:finishes (assemble "addr d, c" :machine 'disasm-word-alias-machine)))
+
+(fiveam:test assemble-register-hole-ignores-non-register-operand
+  (fiveam:finishes (assemble "ldv v0, #200" :machine 'disasm-alias-machine)))
+
 ;;; Data regions (#82)
 
 (fiveam:test disassemble-cells-data-region-suppresses-decode

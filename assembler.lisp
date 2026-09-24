@@ -1336,6 +1336,22 @@ field (must be between ~D and ~D)"
 (must be between ~D and ~D)"
                                            (instruction-descriptor-name descriptor) value width lo hi))))))))
 
+(defun %check-register-operand-range! (descriptor values line)
+  "Signal an assembly error for a :REGISTER hole whose value indexes outside its bank."
+  (let ((registers (instruction-descriptor-operand-registers descriptor)))
+    (when (some #'identity registers)
+      (let ((table (machine-descriptor-table
+                    (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+        (loop for register in registers
+              for value in values
+              when register
+                do (let ((count (storage-element-count (gethash register table))))
+                     (unless (< -1 value count)
+                       (%assembly-error line
+                                        "~A: register index ~D out of range for ~A (must be between 0 and ~D)"
+                                        (instruction-descriptor-name descriptor) value register
+                                        (1- count)))))))))
+
 (defun %make-growable-cells (size cell-width)
   (make-array size :element-type `(unsigned-byte ,cell-width) :adjustable t :fill-pointer size
                     :initial-element 0))
@@ -1387,6 +1403,7 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
                    when relativep
                      do (setf (nth i values)
                               (%relative-offset address descriptor i value line cell-width)))
+             (%check-register-operand-range! descriptor values line)
              (%check-strict-operand-range! descriptor mode values line cell-width choices)
              (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
                     (shadow (%shadowing-descriptor descriptor encoded)))
