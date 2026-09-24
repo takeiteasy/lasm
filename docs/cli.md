@@ -43,7 +43,9 @@ with `BB:AAAA` addresses; `run` loads every bank.
 
 `assemble` defaults `OUT` to `FILE` with a `.bin` or `.hex` extension; see
 [Binary output](binary-output.md) for the formats. `run` prints the stop reason,
-step count and final `pc`; a storage fault also prints its condition.
+step count and final `pc`. A storage fault or undefined-opcode trap also
+prints its condition, ending with the source line; a decode failure prints
+the source line at `pc`.
 `disassemble` prints re-assemblable source, or with
 `--annotate` an address/cells/text listing; it reads cells with the machine's
 cell width and endianness. `--data-region` (repeatable; `$hex`, `0xhex` or

@@ -184,3 +184,15 @@
         (fiveam:is (= 2 status) "~S" bad)
         (fiveam:is (string= "" out))
         (fiveam:is (search "--data-region" err))))))
+
+(fiveam:test cli-run-fault-and-decode-failure-name-the-source-line
+  (multiple-value-bind (status out)
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/storage-fault.asm")
+                      "-m" (%cli-path "tests/fixtures/cli/storage-fault.lasm")))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "(line 1: popempty)" out)))
+  (multiple-value-bind (status out)
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/undefined-opcode.asm")
+                      "-m" (%cli-path "tests/fixtures/cli/undefined-opcode.lasm")))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "(line 2: .byte 2)" out))))

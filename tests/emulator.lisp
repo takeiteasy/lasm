@@ -1554,3 +1554,63 @@ hlt" :machine 'bank-emu-test-machine))
       (declare (ignore steps))
       (fiveam:is (eq :fault reason))
       (fiveam:is (typep condition 'bank-out-of-range)))))
+
+;;; Runtime errors name their source line
+
+(fiveam:test trap-names-its-source-line
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (assemble "ldx #5
+  hlt" :machine 'emu-test-machine))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= 2 (runtime-location-pc condition)))
+      (fiveam:is (= 2 (listing-line-line (runtime-location-listing-line condition))))
+      (fiveam:is (string= "  hlt" (runtime-location-source-text condition)))
+      (fiveam:is (search "at $0002 (line 2: hlt)" (princ-to-string condition))))))
+
+(fiveam:test fault-names-the-faulting-instruction-not-the-advanced-pc
+  (let ((m (make-machine 'stack-test-machine)))
+    (load-program m (assemble "add
+hlt" :machine 'stack-test-machine))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 0 (runtime-location-pc condition)))
+      (fiveam:is (= 1 (listing-line-line (runtime-location-listing-line condition))))
+      (fiveam:is (search "(line 1: add)" (princ-to-string condition))))))
+
+(fiveam:test direct-step-fault-carries-location
+  (let ((m (make-machine 'stack-test-machine)))
+    (load-program m (assemble "add" :machine 'stack-test-machine))
+    (let ((condition (handler-case (progn (step-machine m) nil)
+                       (storage-error (c) c))))
+      (fiveam:is (typep condition 'stack-underflow))
+      (fiveam:is (= 1 (listing-line-line (runtime-location-listing-line condition)))))))
+
+(fiveam:test raw-cells-locate-the-pc-but-name-no-line
+  (let ((m (make-machine 'stack-test-machine))
+        (a (assemble "add" :machine 'stack-test-machine)))
+    (load-program m (assembly-cells a))
+    (fiveam:is (null (machine-program m)))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 0 (runtime-location-pc condition)))
+      (fiveam:is (null (runtime-location-listing-line condition)))
+      (fiveam:is (search "at $0000" (princ-to-string condition)))
+      (fiveam:is (not (search "line" (princ-to-string condition)))))
+    (let ((c (make-condition 'lasm-trap :tag :x)))
+      (fiveam:is (null (runtime-location-pc c)))
+      (fiveam:is (string= "Trap: :X NIL" (princ-to-string c))))))
+
+(fiveam:test load-program-retains-the-program-only-at-its-own-origin
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "hlt" :machine 'emu-test-machine)))
+    (load-program m a)
+    (fiveam:is (eq a (machine-program m)))
+    (load-program m a :origin 8)
+    (fiveam:is (null (machine-program m)))
+    (load-program m a)
+    (reset m)
+    (fiveam:is (null (machine-program m)))))

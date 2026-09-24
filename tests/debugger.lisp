@@ -1301,3 +1301,21 @@ count: ldx #3
   (let ((session (%dbg-stack-session)))
     (debug-watch session "ds" :index 1)
     (fiveam:is (= 2 (nth-value 1 (debug-continue session))))))
+
+(fiveam:test where-shows-the-line-from-the-included-file
+  (let* ((a (assemble-file (asdf:system-relative-pathname
+                            :lasm "tests/fixtures/include/where.asm")
+                           :machine 'instr-test-machine))
+         (m (make-machine 'instr-test-machine)))
+    (load-program m a)
+    (let ((session (make-debug-session m :assembly a)))
+      (setf (sref m 'pc) 1)
+      (let ((text (debug-where-text session)))
+        (fiveam:is (search "2:nop" text))
+        (fiveam:is (not (search ".include" text)))))))
+
+(fiveam:test session-defaults-to-the-machines-retained-program
+  (let ((m (make-machine 'emu-test-machine))
+        (a (%dbg-assembly)))
+    (load-program m a)
+    (fiveam:is (eq a (debug-session-assembly (make-debug-session m))))))

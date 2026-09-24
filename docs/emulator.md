@@ -28,6 +28,10 @@ directly, including into ROM, and sets PC to its origin. For an `assembly`,
 the origin comes from `assembly-origin` and its cell width must match the
 target memory. A plain sequence starts at `0` unless `:origin` is supplied.
 
+An assembly loaded at its own origin into the default memory is kept as
+`machine-program`. Any other load without `:bank` clears it, and `reset`
+clears it too; snapshots do not save it.
+
 An assembly's [bank images](banked-output.md) load without changing the
 current mapping. `:bank n` loads a selected bank without changing the
 mapping or PC; it requires the image to fit the banked region. Main-image
@@ -107,6 +111,20 @@ does not count. An idle step counts. Direct stepping still signals faults.
 | `:max-steps` | The step budget is reached. |
 | `:max-cycles` | The cycle budget is reached in `run-for-cycles`. |
 | `:duration` | The duration budget is reached in `run-for-duration`. |
+
+### Error locations
+
+A trap or storage fault raised while an instruction runs records that
+instruction's address in `runtime-location-pc`. With a retained
+`machine-program` it also records `runtime-location-listing-line` and
+`runtime-location-source-text`, and the report ends with the location:
+
+```text
+Stack underflow on DS (machine STACK-TEST-MACHINE) at $0000 (line 1: add)
+```
+
+`pc` is the instruction's start, not the already-advanced program counter.
+Without a retained program the report ends `at $0000`.
 
 A host can signal an interrupt or call `wake-machine`, then run again.
 Undefined-opcode policy can skip or trap instead of reporting decode failure;

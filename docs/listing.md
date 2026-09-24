@@ -33,6 +33,19 @@ a list because a macro invocation or repeated include can emit several
 entries for one source line. A listing entry keeps the macro body line as
 `listing-line-definition-line`.
 
+### Runtime lookup
+
+```lisp
+(machine-listing-line machine address &key memory assembly)
+(listing-line-source-text line assembly)
+```
+
+`machine-listing-line` returns the entry for an address in a live machine.
+It prefers the bank mapped at that address, then the main image, and
+defaults `assembly` to `machine-program`. `listing-line-source-text` reads
+the entry's line from its own included file when it has one. Runtime
+conditions use both; see [Error locations](emulator.md#error-locations).
+
 ## `assembly-data-regions`
 
 ```lisp
@@ -98,5 +111,3 @@ from assignments with the same value.
 
 - Address lookup scans the listing linearly. An indexed lookup may help
   larger programs.
-- Runtime traps and storage faults do not name an assembly source line;
-  the emulator does not retain the loaded assembly's source map.

@@ -52,6 +52,34 @@ structure if that ever matters."
                                 (1- (+ (listing-line-address l) (listing-line-size l))))))
             (assembly-listing assembly)))
 
+(defun machine-listing-line (machine address &key memory (assembly (machine-program machine)))
+  "The LISTING-LINE for ADDRESS in MACHINE's MEMORY, or NIL: the entry in the
+bank mapped at ADDRESS when it lies in a banked region, else (or failing
+that) the main image's. ASSEMBLY defaults to the program LOAD-PROGRAM
+retained."
+  (when assembly
+    (let* ((descriptor (machine-descriptor machine))
+           (element (descriptor-element
+                     descriptor
+                     (%resolve-memory (machine-descriptor-name descriptor) memory)))
+           (region (find-if (lambda (r) (and (memory-region-banks r)
+                                             (<= (memory-region-start r) address
+                                                 (memory-region-end r))))
+                            (storage-element-regions element))))
+      (or (and region
+               (let ((name (memory-region-name region)))
+                 (listing-line-at assembly address :region name
+                                                   :bank (current-bank machine name))))
+          (listing-line-at assembly address)))))
+
+(defun listing-line-source-text (line assembly)
+  "The source text of LISTING-LINE LINE: from its own included source unit
+when it has one, else from ASSEMBLY-SOURCE. NIL if unavailable."
+  (let ((text (cond ((listing-line-source-unit line)
+                     (source-unit-text (listing-line-source-unit line)))
+                    (t (assembly-source assembly)))))
+    (and text (nth (1- (listing-line-line line)) (%split-source-lines text)))))
+
 (defun listing-lines-for-source-line (assembly line &key file)
   "Entries emitted by LINE, in address order. Without FILE, select the
 top-level source. With FILE, select that included path; repeated includes

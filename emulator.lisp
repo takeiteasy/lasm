@@ -90,11 +90,16 @@ BANK loads CELLS into that bank of the banked region containing ORIGIN,
 whether or not it is mapped in, leaving the mapping and PC untouched.
 Signals if ORIGIN is not in a banked region or CELLS run past its end.
 
+An ASSEMBLY loaded at its own origin into the default memory (no MEMORY, no
+BANK) is retained as MACHINE-PROGRAM, so runtime conditions can name the
+source line; any other load without BANK clears it, and RESET does too.
+
 An ASSEMBLY that placed output in banks with .BANK also has each of those
 banks filled, without changing the mapping, when BANK is not given. Signals
 if main-image output lies in a banked window whose mapped bank the assembly
 also has an image for, since that image would replace it."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
+         (default-memory-p (null memory))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
          (origin (or origin (if assembly-p (assembly-origin cells) 0)))
@@ -107,6 +112,12 @@ also has an image for, since that image would replace it."
 match memory ~S's cell width (~D)" machine-name source-width memory target-width))))
     (when (and assembly-p (not bank))
       (%check-main-image-banks machine memory cells))
+    (unless bank
+      (setf (machine-program machine)
+            (and assembly-p
+                 (eql origin (assembly-origin cells))
+                 default-memory-p
+                 cells)))
     (if bank
         (%load-into-bank machine memory origin data bank)
         (let ((address origin))
@@ -197,6 +208,17 @@ cost)."
                (tick-devices machine cost)
                (values :nop cost))))))))
 
+(defun %locate-runtime-condition (condition machine address memory)
+  "Record on CONDITION the instruction at ADDRESS that raised it, and its
+source line when MACHINE retained its program."
+  (unless (runtime-location-pc condition)
+    (let* ((line (machine-listing-line machine address :memory memory))
+           (assembly (machine-program machine)))
+      (setf (runtime-location-pc condition) address
+            (runtime-location-listing-line condition) line
+            (runtime-location-source-text condition)
+            (and line (listing-line-source-text line assembly))))))
+
 (defun %step-machine-resolved (machine pc memory machine-name layout cell-width endian)
   "Fetch one instruction from MACHINE's MEMORY at its PC register, advance
 PC past it, then execute it against MACHINE. Returns (VALUES result cost):
@@ -269,27 +291,29 @@ decoded, not just the values."
     (tick-devices machine 1)
     (return-from %step-machine-resolved (values :idle 1)))
   (let ((address (%sref machine pc)))
-    (multiple-value-bind (descriptor values size choices)
-        (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
-                                         machine-name layout cell-width endian)
-      (if (eq descriptor :decode-failure)
-          (%undefined-opcode-step machine pc address memory machine-name layout)
-          (let ((cost (%descriptor-cycle-cost descriptor)))
-            (setf (%sref machine pc) (+ address size))
-            (incf (machine-cycles machine) cost)
-            ;; TODO: devices tick once per instruction with its declared
-            ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
-            ;; device needing intra-instruction resolution can't express
-            ;; either; sub-instruction tick granularity is a follow-up
-            ;; (#108, #159).
-            (tick-devices machine cost)
-            (setf (machine-extra-cycles machine) 0)
-            (unwind-protect (execute-instruction descriptor machine values choices)
-              (incf (machine-cycles machine) (machine-extra-cycles machine)))
-            (let ((extra (machine-extra-cycles machine)))
-              (when (plusp extra)
-                (tick-devices machine extra))
-              (values descriptor (+ cost extra))))))))
+    (handler-bind ((runtime-location
+                    (lambda (c) (%locate-runtime-condition c machine address memory))))
+      (multiple-value-bind (descriptor values size choices)
+          (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
+                                           machine-name layout cell-width endian)
+        (if (eq descriptor :decode-failure)
+            (%undefined-opcode-step machine pc address memory machine-name layout)
+            (let ((cost (%descriptor-cycle-cost descriptor)))
+              (setf (%sref machine pc) (+ address size))
+              (incf (machine-cycles machine) cost)
+              ;; TODO: devices tick once per instruction with its declared
+              ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
+              ;; device needing intra-instruction resolution can't express
+              ;; either; sub-instruction tick granularity is a follow-up
+              ;; (#108, #159).
+              (tick-devices machine cost)
+              (setf (machine-extra-cycles machine) 0)
+              (unwind-protect (execute-instruction descriptor machine values choices)
+                (incf (machine-cycles machine) (machine-extra-cycles machine)))
+              (let ((extra (machine-extra-cycles machine)))
+                (when (plusp extra)
+                  (tick-devices machine extra))
+                (values descriptor (+ cost extra)))))))))
 
 (defun step-machine (machine &key pc memory)
   "Execute one instruction, returning its descriptor and cycle cost, or

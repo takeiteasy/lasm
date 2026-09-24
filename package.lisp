@@ -39,6 +39,10 @@
    #:interrupt-queue-full-machine
    #:lasm-trap
    #:lasm-trap-tag
+   #:runtime-location
+   #:runtime-location-pc
+   #:runtime-location-listing-line
+   #:runtime-location-source-text
    #:lasm-trap-data
    #:lasm-syntax-error
    #:lasm-syntax-error-message
@@ -447,6 +451,9 @@
    #:listing-text
    #:print-listing
    #:listing-line-at
+   #:machine-listing-line
+   #:listing-line-source-text
+   #:machine-program
    #:listing-lines-for-source-line
    #:*listing-max-cells-shown*
 

@@ -10,16 +10,19 @@ For context, see [Machine model](machine-model.md#conditions),
 | Condition | Parent | Readers |
 |---|---|---|
 | `lasm-error` | `error` | — |
-| `storage-error` | `lasm-error` | `storage-error-machine`, `storage-error-name` |
+| `storage-error` | `lasm-error`, `runtime-location` | `storage-error-machine`, `storage-error-name` |
+| `runtime-location` | — | `runtime-location-pc`, `runtime-location-listing-line`, `runtime-location-source-text` |
 | `unknown-storage` | `storage-error` | — |
 | `address-out-of-range` | `storage-error` | `address-out-of-range-address` |
 | `memory-write-protected` | `storage-error` | `memory-write-protected-address` |
 | `stack-overflow` | `storage-error` | — |
 | `stack-underflow` | `storage-error` | — |
 | `stack-index-out-of-range` | `storage-error` | `stack-index-out-of-range-index` |
+| `stack-pointer-out-of-range` | `storage-error` | `stack-pointer-out-of-range-value` |
+| `bank-out-of-range` | `storage-error` | `bank-out-of-range-bank` |
 | `register-index-out-of-range` | `storage-error` | `register-index-out-of-range-index` |
-| `no-such-device` | `lasm-error` | `no-such-device-machine`, `no-such-device-index` |
-| `lasm-trap` | `lasm-error` | `lasm-trap-tag`, `lasm-trap-data` |
+| `no-such-device` | `lasm-error`, `runtime-location` | `no-such-device-machine`, `no-such-device-index` |
+| `lasm-trap` | `lasm-error`, `runtime-location` | `lasm-trap-tag`, `lasm-trap-data` |
 | `interrupt-queue-full` | `lasm-error` | `interrupt-queue-full-machine` |
 | `snapshot-error` | `lasm-error` | `snapshot-error-detail` |
 | `snapshot-version-mismatch` | `snapshot-error` | — |
@@ -38,6 +41,7 @@ For context, see [Machine model](machine-model.md#conditions),
 | `include-error` | `lasm-syntax-error` | — |
 | `conditional-error` | `lasm-syntax-error` | — |
 | `assembly-error` | `lasm-syntax-error` | — |
+| `assertion-error` | `assembly-error` | — |
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
 | `ambiguous-alternative` | `ambiguous-mode` | `ambiguous-alternative-hole`, `ambiguous-alternative-slot` |

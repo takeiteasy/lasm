@@ -110,7 +110,7 @@ default) records nothing."
          (memory (%resolve-memory machine-name memory))
          (cell-width (%machine-cell-width machine-name memory)))
     (%make-debug-session
-     :machine machine :assembly assembly :pc pc :memory memory :lexer lexer :history history
+     :machine machine :assembly (or assembly (machine-program machine)) :pc pc :memory memory :lexer lexer :history history
      :cell-width cell-width :hex-digits (%listing-hex-digits cell-width))))
 
 ;;; Breakpoints
@@ -1082,16 +1082,6 @@ banked region or the range runs past its end."
     (setf (debug-session-last-x-address session) (+ address count))
     (if stream (progn (write-string body stream) nil) body)))
 
-(defun %pc-listing-line (session assembly pc)
-  "The listing line for PC: the one in the mapped bank when PC lies in a
-banked region, else (or failing that) the main image's."
-  (let ((region (%session-banked-region session pc)))
-    (or (and region
-             (let ((name (memory-region-name region)))
-               (listing-line-at assembly pc :region name
-                                            :bank (current-bank (debug-session-machine session) name))))
-        (listing-line-at assembly pc))))
-
 (defun debug-where-text (session &key (context 4) (stream nil))
   "Render SESSION's current stop point: the PC, its disassembled instruction
 via DISASSEMBLE-MEMORY (disassembler.lisp, passing the attached ASSEMBLY so
@@ -1109,12 +1099,12 @@ NIL."
          (body (with-output-to-string (s)
                  (format s "pc = ~V,'0X~%" (debug-session-addr-digits session) pc)
                  (when session-assembly
-                   (let ((line (%pc-listing-line session session-assembly pc)))
-                     (when (and line (assembly-source session-assembly))
-                       (let ((source-line (nth (1- (listing-line-line line))
-                                                (%split-source-lines (assembly-source session-assembly)))))
-                         (when source-line
-                           (format s "~D:~A~%" (listing-line-line line) source-line))))))
+                   (let* ((line (machine-listing-line machine pc
+                                                      :memory (debug-session-memory session)
+                                                      :assembly session-assembly))
+                          (source-line (and line (listing-line-source-text line session-assembly))))
+                     (when source-line
+                       (format s "~D:~A~%" (listing-line-line line) source-line))))
                  (dolist (l lines)
                    (format s "~V,'0X:  ~A~%" (debug-session-addr-digits session)
                            (disassembly-line-address l) (disassembly-line-text l))))))

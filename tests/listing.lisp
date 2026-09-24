@@ -366,3 +366,21 @@ nop
 (fiveam:test assembly-data-regions-empty-without-data-or-listing
   (fiveam:is (null (assembly-data-regions (assemble "nop" :machine 'instr-test-machine))))
   (fiveam:is (null (assembly-data-regions (make-assembly)))))
+
+(fiveam:test listing-line-source-text-reads-the-included-file
+  (let* ((assembly (assemble-file (asdf:system-relative-pathname
+                                   :lasm "tests/fixtures/include/twice.asm")
+                                  :machine 'instr-test-machine))
+         (entry (second (assembly-listing assembly))))
+    (fiveam:is (string= "nop" (listing-line-source-text entry assembly)))
+    (fiveam:is (string= "nop" (listing-line-source-text (first (assembly-listing assembly))
+                                                        assembly)))))
+
+(fiveam:test machine-listing-line-uses-the-retained-program
+  (let ((m (make-machine 'instr-test-machine))
+        (a (assemble "nop
+nop" :machine 'instr-test-machine)))
+    (fiveam:is (null (machine-listing-line m 1)))
+    (load-program m a)
+    (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
+    (fiveam:is (null (machine-listing-line m 9)))))

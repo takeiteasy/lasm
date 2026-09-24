@@ -7,21 +7,43 @@
 
 (define-condition lasm-error (error) ())
 
-(define-condition storage-error (lasm-error)
+;; Where a runtime condition arose: PC is the faulting instruction's own
+;; address, LISTING-LINE its ASSEMBLY entry and SOURCE-TEXT that line's text,
+;; the last two only when the machine retained its program (MACHINE-PROGRAM).
+;; %STEP-MACHINE-RESOLVED fills the unset slots.
+(define-condition runtime-location ()
+  ((pc :initarg :pc :initform nil :accessor runtime-location-pc)
+   (listing-line :initarg :listing-line :initform nil :accessor runtime-location-listing-line)
+   (source-text :initarg :source-text :initform nil :accessor runtime-location-source-text)))
+
+(defmacro %with-location-suffix ((condition stream) &body body)
+  `(progn ,@body (%write-location-suffix ,condition ,stream)))
+
+(defun %write-location-suffix (condition stream)
+  (let ((pc (runtime-location-pc condition))
+        (line (runtime-location-listing-line condition))
+        (text (runtime-location-source-text condition)))
+    (when pc
+      (format stream " at $~4,'0X" pc)
+      (when line
+        (format stream " (line ~D~@[: ~A~])" (listing-line-line line)
+                (and text (string-trim '(#\Space #\Tab) text)))))))
+
+(define-condition storage-error (lasm-error runtime-location)
   ((machine :initarg :machine :reader storage-error-machine)
    (name :initarg :name :reader storage-error-name)))
 
 (define-condition unknown-storage (storage-error) ()
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Unknown storage element ~S on machine ~S"
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 (define-condition address-out-of-range (storage-error)
   ((address :initarg :address :reader address-out-of-range-address))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Address ~S out of range for memory ~S on machine ~S"
                      (address-out-of-range-address c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 ;; #107: signalled by (SETF MREF) for a store into a :ROM region declaring
 ;; :ON-WRITE :ERROR -- the default :ON-WRITE :IGNORE silently drops the
@@ -30,21 +52,21 @@
 ;; storing there. Mirrors ADDRESS-OUT-OF-RANGE's shape.
 (define-condition memory-write-protected (storage-error)
   ((address :initarg :address :reader memory-write-protected-address))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Write to address ~S rejected by read-only region on ~
 memory ~S on machine ~S"
                      (memory-write-protected-address c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 (define-condition stack-overflow (storage-error) ()
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Stack overflow on ~S (machine ~S)"
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 (define-condition stack-underflow (storage-error) ()
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Stack underflow on ~S (machine ~S)"
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 ;; #50: signalled by STACK-REF/(SETF STACK-REF) for an OFFSET outside the
 ;; stack's live region -- distinct from STACK-UNDERFLOW (which is specifically
@@ -53,35 +75,35 @@ memory ~S on machine ~S"
 ;; one live entry. Mirrors ADDRESS-OUT-OF-RANGE's shape.
 (define-condition stack-index-out-of-range (storage-error)
   ((index :initarg :index :reader stack-index-out-of-range-index))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Stack index ~S out of range for stack ~S on machine ~S"
                      (stack-index-out-of-range-index c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 (define-condition stack-pointer-out-of-range (storage-error)
   ((value :initarg :value :reader stack-pointer-out-of-range-value))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Stack pointer ~S out of range for stack ~S on machine ~S"
                      (stack-pointer-out-of-range-value c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 ;; #13: signalled by REGREF/(SETF REGREF) for an INDEX outside a banked
 ;; register's [0, count) range. Mirrors STACK-INDEX-OUT-OF-RANGE's shape.
 (define-condition register-index-out-of-range (storage-error)
   ((index :initarg :index :reader register-index-out-of-range-index))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Register index ~S out of range for register ~S on machine ~S"
                      (register-index-out-of-range-index c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 ;; Signalled by (SETF CURRENT-BANK) and the BANK-PEEK accessors for a bank
 ;; index outside a banked region's [0, banks) range. NAME is the region.
 (define-condition bank-out-of-range (storage-error)
   ((bank :initarg :bank :reader bank-out-of-range-bank))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Bank ~S out of range for region ~S on machine ~S"
                      (bank-out-of-range-bank c)
-                     (storage-error-name c) (storage-error-machine c)))))
+                     (storage-error-name c) (storage-error-machine c))))))
 
 ;; #108: signalled by DEVICE-AT's checked callers (DETACH-DEVICE, DEVICE-
 ;; INFO, DEVICE-SEND) for a bus INDEX that is out of range or a detached
@@ -89,20 +111,20 @@ memory ~S on machine ~S"
 ;; running program's cached indices stay valid -- see device.lisp). Not a
 ;; STORAGE-ERROR: a device isn't a storage element, so there is no NAME to
 ;; report, only the bus INDEX.
-(define-condition no-such-device (lasm-error)
+(define-condition no-such-device (lasm-error runtime-location)
   ((machine :initarg :machine :reader no-such-device-machine)
    (index :initarg :index :reader no-such-device-index))
-  (:report (lambda (c s)
+  (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "No device at bus index ~S on machine ~S"
-                     (no-such-device-index c) (no-such-device-machine c)))))
+                     (no-such-device-index c) (no-such-device-machine c))))))
 
 ;; Generalized trap primitive placeholder. M6 replaces this with a full
 ;; interrupt/exception model (deftrap/definterrupt, vectors, priority);
 ;; for now `trap` just signals this condition with a tag and optional data.
-(define-condition lasm-trap (lasm-error)
+(define-condition lasm-trap (lasm-error runtime-location)
   ((tag :initarg :tag :reader lasm-trap-tag)
    (data :initarg :data :initform nil :reader lasm-trap-data))
-  (:report (lambda (c s) (format s "Trap: ~S ~S" (lasm-trap-tag c) (lasm-trap-data c)))))
+  (:report (lambda (c s) (%with-location-suffix (c s) (format s "Trap: ~S ~S" (lasm-trap-tag c) (lasm-trap-data c))))))
 
 ;; #109: signalled by SIGNAL-INTERRUPT (interrupt.lisp) when a machine's
 ;; (interrupts ...) clause declares :ON-OVERFLOW :ERROR (the default) and
@@ -560,7 +582,11 @@ machine's default layout -- callers hold no other kind (#64)."
   (banks (make-hash-table :test 'eq))
   ;; Banked region name -> the bank LOAD-PROGRAM's unbanked image was written
   ;; into (whichever was mapped then). Cleared by RESET; not snapshotted.
-  (loaded-banks (make-hash-table :test 'eq)))
+  (loaded-banks (make-hash-table :test 'eq))
+  ;; The ASSEMBLY LOAD-PROGRAM last loaded at its own origin into the default
+  ;; memory, for naming source lines in runtime errors. Cleared by RESET; not
+  ;; snapshotted.
+  (program nil))
 
 ;;; Access notification
 
@@ -742,6 +768,7 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
   (clrhash (machine-loaded-banks machine))
+  (setf (machine-program machine) nil)
   (loop for entry being the hash-values of (machine-banks machine)
         do (setf (car entry) 0)
            (map nil (lambda (bank) (fill bank 0)) (cdr entry)))

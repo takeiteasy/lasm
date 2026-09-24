@@ -23,7 +23,8 @@ See [`debugger.lisp`](../examples/debugger.lisp).
 ```
 
 `machine` is already running or loaded. `assembly` supplies label, `.equ`,
-and source information. `:pc` and `:memory` override the machine defaults;
+and source information; it defaults to the machine's retained
+`machine-program`. `:pc` and `:memory` override the machine defaults;
 `:lexer` parses breakpoint expressions. `:history` enables
 [step back](#step-back); it is off by default.
 

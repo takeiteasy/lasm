@@ -193,8 +193,14 @@ the calling image."
             (run-for-cycles m cycles :max-steps max-steps :memory memory)
             (run m :max-steps max-steps :memory memory))
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
-      (when (eq reason :fault)
+      (when (or (eq reason :fault)
+                (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
         (format out "~A~%" condition))
+      (when (eq reason :decode-failure)
+        (let ((line (machine-listing-line m (sref m 'pc) :memory memory)))
+          (when line
+            (format out "line ~D: ~A~%" (listing-line-line line)
+                    (string-trim '(#\Space #\Tab) (or (listing-line-source-text line assembly) ""))))))
       (if (or (member reason '(:decode-failure :fault))
               (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
           1
