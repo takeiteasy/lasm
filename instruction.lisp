@@ -444,16 +444,22 @@ cell after the opcode is a sub-opcode or the first operand -- and so is a
 collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
   (let* ((md (find-machine-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
+         (wordp (%word-machine-p machine-name))
+         (order-computed (when wordp
+                           (dolist (descriptor descriptors t)
+                             (setf (instruction-descriptor-word-decode-order descriptor)
+                                   (%compute-word-decode-order descriptor)))))
          (plan (%collect-propagation md name descriptors))
          (target-evicted (%check-registration md name descriptors))
          (checked (loop for (child kind copies) in plan
                         collect (list child kind copies
                                       (when (eq kind :install)
                                         (%check-registration child name copies :evict t))))))
+    (declare (ignore order-computed))
     (setf (gethash name (machine-descriptor-own-instructions md)) t
           (machine-descriptor-removed-instructions md)
           (remove name (machine-descriptor-removed-instructions md) :test #'string=))
-    (%install-registration md name descriptors :evicted target-evicted :compute-order t)
+    (%install-registration md name descriptors :evicted target-evicted)
     (loop for (child kind copies evicted) in checked
           do (ecase kind
                (:install (%install-registration child name copies :evicted evicted))
@@ -547,15 +553,10 @@ are returned instead."
                    (setf (gethash opcode table) kept)
                    (remhash opcode table))))))
 
-(defun %install-registration (md name descriptors &key evicted compute-order)
-  "Apply a registration %CHECK-REGISTRATION accepted. COMPUTE-ORDER derives
-each descriptor's word decode order; propagated copies carry it over."
+(defun %install-registration (md name descriptors &key evicted)
+  "Apply a registration %CHECK-REGISTRATION accepted."
   (let ((wordp (%word-machine-p (machine-descriptor-name md)))
         (additions (%registration-additions descriptors)))
-    (when (and wordp compute-order)
-      (dolist (descriptor descriptors)
-        (setf (instruction-descriptor-word-decode-order descriptor)
-              (%compute-word-decode-order descriptor))))
     (setf (machine-descriptor-word-decode-table md) nil)
     (%clear-disabled md name descriptors)
     (dolist (mnemonic evicted)
@@ -1445,17 +1446,22 @@ actually run for this descriptor."
     (and source (nth source operands))))
 
 (defun %lazy-instruction-semantics (form machine-name name)
-  "Compile on first use, then replace every sibling's shared proxy."
+  "Compile on first use, then replace every sibling's shared proxy, on the
+machine and on each descendant holding a copy."
   (let (compiled proxy)
     (setf proxy
           (lambda (machine operands choices &optional selections mapping)
             (unless compiled
               (setf compiled (compile nil form))
-              (dolist (descriptor (gethash (string-upcase (string name))
-                                           (machine-descriptor-instructions
-                                            (find-machine-descriptor machine-name))))
-                (when (eq (instruction-descriptor-semantics-fn descriptor) proxy)
-                  (setf (instruction-descriptor-semantics-fn descriptor) compiled))))
+              (labels ((patch (machine-name)
+                         (dolist (descriptor (gethash (string-upcase (string name))
+                                                      (machine-descriptor-instructions
+                                                       (find-machine-descriptor machine-name))))
+                           (when (eq (instruction-descriptor-semantics-fn descriptor) proxy)
+                             (setf (instruction-descriptor-semantics-fn descriptor) compiled)))
+                         (dolist (child (%machine-children machine-name))
+                           (patch (machine-descriptor-name child)))))
+                (patch machine-name)))
             (funcall compiled machine operands choices selections mapping)))
     proxy))
 

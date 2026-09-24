@@ -9,17 +9,21 @@ instructions and differ in memory size, clock rate and identity.
 (defmachine anima16
   (register reg :width 16 :names (a b c x y z i j))
   (register pc :width 16)
+  (register sp :width 16)
+  (register ia :width 16)
   (memory ram :width 16 :addr-width 16 :cell-width 16)
-  (interrupts :vector ia :message (reg 0) :save (pc (reg 0)) :queue 512)
-  (properties :model "praxis-100" :device-id #xC9000001))
+  (stack-pointer sp :memory ram :grows :down)
+  (interrupts :vector ia :message (reg 0) :save (pc (reg 0)) :stack sp :queue 512)
+  (clock-speed 100000)
+  (properties :architecture "anima16"))
 
 (defmachine (mote (:extends anima16))
   (without-instructions bra bsr swp neg)
   (undefined-opcode :trap)
   (interrupts :queue 16)
-  (properties :model "mote-40" :device-id #xC9000002)
   (memory ram :addr-width 12)
-  (clock-speed 1000000))
+  (clock-speed 1000000)
+  (properties :model "mote-40" :device-id #xC9000002))
 ```
 
 `(defmachine (NAME (:extends PARENT)) clause...)` — `PARENT` must already be

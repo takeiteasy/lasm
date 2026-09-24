@@ -187,7 +187,10 @@ the calling image."
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
       (when (eq reason :fault)
         (format out "~A~%" condition))
-      (if (member reason '(:decode-failure :fault)) 1 0))))
+      (if (or (member reason '(:decode-failure :fault))
+              (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
+          1
+          0))))
 
 (defun %cli-command-disassemble (file machine lexer options out)
   (let* ((memory (%cli-memory options))

@@ -49,7 +49,7 @@ instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 | Status | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | load, assembly or file error, or a `run` ending in a decode failure or storage fault |
+| 1 | load, assembly or file error, or a `run` ending in a decode failure, storage fault or undefined-opcode trap |
 | 2 | usage error |
 
 Diagnostics go to standard error.

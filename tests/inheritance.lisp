@@ -362,6 +362,29 @@ stop" :machine 'fam-w8))
       (fiveam:is (= 0 (sref m 'a)))
       (fiveam:is (= 3 (machine-cycles m))))))
 
+;;; A word instruction defined on the parent after its children exist reaches
+;;; them with its decode order already computed.
+
+(fiveam:test late-word-definitions-carry-a-computed-decode-order
+  (eval '(definstruction fam-w8 loadw
+          (modes fam-w8-imm)
+          (encoding (opcode 4)
+                    (operand value :field value
+                      (variant (range 0 14) inline)
+                      (variant :else (extra-word :escape 15))))
+          (semantics (set! a value))))
+  (let ((parent (find-instruction-variants 'fam-w8 "LOADW"))
+        (child (find-instruction-variants 'fam-w8-child "LOADW")))
+    (fiveam:is (= (length parent) (length child)))
+    (fiveam:is (notany (lambda (d) (eq :dynamic (instruction-descriptor-word-decode-order d))) child))
+    (fiveam:is (equal (mapcar #'instruction-descriptor-word-decode-order parent)
+                      (mapcar #'instruction-descriptor-word-decode-order child)))))
+
+(fiveam:test assembler-rejects-a-fallback-encoding-of-a-removed-instruction
+  (fiveam:signals assembly-error (assemble "fwsys $0e0" :machine 'fam-word))
+  (fiveam:signals assembly-error (assemble "fwsys $0e0" :machine 'fam-word-lite))
+  (fiveam:finishes (assemble "fwsys $0e1" :machine 'fam-word-lite)))
+
 ;;; Snapshots
 
 (fiveam:test snapshots-are-keyed-on-the-child

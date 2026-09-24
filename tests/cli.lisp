@@ -63,6 +63,14 @@
       (fiveam:is (search "Stack underflow" out))
       (fiveam:is (string= "" err)))))
 
+(fiveam:test cli-run-undefined-opcode-trap-exits-one
+  (multiple-value-bind (status out err)
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/undefined-opcode.asm")
+                      "-m" (%cli-path "tests/fixtures/cli/undefined-opcode.lasm")))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "stopped: trap after 2 steps, pc = $0001" out))
+    (fiveam:is (string= "" err))))
+
 (fiveam:test cli-listing-and-symbols
   (multiple-value-bind (status out)
       (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--symbols")))

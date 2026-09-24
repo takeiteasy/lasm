@@ -1406,9 +1406,13 @@ emits two different words. ENDIAN (#66) governs :EMIT's own
              (%check-register-operand-range! descriptor values line)
              (%check-strict-operand-range! descriptor mode values line cell-width choices)
              (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
-                    (shadow (%shadowing-descriptor descriptor encoded)))
+                    (shadow nil)
+                    (removedp nil))
+               (multiple-value-setq (shadow removedp) (%shadowing-descriptor descriptor encoded))
                (when shadow
-                 (%assembly-error line "~A: this encoding decodes as ~A"
+                 (%assembly-error line (if removedp
+                                           "~A: this encoding is the removed instruction ~A"
+                                           "~A: this encoding decodes as ~A")
                                   (instruction-descriptor-name descriptor)
                                   (instruction-descriptor-name shadow)))
                (loop with i = (- address origin)

@@ -103,23 +103,6 @@ never run backward or past a rejected candidate's own bounds."
              (gethash (ldb (byte width shift) word)
                       (machine-descriptor-opcodes descriptor)))))
 
-(defun %shadowing-descriptor (descriptor cells)
-  "For a (fallback) DESCRIPTOR encoded as CELLS, the other descriptor that
-decodes those cells instead, or NIL."
-  (when (instruction-descriptor-fallback descriptor)
-    (let* ((layout (instruction-descriptor-word-layout descriptor))
-           (word (%fetch-cells (lambda (i) (nth i cells)) 0
-                               (instruction-word-layout-width-cells layout)
-                               (instruction-word-layout-cell-width layout)
-                               (instruction-word-layout-endian layout)))
-           (found (%find-word-candidate
-                   (find-machine-descriptor (instruction-descriptor-machine descriptor))
-                   layout word)))
-      (and found
-           (not (eq found descriptor))
-           (not (%sibling-combos-p found descriptor))
-           found))))
-
 (defun %find-word-decode-candidate (descriptor layout word)
   "Like %FIND-WORD-CANDIDATE, but ranks removed instructions alongside live
 ones, so a removed specific encoding is not decoded by a (fallback) it
@@ -135,6 +118,25 @@ shadowed. Returns the candidate and whether it is a removed one."
                                  (%insert-by-specificity
                                   dead (gethash opcode (machine-descriptor-opcodes descriptor))))))
             (values found (and found (member found dead) t)))))))
+
+(defun %shadowing-descriptor (descriptor cells)
+  "For a (fallback) DESCRIPTOR encoded as CELLS, the other descriptor that
+decodes those cells instead, or NIL. A second value is true when that
+descriptor was removed from the machine, so the cells decode as nothing."
+  (when (instruction-descriptor-fallback descriptor)
+    (let* ((layout (instruction-descriptor-word-layout descriptor))
+           (word (%fetch-cells (lambda (i) (nth i cells)) 0
+                               (instruction-word-layout-width-cells layout)
+                               (instruction-word-layout-cell-width layout)
+                               (instruction-word-layout-endian layout))))
+      (multiple-value-bind (found disabledp)
+          (%find-word-decode-candidate
+           (find-machine-descriptor (instruction-descriptor-machine descriptor))
+           layout word)
+        (and found
+             (not (eq found descriptor))
+             (not (%sibling-combos-p found descriptor))
+             (values found disabledp))))))
 
 (defun %word-decode-table (descriptor layout)
   "Publish a complete, read-only dispatch table for words up to 16 bits. A
