@@ -121,6 +121,21 @@
                (disasm-rel-abs (set! x tgt))
                (disasm-rel-rel (set! pc (+ pc tgt))))))
 
+;; Byte-encoded varying hole counts: VLD's `[base, offset]` alternative has a
+;; hole the plain `base` alternative lacks.
+(defmode disasm-vh-reg expr :width 1)
+(defmode disasm-vh-idx "[" expr "," expr "]" :width 1)
+(defmode disasm-vh-one (one-of disasm-vh-reg disasm-vh-idx))
+
+(definstruction disasm-test-machine vld
+  (modes disasm-vh-one)
+  (encoding (opcode #x06)
+            (operand src :width 1
+              (variant (choice disasm-vh-reg) (sub 0))
+              (variant (choice disasm-vh-idx) (sub 1)))
+            (for-choice disasm-vh-idx (operand off :width 1)))
+  (semantics (set! x src)))
+
 ;;; Word-encoded fixture -- DCPU-16-shaped (examples/dcpu16.lisp): a 6-bit
 ;;; field A, a 5-bit field B, a 5-bit OPCODE field, MSB-first. SET's operand
 ;;; order (dst = field B, shift 5; src = field A, shift 10) is declared
@@ -697,6 +712,16 @@ hlt" :machine 'disasm-test-machine))
     (let* ((text (disassembly-text lines))
            (a2 (assemble text :machine 'disasm-test-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
+
+(fiveam:test round-trip-byte-varying-hole-counts-renders-the-alternative-written
+  (let* ((a (assemble "vld 5
+vld [3, 4]
+hlt" :machine 'disasm-test-machine))
+         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+    (fiveam:is (string= "vld $5" (disassembly-line-text (first lines))))
+    (fiveam:is (string= "vld [$3,$4]" (disassembly-line-text (second lines))))
+    (fiveam:is (equalp (assembly-cells a)
+                       (assembly-cells (assemble (disassembly-text lines) :machine 'disasm-test-machine))))))
 
 (fiveam:test round-trip-relative-sibling-hole-decodes-back-to-itself
   ;; #130's own reproduction, at the disassembler level: BRM's TGT hole

@@ -116,6 +116,23 @@
         (emu-oo-reg (setf (mref machine 'ram dst) s))
         (emu-oo-ind (setf (mref machine 'ram (mref machine 'ram dst)) s))))))
 
+;; Byte-encoded varying hole counts: `[base, offset]` carries a second hole
+;; that plain `base` lacks; the sub-opcode cell tells them apart.
+(defmode emu-vh-reg expr :width 1)
+(defmode emu-vh-idx "[" expr "," expr "]" :width 1)
+(defmode emu-vh-one (one-of emu-vh-reg emu-vh-idx))
+
+(definstruction emu-test-machine varld
+  (modes emu-vh-one)
+  (encoding (opcode #xB3)
+            (operand src :width 1
+              (variant (choice emu-vh-reg) (sub 0))
+              (variant (choice emu-vh-idx) (sub 1)))
+            (for-choice emu-vh-idx (operand off :width 1)))
+  (semantics (choice-case src
+               (emu-vh-reg (set! x src))
+               (emu-vh-idx (set! x (mref machine 'ram (+ src off)))))))
+
 ;; Per-hole :WIDTH (#129): the hole-selected sub-opcode selector doubling as
 ;; a decode-time width discriminator, the same way SUBOP above uses it for
 ;; per-mode semantics -- proves STEP-MACHINE runs the right alternative's own
@@ -292,6 +309,17 @@ subtab 110, [120]" :machine 'emu-test-machine)))
     (fiveam:is (= 10 (mref m 'ram 100)))
     (step-machine m)                                           ; subtab 110, [120] -- reg,ind
     (fiveam:is (= 42 (mref m 'ram 110)))))
+
+(fiveam:test step-machine-byte-varying-hole-counts-run-each-shapes-own-semantics
+  (let ((m (make-machine 'emu-test-machine))
+        (a (assemble "varld 7
+varld [100, 5]" :machine 'emu-test-machine)))
+    (load-program m a)
+    (setf (mref m 'ram 105) 42)
+    (step-machine m)                                           ; varld 7 -- one hole
+    (fiveam:is (= 7 (sref m 'x)))
+    (step-machine m)                                           ; varld [100, 5] -- two holes
+    (fiveam:is (= 42 (sref m 'x)))))
 
 (fiveam:test step-machine-branch-not-taken-falls-through
   (let ((m (make-machine 'emu-test-machine))

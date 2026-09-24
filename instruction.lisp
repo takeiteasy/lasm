@@ -1066,21 +1066,6 @@ ONE-OF hole -- declare :RELATIVE on its alternatives instead"
 ONE-OF hole -- declare :SIGNED on its alternatives instead"
            machine name (mode-descriptor-name mode))))
 
-(defun %check-no-varying-one-of! (mode machine name)
-  "Signal a DEFINSTRUCTION-time error if MODE has a ONE-OF element whose
-alternatives disagree on hole count (#120) -- varying hole counts are
-supported only on a word-encoded machine's operand path so far
-(%WORD-MODE-DESCRIPTOR-FORMS' per-tuple expansion); a byte-encoded machine
-reaching here has no such expansion to fall back to, so it rejects a
-varying mode outright rather than silently using %MODE-HOLE-COUNT's minimum
-and dropping every over-count alternative's extra hole on the floor.
-Byte-encoded varying hole counts are #151."
-  (when (mode-descriptor-varyingp mode)
-    (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree ~
-on hole count -- not yet supported on a byte-encoded machine (#120's initial slice is ~
-word-encoded-machine-only; byte-encoded support is #151)"
-           machine name (mode-descriptor-name mode))))
-
 ;; The semantics body has no WITH-MACHINE form of its own to name its machine
 ;; variable (unlike the M0 standalone examples), so DEFINSTRUCTION fixes it
 ;; to the literal symbol MACHINE -- used explicitly for memory/stack access,
@@ -1305,7 +1290,7 @@ compile error, preserving typo protection."
 (defun %descriptor-form (machine name mode-form opcode operand-widths operand-names cycles semantics-fn-form
                            &optional sub-opcode sub-choices operand-signedness
                              relative-holes word-layout-name word-constants-form operand-registers
-                             choice-selections)
+                             choice-selections semantics-operand-map)
   "SEMANTICS-FN-FORM is an already-built %SEMANTICS-FN-FORM lambda form, or a
 gensym bound to one by the caller's own LET* (#150) -- built once and shared
 across every sibling descriptor whose SEMANTICS-FN-FORM inputs (SEMANTICS-
@@ -1336,19 +1321,20 @@ SUB-CHOICES or field-variant combo."
      :word-layout-name ',word-layout-name
      :word-constants ,word-constants-form
      :choice-selections ',choice-selections
+    :semantics-operand-map ',semantics-operand-map
     :cycles ,cycles
     :semantics-fn ,semantics-fn-form))
 
-(defun %byte-operand-signedness (mode sub-choices)
+(defun %byte-operand-signedness (mode sub-choices &optional (sources (%mode-hole-sources mode)))
   "Return signedness for each byte operand field after selected alternatives are resolved."
-  (loop for source in (%mode-hole-sources mode)
+  (loop for source in sources
         for i from 0
         for chosen = (nth i sub-choices)
         collect (%hole-source-attribute mode source :signed chosen)))
 
-(defun %byte-relative-flags (mode sub-choices)
+(defun %byte-relative-flags (mode sub-choices &optional (sources (%mode-hole-sources mode)))
   "Return one relative flag per hole for this byte descriptor."
-  (loop for source in (%mode-hole-sources mode)
+  (loop for source in sources
         for i from 0
         for chosen = (nth i sub-choices)
         collect (%hole-source-attribute mode source :relative chosen)))
@@ -1387,7 +1373,8 @@ hole sharing a common :WIDTH -- that shared value)."
 declaration order) given for one addressing-mode use into (VALUES widths
 names sub-spec mode-specified registers), one WIDTHS/NAMES/MODE-SPECIFIED/
 REGISTERS entry per MODE hole. With no subclauses at all, MODE must have
-exactly one hole (a bare width can't be inferred for more) -- its default
+at most one hole (a bare width can't be inferred for more; none gives empty
+lists) -- its default
 width (%MODE-OPERAND-WIDTH) is used, unnamed, SUB-SPEC is NIL, MODE-SPECIFIED
 is (T) (the default width traces back to :MODE, not an explicit :WIDTH), and
 REGISTERS is (NIL) (#143, no subclause means no :REGISTER either), unless
@@ -1403,16 +1390,17 @@ subclauses, their count must match MODE's hole count exactly, and SUB-SPEC
   (if operand-subclauses
       (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name
                                   sub-opcode-subclause)
-      (if (= (%mode-hole-count mode) 1)
-          (progn
-            (when sub-opcode-subclause
-              (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
+      (case (%mode-hole-count mode)
+        (0 (values nil nil nil nil nil))
+        (1
+         (when sub-opcode-subclause
+           (error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
 (operand ...) subclauses -- a defaulted single-hole operand has no room to declare one"
-                     machine name mode-name))
-            (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t) (list nil)))
-          (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
+                  machine name mode-name))
+         (values (list (%mode-operand-width mode machine-name)) (list nil) nil (list t) (list nil)))
+        (t (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has ~D EXPR holes ~
 -- an (operand ...) subclause is required per hole" machine name mode-name
-                 (%mode-hole-count mode)))))
+                  (%mode-hole-count mode))))))
 
 (defun %check-byte-sub-conflict! (machine name explicit-sub sub-spec)
   "Signal a DEFINSTRUCTION-time error if EXPLICIT-SUB (an (opcode n :sub s)
@@ -1458,6 +1446,152 @@ hole-selected one would both be trying to write it."
                                           (%byte-relative-flags mode sub-choices)
                                           nil nil operand-registers)))
                    pairs))))))
+
+(defun %tuple-hole-index (tuple base-index)
+  "TUPLE's hole index for BASE-INDEX, a hole index of the mode's minimum shape."
+  (+ base-index
+     (loop for group in (mode-hole-tuple-groups tuple)
+           when (<= (+ (mode-hole-group-base-start group) (mode-hole-group-base-count group)) base-index)
+             sum (- (mode-hole-group-count group) (mode-hole-group-base-count group)))))
+
+(defun %check-byte-varying-selectors! (mode sub-spec machine name)
+  "Signal a DEFINSTRUCTION-time error unless SUB-SPEC selects, at the first
+minimum-shape hole of every varying ONE-OF element of MODE, which alternative
+matched. That sub-opcode is the only thing a byte-encoded decode can read to
+learn how many operand cells follow. Only the first hole of an element may
+participate: its alternatives govern the element's other holes alike."
+  (dolist (group (remove-duplicates (loop for tuple in (%mode-hole-tuples mode)
+                                          append (mode-hole-tuple-groups tuple))
+                                    :key #'mode-hole-group-base-start))
+    (let ((first-hole (mode-hole-group-base-start group))
+          (base-count (mode-hole-group-base-count group)))
+      (when (zerop base-count)
+        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a varying ONE-OF whose shortest ~
+alternative has no operand hole -- there is no hole to carry its sub-opcode selector"
+               machine name (mode-descriptor-name mode)))
+      (unless (member first-hole (car sub-spec))
+        (error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree on ~
+hole count -- operand hole ~D must carry a sub-opcode selector, alone or inside a (sub-opcode ...) ~
+table, so decode can tell how many operand cells follow"
+               machine name (mode-descriptor-name mode) first-hole))
+      (loop for hole from (1+ first-hole) below (+ first-hole base-count)
+            when (member hole (car sub-spec))
+              do (error "DEFINSTRUCTION ~S ~S: operand hole ~D shares a varying ONE-OF element with ~
+hole ~D -- only the element's first hole may carry a sub-opcode selector"
+                        machine name hole first-hole)))))
+
+(defun %parse-byte-tuple-fields (mode tuple subclauses base-subclauses machine name mode-name)
+  "Resolve one alternative-tuple's operand SUBCLAUSES (the shared BASE-SUBCLAUSES
+plus its own extras) into (VALUES widths names mode-specified registers)."
+  (let ((parsed (loop for subclause in subclauses
+                      for i from 0
+                      collect (multiple-value-bind (op-name spec variant-forms register)
+                                  (%parse-byte-operand-subclause subclause)
+                                (when (and variant-forms (not (member subclause base-subclauses)))
+                                  (error "DEFINSTRUCTION ~S ~S: extra operand ~A cannot declare a ~
+sub-opcode selector -- its alternative is chosen at the element's first hole"
+                                         machine name (or op-name i)))
+                                (list (%operand-width mode spec machine) op-name (eq (first spec) :mode)
+                                      register)))))
+    (let ((names (mapcar #'second parsed))
+          (registers (mapcar #'fourth parsed)))
+      (%check-operand-names names machine name mode-name)
+      (%check-operand-registers! registers machine name mode-name mode
+                                 (mode-hole-tuple-hole-alternatives tuple)
+                                 (mode-hole-tuple-hole-sources tuple))
+      (values (mapcar #'first parsed) names (mapcar #'third parsed) registers))))
+
+(defun %byte-pair-chosen (pair hole-indices group)
+  "The alternative PAIR, a (name-list . sub) sub-opcode table entry, names at GROUP's first hole."
+  (nth (position (mode-hole-group-base-start group) hole-indices) (car pair)))
+
+(defun %byte-pair-in-tuple-p (pair hole-indices tuple)
+  "T if PAIR's alternatives select TUPLE's shape at every varying element."
+  (every (lambda (group)
+           (let ((chosen (%byte-pair-chosen pair hole-indices group))
+                 (alt (mode-hole-group-alt-name group)))
+             (if alt
+                 (eq chosen alt)
+                 (= (%mode-hole-count (find-mode-descriptor chosen)) (mode-hole-group-base-count group)))))
+         (mode-hole-tuple-groups tuple)))
+
+(defun %byte-tuple-sub-choices (pair hole-indices tuple)
+  "Hole-aligned selected alternatives for TUPLE under PAIR. Every hole of a
+varying element records the alternative matched at its first hole."
+  (let ((choices (make-list (length (mode-hole-tuple-hole-alternatives tuple)))))
+    (loop for hole in hole-indices
+          for chosen in (car pair)
+          do (setf (nth (%tuple-hole-index tuple hole) choices) chosen))
+    (dolist (group (mode-hole-tuple-groups tuple) choices)
+      (loop with chosen = (%byte-pair-chosen pair hole-indices group)
+            for i from (mode-hole-group-start group)
+                below (+ (mode-hole-group-start group) (mode-hole-group-count group))
+            do (setf (nth i choices) chosen)))))
+
+(defun %byte-varying-descriptor-forms (machine name mode-form opcode explicit-sub mode mode-name
+                                        operand-subclauses for-choice-subclauses sub-spec cycles
+                                        semantics-forms)
+  "Byte-encoded expansion of a mode whose ONE-OF alternatives disagree on hole
+count: one descriptor per sub-opcode table entry, shaped by the alternative-tuple
+that entry selects. Extra holes come from FOR-CHOICE-SUBCLAUSES. Returns (VALUES
+bindings forms) like %BYTE-DESCRIPTOR-FORMS."
+  (%check-byte-varying-selectors! mode sub-spec machine name)
+  (%check-byte-sub-conflict! machine name explicit-sub sub-spec)
+  (let* ((for-choice-alist (%parse-for-choice-subclauses mode for-choice-subclauses operand-subclauses))
+         (tuples (%mode-hole-tuples mode))
+         (tuple-subclause-lists (mapcar (lambda (tuple)
+                                          (%tuple-operand-subclauses operand-subclauses tuple for-choice-alist))
+                                        tuples))
+         (semantics-fn-gensym (gensym "SEMANTICS-FN"))
+         (hole-indices (car sub-spec))
+         (pairs (cdr sub-spec)))
+    (multiple-value-bind (semantics-subclauses shared-names shared-alternatives)
+        (%shared-semantics-shape tuples tuple-subclause-lists)
+      (let ((forms
+              (loop for tuple in tuples
+                    for subclauses in tuple-subclause-lists
+                    append (multiple-value-bind (widths names mode-specified registers)
+                               (%parse-byte-tuple-fields mode tuple subclauses operand-subclauses
+                                                         machine name mode-name)
+                             (loop with alternatives = (mode-hole-tuple-hole-alternatives tuple)
+                                   with sources = (mode-hole-tuple-hole-sources tuple)
+                                   with operand-map = (%semantics-operand-map semantics-subclauses subclauses)
+                                   for pair in pairs
+                                   when (%byte-pair-in-tuple-p pair hole-indices tuple)
+                                     collect (let ((sub-choices (%byte-tuple-sub-choices pair hole-indices tuple)))
+                                               (%descriptor-form
+                                                machine name mode-form opcode
+                                                (%byte-operand-widths alternatives sub-choices widths mode-specified)
+                                                names cycles semantics-fn-gensym (cdr pair) sub-choices
+                                                (%byte-operand-signedness mode sub-choices sources)
+                                                (%byte-relative-flags mode sub-choices sources)
+                                                nil nil registers nil operand-map)))))))
+        (assert (= (length forms) (length pairs)))
+        (values (list (list semantics-fn-gensym
+                            (%semantics-fn-form semantics-forms machine name shared-names shared-alternatives
+                                                shared-names)))
+                forms)))))
+
+(defun %byte-mode-descriptor-forms (machine name mode-form mode mode-name opcode explicit-sub
+                                     operand-subclauses for-choice-subclauses sub-opcode-subclause
+                                     cycles semantics-forms)
+  "Descriptor forms for one byte-encoded use of MODE: (VALUES bindings forms)."
+  (when (and for-choice-subclauses (not (mode-descriptor-varyingp mode)))
+    (error "DEFINSTRUCTION ~S ~S: (for-choice ...) given but addressing mode ~S has no ONE-OF whose ~
+alternatives disagree on hole count" machine name mode-name))
+  (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
+      (%resolve-operand-fields mode operand-subclauses machine name mode-name machine sub-opcode-subclause)
+    (let ((hole-alternatives (%mode-hole-alternatives mode)))
+      (%check-byte-one-of-signed mode hole-alternatives sub-spec machine name)
+      (%check-byte-one-of-width hole-alternatives sub-spec mode-specified machine name)
+      (%check-byte-one-of-relative mode hole-alternatives sub-spec machine name)
+      (if (mode-descriptor-varyingp mode)
+          (%byte-varying-descriptor-forms machine name mode-form opcode explicit-sub mode mode-name
+                                          operand-subclauses for-choice-subclauses sub-spec cycles
+                                          semantics-forms)
+          (%byte-descriptor-forms machine name mode-form opcode explicit-sub operand-widths operand-names
+                                  cycles semantics-forms hole-alternatives sub-spec mode mode-specified
+                                  operand-registers)))))
 
 ;;; Word-encoded instructions (#20, M4) -- DCPU-16-shaped bitfield/variant
 ;;; operand encoding, kept as its own code path parallel to the byte-encoded
@@ -2736,6 +2870,32 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
         (eq a-name b-name)
         (eq a b))))
 
+(defun %shared-semantics-shape (tuples tuple-subclause-lists)
+  "Operand shape one shared (semantics ...) body sees across every alternative-tuple.
+Returns (VALUES subclauses names hole-alternatives): the deduplicated operand
+subclauses of TUPLES (TUPLE-SUBCLAUSE-LISTS, parallel), their names, and each
+one's ONE-OF alternatives."
+  (let* ((subclauses (remove-duplicates (mapcan #'copy-list tuple-subclause-lists)
+                                        :test #'%same-semantics-operand-subclause-p))
+         (names (mapcar (lambda (subclause) (nth-value 0 (%parse-operand-subclause subclause)))
+                        subclauses))
+         (hole-alternatives
+           (mapcar (lambda (subclause)
+                     (loop for tuple in tuples
+                           for tuple-subclauses in tuple-subclause-lists
+                           for index = (position subclause tuple-subclauses
+                                                 :test #'%same-semantics-operand-subclause-p)
+                           when index
+                             return (nth index (mode-hole-tuple-hole-alternatives tuple))))
+                   subclauses)))
+    (values subclauses names hole-alternatives)))
+
+(defun %semantics-operand-map (semantics-subclauses tuple-subclauses)
+  "For each shared semantics operand, its position among TUPLE-SUBCLAUSES (NIL if absent)."
+  (mapcar (lambda (subclause)
+            (position subclause tuple-subclauses :test #'%same-semantics-operand-subclause-p))
+          semantics-subclauses))
+
 (defun %word-mode-descriptor-forms (machine name mode-form opcode operand-subclauses mode mode-name machine-name
                                      cycles semantics-forms &optional layout-name field-value-subclauses
                                        for-choice-subclauses)
@@ -2792,20 +2952,12 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                                 tuple machine name)))
                         (list tuple specs tuple-subclauses)))
                     (%mode-hole-tuples mode)))
-                 (semantics-subclauses
-                   (remove-duplicates (mapcan (lambda (entry) (copy-list (third entry))) tuple-specs)
-                                       :test #'%same-semantics-operand-subclause-p))
-                 (mode-operand-names
-                   (mapcar (lambda (subclause) (nth-value 0 (%parse-operand-subclause subclause)))
-                           semantics-subclauses))
-                 (mode-hole-alternatives
-                    (mapcar (lambda (subclause)
-                              (loop for (tuple nil tuple-subclauses) in tuple-specs
-                                    for index = (position subclause tuple-subclauses
-                                                          :test #'%same-semantics-operand-subclause-p)
-                                    when index
-                                      return (nth index (mode-hole-tuple-hole-alternatives tuple))))
-                           semantics-subclauses))
+                 (shared-shape (multiple-value-list
+                                (%shared-semantics-shape (mapcar #'first tuple-specs)
+                                                         (mapcar #'third tuple-specs))))
+                 (semantics-subclauses (first shared-shape))
+                 (mode-operand-names (second shared-shape))
+                 (mode-hole-alternatives (third shared-shape))
                  (named-slot-alternatives
                    (remove-duplicates
                     (loop for (tuple nil nil) in tuple-specs
@@ -2826,11 +2978,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                 for tuple-hole-alternatives = (mode-hole-tuple-hole-alternatives tuple)
                 for hole-signedp-list = (%word-hole-signedp-list mode
                                                                   (mode-hole-tuple-hole-sources tuple))
-                 for semantics-operand-map =
-                   (mapcar (lambda (subclause)
-                             (position subclause tuple-subclauses
-                                       :test #'%same-semantics-operand-subclause-p))
-                           semantics-subclauses)
+                 for semantics-operand-map = (%semantics-operand-map semantics-subclauses tuple-subclauses)
                 do (let* ((tuple-selections (%tuple-choice-selections tuple))
                            (tuple-field-values
                              (loop for entry in for-choice-alist
@@ -3267,23 +3415,9 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                             opcode operand-subclauses mode mode-sym machine
                                             cycles-form semantics-forms layout-name
                                             field-value-subclauses for-choice-subclauses)
-              ;; #124/#127: the word path's own gate runs inside
-              ;; %WORD-MODE-DESCRIPTOR-FORMS itself (unlike the byte path's,
-              ;; called here) -- it needs SPECS, which only that function
-              ;; computes, and there is exactly one call site for it, unlike
-              ;; %BYTE-DESCRIPTOR-FORMS' two.
-              (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
-                  (progn
-                    (%check-no-varying-one-of! mode machine name)
-                    (%resolve-operand-fields mode operand-subclauses machine name mode-sym machine
-                                              sub-opcode-subclause))
-                (%check-byte-one-of-signed mode (%mode-hole-alternatives mode) sub-spec machine name)
-                (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
-                (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
-                (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                         opcode sub operand-widths operand-names cycles-form semantics-forms
-                                         (%mode-hole-alternatives mode) sub-spec mode mode-specified
-                                         operand-registers)))))))))
+              (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
+                                           opcode sub operand-subclauses for-choice-subclauses
+                                           sub-opcode-subclause cycles-form semantics-forms))))))))
 
 (defvar *definstruction-fallback* nil
   "True while DEFINSTRUCTION expands an instruction declaring (fallback).")
@@ -3629,23 +3763,13 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                    (%instruction-registration-form
                     machine name
                     `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
-                 (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
-                     (progn
-                       (%check-no-varying-one-of! mode machine name)
-                       (%parse-operand-subclauses mode operand-subclauses machine name mode-sym machine
-                                                   sub-opcode-subclause))
-                   (%check-byte-one-of-signed mode (%mode-hole-alternatives mode) sub-spec machine name)
-                   (%check-byte-one-of-width (%mode-hole-alternatives mode) sub-spec mode-specified machine name)
-                   (%check-byte-one-of-relative mode (%mode-hole-alternatives mode) sub-spec machine name)
-                   (multiple-value-bind (bindings forms)
-                       (%byte-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
-                                                opcode sub operand-widths operand-names
-                                                cycles-form (rest semantics-clause)
-                                                (%mode-hole-alternatives mode) sub-spec mode
-                                                mode-specified operand-registers)
-                     (%instruction-registration-form
-                      machine name
-                      `(let* (,@bindings) (list ,@forms))))))))))))))
+                 (multiple-value-bind (bindings forms)
+                     (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
+                                                  opcode sub operand-subclauses for-choice-subclauses
+                                                  sub-opcode-subclause cycles-form (rest semantics-clause))
+                   (%instruction-registration-form
+                    machine name
+                    `(let* (,@bindings) (list ,@forms)))))))))))))
 
 (defun %evaluate-instruction-registration (form)
   (eval form))

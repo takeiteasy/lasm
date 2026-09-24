@@ -2368,22 +2368,222 @@ second: nop" :machine 'instr-test-machine))))
                (for-choice vh-idx (operand off :trailing-word)))
              (semantics nil)))))
 
-;; Byte-encoded machines are out of #120's initial slice -- a varying ONE-OF
-;; is rejected outright, not silently truncated to its base hole count.
+;; Byte-encoded varying hole counts: a ONE-OF's alternative-tuples are told apart
+;; by the sub-opcode cell, and each extra hole comes from a (for-choice ...).
 (defmachine varying-hole-byte-test-machine
   (register pc :width 16)
   (register a :width 16)
   (memory ram :width 8 :addr-width 16))
 
-(fiveam:test varying-hole-counts-rejected-on-byte-machine
-  (fiveam:signals error
-    (eval '(definstruction varying-hole-byte-test-machine bogus
-             (modes vh-mode)
-             (encoding
-               (opcode 1)
-               (operand :width 1)
-               (operand :width 1))
-             (semantics nil)))))
+(definstruction varying-hole-byte-test-machine ldv
+  (modes vh-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :width 1)
+    (operand src :width 1
+      (variant (choice vh-reg) (sub 0))
+      (variant (choice vh-idx) (sub 1)))
+    (for-choice vh-idx (operand off :width 1)))
+  (semantics
+    (choice-case src
+      (vh-reg (set! a (+ dst src)))
+      (vh-idx (set! a (+ dst src off))))))
+
+(defun %byte-vh-variant (name holes)
+  (find holes (find-instruction-variants 'varying-hole-byte-test-machine name)
+        :key (lambda (d) (length (instruction-descriptor-operand-widths d)))))
+
+(fiveam:test byte-varying-hole-counts-expand-one-descriptor-per-table-entry
+  (let ((short (%byte-vh-variant 'ldv 2))
+        (long (%byte-vh-variant 'ldv 3)))
+    (fiveam:is (= 2 (length (find-instruction-variants 'varying-hole-byte-test-machine 'ldv))))
+    (fiveam:is (= 0 (instruction-descriptor-sub-opcode short)))
+    (fiveam:is (= 1 (instruction-descriptor-sub-opcode long)))
+    (fiveam:is (= 4 (instruction-descriptor-size short)))
+    (fiveam:is (= 5 (instruction-descriptor-size long)))
+    (fiveam:is (equal '(nil vh-reg) (instruction-descriptor-sub-choices short)))
+    (fiveam:is (equal '(nil vh-idx vh-idx) (instruction-descriptor-sub-choices long)))
+    (fiveam:is (equal '(dst src) (instruction-descriptor-operand-names short)))
+    (fiveam:is (equal '(dst src off) (instruction-descriptor-operand-names long)))))
+
+(fiveam:test byte-varying-hole-counts-assemble-and-decode-round-trip
+  (let ((short (assembly-cells (assemble "ldv 2, 5" :machine 'varying-hole-byte-test-machine)))
+        (long (assembly-cells (assemble "ldv 2, [3, 4]" :machine 'varying-hole-byte-test-machine))))
+    (fiveam:is (equalp #(1 0 2 5) short))
+    (fiveam:is (equalp #(1 1 2 3 4) long))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader short) 0 'varying-hole-byte-test-machine)
+      (fiveam:is (string= "LDV" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(2 5) values))
+      (fiveam:is (= 4 size))
+      (fiveam:is (equal '(nil vh-reg) choices)))
+    (multiple-value-bind (descriptor values size choices)
+        (decode-instruction-at (vector-cell-reader long) 0 'varying-hole-byte-test-machine)
+      (declare (ignore descriptor))
+      (fiveam:is (equal '(2 3 4) values))
+      (fiveam:is (= 5 size))
+      (fiveam:is (equal '(nil vh-idx vh-idx) choices)))))
+
+(fiveam:test byte-varying-hole-counts-semantics-dispatch-reads-extra-hole
+  (let ((m (make-machine 'varying-hole-byte-test-machine)))
+    (load-program m (assembly-cells (assemble "ldv 2, [3, 4]" :machine 'varying-hole-byte-test-machine)))
+    (step-machine m)
+    (fiveam:is (= 9 (sref m 'a)))))
+
+(defmode vh-pair (one-of vh-reg vh-idx) "," (one-of vh-reg vh-idx))
+
+(definstruction varying-hole-byte-test-machine ldp
+  (modes vh-pair)
+  (encoding
+    (opcode 2)
+    (operand p :width 1)
+    (operand q :width 1)
+    (for-choice (p vh-idx) (operand p-off :width 1))
+    (for-choice (q vh-idx) (operand q-off :width 1))
+    (sub-opcode
+      (variant (choice vh-reg vh-reg) (sub 0))
+      (variant (choice vh-reg vh-idx) (sub 1))
+      (variant (choice vh-idx vh-reg) (sub 2))
+      (variant (choice vh-idx vh-idx) (sub 3))))
+  (semantics (set! a 0)))
+
+(fiveam:test byte-varying-hole-counts-two-independent-elements
+  (dolist (case '(("ldp 1, 2" #(2 0 1 2))
+                  ("ldp 1, [2, 3]" #(2 1 1 2 3))
+                  ("ldp [1, 2], 3" #(2 2 1 2 3))
+                  ("ldp [1, 2], [3, 4]" #(2 3 1 2 3 4))))
+    (destructuring-bind (source cells) case
+      (let ((assembled (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine))))
+        (fiveam:is (equalp cells assembled))
+        (multiple-value-bind (descriptor values size)
+            (decode-instruction-at (vector-cell-reader assembled) 0 'varying-hole-byte-test-machine)
+          (fiveam:is (string= "LDP" (instruction-descriptor-name descriptor)))
+          (fiveam:is (= (length cells) size))
+          (fiveam:is (equal (coerce (subseq cells 2) 'list) values)))))))
+
+(fiveam:test byte-varying-hole-counts-stamp-every-hole-of-the-element
+  (let ((both (find 4 (find-instruction-variants 'varying-hole-byte-test-machine 'ldp)
+                    :key (lambda (d) (length (instruction-descriptor-operand-widths d))))))
+    (fiveam:is (equal '(vh-idx vh-idx vh-idx vh-idx) (instruction-descriptor-sub-choices both)))
+    (fiveam:is (equal '(p p-off q q-off) (instruction-descriptor-operand-names both)))))
+
+;; A varying element spanning several base holes: only its first hole selects.
+(defmode vh-p2 "[" expr "," expr "]")
+(defmode vh-p3 "[" expr "," expr "," expr "]")
+(defmode vh-multi (one-of vh-p2 vh-p3))
+
+(definstruction varying-hole-byte-test-machine ldm
+  (modes vh-multi)
+  (encoding
+    (opcode 4)
+    (operand x :width 1)
+    (operand y :width 1)
+    (for-choice vh-p3 (operand z :width 1))
+    (sub-opcode
+      (holes 0)
+      (variant (choice vh-p2) (sub 0))
+      (variant (choice vh-p3) (sub 1))))
+  (semantics (set! a 0)))
+
+(fiveam:test byte-varying-hole-counts-multi-hole-element
+  (let ((two (assembly-cells (assemble "ldm [1, 2]" :machine 'varying-hole-byte-test-machine)))
+        (three (assembly-cells (assemble "ldm [1, 2, 3]" :machine 'varying-hole-byte-test-machine))))
+    (fiveam:is (equalp #(4 0 1 2) two))
+    (fiveam:is (equalp #(4 1 1 2 3) three))
+    (fiveam:is (equal '(vh-p2 vh-p2) (instruction-descriptor-sub-choices (%byte-vh-variant 'ldm 2))))
+    (fiveam:is (equal '(vh-p3 vh-p3 vh-p3) (instruction-descriptor-sub-choices (%byte-vh-variant 'ldm 3))))
+    (fiveam:is (equal '(1 2 3) (nth-value 1 (decode-instruction-at (vector-cell-reader three) 0
+                                                                     'varying-hole-byte-test-machine))))))
+
+;; An extra hole's :mode width comes from the alternative that owns it.
+(defmode vh-nar expr :width 1)
+(defmode vh-wide "[" expr "," expr "]" :width 2)
+(defmode vh-wmode (one-of vh-nar vh-wide))
+
+(definstruction varying-hole-byte-test-machine ldw
+  (modes vh-wmode)
+  (encoding
+    (opcode 5)
+    (operand src :mode
+      (variant (choice vh-nar) (sub 0))
+      (variant (choice vh-wide) (sub 1)))
+    (for-choice vh-wide (operand off :mode)))
+  (semantics (set! a 0)))
+
+(fiveam:test byte-varying-hole-counts-extra-hole-width-from-alternative
+  (fiveam:is (equal '(1) (instruction-descriptor-operand-widths (%byte-vh-variant 'ldw 1))))
+  (fiveam:is (equal '(2 2) (instruction-descriptor-operand-widths (%byte-vh-variant 'ldw 2))))
+  (fiveam:is (equalp #(5 1 1 0 2 0) (assembly-cells (assemble "ldw [1, 2]"
+                                                              :machine 'varying-hole-byte-test-machine)))))
+
+(defmacro %signals-byte-varying-error (&body form)
+  `(fiveam:signals error (eval '(progn ,@form))))
+
+(fiveam:test byte-varying-hole-counts-require-a-selector
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-mode)
+      (encoding (opcode 9) (operand :width 1) (operand :width 1)
+                (for-choice vh-idx (operand :width 1)))
+      (semantics nil))))
+
+(fiveam:test byte-varying-hole-counts-selector-must-cover-every-varying-element
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-pair)
+      (encoding (opcode 9) (operand :width 1) (operand :width 1)
+                (for-choice (p vh-idx) (operand :width 1))
+                (for-choice (q vh-idx) (operand :width 1))
+                (sub-opcode (holes 0)
+                            (variant (choice vh-reg) (sub 0))
+                            (variant (choice vh-idx) (sub 1))))
+      (semantics nil))))
+
+(fiveam:test byte-varying-hole-counts-selector-on-later-element-hole-rejected
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-multi)
+      (encoding (opcode 9) (operand :width 1) (operand :width 1)
+                (for-choice vh-p3 (operand :width 1))
+                (sub-opcode (variant (choice vh-p2 vh-p2) (sub 0))
+                            (variant (choice vh-p2 vh-p3) (sub 1))
+                            (variant (choice vh-p3 vh-p2) (sub 2))
+                            (variant (choice vh-p3 vh-p3) (sub 3))))
+      (semantics nil))))
+
+(fiveam:test byte-varying-hole-counts-missing-for-choice-rejected
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-mode)
+      (encoding (opcode 9) (operand :width 1)
+                (operand :width 1 (variant (choice vh-reg) (sub 0)) (variant (choice vh-idx) (sub 1))))
+      (semantics nil))))
+
+(fiveam:test byte-varying-hole-counts-extra-hole-selector-rejected
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-mode)
+      (encoding (opcode 9) (operand :width 1)
+                (operand :width 1 (variant (choice vh-reg) (sub 0)) (variant (choice vh-idx) (sub 1)))
+                (for-choice vh-idx (operand :width 1 (variant (choice vh-idx) (sub 2)))))
+      (semantics nil))))
+
+(defmode vh-nothing "none")
+(defmode vh-zero (one-of vh-nothing vh-idx))
+
+(fiveam:test byte-varying-hole-counts-element-without-base-hole-rejected
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-zero)
+      (encoding (opcode 9) (for-choice vh-idx (operand :width 1) (operand :width 1)))
+      (semantics nil))))
+
+(fiveam:test byte-for-choice-on-non-varying-mode-rejected
+  (%signals-byte-varying-error
+    (definstruction varying-hole-byte-test-machine bogus
+      (modes vh-nar)
+      (encoding (opcode 9) (operand :mode) (for-choice vh-idx (operand :width 1)))
+      (semantics nil))))
 
 ;;; Per-field extra-word width (#135) -- an (extra-word ...) variant's own
 ;;; :CELLS, defaulting to the layout's WIDTH-CELLS (2, for this 16-bit word

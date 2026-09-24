@@ -490,10 +490,9 @@ end address as its offset base (see [Addressing modes](modes.md#per-hole-relativ
 A `(one-of mode...)` pattern element ([Addressing modes, "Per-operand
 modes"](modes.md#per-operand-modes)) counts as one hole, the same as a plain
 `expr`, as long as every alternative it names shares the same hole count --
-the ordinary case, and the only one a byte-encoded machine accepts (see
-["Varying hole counts across
+the ordinary case (see ["Varying hole counts across
 alternatives"](modes.md#varying-hole-counts-across-alternatives) for the
-word-encoded exception) -- so `(operand ...)` subclause counting here
+exception) -- so `(operand ...)` subclause counting here
 doesn't need to know or care whether a given hole came from a bare `expr`
 or an equal-count `one-of`.
 
@@ -1261,9 +1260,31 @@ combination. Registration still produces the same concrete
 `instruction-descriptor` list in the same narrow-before-wide order, so the
 public descriptor lookup and accessor APIs are unchanged.
 
-Word-encoded machines only. Multiple `one-of` elements may vary
-independently, but their alternatives cannot themselves contain a varying
-`one-of`. Byte-encoded varying modes are rejected.
+Multiple `one-of` elements may vary independently, but their alternatives
+cannot themselves contain a varying `one-of`.
+
+On a byte-encoded machine the extra holes take ordinary `(operand name :width
+n)` or `(operand name :mode)` subclauses, and the varying element's first
+hole carries the sub-opcode selector that tells the tuples apart:
+
+```lisp
+(definstruction lda
+  (modes sv-any)                       ; (one-of sv-imm sv-idx)
+  (encoding
+    (opcode #x10)
+    (operand src :width 1
+      (variant (choice sv-imm) (sub 0))
+      (variant (choice sv-idx) (sub 1)))
+    (for-choice sv-idx (operand off :width 1)))
+  (semantics ...))
+```
+
+`lda 5` encodes as `[opcode][sub][src]` and `lda [100, 7]` as
+`[opcode][sub][src][off]`. Several varying elements select jointly through a
+`(sub-opcode ...)` table naming the first hole of each. An extra operand may
+not declare its own selector, and a `(for-choice ...)` on a mode with no
+varying `one-of` is an error. See [Addressing modes, "Varying hole counts
+across alternatives"](modes.md#varying-hole-counts-across-alternatives).
 
 #### `CHOICE`-selected fields and `:SIGNED`
 

@@ -291,10 +291,11 @@ alternative when it doesn't — see [Disassembler](disassembler.md).
 ### Varying hole counts across alternatives
 
 A `one-of`'s alternatives may declare *different* hole counts — `reg`
-(one hole) and `[reg + off]` (two holes) can sit in the same `one-of` — on a
-**word-encoded** machine, when the governing hole is `(choice mode)`-selected
+(one hole) and `[reg + off]` (two holes) can sit in the same `one-of`. On a
+**word-encoded** machine the governing hole must be `(choice mode)`-selected
 on every alternative (or #118-mixed, with the one unclaimed alternative
-sharing the other alternatives' hole count). `definstruction` expands one
+sharing the other alternatives' hole count); on a **byte-encoded** machine it
+must carry a sub-opcode selector (see below). `definstruction` expands one
 fixed-arity `instruction-descriptor` per alternative-tuple rather than
 assuming every alternative shares one shape, so nothing downstream of
 `definstruction` — the decoder, the disassembler, `%choose-variant` — ever
@@ -316,9 +317,20 @@ fieldless hole shape an extra operand typically takes. A shared
 "`choice-case`"](semantics.md#choice-case) for what a sibling descriptor
 that lacks that hole sees instead.
 
-Byte-encoded machines (#151) and a varying `one-of` nested inside another
-alternative (#152) are both rejected outright at `definstruction` time —
-neither is supported yet.
+On a byte-encoded machine the sub-opcode cell tells the alternative-tuples
+apart, so decode knows how many operand cells follow. The varying element's
+first hole must carry a `(variant (choice m) (sub s))` selector, alone or as
+part of a `(sub-opcode ...)` table, claiming every alternative. `(holes ...)`
+and `(choice ...)` count the mode's shortest shape; extra holes never take
+part in the table. Each descriptor records the selected alternative on every
+hole of the element, so `choice-case`, disassembly and per-hole `:width`,
+`:signed` and `:relative` see the alternative that was written — an extra
+`(operand name :mode)` hole takes the width its own alternative declares. See
+[`examples/subvarying.lisp`](../examples/subvarying.lisp) for this run end to
+end.
+
+A varying `one-of` nested inside another alternative, and a varying element
+whose shortest alternative has no hole, are rejected at `definstruction` time.
 
 ### Per-hole `:strict`
 
