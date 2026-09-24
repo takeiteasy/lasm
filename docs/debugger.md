@@ -143,11 +143,7 @@ instructions at it (via `disassemble-memory`, passing the attached
 assembly's `symbol-info` so labels resolve in the output), and — when an
 assembly is attached — the originating source line (via `listing-line-at`).
 
-Inspection is deliberately read-only: no `set register`/poke command. Writing
-a register would inherit an existing bug where `(setf flag)` treats any
-non-`nil` value, including `0`, as true (see [Emulator](emulator.md)) —
-staying read-only sidesteps it rather than baking it in; see this file's
-scope section below.
+Inspection is read-only: there is no `set register`/poke command.
 
 ## Command dispatcher and REPL
 
