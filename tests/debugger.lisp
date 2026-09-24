@@ -1169,7 +1169,7 @@ count: ldx #3
     (fiveam:is (search "v[0x2] = 9" (debug-command session "print v[0x2]")))
     (fiveam:is (search "index 4 is out of range" (debug-command session "print v[4]")))
     (fiveam:is (search "Error" (debug-command session "print pc[0]")))
-    (fiveam:is (search "Error" (debug-command session "print v[1] + 1")))
+    (fiveam:is (search "v[1] + 1 = 1" (debug-command session "print v[1] + 1")))
     (fiveam:is (search "Error" (debug-command session "print nonesuch[1]")))))
 
 (fiveam:test debug-command-print-aliased-bank-cell
@@ -1199,6 +1199,55 @@ count: ldx #3
     (debug-break session 4 :condition "ds.depth == 2")
     (fiveam:is (eq :breakpoint (debug-continue session)))
     (fiveam:is (= 2 (stack-depth (debug-session-machine session) 'ds)))))
+
+;;; Indexed cells inside expressions
+
+(fiveam:test debug-command-print-indexed-in-expression
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (session (make-debug-session m)))
+    (setf (regref m 'v 1) 1 (regref m 'v 2) 9)
+    (fiveam:is (search "v[2] * 2 = 18" (debug-command session "print v[2] * 2")))
+    (fiveam:is (search "v[v[1]] = 1" (debug-command session "print v[v[1]]")))
+    (fiveam:is (search "v[1 + 1] = 9" (debug-command session "print v[1 + 1]")))
+    (fiveam:is (search "index 4 is out of range" (debug-command session "print v[1] + v[4]")))
+    (fiveam:is (search "index 9 is out of range" (debug-command session "print v[v[2]]")))))
+
+(fiveam:test debug-command-print-stack-slots-in-expression
+  (let ((session (%dbg-stack-session)))
+    (debug-step session 2)
+    (fiveam:is (search "ds[0] + ds[1] = 12" (debug-command session "print ds[0] + ds[1]")))
+    (fiveam:is (search "no live slot 2" (debug-command session "print ds[0] + ds[2]")))))
+
+(fiveam:test debug-break-condition-reads-stack-slot
+  (let ((session (%dbg-stack-session)))
+    (debug-break session 4 :condition "ds[0] == 5 && ds[1] == 7")
+    (fiveam:is (eq :breakpoint (debug-continue session)))
+    (fiveam:is (= 2 (stack-depth (debug-session-machine session) 'ds))))
+  (let ((session (%dbg-stack-session)))
+    (debug-break session 4 :condition "ds[0] == 6")
+    (fiveam:is (eq :trap (debug-continue session)))))
+
+(fiveam:test debug-break-condition-indexed-cell-checked-when-set
+  (let ((session (%dbg-stack-session)))
+    (fiveam:signals error (debug-break session 4 :condition "ds[99] == 1"))
+    (fiveam:signals error (debug-break session 4 :condition "pc[0] == 1"))
+    (fiveam:signals error (debug-break session 4 :condition "ds.depth[0] == 1"))
+    (fiveam:signals error (debug-break session 4 :condition "nonesuch[1] == 1"))
+    (fiveam:signals error (debug-break session 4 :condition "ds[1 == 1"))))
+
+(fiveam:test debug-break-condition-dead-slot-error-stops
+  (let ((session (%dbg-stack-session)))
+    (debug-break session 4 :condition "ds[ds.depth] == 1")
+    (fiveam:is (eq :breakpoint (debug-continue session)))
+    (fiveam:is (search "no live slot" (princ-to-string (debug-session-condition-error session))))))
+
+(fiveam:test debug-break-condition-reads-bank-cell
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (session (make-debug-session m)))
+    (setf (regref m 'v 2) 9)
+    (fiveam:is (%breakpoint-triggered-p session (debug-break session 0 :condition "v[2] == 9")))
+    (fiveam:is (not (%breakpoint-triggered-p session (debug-break session 0 :condition "v[2] == 8"))))
+    (fiveam:is (null (debug-session-condition-error session)))))
 
 ;;; Stack depth watchpoints
 

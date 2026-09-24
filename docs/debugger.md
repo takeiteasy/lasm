@@ -48,8 +48,12 @@ one. A bank-qualified breakpoint stops only while that bank is mapped.
 
 The expression is checked when execution reaches the breakpoint. It can
 read scalar registers, flags, aliases, attached assembly symbols, `*` for
-PC, `STACK.depth` for a fixed stack's depth, and `mem(addr)` for
-side-effect-free memory inspection. An unknown name
+PC, `REG[N]` for a banked register cell, `STACK[N]` for a live stack slot
+(bottom first), `STACK.depth` for a fixed stack's depth, and `mem(addr)` for
+side-effect-free memory inspection. `N` may be any expression, for example
+`v[v[1]] == 2` or `ds[0] + ds[1] > 9`. A literal `N` is range-checked when
+the breakpoint is set; a computed `N` or a dead stack slot is checked when
+the condition runs and stops the breakpoint like any condition error. An unknown name
 or unsupported function signals when the breakpoint is set. A custom lexer
 must include `mem` in `function-operators`; see [Lexer](lexer.md#clauses).
 
@@ -146,8 +150,8 @@ the steps undone. The step the session is at never counts as a hit.
 These return text, or write to `:stream`. State includes registers, flags,
 and stacks; banked register aliases render by name. `print v[2]` reads one
 cell of a banked register, `print ds[1]` a live stack slot (bottom first), and
-`print ds.depth` a stack's depth; an out-of-range index or dead slot is an
-error message. Memory inspection uses
+`print ds.depth` a stack's depth. All three also work inside expressions
+(`print v[3] + 1`); an out-of-range index or dead slot is an error message. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC, nearby decoded
 instructions, and an attached source line. With an attached assembly,
 declared data renders as `.byte` and labels come from the main image and
@@ -232,7 +236,7 @@ and prints until `quit` or end of input.
 | `reverse-continue`, `rc`, `reverse-until ADDR\|LABEL` | Run back to the previous hit or address. |
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
-| `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. |
+| `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. Usable inside expressions and conditions. |
 | `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |

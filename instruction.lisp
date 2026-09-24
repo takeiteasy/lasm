@@ -323,6 +323,10 @@ than each caller assuming a byte opcode."
 ;; elsewhere, where mem() is an error.
 (defvar *memory-reader* nil)
 
+;; Function from (name index) to the banked register cell or stack slot, bound
+;; by the debugger for NAME[expr]. NIL elsewhere, where NAME[expr] is an error.
+(defvar *index-reader* nil)
+
 ;; Names defined so far, bound by PREPROCESS for defined(name). NIL elsewhere,
 ;; where defined(name) tests the symbol table.
 (defvar *defined-names* nil)
@@ -401,6 +405,11 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
     (expr-location
      (unless pc (error 'unresolved-location))
      pc)
+    (expr-index
+     (unless *index-reader*
+       (error 'assembly-error :message "NAME[expr] is only available in debugger conditions"))
+     (funcall *index-reader* (expr-index-name ast)
+              (eval-expr (expr-index-operand ast) :symbols symbols :pc pc)))
     (expr-unary
      (when (eq (expr-unary-op ast) :bank)
        (return-from eval-expr (%eval-bank (expr-unary-operand ast) symbols pc)))

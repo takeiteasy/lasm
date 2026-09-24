@@ -93,6 +93,7 @@ token. The assembler supplies the address when evaluating the AST; see
 | `expr-number` | Numeric literal. |
 | `expr-label` | Label reference, including a local-label flag. |
 | `expr-location` | Location counter. |
+| `expr-index` | `NAME[expr]`, a banked register cell or stack slot. Parsed only in debugger expressions.[^index] |
 | `expr-unary` | Prefix operator or function. |
 | `expr-binary` | Binary operator. |
 
@@ -113,3 +114,8 @@ does not apply directive actions or resolve labels.
 [^syntax]: With the default lexer, `%101` is a binary literal. Put space
   after the modulo operator before a right operand starting with `0` or
   `1`. For example, `13 % 5` evaluates to `3`.
+
+[^index]: `NAME[expr]` parses only while `*indexed-names*` is true, which the
+  debugger binds. Elsewhere `[` ends the expression so addressing-mode
+  patterns such as `expr "[" reg "]"` keep matching. `eval-expr` reads the
+  cell through `*index-reader*`, and signals when none is bound.

@@ -101,6 +101,8 @@
                                              ;          :bank :lowcell :highcell :defined :mem
                                              ; (:bank's operand is an EXPR-LABEL or EXPR-LOCATION,
                                              ; :defined's an EXPR-LABEL)
+(defstruct expr-index name operand line column) ; NAME[OPERAND], a banked register cell or stack
+                                             ; slot -- parsed only while *INDEXED-NAMES* is true
 (defstruct expr-binary op left right)       ; OP one of :pipe :caret :amp :shl :shr
                                              ;          :plus :minus :star :slash :percent
                                              ;          :lt :gt :le :ge :eq :ne :andand :oror
@@ -125,6 +127,10 @@
 (defparameter *unary-ops*
   '((:minus . :neg) (:plus . :pos) (:tilde . :lognot) (:bang . :not) (:lt . :lo) (:gt . :hi)))
 
+;; Bound true by the debugger so NAME[expr] parses as a term. Elsewhere "[" ends
+;; the expression, leaving addressing-mode patterns like `expr "[" reg "]"` intact.
+(defvar *indexed-names* nil)
+
 (defun %tok (tokens i end)
   (when (< i end) (aref tokens i)))
 
@@ -137,6 +143,16 @@
       ((null tok) (%parse-error tok "Unexpected end of expression"))
       ((eq (token-type tok) :number)
        (values (make-expr-number :value (token-value tok)) (1+ i)))
+      ((and *indexed-names* (eq (token-type tok) :identifier)
+            (eq (%punct-value (%tok tokens (1+ i) end)) :lbracket))
+       (multiple-value-bind (inner next-i) (%parse-binary tokens (+ i 2) end 0)
+         (let ((close (%tok tokens next-i end)))
+           (unless (eq (%punct-value close) :rbracket)
+             (%parse-error close "Expected closing bracket, found ~:[end of expression~;~:*~S~]"
+                            (and close (token-text close))))
+           (values (make-expr-index :name (token-value tok) :operand inner
+                                    :line (token-line tok) :column (token-column tok))
+                   (1+ next-i)))))
       ((eq (token-type tok) :identifier)
        (values (make-expr-label :name (token-value tok) :localp (token-localp tok)
                                 :line (token-line tok) :column (token-column tok))

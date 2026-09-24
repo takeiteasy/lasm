@@ -244,6 +244,24 @@ jmp start")))
       (fiveam:is (= 2 (expr-number-value (expr-binary-right ast))))
       (fiveam:is (eq :comma (token-value (aref toks next-i)))))))
 
+(fiveam:test indexed-term-parses-only-while-indexed-names-is-bound
+  (let ((ast (let ((*indexed-names* t)) (%expr "v[1 + 2] * 2"))))
+    (fiveam:is (eq :star (expr-binary-op ast)))
+    (fiveam:is (equal "v" (expr-index-name (expr-binary-left ast))))
+    (fiveam:is (expr-binary-p (expr-index-operand (expr-binary-left ast)))))
+  (let ((toks (tokenize "v[1]")))
+    (multiple-value-bind (ast next-i) (parse-expression toks :end (1- (length toks)))
+      (fiveam:is (expr-label-p ast))
+      (fiveam:is (= 1 next-i))))
+  (fiveam:signals parse-failure (let ((*indexed-names* t)) (%expr "v[1")))
+  (fiveam:signals parse-failure (let ((*indexed-names* t)) (%expr "v[1)"))))
+
+(fiveam:test indexed-term-needs-a-debugger-reader
+  (let ((ast (let ((*indexed-names* t)) (%expr "v[1]"))))
+    (fiveam:signals assembly-error (eval-expr ast))
+    (let ((*index-reader* (lambda (name index) (+ index (length name)))))
+      (fiveam:is (= 2 (eval-expr ast))))))
+
 (fiveam:test unbalanced-parens-signal-parse-failure
   (fiveam:signals parse-failure (parse-expression (tokenize "(1+2"))))
 

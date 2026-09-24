@@ -229,13 +229,16 @@ be read as a single value."
       (t (sref machine name)))))
 
 (defun %condition-names (ast)
-  "The distinct EXPR-LABEL names in AST. Signals on an assembler-only
-operator (bank, defined, lowcell, highcell)."
-  (let (names)
+  "As (VALUES NAMES INDEXED): the distinct EXPR-LABEL names in AST, and its
+EXPR-INDEX nodes. Signals on an assembler-only operator (bank, defined,
+lowcell, highcell)."
+  (let (names indexed)
     (labels ((walk (node)
                (etypecase node
                  ((or expr-number expr-location) nil)
                  (expr-label (pushnew (expr-label-name node) names :test #'string=))
+                 (expr-index (cl:push node indexed)
+                             (walk (expr-index-operand node)))
                  (expr-unary
                   (when (member (expr-unary-op node) '(:bank :defined :lowcell :highcell))
                     (error "~(~A~)() is not available in a condition" (expr-unary-op node)))
@@ -243,7 +246,24 @@ operator (bank, defined, lowcell, highcell)."
                  (expr-binary (walk (expr-binary-left node))
                               (walk (expr-binary-right node))))))
       (walk ast))
-    (nreverse names)))
+    (values (nreverse names) (nreverse indexed))))
+
+(defun %check-indexed (session node)
+  "Signal when NODE's storage is unknown or not indexable, or its literal index is out of range."
+  (let ((operand (expr-index-operand node))
+        (name (expr-index-name node)))
+    (unless (%resolve-storage session name (if (expr-number-p operand) (expr-number-value operand) 0) t)
+      (error "~A is not a register or stack" name))))
+
+(defun %read-indexed (session name index)
+  "The cell of banked register or live slot of the fixed stack NAME at INDEX."
+  (multiple-value-bind (storage slot) (%resolve-storage session name index t)
+    (let ((machine (debug-session-machine session)))
+      (unless storage (error "~A is not a register or stack" name))
+      (if (%stack-name-p machine storage)
+          (or (%stack-slot-value machine storage slot)
+              (error "stack ~A has no live slot ~D" name slot))
+          (%read-storage machine storage slot)))))
 
 (defun %compile-condition (session text scope)
   "Parse TEXT and bind every name in it, as (VALUES AST VALUES READERS): a
@@ -254,19 +274,21 @@ on a syntax error or an unknown name."
          (end (or (position :eof tokens :key #'token-type) (length tokens)))
          (values (make-hash-table :test 'equal))
          readers)
-    (multiple-value-bind (ast next) (parse-expression tokens :end end)
+    (multiple-value-bind (ast next) (let ((*indexed-names* t)) (parse-expression tokens :end end))
       (when (< next end)
         (error "unexpected ~S in condition" (token-text (aref tokens next))))
-      (dolist (name (%condition-names ast))
-        (multiple-value-bind (storage index) (%resolve-storage session name)
-          (let* ((assembly (and (null storage) (debug-session-assembly session)))
-                 (info (and assembly (%session-symbol session name scope))))
-            (cond
-              (storage
-               (let ((machine (debug-session-machine session)))
-                 (cl:push (cons name (lambda () (%read-storage machine storage index))) readers)))
-              (info (setf (gethash name values) (symbol-info-value info)))
-              (t (error "unknown name ~S in condition" name))))))
+      (multiple-value-bind (names indexed) (%condition-names ast)
+        (dolist (node indexed) (%check-indexed session node))
+        (dolist (name names)
+          (multiple-value-bind (storage index) (%resolve-storage session name)
+            (let* ((assembly (and (null storage) (debug-session-assembly session)))
+                   (info (and assembly (%session-symbol session name scope))))
+              (cond
+                (storage
+                 (let ((machine (debug-session-machine session)))
+                   (cl:push (cons name (lambda () (%read-storage machine storage index))) readers)))
+                (info (setf (gethash name values) (symbol-info-value info)))
+                (t (error "unknown name ~S in condition" name)))))))
       (values ast values readers))))
 
 (defun %memory-reader (session)
@@ -279,7 +301,8 @@ on a syntax error or an unknown name."
   "TEST evaluated over freshly read READERS and VALUES, with mem() bound."
   (loop for (name . reader) in readers
         do (setf (gethash name values) (funcall reader)))
-  (let ((*memory-reader* (%memory-reader session)))
+  (let ((*memory-reader* (%memory-reader session))
+        (*index-reader* (lambda (name index) (%read-indexed session name index))))
     (eval-expr test :symbols values :pc (%pc session))))
 
 (defun %breakpoint-triggered-p (session bp)
@@ -295,8 +318,8 @@ condition counts as true and is left in SESSION's CONDITION-ERROR."
   "Set a breakpoint at WHERE (an address, or a label name resolved via
 %RESOLVE-BREAKPOINT-ADDRESS) on SESSION. A label in a banked region, or an
 address given with BANK, only stops while that bank is mapped. CONDITION, a
-string, is an expression over registers, flags, register aliases, labels and
-.equs of the attached assembly (SCOPE qualifies local labels), with * as the
+string, is an expression over registers, flags, register aliases, REG[N] cells,
+STACK[N] slots, STACK.depth, labels and .equs of the attached assembly (SCOPE qualifies local labels), with * as the
 PC and mem(ADDR) as the cell at ADDR; the breakpoint only stops while it is nonzero. A bad condition signals
 here. Returns the new BREAKPOINT. Setting a second breakpoint at the same
 address and bank replaces it (same id space, but the old entry is gone)
@@ -1234,20 +1257,6 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   (multiple-value-bind (test values readers) (%compile-condition session text scope)
     (%eval-condition session test values readers)))
 
-(defun %print-indexed (session text)
-  "The response for TEXT of exactly the form NAME[N], a cell of a banked
-register or a live bottom-relative stack slot, or NIL when TEXT is not that form."
-  (multiple-value-bind (name index) (%split-index text)
-    (when (and index (= (position #\] text) (1- (length text))))
-      (multiple-value-bind (storage slot) (%resolve-storage session name index t)
-        (let ((machine (debug-session-machine session)))
-          (unless storage (error "~A is not a register or stack" name))
-          (format nil "~A = ~D~%" text
-                  (if (%stack-name-p machine storage)
-                      (or (%stack-slot-value machine storage slot)
-                          (error "stack ~A has no live slot ~D" name slot))
-                      (%read-storage machine storage slot))))))))
-
 (defun %command-set (session rest)
   (multiple-value-bind (target scope text) (%split-assignment rest)
     (if (null target)
@@ -1307,9 +1316,10 @@ register or a live bottom-relative stack slot, or NIL when TEXT is not that form
   until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
                      LABEL takes an `in GLOBAL` scope like break)
   print EXPR         print a register, alias or flag, or evaluate an expression
-  print REG[N]       print a cell of a banked register
+  print REG[N]       print a cell of a banked register (N may be an expression)
   print STACK[N]     print a live slot of a fixed stack, bottom first
-  print STACK.depth  print a fixed stack's depth (also usable in conditions)
+  print STACK.depth  print a fixed stack's depth
+                     REG[N], STACK[N] and STACK.depth also work in expressions and conditions
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
@@ -1433,7 +1443,6 @@ this call."
                   ((string-equal cmd "print")
                    (cond
                      ((zerop (length rest)) "print: missing name")
-                     ((%print-indexed session rest))
                      (t
                        (let* ((machine (debug-session-machine session))
                               (descriptor (machine-descriptor machine))
