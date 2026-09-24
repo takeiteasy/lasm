@@ -1604,13 +1604,48 @@ hlt" :machine 'stack-test-machine))
       (fiveam:is (null (runtime-location-pc c)))
       (fiveam:is (string= "Trap: :X NIL" (princ-to-string c))))))
 
-(fiveam:test load-program-retains-the-program-only-at-its-own-origin
+(defmachine two-memory-test-machine
+  (register pc :width 16)
+  (memory rom :width 8 :addr-width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(fiveam:test load-program-retains-the-program-with-its-memory-and-offset
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "hlt" :machine 'emu-test-machine)))
     (load-program m a)
     (fiveam:is (eq a (machine-program m)))
+    (fiveam:is (= 0 (machine-program-offset m)))
     (load-program m a :origin 8)
+    (fiveam:is (eq a (machine-program m)))
+    (fiveam:is (= 8 (machine-program-offset m)))
+    (load-program m (assembly-cells a))
     (fiveam:is (null (machine-program m)))
     (load-program m a)
     (reset m)
-    (fiveam:is (null (machine-program m)))))
+    (fiveam:is (null (machine-program m)))
+    (fiveam:is (= 0 (machine-program-offset m)))))
+
+(fiveam:test relocated-program-names-lines-at-the-shifted-address
+  (let ((m (make-machine 'stack-test-machine))
+        (a (assemble "psh #1
+add
+hlt" :machine 'stack-test-machine)))
+    (load-program m a :origin #x40)
+    (fiveam:is (= 1 (listing-line-line (machine-listing-line m #x40))))
+    (fiveam:is (= 2 (listing-line-line (machine-listing-line m #x42))))
+    (fiveam:is (null (machine-listing-line m 0)))
+    (multiple-value-bind (reason steps condition) (run m)
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 2 steps))
+      (fiveam:is (= #x42 (runtime-location-pc condition)))
+      (fiveam:is (search "at $0042 (line 2: add)" (princ-to-string condition))))))
+
+(fiveam:test explicit-memory-load-is-matched-only-for-that-memory
+  (let ((m (make-machine 'two-memory-test-machine))
+        (a (assemble ".byte 1
+.byte 2" :machine 'two-memory-test-machine :memory 'rom)))
+    (load-program m a :memory 'rom)
+    (fiveam:is (eq 'rom (machine-program-memory m)))
+    (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
+    (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1 :memory 'rom))))
+    (fiveam:is (null (machine-listing-line m 1 :memory 'ram)))))

@@ -28,9 +28,9 @@ directly, including into ROM, and sets PC to its origin. For an `assembly`,
 the origin comes from `assembly-origin` and its cell width must match the
 target memory. A plain sequence starts at `0` unless `:origin` is supplied.
 
-An assembly loaded at its own origin into the default memory is kept as
-`machine-program`. Any other load without `:bank` clears it, and `reset`
-clears it too; snapshots do not save it.
+An assembly loaded without `:bank` is kept as `machine-program`, with the
+memory it went into and its load offset. Loading raw cells clears it, and
+`reset` clears it too; snapshots do not save it.
 
 An assembly's [bank images](banked-output.md) load without changing the
 current mapping. `:bank n` loads a selected bank without changing the
@@ -124,7 +124,9 @@ Stack underflow on DS (machine STACK-TEST-MACHINE) at $0000 (line 1: add)
 ```
 
 `pc` is the instruction's start, not the already-advanced program counter.
-Without a retained program the report ends `at $0000`.
+Without a retained program the report ends `at $0000`. A program loaded at
+another `:origin` names lines by that load offset, so relocated code reports
+the line it was assembled from.[^relocation]
 
 A host can signal an interrupt or call `wake-machine`, then run again.
 Undefined-opcode policy can skip or trap instead of reporting decode failure;
@@ -166,6 +168,9 @@ skips that second tick.
   [ticket 164](https://todo.sr.ht/~takeiteasy/lasm/164).
 - Privilege levels and a unified trap/interrupt model are outside this
   execution model.
+- `machine-program` holds one assembly, so a machine that loads several
+  images names source lines only for the last; see
+  [ticket 261](https://todo.sr.ht/~takeiteasy/lasm/261).
 
 [^decode]: Decode returns the selected `one-of` choices to semantics so
   `choice-case` can dispatch on the form actually encoded. Trailing cells
@@ -174,3 +179,8 @@ skips that second tick.
 [^timing]: `:throttle` uses `trivial-high-precision-timer` and sleeps when
   simulated time leads real time. `machine-cycles` accumulates instruction
   and extra costs; reset clears it.
+[^relocation]: The offset is the load origin minus `assembly-origin`. The
+  lookup matches only the memory the program was loaded into, and the report
+  is only right when the code is position-independent or was assembled for
+  its load address. A second `load-program` replaces the retained program; a
+  bank-only load leaves it alone.

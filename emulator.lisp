@@ -90,16 +90,15 @@ BANK loads CELLS into that bank of the banked region containing ORIGIN,
 whether or not it is mapped in, leaving the mapping and PC untouched.
 Signals if ORIGIN is not in a banked region or CELLS run past its end.
 
-An ASSEMBLY loaded at its own origin into the default memory (no MEMORY, no
-BANK) is retained as MACHINE-PROGRAM, so runtime conditions can name the
-source line; any other load without BANK clears it, and RESET does too.
+An ASSEMBLY loaded without BANK is retained as MACHINE-PROGRAM, with its
+memory and load offset, so runtime conditions can name the source line; a
+load of raw cells clears it, and RESET does too.
 
 An ASSEMBLY that placed output in banks with .BANK also has each of those
 banks filled, without changing the mapping, when BANK is not given. Signals
 if main-image output lies in a banked window whose mapped bank the assembly
 also has an image for, since that image would replace it."
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
-         (default-memory-p (null memory))
          (memory (%resolve-memory machine-name memory))
          (assembly-p (assembly-p cells))
          (origin (or origin (if assembly-p (assembly-origin cells) 0)))
@@ -113,11 +112,9 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
     (when (and assembly-p (not bank))
       (%check-main-image-banks machine memory cells))
     (unless bank
-      (setf (machine-program machine)
-            (and assembly-p
-                 (eql origin (assembly-origin cells))
-                 default-memory-p
-                 cells)))
+      (setf (machine-program machine) (and assembly-p cells)
+            (machine-program-memory machine) memory
+            (machine-program-offset machine) (if assembly-p (- origin (assembly-origin cells)) 0)))
     (if bank
         (%load-into-bank machine memory origin data bank)
         (let ((address origin))

@@ -56,21 +56,27 @@ structure if that ever matters."
   "The LISTING-LINE for ADDRESS in MACHINE's MEMORY, or NIL: the entry in the
 bank mapped at ADDRESS when it lies in a banked region, else (or failing
 that) the main image's. ASSEMBLY defaults to the program LOAD-PROGRAM
-retained."
+retained. For that program only MEMORY must be the memory it was loaded
+into (the default is that one), and ADDRESS is translated by its load
+offset."
   (when assembly
     (let* ((descriptor (machine-descriptor machine))
-           (element (descriptor-element
-                     descriptor
-                     (%resolve-memory (machine-descriptor-name descriptor) memory)))
+           (retainedp (eq assembly (machine-program machine)))
+           (memory (or memory
+                       (and retainedp (machine-program-memory machine))
+                       (%resolve-memory (machine-descriptor-name descriptor) nil)))
+           (element (descriptor-element descriptor memory))
            (region (find-if (lambda (r) (and (memory-region-banks r)
                                              (<= (memory-region-start r) address
                                                  (memory-region-end r))))
                             (storage-element-regions element))))
-      (or (and region
-               (let ((name (memory-region-name region)))
-                 (listing-line-at assembly address :region name
-                                                   :bank (current-bank machine name))))
-          (listing-line-at assembly address)))))
+      (when (or (not retainedp) (eq memory (machine-program-memory machine)))
+        (let ((listed (if retainedp (- address (machine-program-offset machine)) address)))
+          (or (and region
+                   (let ((name (memory-region-name region)))
+                     (listing-line-at assembly listed :region name
+                                                      :bank (current-bank machine name))))
+              (listing-line-at assembly listed)))))))
 
 (defun listing-line-source-text (line assembly)
   "The source text of LISTING-LINE LINE: from its own included source unit

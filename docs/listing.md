@@ -42,7 +42,8 @@ entries for one source line. A listing entry keeps the macro body line as
 
 `machine-listing-line` returns the entry for an address in a live machine.
 It prefers the bank mapped at that address, then the main image, and
-defaults `assembly` to `machine-program`. `listing-line-source-text` reads
+defaults `assembly` to `machine-program`, whose load offset it applies and
+whose memory `:memory` must match. `listing-line-source-text` reads
 the entry's line from its own included file when it has one. Runtime
 conditions use both; see [Error locations](emulator.md#error-locations).
 

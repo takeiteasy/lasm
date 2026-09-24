@@ -1319,3 +1319,11 @@ count: ldx #3
         (a (%dbg-assembly)))
     (load-program m a)
     (fiveam:is (eq a (debug-session-assembly (make-debug-session m))))))
+
+(fiveam:test where-follows-a-relocated-program
+  (let ((m (make-machine 'emu-test-machine))
+        (a (%dbg-assembly)))
+    (load-program m a :origin #x300)
+    (let ((session (make-debug-session m)))
+      (setf (sref m 'pc) #x302)
+      (fiveam:is (search "2:.loop:  dex" (debug-where-text session))))))

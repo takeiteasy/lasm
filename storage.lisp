@@ -583,10 +583,12 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; Banked region name -> the bank LOAD-PROGRAM's unbanked image was written
   ;; into (whichever was mapped then). Cleared by RESET; not snapshotted.
   (loaded-banks (make-hash-table :test 'eq))
-  ;; The ASSEMBLY LOAD-PROGRAM last loaded at its own origin into the default
-  ;; memory, for naming source lines in runtime errors. Cleared by RESET; not
-  ;; snapshotted.
-  (program nil))
+  ;; The ASSEMBLY LOAD-PROGRAM last loaded, for naming source lines in
+  ;; runtime errors, with the memory element it went into and its load
+  ;; origin minus the assembly's own. Cleared by RESET; not snapshotted.
+  (program nil)
+  (program-memory nil)
+  (program-offset 0 :type integer))
 
 ;;; Access notification
 
@@ -768,7 +770,9 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
         (:memory (fill slot 0)))))
   (clrhash (machine-loaded-banks machine))
-  (setf (machine-program machine) nil)
+  (setf (machine-program machine) nil
+        (machine-program-memory machine) nil
+        (machine-program-offset machine) 0)
   (loop for entry being the hash-values of (machine-banks machine)
         do (setf (car entry) 0)
            (map nil (lambda (bank) (fill bank 0)) (cdr entry)))
