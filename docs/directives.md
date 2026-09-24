@@ -289,7 +289,7 @@ evaluating anything; a macro instead captures a *range* of statements and
 substitutes parameter tokens into them at each invocation site — there is no
 action form in `defdirective`'s vocabulary that could express "collect
 everything up to the matching `.endm`". It lives in its own statement-
-expansion pass instead, `expand-macros` (`macro.lisp`), which
+expansion pass instead, `preprocess` (`preprocess.lisp`), which
 `assemble-statements` ([Assembler](assembler.md)) runs before layout ever
 sees the statement list — see [Macros](macros.md). `.equ`, by contrast, fits
 `defdirective` just fine even though it binds a *name* rather than sizing

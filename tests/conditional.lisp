@@ -236,13 +236,75 @@ later: nop" :machine 'instr-test-machine)))
 
 ;;; Interaction with macros and includes
 
-(fiveam:test macro-definition-inside-if-signals
-  (fiveam:signals macro-error
-    (assemble ".if 1
+(fiveam:test macro-defined-in-a-taken-branch-is-usable
+  (fiveam:is (equalp #(#xEA)
+                     (assembly-cells (assemble ".if 1
 .macro m
     nop
 .endm
-.endif" :machine 'instr-test-machine)))
+.endif
+    m" :machine 'instr-test-machine)))))
+
+(fiveam:test macro-defined-in-a-skipped-branch-is-not-defined
+  (fiveam:signals unknown-instruction
+    (assemble ".if 0
+.macro m
+    nop
+.endm
+.endif
+    m" :machine 'instr-test-machine)))
+
+(fiveam:test skipped-macro-body-is-not-interpreted
+  (fiveam:is (equalp #(#xEA)
+                     (assembly-cells (assemble ".if 0
+.macro m a, a
+.if
+.endm
+.endif
+    nop" :machine 'instr-test-machine)))))
+
+(fiveam:test same-macro-name-can-be-defined-in-each-branch
+  (flet ((run (flag)
+           (assembly-cells (assemble (format nil ".equ flag, ~D
+.if flag
+.macro m
+    nop
+.endm
+.else
+.macro m
+    ldx #1
+.endm
+.endif
+    m" flag) :machine 'instr-test-machine))))
+    (fiveam:is (equalp #(#xEA) (run 1)))
+    (fiveam:is (equalp #(#xA2 1) (run 0)))))
+
+(fiveam:test invocation-in-a-skipped-branch-is-not-checked
+  (fiveam:is (equalp #(#xEA)
+                     (assembly-cells (assemble ".macro m a
+    nop
+.endm
+.if 0
+    m 1, 2, 3
+.endif
+    nop" :machine 'instr-test-machine)))))
+
+(fiveam:test recursive-macro-terminates-on-an-if-base-case
+  (fiveam:is (equalp #(#xEA #xEA #xEA)
+                     (assembly-cells (assemble ".macro rep n
+.if n > 0
+    nop
+    rep n-1
+.endif
+.endm
+    rep 3" :machine 'instr-test-machine)))))
+
+(fiveam:test unbounded-macro-recursion-signals-macro-error
+  (fiveam:signals macro-error
+    (assemble ".macro r
+    r
+.endm
+    r" :machine 'instr-test-machine)))
 
 (fiveam:test macro-body-must-balance-its-conditionals
   (fiveam:signals macro-error
@@ -269,12 +331,32 @@ later: nop" :machine 'instr-test-machine)))
 .endif
     nop")))))
 
-(fiveam:test include-defining-a-macro-inside-if-signals
+(fiveam:test include-defining-a-macro-inside-if-defines-it
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
-    (fiveam:signals macro-error
-      (assemble ".if 1
+    (fiveam:is (equalp #(#xEA)
+                       (assembly-cells (assemble ".if 1
 .include \"macro-def.asm\"
-.endif" :machine 'instr-test-machine))))
+.endif
+    nop" :machine 'instr-test-machine))))))
+
+(fiveam:test include-in-a-skipped-branch-is-not-read
+  (fiveam:is (equalp #(#xEA)
+                     (assembly-cells (assemble ".if 0
+.include \"does-not-exist.asm\"
+.endif
+    nop" :machine 'instr-test-machine)))))
+
+(fiveam:test include-in-a-taken-branch-is-read
+  (fiveam:signals include-error
+    (assemble ".if 1
+.include \"does-not-exist.asm\"
+.endif" :machine 'instr-test-machine)))
+
+(fiveam:test include-in-a-macro-body-resolves-against-the-macro-file
+  (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
+    (fiveam:is (equalp #(#xEA)
+                       (assembly-cells (assemble ".include \"sub/lib.asm\"
+    nopc" :machine 'instr-test-machine))))))
 
 (fiveam:test included-file-cannot-leave-an-if-open
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))

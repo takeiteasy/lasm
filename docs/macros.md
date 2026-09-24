@@ -7,8 +7,8 @@ action with a statically-known size, while a macro spans a range of
 statements and its expansion isn't known until it's substituted (see
 [Directives, "Scope: `.macro` is not a
 directive"](directives.md#scope-macro-is-not-a-directive)). It's implemented
-as its own statement-expansion pass, `(expand-macros statements machine)`
-(`macro.lisp`), which
+as part of the statement-expansion pass `(preprocess statements :machine machine)`
+(`preprocess.lisp`), which
 `assemble-statements` ([Assembler](assembler.md)) runs before layout ever
 sees the statement list — so both of `assemble-statements`'s entry points
 (`assemble`, and a caller already holding a parsed `statement` list, see
@@ -75,13 +75,25 @@ operand syntax: if the body writes `adc #k`, the caller passes the bare value
 the body, so an argument that included its own `#` would produce `##5`, not
 match any addressing mode, and signal `assembly-error`.
 
-A macro invoking another macro (nesting) needs no special handling: each
-round of expansion rewrites every remaining invocation it finds, so a body
-statement that turns out to invoke another macro is itself expanded on the
-next round. Expansion is capped at `*max-macro-expansion-rounds*` (32 by
-default) rounds — a macro that (directly or through another macro) invokes
-itself never reaches a fixpoint and signals `macro-error` instead of growing
-the statement list without bound.
+A macro must be defined above its first invocation. A macro may be defined
+inside a `.if` branch; it exists only when that branch is kept, so the same
+name can be defined in each branch of one `.if`.
+
+A macro invoking another macro (nesting) needs no special handling: the
+expansion of an invocation is itself preprocessed. Nesting is capped at
+`*max-macro-depth*` (256 by default); a macro that invokes itself
+unconditionally signals `macro-error`. A recursive macro terminates when its
+recursion is guarded by a `.if`:
+
+```asm
+.macro rep n
+.if n > 0
+    nop
+    rep n-1
+.endif
+.endm
+    rep 3
+```
 
 Expanded statements use the outermost source invocation line for listings,
 symbols and diagnostics. Their macro body definition line is retained
@@ -134,7 +146,7 @@ and forces its mode after expansion exactly as it would in ordinary code:
 ## Conditionals
 
 A macro body may contain balanced `.if`/`.endif` blocks, which see the
-substituted arguments; `.macro` cannot be defined inside `.if`. See
+substituted arguments. A `.macro` may be defined inside `.if`. See
 [Conditional assembly](conditionals.md).
 
 ## Conditions
@@ -153,5 +165,5 @@ substituted arguments; `.macro` cannot be defined inside `.if`. See
 - A malformed default, required parameter after an optional one, or an
   invocation with too few or too many arguments.
 - A parameter name also used for a body-defined symbol.
-- Expansion that doesn't converge within `*max-macro-expansion-rounds*`
-  rounds (a directly or indirectly recursive macro).
+- Invocations nested deeper than `*max-macro-depth*` (a directly or
+  indirectly recursive macro).

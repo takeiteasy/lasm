@@ -26,12 +26,12 @@
     loadx 20" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xA2 10 #xA2 20) (assembly-cells a)))))
 
-(fiveam:test macro-can-be-invoked-before-its-own-definition
-  (let ((a (assemble "    loadx 10
+(fiveam:test macro-must-be-defined-before-its-invocation
+  (fiveam:signals unknown-instruction
+    (assemble "    loadx 10
 .macro loadx n
     ldx #n
 .endm" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#xA2 10) (assembly-cells a)))))
 
 ;;; Substitution into a multi-hole addressing mode (MOVI, two-hole-test-mode)
 
@@ -92,11 +92,11 @@ start: loadx 10
          (a (assemble-statements statements :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xA2 10) (assembly-cells a)))))
 
-;;; expand-macros is directly callable and idempotent on macro-free input
+;;; preprocess is directly callable and idempotent on macro-free input
 
 (fiveam:test expand-macros-on-macro-free-input-returns-equivalent-statements
   (let* ((statements (parse "nop"))
-         (expanded (expand-macros statements 'instr-test-machine)))
+         (expanded (preprocess statements :machine 'instr-test-machine)))
     (fiveam:is (= 1 (length expanded)))
     (fiveam:is (string= "nop" (statement-mnemonic (first expanded))))))
 
@@ -294,9 +294,9 @@ tag: nop
 .endm" :machine 'instr-test-machine)))
 
 (fiveam:test macro-name-check-uses-target-machine
-  (let ((expanded (expand-macros (parse ".macro nop
+  (let ((expanded (preprocess (parse ".macro nop
 .endm
-    nop") 'test-machine)))
+    nop") :machine 'test-machine)))
     (fiveam:is (null expanded))))
 
 ;;; Forced addressing-mode suffix and macros

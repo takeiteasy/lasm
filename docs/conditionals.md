@@ -3,8 +3,7 @@
 `.if`, `.elseif`, `.else` and `.endif` include or skip a block of statements
 based on a constant expression. Like [`.macro`](macros.md) and
 [`.include`](includes.md), they span a range of statements, so they are
-handled by `expand-conditionals` (`conditional.lisp`) rather than
-`defdirective`.
+handled by `preprocess` (`preprocess.lisp`) rather than `defdirective`.
 
 ```asm
 .equ debug, 1
@@ -47,13 +46,12 @@ kept condition, `&&` and `||` short-circuit, so `0 && undefined` is fine.
 
 ## Macros and includes
 
-Macros expand before conditionals, so a `.if` inside a macro body sees the
-substituted arguments, and a macro invoked in a skipped branch emits nothing.
+Includes, macros and conditionals resolve in one pass, in source order. A
+skipped branch is never interpreted: an `.include` in it is not read (the file
+need not exist), a `.macro` in it is not defined, and an invocation in it is
+not checked. A kept branch may contain either.
 
 - A `.if` block and its `.endif` must be in the same macro body or the same
   source file.
-- `.macro` cannot appear inside `.if` (`macro-error`).
-- `.include` is expanded before conditionals: an included file is always read
-  and must exist, and its statements are dropped when the branch is skipped.
-  Including a file that defines macros from inside `.if` is therefore a
-  `macro-error`.
+- A `.if` inside a macro body sees the substituted arguments.
+- A macro must be defined above its first invocation.

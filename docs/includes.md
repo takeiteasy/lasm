@@ -4,8 +4,8 @@
 so shared `.equ` constants and `.macro` libraries can live in their own
 files. It is not a `defdirective` — like [`.macro`](macros.md), it spans a
 range of statements, which no directive action can express — and is handled by
-`expand-includes` (`include.lisp`), which `assemble` runs after `parse` and
-before macro expansion.
+`preprocess` (`preprocess.lisp`), which `assemble-statements` runs before
+layout.
 
 ```asm
 .include "defs.asm"
@@ -13,9 +13,10 @@ before macro expansion.
 start:  countdown iterations
 ```
 
-Because includes are spliced before macros are collected, an included file can
-define `.macro` blocks and `.equ` constants that the including file uses, and
-an `.include` inside a `.macro` body is spliced into that body.
+An included file can define `.macro` blocks and `.equ` constants that the
+including file uses below the `.include`. An `.include` inside a `.macro` body
+is expanded at each invocation and resolves against the file that defines the
+macro.
 
 See [`examples/include/`](../examples/include/include.lisp) for a runnable
 version.
@@ -36,8 +37,8 @@ file's own directory.
 
 ## Inside `.if`
 
-An `.include` inside `.if` is always read, even when the branch is skipped;
-see [Conditional assembly](conditionals.md#macros-and-includes).
+An `.include` inside a skipped `.if` branch is not read; see
+[Conditional assembly](conditionals.md#macros-and-includes).
 
 ## Nesting and cycles
 
@@ -48,20 +49,18 @@ processed twice.
 ## Conditions
 
 `include-error` (a `lasm-syntax-error`) is signalled for a malformed operand, a
-mode suffix, a target that does not exist (carrying the `.include` line), a
-circular include, and an `.include` left unexpanded in the statements passed to
-`assemble-statements` — call `(expand-includes statements :lexer lexer)` first.
-A missing top-level file given to `assemble-file` is the ordinary CL
-`file-error`.
+mode suffix, a target that does not exist (carrying the `.include` line), and a
+circular include. A missing top-level file given to `assemble-file` is the
+ordinary CL `file-error`.
 
 ## Entry point
 
 ```lisp
-(expand-includes STATEMENTS &key (lexer 'default))
+(preprocess STATEMENTS &key machine (lexer 'default))
 ```
 
-Returns `statements` with every `.include` replaced by the named file's
-statements, parsed with `lexer`.
+Returns `statements` with every reached `.include` replaced by the named
+file's statements, parsed with `lexer`; see [Assembler](assembler.md).
 
 Diagnostics use the file and source line that contain the error. A macro
 invocation reports its call location and names its body location separately.

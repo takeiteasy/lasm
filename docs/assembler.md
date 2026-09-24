@@ -26,13 +26,12 @@ the result.
 
 ```lisp
 (assemble SOURCE &key machine (lexer 'default) (origin 0) memory file)
-(assemble-statements STATEMENTS &key machine (origin 0) memory source)
+(assemble-statements STATEMENTS &key machine (lexer 'default) (origin 0) memory source)
 ```
 
 `assemble` is `parse` (see [Statement grammar & expression
-parser](parser.md)) and `expand-includes` ([Includes](includes.md)) followed by `assemble-statements` — a caller already
-holding a `statement` list (e.g. from its own preprocessing) can call the
-latter directly. `file` names in-memory source in diagnostics and listings;
+parser](parser.md)) followed by `assemble-statements` — a caller already
+holding a `statement` list can call the latter directly. `file` names in-memory source in diagnostics and listings;
 `assemble-file` supplies its path automatically. Both return an `assembly`:
 
 ```lisp
@@ -107,30 +106,14 @@ are `assemble`'s. `.asm` or `.s` is the conventional extension for target
 source (`.lasm` is reserved for machine definitions); it is not enforced. A
 missing or unreadable file signals the ordinary CL `file-error`.
 
-## Include expansion
+## Preprocessing
 
-`assemble` runs `expand-includes` ([Includes](includes.md)) right after
-parsing, before macro expansion, so an included file's `.macro` and `.equ`
-statements are visible to the includer. `assemble-statements` does not: it has
-no lexer to parse an included file, so a statement list passed to it directly
-must already have `.include` expanded, otherwise layout signals
-`include-error`.
-
-## Macro expansion
-
-`assemble-statements` runs `expand-macros` ([Macros](macros.md)) before
-layout ever sees the statement list — every `.macro`...`.endm` block is
-collected and every invocation replaced by its substituted body first, so
-neither layout nor encode below has any notion of a macro at all. Both entry
-points (`assemble` and `assemble-statements`) get this, since `assemble`
-reaches `assemble-statements` after parsing.
-
-## Conditional expansion
-
-After macros, `assemble-statements` runs `expand-conditionals`
-([Conditional assembly](conditionals.md)), which keeps the statements of each
-selected `.if` branch. Layout sees only the kept statements. The order is
-includes, then macros, then conditionals, then layout.
+`assemble-statements` runs `preprocess` (`preprocess.lisp`) before layout. One
+pass walks the statements in order and resolves
+[`.include`](includes.md), [`.macro`](macros.md) and
+[`.if`](conditionals.md), so each is only interpreted in a region that is
+emitting. Layout sees the resulting plain statement list and has no notion of
+includes, macros or conditionals. `lexer` parses any included file.
 
 ## Layout and encode
 

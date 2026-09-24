@@ -1258,9 +1258,6 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                               (incf address (* width (length asts)))
                               (unless region (setf emitted-p t main-end address)))))))
                       (t
-                       (when (%include-statement-p statement)
-                         (%include-error line ".include is not expanded; run ~
-EXPAND-INCLUDES on the statements first (ASSEMBLE and ASSEMBLE-FILE do)"))
                        (let ((variants (find-instruction-variants machine mnemonic)))
                          (multiple-value-bind (descriptor asts choices)
                              (%choose-variant statement variants address
@@ -1606,13 +1603,12 @@ bank the following lines are tagged with."
 
 ;;; Entry points
 
-(defun assemble-statements (statements &key machine (origin 0) memory source source-unit)
+(defun assemble-statements (statements &key machine (lexer 'default) (origin 0) memory source source-unit)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
-ASSEMBLY. Runs EXPAND-MACROS (macro.lisp) first, so both this entry
-point and ASSEMBLE (which reaches here after parsing) see .macro/.endm
-blocks collected and every invocation replaced by its substituted body
-before layout ever looks at the statement list, then EXPAND-CONDITIONALS
-(conditional.lisp) resolves .if blocks. Signals ASSEMBLY-ERROR on a
+ASSEMBLY. Runs PREPROCESS (preprocess.lisp) first, so both this entry
+point and ASSEMBLE (which reaches here after parsing) see .include, .macro/.endm
+and .if blocks resolved before layout ever looks at the statement list;
+LEXER parses any included file. Signals ASSEMBLY-ERROR on a
 duplicate symbol, an operand matching no addressing mode, a malformed or
 backward-moving directive, a forward assignment reference, or a cyclic
 .ORG/.RES address dependency. Signals MACRO-ERROR on a malformed .macro/.endm
@@ -1674,7 +1670,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                                    (lasm-syntax-error-definition-source condition)
                                    (source-unit-text *current-definition-unit*)))))))
         (multiple-value-bind (symbols sized final-address asm-origin info label-banks)
-            (%layout (expand-conditionals (expand-macros statements machine))
+            (%layout (preprocess statements :machine machine :lexer lexer)
                      machine origin cell-width)
           (multiple-value-bind (cells bank-images)
               (let ((*label-banks* label-banks))
@@ -1687,15 +1683,15 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
-EXPAND-INCLUDES (include.lisp) and ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
+ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
 front end, for what MEMORY selects, and for how SOURCE is retained as
 ASSEMBLY-SOURCE and on positioned conditions. FILE names SOURCE in
 diagnostics and listings when supplied."
   (multiple-value-bind (statements unit) (parse source :lexer lexer :file file)
     (with-source-unit unit
-      (assemble-statements (expand-includes statements :lexer lexer)
-                           :machine machine :origin origin :memory memory
+      (assemble-statements statements
+                           :machine machine :lexer lexer :origin origin :memory memory
                            :source source :source-unit unit))))
 
 (defun assemble-file (path &key machine (lexer 'default) (origin 0) memory)

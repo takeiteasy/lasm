@@ -274,9 +274,7 @@
    #:directive-descriptor-width
 
    ;; Macros
-   #:expand-macros
-   #:expand-includes
-   #:expand-conditionals
+   #:preprocess
    #:conditional-error
    #:include-error
    #:macro-error
@@ -285,7 +283,7 @@
    #:macro-descriptor-name
    #:macro-descriptor-params
    #:macro-descriptor-body
-   #:*max-macro-expansion-rounds*
+   #:*max-macro-depth*
 
    ;; Addressing modes
    #:defmode

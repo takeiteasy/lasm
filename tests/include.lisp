@@ -60,14 +60,11 @@
 
 (fiveam:test include-mode-suffix-signals
   (fiveam:signals include-error
-    (expand-includes (parse ".include.w \"x.asm\""))))
+    (preprocess (parse ".include.w \"x.asm\""))))
 
 (fiveam:test include-with-no-operand-signals
-  (fiveam:signals include-error (expand-includes (parse ".include"))))
+  (fiveam:signals include-error (preprocess (parse ".include"))))
 
-(fiveam:test unexpanded-include-reaching-layout-signals
-  (fiveam:signals include-error
-    (assemble-statements (parse ".include \"sub/c.asm\"") :machine 'instr-test-machine)))
 
 (fiveam:test include-is-not-a-registered-directive
   (fiveam:is (null (find-directive-descriptor ".include"))))

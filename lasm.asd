@@ -31,6 +31,7 @@
                (:file "macro")
                (:file "assembler")
                (:file "conditional")
+               (:file "preprocess")
                (:file "emulator")
                (:file "disassembler")
                (:file "listing")

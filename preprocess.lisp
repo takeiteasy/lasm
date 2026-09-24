@@ -1,0 +1,274 @@
+;;;; preprocess.lisp
+;;;; Single-pass expansion of .include, .macro/.endm and .if/.elseif/.else/.endif.
+;;;; PREPROCESS walks the statements in order, so each construct is only
+;;;; interpreted in a region that is emitting: a skipped branch never reads an
+;;;; include, defines a macro or expands an invocation. A macro must be defined
+;;;; above its first invocation.
+;;;;
+;;;; A condition folds against the constants (.equ, .set, name = value) defined
+;;;; above it; it cannot depend on a label or the location counter, which have
+;;;; no value until layout.
+
+(in-package #:lasm)
+
+(defparameter *max-macro-depth* 256
+  "Maximum nesting of macro invocations before PREPROCESS reports recursion.")
+
+(defstruct macro-draft
+  name key params defaults line unit
+  keep-p            ; the definition sits in an emitting region
+  (body nil)
+  (if-depth 0)
+  unbalanced-p)
+
+(defun %include-base-directory (statement)
+  "Directory STATEMENT's .include path resolves against: the file that defines
+a macro body statement, else the innermost file being included."
+  (let* ((unit (statement-definition-unit statement))
+         (file (and unit (source-unit-file unit)))
+         (truename (and file (probe-file file))))
+    (if truename
+        (%file-directory truename)
+        (or *include-directory* *default-pathname-defaults*))))
+
+(defun preprocess (statements &key machine (lexer 'default))
+  "Resolve .include, .macro/.endm and .if/.elseif/.else/.endif in STATEMENTS.
+Included files are parsed with LEXER. MACHINE, when given, reserves its
+instruction names and register aliases from macros. A label on an .include,
+invocation or conditional line stays as a label-only statement. Signals
+INCLUDE-ERROR, MACRO-ERROR or CONDITIONAL-ERROR on a malformed construct."
+  (let* ((descriptor (and machine (find-machine-descriptor machine)))
+         (instructions (and descriptor (machine-descriptor-instructions descriptor)))
+         (aliases (and descriptor (machine-descriptor-register-aliases descriptor)))
+         (macros (make-hash-table :test 'equal))
+         (used (make-hash-table :test 'equal))
+         (constants (make-hash-table :test 'equal))
+         (layout-names (make-hash-table :test 'equal))
+         (serial 0)
+         (stack nil)
+         (scope nil)
+         result)
+    (labels
+        ((active-p () (or (null stack) (if-block-active-p (first stack))))
+         (seed (list)
+           (dolist (statement list)
+             (when (statement-label statement)
+               (setf (gethash (statement-label statement) used) t))
+             (loop for token across (statement-operand-tokens statement)
+                   when (eq (token-type token) :identifier)
+                     do (setf (gethash (token-value token) used) t)))
+           (maphash (lambda (name value) (setf (gethash name layout-names) value))
+                    (%conditional-label-names list)))
+         (fresh-name (name)
+           (loop for candidate = (format nil "~A__LASM_~D" name (incf serial))
+                 unless (or (gethash candidate used)
+                            (and aliases (gethash (string-upcase candidate) aliases)))
+                   do (setf (gethash candidate used) t)
+                      (return candidate)))
+         (fold-assignment (statement)
+           (let* ((directive (find-directive-descriptor (statement-mnemonic statement)))
+                  (asts (%directive-args statement directive))
+                  (line (statement-line statement))
+                  (name-ast (first asts)))
+             (when (and (expr-label-p name-ast) (= 2 (length asts)))
+               (let ((name (if (expr-label-localp name-ast)
+                               (%qualify-local scope (expr-label-name name-ast) line)
+                               (expr-label-name name-ast)))
+                     (value-ast (%qualify-locals! (second asts) scope line)))
+                 (remhash name constants)
+                 (setf (gethash name layout-names) t)
+                 (unless (%ast-layout-dependent-p value-ast)
+                   (handler-case
+                       (progn (setf (gethash name constants)
+                                    (eval-expr value-ast :symbols constants))
+                              (remhash name layout-names))
+                     (error () nil)))))))
+         (emit (statement)
+           (cl:push statement result)
+           (unless (or (null (statement-label statement)) (statement-label-localp statement))
+             (setf scope (statement-label statement)))
+           (let ((directive (and (statement-mnemonic statement)
+                                 (find-directive-descriptor (statement-mnemonic statement)))))
+             (when (and directive
+                        (member (directive-descriptor-action directive) '(:assign :reassign)))
+               (fold-assignment statement))))
+         (condition-value (statement)
+           (let ((line (statement-line statement))
+                 (mnemonic (statement-mnemonic statement)))
+             (when (statement-mode-suffix statement)
+               (%conditional-error line "~A: a mode suffix is not valid here" mnemonic))
+             (unless (= 1 (length (statement-operands statement)))
+               (%conditional-error line "~A: expected one condition" mnemonic))
+             (let ((ast (%qualify-locals!
+                         (%directive-operand-ast (first (statement-operands statement)))
+                         scope line)))
+               (when (%ast-layout-dependent-p ast)
+                 (%conditional-error line "~A: the condition depends on layout (a label, * or bank())"
+                                     mnemonic))
+               (handler-case (/= 0 (eval-expr ast :symbols constants))
+                 (unresolved-label (c)
+                   (let ((name (unresolved-label-name c)))
+                     (%conditional-error
+                      line (if (gethash name layout-names)
+                               "~A: ~S depends on layout (a label or *)"
+                               "~A: ~S is not a constant defined above")
+                      mnemonic (%display-symbol-key name))))))))
+         (no-operands (statement)
+           (when (or (statement-operands statement) (statement-mode-suffix statement))
+             (%conditional-error (statement-line statement) "~A: takes no operands"
+                                 (statement-mnemonic statement))))
+         (conditional (statement keyword base)
+           (let ((line (statement-line statement))
+                 (label (and (statement-label statement) (%label-only-statement statement))))
+             (when (and label (active-p))
+               (emit label))
+             (ecase keyword
+               (:if
+                (let* ((parent (active-p))
+                       (blk (make-if-block :parent-active-p parent :line line
+                                           :unit (statement-source-unit statement))))
+                  (cl:push blk stack)
+                  (if parent
+                      (setf (if-block-active-p blk) (condition-value statement)
+                            (if-block-taken-p blk) (if-block-active-p blk))
+                      (setf (if-block-taken-p blk) t))))
+               ((:elseif :else :endif)
+                (unless (> (length stack) base)
+                  (%conditional-error line "~A without a matching .if"
+                                      (statement-mnemonic statement)))
+                (let ((blk (first stack)))
+                  (ecase keyword
+                    (:elseif
+                     (when (if-block-else-seen-p blk)
+                       (%conditional-error line ".elseif after .else"))
+                     (setf (if-block-active-p blk) nil)
+                     (unless (if-block-taken-p blk)
+                       (let ((value (condition-value statement)))
+                         (setf (if-block-active-p blk) value
+                               (if-block-taken-p blk) value))))
+                    (:else
+                     (no-operands statement)
+                     (when (if-block-else-seen-p blk)
+                       (%conditional-error line "duplicate .else"))
+                     (setf (if-block-else-seen-p blk) t
+                           (if-block-active-p blk) (and (if-block-parent-active-p blk)
+                                                        (not (if-block-taken-p blk)))
+                           (if-block-taken-p blk) t))
+                    (:endif
+                     (no-operands statement)
+                     (cl:pop stack))))))))
+         (begin-macro (statement)
+           (let ((line (statement-line statement))
+                 (unit (statement-source-unit statement)))
+             (if (not (active-p))
+                 (make-macro-draft :line line :unit unit)
+                 (progn
+                   (when (statement-label statement)
+                     (%macro-error line ".macro: cannot itself carry a label"))
+                   (when (statement-mode-suffix statement)
+                     (%macro-error line ".macro: a mode suffix is not valid here"))
+                   (multiple-value-bind (name params defaults) (%parse-macro-header statement)
+                     (let ((key (string-upcase name)))
+                       (when (nth-value 1 (gethash key macros))
+                         (%macro-error line "Duplicate macro ~S" name))
+                       (when (or (find-directive-descriptor name)
+                                 (%conditional-mnemonic (make-statement :mnemonic name)))
+                         (%macro-error line "Macro name ~S collides with a directive" name))
+                       (when (and instructions (gethash key instructions))
+                         (%macro-error line "Macro name ~S collides with an instruction" name))
+                       (make-macro-draft :name name :key key :params params :defaults defaults
+                                         :line line :unit unit :keep-p t)))))))
+         (end-macro (statement draft)
+           (when (statement-label statement)
+             (%macro-error (statement-line statement) ".endm: cannot itself carry a label"))
+           (when (statement-mode-suffix statement)
+             (%macro-error (statement-line statement) ".endm: a mode suffix is not valid here"))
+           (when (macro-draft-keep-p draft)
+             (let ((body (nreverse (macro-draft-body draft))))
+               (when (or (macro-draft-unbalanced-p draft) (/= 0 (macro-draft-if-depth draft)))
+                 (%macro-error (macro-draft-line draft)
+                               ".macro ~A has an unbalanced .if/.endif" (macro-draft-name draft)))
+               (dolist (key (%macro-symbol-definitions body))
+                 (when (and (not (cdr key))
+                            (member (car key) (macro-draft-params draft) :test #'string=))
+                   (%macro-error (macro-draft-line draft)
+                                 "Macro parameter ~S also names a body symbol" (car key))))
+               (setf (gethash (macro-draft-key draft) macros)
+                     (make-macro-descriptor :name (macro-draft-key draft)
+                                            :params (macro-draft-params draft)
+                                            :defaults (macro-draft-defaults draft)
+                                            :body body :line (macro-draft-line draft))))))
+         (collect-body (statement draft)
+           (case (%conditional-mnemonic statement)
+             (:if (incf (macro-draft-if-depth draft)))
+             (:endif (when (minusp (decf (macro-draft-if-depth draft)))
+                       (setf (macro-draft-unbalanced-p draft) t))))
+           (when (macro-draft-keep-p draft)
+             (cl:push statement (macro-draft-body draft))))
+         (include (statement depth)
+           (let* ((line (statement-line statement))
+                  (path (%include-path statement))
+                  (file (probe-file (merge-pathnames path (%include-base-directory statement)))))
+             (unless file
+               (%include-error line ".include ~S: file not found" path))
+             (when (member file *include-chain* :test #'equal)
+               (%include-error line "Circular .include: ~{~A~^ -> ~}"
+                               (mapcar #'namestring (reverse (cons file *include-chain*)))))
+             (when (statement-label statement)
+               (emit (%label-only-statement statement)))
+             (let ((*include-directory* (%file-directory file))
+                   (*include-chain* (cons file *include-chain*)))
+               (multiple-value-bind (parsed unit)
+                   (parse (%read-source-file file) :lexer lexer :file file)
+                 (let ((parent (statement-source-unit statement)))
+                   (when parent
+                     (setf (gethash line (source-unit-children parent))
+                           (append (gethash line (source-unit-children parent))
+                                   (list unit)))))
+                 (seed parsed)
+                 (walk parsed depth)))))
+         (invoke (statement macro depth)
+           (when (>= depth *max-macro-depth*)
+             (%macro-error (statement-line statement)
+                           "macro invocations nested deeper than ~D (a macro invoking itself, ~
+directly or indirectly?)" *max-macro-depth*))
+           (walk (%expand-invocation statement macro #'fresh-name) (1+ depth)))
+         (walk (statements depth)
+           (let ((base (length stack))
+                 (draft nil))
+             (dolist (statement statements)
+               (let ((*current-invocation-line* (and (statement-definition-line statement)
+                                                     (statement-line statement)))
+                     (*current-definition-line* (statement-definition-line statement))
+                     (*current-source-unit* (statement-source-unit statement))
+                     (*current-definition-unit* (statement-definition-unit statement))
+                     (mnemonic (statement-mnemonic statement))
+                     (keyword (%conditional-mnemonic statement)))
+                 (with-source-unit (statement-source-unit statement)
+                   (cond
+                     ((and draft (%endm-directive-p mnemonic))
+                      (end-macro statement draft)
+                      (setf draft nil))
+                     ((and draft (%macro-directive-p mnemonic))
+                      (%macro-error (statement-line statement) ".macro: nested inside another .macro"))
+                     (draft (collect-body statement draft))
+                     ((%macro-directive-p mnemonic)
+                      (setf draft (begin-macro statement)))
+                     (keyword (conditional statement keyword base))
+                     ((not (active-p)))
+                     ((%endm-directive-p mnemonic)
+                      (%macro-error (statement-line statement) ".endm without a matching .macro"))
+                     ((%include-statement-p statement) (include statement depth))
+                     ((and mnemonic (gethash (string-upcase mnemonic) macros))
+                      (invoke statement (gethash (string-upcase mnemonic) macros) depth))
+                     (t (emit statement))))))
+             (when draft
+               (with-source-unit (macro-draft-unit draft)
+                 (%macro-error (macro-draft-line draft) ".macro ~A has no matching .endm"
+                               (or (macro-draft-name draft) "(skipped)"))))
+             (when (> (length stack) base)
+               (with-source-unit (if-block-unit (first stack))
+                 (%conditional-error (if-block-line (first stack)) ".if has no matching .endif"))))))
+      (seed statements)
+      (walk statements 0)
+      (nreverse result))))

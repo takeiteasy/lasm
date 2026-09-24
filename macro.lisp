@@ -1,14 +1,15 @@
 ;;;; macro.lisp
-;;;; .macro/.endm collection and expansion. Each invocation receives its own
-;;;; bindings for parameters and body-defined symbols before assembly layout.
+;;;; .macro/.endm parsing and invocation expansion. Each invocation receives its
+;;;; own bindings for parameters and body-defined symbols. PREPROCESS
+;;;; (preprocess.lisp) drives collection and expansion.
 
 (in-package #:lasm)
 
 ;;; Conditions
 
 (define-condition macro-error (lasm-syntax-error) ()
-  (:documentation "Signalled by EXPAND-MACROS on a malformed macro definition,
-name collision, invocation, or non-converging expansion."))
+  (:documentation "Signalled by PREPROCESS on a malformed macro definition,
+name collision, invocation, or over-deep expansion."))
 
 (defun %macro-error (line fmt &rest args)
   (error 'macro-error :message (apply #'format nil fmt args) :line line))
@@ -22,10 +23,7 @@ name collision, invocation, or non-converging expansion."))
   body
   line)
 
-(defparameter *max-macro-expansion-rounds* 32
-  "Maximum rewrite rounds before EXPAND-MACROS reports recursion.")
-
-;;; Phase 1: collect .macro...endm blocks, leaving the rest of the program
+;;; Definition parsing
 
 (defun %macro-directive-p (mnemonic)
   (and mnemonic (string-equal mnemonic ".macro")))
@@ -90,80 +88,8 @@ name collision, invocation, or non-converging expansion."))
                        definitions))))))
     (remove-duplicates definitions :test #'equal)))
 
-(defun %collect-macros (statements machine)
-  "Return macro descriptors and statements outside definition blocks.
-Reject malformed definitions and names reserved by MACHINE or directives."
-  (let ((macros (make-hash-table :test 'equal))
-        remaining
-        (if-depth 0) (body-if-depth 0) (body-if-unbalanced-p nil)
-        in-macro-p header-name header-key header-params header-defaults header-line header-unit body)
-    (dolist (statement statements)
-      (with-source-unit (statement-source-unit statement)
-       (let ((mnemonic (statement-mnemonic statement)))
-        (cond
-          ((%macro-directive-p mnemonic)
-           (when in-macro-p
-             (%macro-error (statement-line statement) ".macro: nested inside another .macro"))
-           (when (plusp if-depth)
-             ;; TODO: a .macro inside .if is rejected rather than defined
-             ;; conditionally; lazy macro collection would lift this.
-             (%macro-error (statement-line statement) ".macro: cannot be defined inside .if"))
-           (when (statement-label statement)
-             (%macro-error (statement-line statement) ".macro: cannot itself carry a label"))
-           (when (statement-mode-suffix statement)
-             (%macro-error (statement-line statement) ".macro: a mode suffix is not valid here"))
-           (multiple-value-bind (name params defaults) (%parse-macro-header statement)
-             (let ((key (string-upcase name)))
-               (when (nth-value 1 (gethash key macros))
-                 (%macro-error (statement-line statement) "Duplicate macro ~S" name))
-               (when (or (find-directive-descriptor name)
-                         (%conditional-mnemonic (make-statement :mnemonic name)))
-                 (%macro-error (statement-line statement)
-                                "Macro name ~S collides with a directive" name))
-               (when (gethash key (machine-descriptor-instructions
-                                   (find-machine-descriptor machine)))
-                 (%macro-error (statement-line statement)
-                               "Macro name ~S collides with an instruction" name))
-               (setf in-macro-p t header-name name header-key key header-params params
-                     header-defaults defaults
-                     header-line (statement-line statement)
-                     header-unit (statement-source-unit statement) body nil
-                     body-if-depth 0 body-if-unbalanced-p nil))))
-          ((%endm-directive-p mnemonic)
-           (unless in-macro-p
-             (%macro-error (statement-line statement) ".endm without a matching .macro"))
-           (when (statement-label statement)
-             (%macro-error (statement-line statement) ".endm: cannot itself carry a label"))
-           (when (statement-mode-suffix statement)
-             (%macro-error (statement-line statement) ".endm: a mode suffix is not valid here"))
-           (when (or body-if-unbalanced-p (/= 0 body-if-depth))
-             (%macro-error header-line ".macro ~A has an unbalanced .if/.endif" header-name))
-           (dolist (key (%macro-symbol-definitions body))
-             (when (and (not (cdr key))
-                        (member (car key) header-params :test #'string=))
-               (%macro-error header-line "Macro parameter ~S also names a body symbol"
-                             (car key))))
-           (setf (gethash header-key macros)
-                 (make-macro-descriptor :name header-key :params header-params
-                                         :defaults header-defaults
-                                         :body (nreverse body) :line header-line))
-           (setf in-macro-p nil header-key nil))
-          (in-macro-p
-           (case (%conditional-mnemonic statement)
-             (:if (incf body-if-depth))
-             (:endif (when (minusp (decf body-if-depth)) (setf body-if-unbalanced-p t))))
-           (cl:push statement body))
-          (t
-           (case (%conditional-mnemonic statement)
-             (:if (incf if-depth))
-             (:endif (setf if-depth (max 0 (1- if-depth)))))
-           (cl:push statement remaining))))))
-    (when in-macro-p
-      (with-source-unit header-unit
-        (%macro-error header-line ".macro ~A has no matching .endm" header-name)))
-    (values macros (nreverse remaining))))
 
-;;; Phase 2: expand invocations against the collected macro table
+;;; Invocation expansion
 
 (defun %macro-hygiene-map (body fresh-name)
   (let ((names (make-hash-table :test 'equal)))
@@ -217,11 +143,6 @@ Reject malformed definitions and names reserved by MACHINE or directives."
      :definition-unit (or (statement-definition-unit statement)
                           (statement-source-unit statement)))))
 
-(defun %macro-invocation-p (statement macros)
-  "Return the descriptor invoked by STATEMENT, or NIL."
-  (and (statement-mnemonic statement)
-       (gethash (string-upcase (statement-mnemonic statement)) macros)))
-
 (defun %expand-invocation (statement descriptor fresh-name)
   "Expand STATEMENT using DESCRIPTOR's parameters and fresh body symbol names."
   (let* ((params (macro-descriptor-params descriptor))
@@ -260,42 +181,3 @@ Reject malformed definitions and names reserved by MACHINE or directives."
                                                (statement-source-unit statement)))
                       (macro-descriptor-body descriptor))))))
 
-(defun expand-macros (statements machine)
-  "Expand macro invocations for MACHINE until no invocations remain."
-  (multiple-value-bind (macros remaining) (%collect-macros statements machine)
-    (if (zerop (hash-table-count macros))
-        remaining
-        (let ((result remaining)
-              (used (make-hash-table :test 'equal))
-              (aliases (machine-descriptor-register-aliases
-                        (find-machine-descriptor machine)))
-              (serial 0))
-          (dolist (statement statements)
-            (when (statement-label statement)
-              (setf (gethash (statement-label statement) used) t))
-            (loop for token across (statement-operand-tokens statement)
-                  when (eq (token-type token) :identifier)
-                    do (setf (gethash (token-value token) used) t)))
-          (dotimes (round *max-macro-expansion-rounds*)
-            (if (some (lambda (s) (%macro-invocation-p s macros)) result)
-                (setf result
-                      (loop for statement in result
-                            for descriptor = (%macro-invocation-p statement macros)
-                            if descriptor
-                              append (with-source-unit (statement-source-unit statement)
-                               (%expand-invocation
-                                      statement descriptor
-                                      (lambda (name)
-                                        (loop for candidate = (format nil "~A__LASM_~D" name
-                                                                      (incf serial))
-                                              unless (or (gethash candidate used)
-                                                         (and aliases
-                                                              (gethash (string-upcase candidate)
-                                                                       aliases)))
-                                                do (setf (gethash candidate used) t)
-                                                   (return candidate)))))
-                            else collect statement))
-                (return-from expand-macros result)))
-          (%macro-error nil "macro expansion did not converge after ~D rounds ~
-(a macro invoking itself, directly or indirectly?)"
-                        *max-macro-expansion-rounds*)))))
