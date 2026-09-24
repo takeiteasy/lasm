@@ -138,7 +138,9 @@ machine has only one fixed stack. See [Semantics vocabulary](semantics.md).
 
 `machine-access-hook` takes `(machine name index access value)` for storage
 reads and writes. `access` is `:read` or `:write`; the index is a bank index,
-address, stack slot, `:pointer`, or `nil`. Inspection peeks, program loading,
+address, stack slot, `:pointer`, or `nil`. A fixed stack's push, pop and
+`(setf stack-pointer)` also report `:pointer` as a write of the new depth,
+before the depth changes. Inspection peeks, program loading,
 instruction fetch, and PC advancement do not call it. The
 [debugger](debugger.md#watchpoints) uses this hook.
 

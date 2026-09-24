@@ -168,12 +168,29 @@ never notify it."
        (unwind-protect (progn ,@body)
          (setf (machine-access-hook ,m) ,hook)))))
 
+(defun %resolve-depth (session name)
+  "The fixed stack NAME as (VALUES STACK :POINTER). Signals when NAME is not one."
+  (let ((stack (%resolve-storage session name nil t)))
+    (unless (and stack (%stack-name-p (debug-session-machine session) stack))
+      (error "~A is not a fixed stack" name))
+    (values stack :pointer)))
+
 (defun %resolve-storage (session name &optional index stacks)
   "NAME as a scalar register, flag or register alias on SESSION's machine,
 as (VALUES ELEMENT-NAME INDEX), or NIL when NAME is not a storage name.
 INDEX selects a cell of a banked register, or with STACKS a slot of a fixed
-stack (a bare stack name gives INDEX :ANY). Signals when NAME is storage
-that cannot be read as a single value."
+stack (a bare stack name gives INDEX :ANY). NAME.depth, or a stack NAME with
+INDEX :DEPTH, gives INDEX :POINTER. Signals when NAME is storage that cannot
+be read as a single value."
+  (let ((dot (position #\. name :from-end t)))
+    (cond
+      ((eq index :depth)
+       (return-from %resolve-storage (%resolve-depth session name)))
+      ((and dot (string-equal (subseq name (1+ dot)) "depth"))
+       (when index (error "~A takes no index" name))
+       (let ((base (subseq name 0 dot)))
+         (return-from %resolve-storage
+           (and (%resolve-storage session base nil t) (%resolve-depth session base)))))))
   (let* ((descriptor (machine-descriptor (debug-session-machine session)))
          (alias-element (gethash name (machine-descriptor-register-alias-elements descriptor)))
          (symbol (find-symbol (string-upcase name) :lasm))
@@ -205,6 +222,7 @@ that cannot be read as a single value."
 (defun %read-storage (machine name index)
   (%without-hook (machine)
     (cond
+      ((eq index :pointer) (stack-depth machine name))
       (index (regref machine name index))
       ((eq (storage-element-kind (descriptor-element (machine-descriptor machine) name)) :flag)
        (flag machine name))
@@ -347,17 +365,23 @@ then bank."
 (defun debug-watch (session target &key (access :write) index scope bank)
   "Watch TARGET on SESSION, stopping after the instruction that accesses it.
 TARGET is a scalar register, flag or register alias name (a banked register
-takes INDEX), a fixed stack name (INDEX picks a bottom-relative slot; without
-one any access to the stack), a label, or a memory address; a name that is
+takes INDEX), a fixed stack name (INDEX picks a bottom-relative slot, :DEPTH
+its depth, which needs :WRITE or :READ-WRITE; without one any access to the
+stack), a label, or a memory address; a name that is
 both storage and a label is storage. ACCESS is :READ, :WRITE or :READ-WRITE. SCOPE and BANK
 qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
   (unless (member access '(:read :write :read-write))
     (error "bad watch access ~S -- expected :READ, :WRITE or :READ-WRITE" access))
+  (when (and (eq index :depth) (not (stringp target)))
+    (error "depth watches need a fixed stack name, not ~S" target))
   (multiple-value-bind (name register-index)
       (and (stringp target) (%resolve-storage session target index t))
+    (when (and (eq register-index :pointer) (eq access :read))
+      (error "a depth changes only by writes -- watch ~A with w or rw" target))
     (let ((wp (if name
                   (make-watchpoint :id (debug-session-next-id session) :name name :index register-index :access access
-                                   :label (cond ((null register-index) (string-downcase target))
+                                   :label (cond ((eq register-index :pointer) (format nil "~(~A~).depth" name))
+                                                ((null register-index) (string-downcase target))
                                                 (index (format nil "~(~A~)[~D]" target index))
                                                 (t (string-downcase target))))
                   (multiple-value-bind (address region bank)
@@ -387,8 +411,8 @@ qualify a memory target as in DEBUG-BREAK. Returns the new WATCHPOINT."
 
 (defun %stack-target (session target)
   "The name of the fixed stack TARGET on SESSION, or signals."
-  (let ((name (and (stringp target) (%resolve-storage session target nil t))))
-    (unless (and name (%stack-name-p (debug-session-machine session) name))
+  (multiple-value-bind (name index) (and (stringp target) (%resolve-storage session target nil t))
+    (unless (and name (not (eq index :pointer)) (%stack-name-p (debug-session-machine session) name))
       (error "~A is not a fixed stack" target))
     name))
 
@@ -435,6 +459,7 @@ notifies the access hook, so watchpoints do not fire."
        (multiple-value-bind (name slot) (and (stringp target) (%resolve-storage session target index t))
          (%without-hook (machine)
            (cond
+             ((eq slot :pointer) (setf (stack-pointer machine name) value))
              ((null name)
               (multiple-value-bind (address region bank)
                   (%resolve-breakpoint-address session target :scope scope :bank bank)
@@ -1209,26 +1234,26 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   (multiple-value-bind (test values readers) (%compile-condition session text scope)
     (%eval-condition session test values readers)))
 
-(defun %depth-target (session target)
-  "The stack named by TARGET of the form NAME.depth, or NIL when TARGET is not
-that form or NAME is not storage. Signals when NAME is storage but no stack."
-  (let ((dot (position #\. target :from-end t)))
-    (when (and dot (string-equal (subseq target (1+ dot)) "depth"))
-      (let ((base (subseq target 0 dot)))
-        (when (%resolve-storage session base nil t)
-          (%stack-target session base)
-          base)))))
+(defun %print-indexed (session text)
+  "The response for TEXT of exactly the form NAME[N], a cell of a banked
+register or a live bottom-relative stack slot, or NIL when TEXT is not that form."
+  (multiple-value-bind (name index) (%split-index text)
+    (when (and index (= (position #\] text) (1- (length text))))
+      (multiple-value-bind (storage slot) (%resolve-storage session name index t)
+        (let ((machine (debug-session-machine session)))
+          (unless storage (error "~A is not a register or stack" name))
+          (format nil "~A = ~D~%" text
+                  (if (%stack-name-p machine storage)
+                      (or (%stack-slot-value machine storage slot)
+                          (error "stack ~A has no live slot ~D" name slot))
+                      (%read-storage machine storage slot))))))))
 
 (defun %command-set (session rest)
   (multiple-value-bind (target scope text) (%split-assignment rest)
     (if (null target)
         "set: usage: set TARGET = EXPR"
-        (let ((items (%list-items text))
-              (stack (%depth-target session target)))
+        (let ((items (%list-items text)))
           (cond
-            (stack
-             (format nil "~A = ~D~%" target
-                     (debug-set session stack (%eval-text session text scope) :index :depth)))
             ((listp items)
              (format nil "~A = [~{~D~^, ~}]~%" target
                      (debug-set session target
@@ -1261,6 +1286,7 @@ that form or NAME is not storage. Signals when NAME is storage but no stack."
   break BANK:ADDR    set a breakpoint that only stops while that bank is mapped
   break ... if EXPR  stop only while EXPR (registers, flags, labels, *, mem(ADDR)) is nonzero
   watch TARGET [r|w|rw]  stop when ADDR, LABEL, REG, REG[N], STACK, STACK[N] or a flag is accessed
+  watch STACK.depth [w|rw]  stop when a fixed stack's depth changes
   set TARGET = EXPR  store EXPR in a register, flag, REG[N], STACK[N], ADDR, BANK:ADDR or LABEL
   set STACK.depth = EXPR  set a fixed stack's depth
   set STACK = [EXPR, ...]  replace a fixed stack's entries, bottom first
@@ -1281,6 +1307,9 @@ that form or NAME is not storage. Signals when NAME is storage but no stack."
   until ADDR|LABEL   run until ADDR/LABEL is reached (BANK:ADDR waits for a bank;
                      LABEL takes an `in GLOBAL` scope like break)
   print EXPR         print a register, alias or flag, or evaluate an expression
+  print REG[N]       print a cell of a banked register
+  print STACK[N]     print a live slot of a fixed stack, bottom first
+  print STACK.depth  print a fixed stack's depth (also usable in conditions)
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
@@ -1402,8 +1431,10 @@ this call."
                                (debug-continue-to session where :bank bank :scope scope)))
                          (%stop-text session reason steps condition))))
                   ((string-equal cmd "print")
-                   (if (zerop (length rest))
-                       "print: missing name"
+                   (cond
+                     ((zerop (length rest)) "print: missing name")
+                     ((%print-indexed session rest))
+                     (t
                        (let* ((machine (debug-session-machine session))
                               (descriptor (machine-descriptor machine))
                               (symbol (find-symbol (string-upcase rest) :lasm))
@@ -1421,7 +1452,7 @@ this call."
                            (t (multiple-value-bind (test values readers)
                                   (%compile-condition session rest nil)
                                 (format nil "~A = ~D~%" rest
-                                        (%eval-condition session test values readers))))))))
+                                        (%eval-condition session test values readers)))))))))
                   ((and (>= (length cmd) 2) (string-equal (subseq cmd 0 2) "x/"))
                    (let* ((n (or (%parse-integer-maybe (subseq cmd 2)) 8))
                           (colon (position #\: rest))

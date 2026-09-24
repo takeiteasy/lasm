@@ -1158,3 +1158,83 @@ count: ldx #3
                   "DEBUG-CONTINUE-TO" "DEBUG-REVERSE-CONTINUE" "DEBUG-REVERSE-CONTINUE-TO"
                   "DEBUG-SET" "DEBUG-WRITE" "DEBUG-SET-BANK" "DEBUGGER-REPL"))
     (fiveam:is (eq :external (nth-value 1 (find-symbol name :lasm))) "~A" name)))
+
+;;; Indexed print and stack depth reads
+
+(fiveam:test debug-command-print-banked-register-cell
+  (let* ((m (make-machine 'dbg-bank-test-machine))
+         (session (make-debug-session m)))
+    (setf (regref m 'v 2) 9)
+    (fiveam:is (search "v[2] = 9" (debug-command session "print v[2]")))
+    (fiveam:is (search "v[0x2] = 9" (debug-command session "print v[0x2]")))
+    (fiveam:is (search "index 4 is out of range" (debug-command session "print v[4]")))
+    (fiveam:is (search "Error" (debug-command session "print pc[0]")))
+    (fiveam:is (search "Error" (debug-command session "print v[1] + 1")))
+    (fiveam:is (search "Error" (debug-command session "print nonesuch[1]")))))
+
+(fiveam:test debug-command-print-aliased-bank-cell
+  (let ((session (%dbg-alias-session)))
+    (fiveam:is (search "reg[1] = 7" (debug-command session "print reg[1]")))
+    (fiveam:is (search "Error" (debug-command session "print b[0]")))))
+
+(fiveam:test debug-command-print-stack-slot
+  (let ((session (%dbg-stack-session)))
+    (debug-step session 2)
+    (fiveam:is (search "ds[0] = 5" (debug-command session "print ds[0]")))
+    (fiveam:is (search "ds[1] = 7" (debug-command session "print ds[1]")))
+    (fiveam:is (search "no live slot 2" (debug-command session "print ds[2]")))
+    (fiveam:is (search "out of range" (debug-command session "print ds[99]")))))
+
+(fiveam:test debug-command-print-stack-depth
+  (let ((session (%dbg-stack-session)))
+    (fiveam:is (search "ds.depth = 0" (debug-command session "print ds.depth")))
+    (debug-step session 2)
+    (fiveam:is (search "ds.depth = 2" (debug-command session "print ds.depth")))
+    (fiveam:is (search "ds.depth + 1 = 3" (debug-command session "print ds.depth + 1")))
+    (fiveam:is (search "DS.DEPTH = 2" (debug-command session "print DS.DEPTH")))
+    (fiveam:is (search "not a fixed stack" (debug-command session "print pc.depth")))))
+
+(fiveam:test debug-break-condition-reads-stack-depth
+  (let ((session (%dbg-stack-session)))
+    (debug-break session 4 :condition "ds.depth == 2")
+    (fiveam:is (eq :breakpoint (debug-continue session)))
+    (fiveam:is (= 2 (stack-depth (debug-session-machine session) 'ds)))))
+
+;;; Stack depth watchpoints
+
+(fiveam:test debug-watch-stack-depth-fires-on-push-and-pop
+  (let ((session (%dbg-stack-session)))
+    (let ((wp (debug-watch session "ds.depth")))
+      (fiveam:is (string= "ds.depth" (watchpoint-label wp))))
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 0 (watch-hit-old hit)))
+      (fiveam:is (= 1 (watch-hit-new hit))))
+    (fiveam:is (search "Watchpoint 1 (w) ds.depth: 1 -> 2" (debug-command session "continue")))
+    (multiple-value-bind (reason steps hit) (debug-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 steps))
+      (fiveam:is (= 2 (watch-hit-old hit)))
+      (fiveam:is (= 1 (watch-hit-new hit))))))
+
+(fiveam:test debug-watch-stack-depth-by-index-and-command
+  (let ((session (%dbg-stack-session)))
+    (fiveam:is (string= "ds.depth" (watchpoint-label (debug-watch session "ds" :index :depth :access :read-write)))))
+  (let ((session (%dbg-stack-session)))
+    (fiveam:is (search "Watchpoint 1 (w) at ds.depth" (debug-command session "watch ds.depth")))
+    (fiveam:is (search "Watchpoint 2 (rw) at ds.depth" (debug-command session "watch ds.depth rw")))))
+
+(fiveam:test debug-watch-stack-depth-rejects-unwatchable-targets
+  (let ((session (%dbg-stack-session)))
+    (fiveam:signals error (debug-watch session "ds.depth" :access :read))
+    (fiveam:signals error (debug-watch session "ds" :index :depth :access :read))
+    (fiveam:signals error (debug-watch session #x10 :index :depth))
+    (fiveam:signals error (debug-watch session "pc.depth"))
+    (fiveam:is (search "Error" (debug-command session "watch ds.depth r")))
+    (fiveam:is (null (debug-watchpoints session)))))
+
+(fiveam:test debug-watch-stack-slot-ignores-depth-changes
+  (let ((session (%dbg-stack-session)))
+    (debug-watch session "ds" :index 1)
+    (fiveam:is (= 2 (nth-value 1 (debug-continue session))))))

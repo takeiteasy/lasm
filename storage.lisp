@@ -1021,6 +1021,7 @@ of banked region REGION, bypassing the region's write policy."
         (error 'stack-overflow :machine (machine-descriptor-name (machine-descriptor machine)) :name name))
       (let ((wrapped (wrap-value value (storage-element-width element))))
         (%notify-access machine name sp :write wrapped)
+        (%notify-access machine name :pointer :write (1+ sp))
         (setf (aref vec sp) wrapped)
         (setf (cdr slot) (1+ sp))
         wrapped))))
@@ -1063,8 +1064,9 @@ REG then load) -- the exact mirror of SP-PUSH's own GROWS case."
         (error 'stack-underflow :machine (machine-descriptor-name (machine-descriptor machine)) :name name))
       (let* ((new-sp (1- sp))
              (value (aref vec new-sp)))
-        (setf (cdr slot) new-sp)
         (%notify-access machine name new-sp :read value)
+        (%notify-access machine name :pointer :write new-sp)
+        (setf (cdr slot) new-sp)
         value))))
 
 (defun %stack-pointer (machine name)

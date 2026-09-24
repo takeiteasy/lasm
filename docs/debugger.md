@@ -48,7 +48,8 @@ one. A bank-qualified breakpoint stops only while that bank is mapped.
 
 The expression is checked when execution reaches the breakpoint. It can
 read scalar registers, flags, aliases, attached assembly symbols, `*` for
-PC, and `mem(addr)` for side-effect-free memory inspection. An unknown name
+PC, `STACK.depth` for a fixed stack's depth, and `mem(addr)` for
+side-effect-free memory inspection. An unknown name
 or unsupported function signals when the breakpoint is set. A custom lexer
 must include `mem` in `function-operators`; see [Lexer](lexer.md#clauses).
 
@@ -61,7 +62,9 @@ must include `mem` in `function-operators`; see [Lexer](lexer.md#clauses).
 ```
 
 Targets include registers, flags, stack entries, labels, and addresses.
-A banked register or stack entry uses `:index`. `:access` is `:read`,
+A banked register or stack entry uses `:index`. `"ds.depth"`, or a stack name
+with `:index :depth`, watches a fixed stack's depth: it fires on every push,
+pop and depth write, and `:access :read` signals. `:access` is `:read`,
 `:write` (default), or `:read-write`. Breakpoints and watchpoints share an
 ID space.
 
@@ -110,13 +113,7 @@ condition.
 `debug-step-back` undoes `n` steps and returns `:back` and the number undone,
 or `:history-start` when fewer were recorded. The session checkpoints the
 machine at the start of every step or continue command and every 256 steps,
-keeping at least `:history` steps.## Limitations
-
-- `STACK.depth` is write-only: `print`, conditions, and `watch` cannot read
-  it. See [#254](https://todo.sr.ht/~takeiteasy/lasm/254).
-
-[^checkpoints] Step back restores the
-nearest earlier checkpoint and replays forward.
+keeping at least `:history` steps.[^checkpoints]
 
 `debug-reverse-continue` runs backwards to the latest earlier step where a
 breakpoint holds or a watchpoint fired. `debug-reverse-continue-to` runs back
@@ -147,7 +144,10 @@ the steps undone. The step the session is at never counts as a hit.
 ```
 
 These return text, or write to `:stream`. State includes registers, flags,
-and stacks; banked register aliases render by name. Memory inspection uses
+and stacks; banked register aliases render by name. `print v[2]` reads one
+cell of a banked register, `print ds[1]` a live stack slot (bottom first), and
+`print ds.depth` a stack's depth; an out-of-range index or dead slot is an
+error message. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC, nearby decoded
 instructions, and an attached source line. With an attached assembly,
 declared data renders as `.byte` and labels come from the main image and
@@ -224,7 +224,7 @@ and prints until `quit` or end of input.
 | Command | Effect |
 | --- | --- |
 | `break ADDR\|LABEL [if EXPR]` | Add a breakpoint, optionally conditional. |
-| `watch TARGET [r\|w\|rw]` | Watch a register, stack entry, label, or address. |
+| `watch TARGET [r\|w\|rw]` | Watch a register, stack entry, label, or address. `watch STACK.depth` takes `w` or `rw`. |
 | `delete ID\|ADDR`, `info break` | Remove or list stops. |
 | `step [N]`, `step N cycles` | Execute instructions, or until a cycle budget is spent. |
 | `continue`, `continue N cycles`, `until ADDR\|LABEL` | Run to a stop condition. |
@@ -232,6 +232,7 @@ and prints until `quit` or end of input.
 | `reverse-continue`, `rc`, `reverse-until ADDR\|LABEL` | Run back to the previous hit or address. |
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
+| `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. |
 | `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. |
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |
@@ -244,7 +245,14 @@ and prints until `quit` or end of input.
 Addresses accept decimal, `$` or `0x` hexadecimal, and `0b` binary. A bank
 address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
-[^checkpoints]: A checkpoint is a full [snapshot](snapshots.md) (an anchor,
+## Limitations
+
+- Conditions and `print` expressions cannot index a banked register or stack
+  (`v[3] + 1`, `break ... if ds[0] == 2`); `print v[3]` alone works. See
+  [#255](https://todo.sr.ht/~takeiteasy/lasm/255).
+
+[^checkpoints]: Step back restores the nearest earlier checkpoint and replays
+    forward. A checkpoint is a full [snapshot](snapshots.md) (an anchor,
     every 16th) or a delta holding the registers, devices and other small
     state plus the memory and bank cells changed since the previous
     checkpoint. History is kept back to an anchor, so it can exceed `:history`.
