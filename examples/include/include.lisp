@@ -2,7 +2,8 @@
 ;;;;
 ;;;; A program split across files: main.asm pulls a shared .equ and .macro in
 ;;;; from defs.asm with .include, and ASSEMBLE-FILE reads main.asm from disk.
-;;;; See docs/includes.md and docs/assembler.md.
+;;;; defs.asm has an .ifndef include guard, and main.asm checks its size with
+;;;; .assert. See docs/includes.md, docs/conditionals.md and docs/assertions.md.
 ;;;;
 ;;;; Run with:  sbcl --script examples/include/include.lisp
 
