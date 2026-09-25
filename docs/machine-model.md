@@ -27,7 +27,7 @@ one namespace.
 | `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
 | `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
 | `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
-| `(instruction-word :width n (field NAME width)...)` | Named instruction bit fields and optional layouts. | [Instruction words](#cell--vs-word-encoded-instructions) |
+| `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
 | `(device NAME ...)` | Bus-addressed peripheral. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
@@ -170,6 +170,8 @@ With `instruction-word`, opcode and inline operands share a fixed-width
 word, followed by any extra cells. Its fields are declared MSB first, must
 sum to the word width, and include `opcode`. Named `(layout NAME ...)` forms
 can provide other field splits with the same word width and opcode position.
+The word's cells follow the memory's `:endian` unless `instruction-word`
+declares its own; see [Cell order](word-instructions.md#cell-order).
 See [Word-encoded instructions](word-instructions.md).
 
 `instruction-descriptor-size` counts the complete encoding in cells.

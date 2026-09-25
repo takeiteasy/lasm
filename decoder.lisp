@@ -186,7 +186,8 @@ emission order. All operand lists belong to this call."
                               (word-field-choice-bias match))))
                 ((:extra-word :trailing-word)
                  (let ((extra-cells (word-field-choice-extra-cells match)))
-                   (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width endian)))
+                   (prog1 (let ((v (%fetch-cells read-cell (+ address offset) extra-cells cell-width
+                                              (or (word-field-choice-endian match) endian))))
                             (if (word-field-choice-signedp match)
                                 (signed-value v (* extra-cells cell-width))
                                 v))

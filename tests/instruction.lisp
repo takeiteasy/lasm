@@ -6461,3 +6461,162 @@ present, so an error comes from the ENCODING under test."
                                    (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
                                    (for-choice (src nb-deep (nb-far nb-idx)) (operand x1 :width 1) (operand x2 :width 1)))
                                  (semantics nil))))))))
+
+;;; #216: per-field and instruction-word :endian
+
+(defmachine word-endian-machine
+  (register pc :width 16)
+  (register a :width 32)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field src 12)))
+
+(defmode we-imm "#" expr)
+(defmode we-pair expr "," expr)
+
+(definstruction word-endian-machine wee
+  (modes we-imm)
+  (encoding (opcode 1)
+    (operand value :field src
+      (variant (range 0 100) inline)
+      (variant :else (extra-word :escape #xfff :cells 2 :endian :big))))
+  (semantics (set! a value)))
+
+(definstruction word-endian-machine wet
+  (modes we-pair)
+  (encoding (opcode 2)
+    (operand first :field src)
+    (operand second :trailing-word :cells 2 :endian :big))
+  (semantics (set! a second)))
+
+(definstruction word-endian-machine wep
+  (modes we-imm)
+  (encoding (opcode 3)
+    (operand value :field src
+      (variant (range 0 100) inline)
+      (variant :else (extra-word :escape #xfff :cells 4 :endian (:big :little 2)))))
+  (semantics (set! a value)))
+
+(defun word-endian-cells (source machine)
+  (coerce (assembly-cells (assemble source :machine machine)) 'list))
+
+(defun word-endian-decode (cells machine &optional (address 0))
+  (multiple-value-list
+   (decode-instruction-at (lambda (a) (nth a cells)) address machine)))
+
+(fiveam:test extra-word-endian-overrides-the-layout
+  (let ((cells (word-endian-cells "wee #5
+wee #$1234" 'word-endian-machine)))
+    (fiveam:is (equal '(#x05 #x10  #xff #x1f #x12 #x34) cells))
+    (destructuring-bind (descriptor values size) (subseq (word-endian-decode cells 'word-endian-machine 2) 0 3)
+      (fiveam:is (string-equal "WEE" (instruction-descriptor-name descriptor)))
+      (fiveam:is (equal '(#x1234) values))
+      (fiveam:is (= 4 size)))))
+
+(fiveam:test trailing-word-endian-overrides-the-layout
+  (let ((cells (word-endian-cells "wet 5, $1234" 'word-endian-machine)))
+    (fiveam:is (equal '(#x05 #x20  #x12 #x34) cells))
+    (fiveam:is (equal '(5 #x1234) (second (word-endian-decode cells 'word-endian-machine))))))
+
+(fiveam:test grouped-extra-word-endian
+  (let ((cells (word-endian-cells "wep #$0A0B0C0D" 'word-endian-machine)))
+    (fiveam:is (equal '(#xff #x3f  #x0B #x0A #x0D #x0C) cells))
+    (fiveam:is (equal '(#x0A0B0C0D) (second (word-endian-decode cells 'word-endian-machine))))))
+
+(defmachine word-order-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16 :endian :big
+    (field opcode 4)
+    (field src 12)))
+
+(definstruction word-order-machine wor
+  (modes we-imm)
+  (encoding (opcode 1) (operand value :field src))
+  (semantics (set! a value)))
+
+(fiveam:test instruction-word-endian-leaves-data-alone
+  (let ((cells (word-endian-cells "wor #5
+.word $1234" 'word-order-machine)))
+    (fiveam:is (equal '(#x10 #x05  #x34 #x12) cells))
+    (fiveam:is (equal '(5) (second (word-endian-decode cells 'word-order-machine))))))
+
+(defmachine word-group-machine
+  (register pc :width 16)
+  (register a :width 32)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 32 :endian (:big :little 2)
+    (field opcode 8)
+    (field src 24)
+    (layout split
+      (field opcode 8)
+      (field lo 8)
+      (field hi 16))))
+
+(definstruction word-group-machine wgi
+  (modes we-imm)
+  (encoding (opcode 1) (operand value :field src))
+  (semantics (set! a value)))
+
+(definstruction word-group-machine wgl
+  (modes we-imm)
+  (encoding (opcode 2) (layout split) (operand value :field lo))
+  (semantics (set! a value)))
+
+(fiveam:test instruction-word-endian-applies-to-every-layout
+  (let ((cells (word-endian-cells "wgi #5
+wgl #5" 'word-group-machine)))
+    (fiveam:is (equal '(#x00 #x01 #x05 #x00  #x05 #x02 #x00 #x00) cells))
+    (fiveam:is (equal '(5) (second (word-endian-decode cells 'word-group-machine 4))))))
+
+(fiveam:test word-endian-declarations-are-validated
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine word-endian-bad-order
+             (register pc :width 16)
+             (memory ram :width 8 :addr-width 16)
+             (instruction-word :width 16 :endian :sideways (field opcode 4) (field src 12)))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine word-endian-bad-layout
+             (register pc :width 16)
+             (memory ram :width 8 :addr-width 16)
+             (instruction-word :width 16 (field opcode 4) (field src 12)
+               (layout split :endian :big (field opcode 4) (field src 12))))))
+  (fiveam:signals instruction-definition-error
+    (eval '(definstruction word-endian-machine weebad
+             (modes we-imm)
+             (encoding (opcode 4)
+               (operand value :field src
+                 (variant (range 0 100) inline)
+                 (variant :else (extra-word :escape #xfff :endian :sideways))))
+             (semantics (set! a value)))))
+  (fiveam:signals instruction-definition-error
+    (eval '(definstruction word-endian-machine wetbad
+             (modes we-pair)
+             (encoding (opcode 5)
+               (operand first :field src)
+               (operand second :trailing-word :endian (:big :little 1)))
+             (semantics (set! a second))))))
+
+(defmode we-x "x" expr)
+(defmode we-y "y" expr)
+(defmode we-xy (one-of we-x we-y))
+
+(fiveam:test aliased-extra-words-must-agree-on-endian
+  (fiveam:signals instruction-definition-error
+    (eval '(definstruction word-endian-machine wea
+             (modes we-xy)
+             (encoding (opcode 6)
+               (operand value :field src
+                 (variant (choice we-x) (extra-word :escape #xfff :cells 2 :endian :big))
+                 (variant (choice we-y) (extra-word :escape #xfff :cells 2 :endian :little :alias t))))
+             (semantics (set! a value)))))
+  (fiveam:finishes
+    (eval '(definstruction word-endian-machine wea
+             (modes we-xy)
+             (encoding (opcode 6)
+               (operand value :field src
+                 (variant (choice we-x) (extra-word :escape #xfff :cells 2 :endian :big))
+                 (variant (choice we-y) (extra-word :escape #xfff :cells 2 :endian :big :alias t))))
+             (semantics (set! a value))))))

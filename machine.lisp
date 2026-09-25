@@ -8,15 +8,18 @@
     (%defmachine-error "~A for ~S must be a positive integer, got ~S" what name value))
   value)
 
+(defun %endian-valid-p (value)
+  (or (member value '(:little :big))
+      (and (consp value) (= (length value) 3)
+           (member (first value) '(:little :big))
+           (member (second value) '(:little :big))
+           (integerp (third value)) (>= (third value) 2))))
+
 (defun %check-endian (value name)
   "#66: VALUE must be :LITTLE, :BIG, or (OUTER INNER GROUP) -- OUTER and INNER
 each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 %CELL-SIGNIFICANCE-ORDER, instruction.lisp)."
-  (unless (or (member value '(:little :big))
-              (and (consp value) (= (length value) 3)
-                   (member (first value) '(:little :big))
-                   (member (second value) '(:little :big))
-                   (integerp (third value)) (>= (third value) 2)))
+  (unless (%endian-valid-p value)
     (%defmachine-error "~S :endian must be :LITTLE, :BIG or (OUTER INNER GROUP), got ~S" name value))
   value)
 
@@ -487,6 +490,9 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
       (%defmachine-error "instruction-word: expected (layout name (field ...)...), got ~S" form))
     (unless (symbolp name)
       (%defmachine-error "instruction-word: layout name must be a symbol, got ~S" name))
+    (when (find-if #'keywordp field-forms)
+      (%defmachine-error "instruction-word layout ~S: options such as :endian belong on the ~
+instruction-word clause, which every layout shares" name))
     (make-instruction-word-layout
      :name name
      :width width
@@ -499,8 +505,13 @@ for stack-pointer ~S's memory ~S (~D-bit cells)"
   (let* ((body (rest form))
          (width-pos (position :width body))
          (width (and width-pos (nth (1+ width-pos) body)))
-         (rest-forms (if width-pos
-                         (append (subseq body 0 width-pos) (subseq body (+ width-pos 2)))
+         (body (if width-pos
+                   (append (subseq body 0 width-pos) (subseq body (+ width-pos 2)))
+                   body))
+         (endian-pos (position :endian body))
+         (declared-endian (and endian-pos (%check-endian (nth (1+ endian-pos) body) 'instruction-word)))
+         (rest-forms (if endian-pos
+                         (append (subseq body 0 endian-pos) (subseq body (+ endian-pos 2)))
                          body))
          ;; #64: (layout ...) forms are the machine's alternates; everything
          ;; else is the default layout's own (field ...) forms.
@@ -552,26 +563,29 @@ default layout's OPCODE field ~S -- every layout must place OPCODE identically"
        :width-cells 1 ; placeholder -- %FINISH-INSTRUCTION-WORD-LAYOUT sets the real value
        :cell-width 1  ; placeholder
        :fields fields
+       :declared-endian declared-endian
        :extra-word-order extra-word-order
        :alternates alternates))))
 
 (defun %finish-instruction-word-layout (layout cell-width endian)
-  "Fill in LAYOUT's WIDTH-CELLS, CELL-WIDTH and ENDIAN (#66), and recurse into
+  "Fill in LAYOUT's WIDTH-CELLS, CELL-WIDTH and ENDIAN (#66) -- its own
+DECLARED-ENDIAN if it has one, else ENDIAN -- and recurse into
 its ALTERNATES (#64), once the machine's own memory cell width/endianness is
 known (BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has been parsed)
 -- see PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this can't happen at
 clause-parse time. Signals if the instruction word's bit width isn't a whole
 number of cells. Setting ENDIAN here (rather than resolving it per-decode)
 means %DECODE-WORD-INSTRUCTION (decoder.lisp) needs no extra lookup."
-  (let ((width (instruction-word-layout-width layout)))
+  (let ((width (instruction-word-layout-width layout))
+        (endian (or (instruction-word-layout-declared-endian layout) endian)))
     (unless (zerop (mod width cell-width))
       (%defmachine-error "instruction-word :width ~D must be a whole number of ~D-bit cells"
              width cell-width))
     (setf (instruction-word-layout-width-cells layout) (/ width cell-width)
           (instruction-word-layout-cell-width layout) cell-width
-          (instruction-word-layout-endian layout) endian))
-  (dolist (alt (instruction-word-layout-alternates layout))
-    (%finish-instruction-word-layout alt cell-width endian))
+          (instruction-word-layout-endian layout) endian)
+    (dolist (alt (instruction-word-layout-alternates layout))
+      (%finish-instruction-word-layout alt cell-width endian)))
   layout)
 
 ;;; Memory / cell-width resolution
@@ -839,7 +853,8 @@ rationale as CELL-WIDTH-CACHE (#63)."
       ;; are deferred to here.
       (when instruction-word
         (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)
-                                          (%descriptor-endian descriptor)))
+                                          (or (instruction-word-layout-declared-endian instruction-word)
+                                              (%descriptor-endian descriptor))))
       ;; #166: STACK-POINTERS' REGISTER/MEMORY must resolve before
       ;; %FINISH-INTERRUPT-MODEL, since an (interrupts ...) clause naming a
       ;; register as its :stack looks that register up in

@@ -8,7 +8,7 @@ cell-encoded instructions.
 ```lisp
 (operand [NAME] :field FIELD-NAME
   [(variant (range LO HI) inline [:bias N])
-   (variant :else (extra-word :escape N [:cells K]))]*)
+   (variant :else (extra-word :escape N [:cells K] [:endian ORDER]))]*)
 ```
 
 | Form | Encoding |
@@ -16,6 +16,7 @@ cell-encoded instructions.
 | No `variant` | Value occupies the field directly. |
 | `(range LO HI) inline` | Values in the range occupy the field; `:bias` adjusts stored bits. |
 | `:else (extra-word ...)` | Escape code occupies the field; value follows in extra cells. |
+| `(operand [NAME] :trailing-word [:cells K] [:endian ORDER])` | Unconditional value in extra cells; see [Extra holes](#extra-holes-with-for-choice). |
 
 `:cells` sets an extra value's width in cells and defaults to the instruction
 word's width. Extra values follow field order unless the machine declares
@@ -46,6 +47,27 @@ instructions sharing an opcode can use different layouts when their encoded
 bit patterns remain distinguishable. See
 [Machine model](machine-model.md#defmachine) and
 [`chip8word.lisp`](../examples/chip8word.lisp).
+
+## Cell order
+
+Cells of the instruction word and of each extra value are stored in the
+memory's `:endian` order by default. Two overrides take any `:endian` order
+(`:little`, `:big` or `(outer inner group)`, see
+[Machine model](machine-model.md#cell-width-and-the-assembler)):
+
+| Override | Applies to |
+| --- | --- |
+| `(instruction-word :width n :endian ORDER ...)` | The instruction word, its extra values and every `(layout ...)`. |
+| `:endian ORDER` on `extra-word` or `:trailing-word` | That one extra value. |
+
+```lisp
+(instruction-word :width 16 :endian :big (field opcode 4) (field src 12))
+(variant :else (extra-word :escape #xfff :cells 2 :endian :little))
+```
+
+The extra value's setting wins over the instruction word's, which wins over
+the memory's. `.word` and other data directives keep the memory's order. See
+[`word-endian.lisp`](../examples/word-endian.lisp).[^endian]
 
 ## Fixed field values
 
@@ -181,6 +203,11 @@ value-selected fallback cannot identify which signedness to decode.
   selected range or escape must fit its field, and stored encodings cannot
   overlap unless they are valid aliases. A matched choice whose value fits
   no selected variant signals `assembly-error`.
+
+[^endian]: `:endian` orders *cells*. Byte order inside a wide cell in binary
+  output still follows the memory's `:endian`. A `(layout ...)` cannot set
+  its own `:endian`, because decode reads the word before it knows the layout.
+  Aliased extra words must agree on `:endian`.
 
 [^aliases]: Exactly one matching variant is canonical. Value-selected
   variants cannot use `:alias`. An alias with a different hole shape or

@@ -2108,7 +2108,10 @@ alternatives disagree on hole count" machine name mode-name))
   ;; Alternate syntax for a canonical encoding; never matched at decode.
   (alias nil :type boolean)
   ;; Name a source hole prefix ("w:5") selects this variant with.
-  (suffix nil :type (or null string)))
+  (suffix nil :type (or null string))
+  ;; #216: :EXTRA-WORD/:TRAILING-WORD only -- cell order of this trailing
+  ;; value, or NIL for the layout's own.
+  (endian nil :type (or null keyword cons)))
 
 (defstruct word-operand-spec
   (name nil)                  ; operand field name, or NIL for unnamed
@@ -2187,7 +2190,9 @@ alternatives disagree on hole count" machine name mode-name))
   ;; #187: mirrors WORD-VARIANT-ALIAS.
   (alias nil :type boolean)
   ;; Mirrors WORD-VARIANT-SUFFIX.
-  (suffix nil :type (or null string)))
+  (suffix nil :type (or null string))
+  ;; Mirrors WORD-VARIANT-ENDIAN.
+  (endian nil :type (or null keyword cons)))
 
 (defun %word-choice-matches-p (raw-value choice)
   "T if RAW-VALUE matches CHOICE's field bits. Signed inline values are
@@ -2544,6 +2549,13 @@ off the variant's own tail."
       (setf (word-variant-suffix variant) suffix)
       variant)))
 
+(defun %word-variant-endian (endian context)
+  "ENDIAN, the :ENDIAN of a trailing value in CONTEXT, after validating it."
+  (when (and endian (not (%endian-valid-p endian)))
+    (%definstruction-error "DEFINSTRUCTION: ~A: :endian must be :LITTLE, :BIG or (OUTER INNER GROUP), got ~S"
+                           context endian))
+  endian)
+
 (defun %parse-word-variant-form-1 (form field-name)
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
 into a WORD-VARIANT. SELECTOR is (range LO HI) for a value-selected :INLINE
@@ -2579,26 +2591,28 @@ INLINE, got ~S" field-name tail))
        (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
          (%definstruction-error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
 (extra-word :escape n), got ~S" field-name tail))
-       (%definition-bind (extra-word-kw &key escape cells alias) (first tail)
+       (%definition-bind (extra-word-kw &key escape cells alias endian) (first tail)
          (declare (ignore extra-word-kw))
          (when alias
            (%definstruction-error "DEFINSTRUCTION: field ~S: :alias applies only to a (choice ...) variant"
                                   field-name))
          (unless escape
            (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
-         (make-word-variant :kind :extra-word :escape escape :extra-cells cells)))
+         (make-word-variant :kind :extra-word :escape escape :extra-cells cells
+                            :endian (%word-variant-endian endian (format nil "field ~S" field-name)))))
       ((and (consp selector) (eq (first selector) 'choice))
        (%definition-bind (choice-kw choice-name) selector
          (declare (ignore choice-kw))
          (setf choice-name (%parse-choice-key choice-name (format nil "field ~S" field-name)))
          (cond
            ((and (consp (first tail)) (eq (first (first tail)) 'extra-word))
-            (%definition-bind (extra-word-kw &key escape cells alias) (first tail)
+            (%definition-bind (extra-word-kw &key escape cells alias endian) (first tail)
               (declare (ignore extra-word-kw))
               (unless escape
                 (%definstruction-error "DEFINSTRUCTION: field ~S: (extra-word ...) requires :escape n" field-name))
               (make-word-variant :kind :extra-word :escape escape :choice choice-name
-                                 :extra-cells cells :alias (and alias t))))
+                                 :extra-cells cells :alias (and alias t)
+                                 :endian (%word-variant-endian endian (format nil "field ~S" field-name)))))
            ((eq (first tail) 'inline)
             (%definition-bind (inline-sym &key range (bias 0) alias) tail
               (declare (ignore inline-sym))
@@ -2813,11 +2827,12 @@ non-alias variant on that escape to be an alias of" field-name e))
   (let ((a (word-variant-choice alias))
         (c (word-variant-choice canonical)))
     (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
+                 (equal (word-variant-endian alias) (word-variant-endian canonical))
                  (= (%option-hole-count a) (%option-hole-count c))
                  (equal (%option-hole-attributes a :signed) (%option-hole-attributes c :signed))
                  (equal (%option-hole-attributes a :width) (%option-hole-attributes c :width))
                  (equal (%option-hole-attributes a :relative) (%option-hole-attributes c :relative)))
-      (%definstruction-error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, hole count, signedness, width and relativeness must agree"
+      (%definstruction-error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, endian, hole count, signedness, width and relativeness must agree"
              field-name (word-variant-choice alias) (word-variant-choice canonical)))))
 
 (defun %check-word-variant-choices! (variants field-name hole-alternatives)
@@ -2978,7 +2993,7 @@ ALT afterwards, since there is no (choice m) syntax on a fieldless hole to
 carry it."
   (multiple-value-bind (name spec) (%parse-operand-subclause subclause)
     (if (eq (first spec) :trailing-word)
-        (%definition-bind (trailing-kw &key cells register) spec
+        (%definition-bind (trailing-kw &key cells register endian) spec
           (declare (ignore trailing-kw))
           (when (and cells (not (and (integerp cells) (plusp cells))))
             (%definstruction-error "DEFINSTRUCTION: (operand ~@[~S ~]:trailing-word :cells ~S): :CELLS must be ~
@@ -2987,6 +3002,7 @@ a positive integer" name cells))
            :name name :field nil :width nil :shift nil :register register
            :variants (list (make-word-variant
                              :kind :trailing-word
+                             :endian (%word-variant-endian endian (format nil "operand ~@[~S ~]:trailing-word" name))
                              :extra-cells (or cells (instruction-word-layout-width-cells layout))))))
         (%parse-word-field-operand-subclause subclause name spec layout layout-name machine-name
                                               hole-alternatives hole-signedp mode source))))
@@ -3129,17 +3145,18 @@ narrower extra word before one needing a wider one."
         (word-variant-choice variant)
         (word-variant-alias variant)
         (%word-variant-signedp-at-parse variant hole-signedp mode source)
-        (word-variant-suffix variant)))
+        (word-variant-suffix variant)
+        (word-variant-endian variant)))
 
 (defun %build-word-alternatives (data)
   (mapcar (lambda (menu)
             (mapcar (lambda (entry)
-                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp &optional suffix)
+                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp &optional suffix endian)
                           entry
                         (make-word-field-choice
                          :width width :shift shift :kind kind :bias bias :range range
                          :escape escape :extra-cells extra-cells :choice choice
-                         :alias alias :signedp signedp :suffix suffix)))
+                         :alias alias :signedp signedp :suffix suffix :endian endian)))
                     menu))
           data))
 
@@ -4574,17 +4591,22 @@ or word order."
                (:extra-word
                 (setf word (logior word (ash (word-field-choice-escape choice)
                                               (word-field-choice-shift choice))))
-                (cl:push (list index value (word-field-choice-extra-cells choice)) extra-word-values))
+                (cl:push (list index value (word-field-choice-extra-cells choice)
+                               (word-field-choice-endian choice))
+                         extra-word-values))
                ;; #120: a :TRAILING-WORD choice ORs no bits into WORD at all --
                ;; it has no field of its own -- and spends its own trailing
                ;; cells unconditionally.
                (:trailing-word
-                (cl:push (list index value (word-field-choice-extra-cells choice)) extra-word-values))))
+                (cl:push (list index value (word-field-choice-extra-cells choice)
+                               (word-field-choice-endian choice))
+                         extra-word-values))))
     (append (%encode-value-cells word (instruction-word-layout-width-cells layout) cell-width endian)
             (loop for index in (%word-emit-order descriptor choices)
                   for extra = (find index extra-word-values :key #'first)
                   when extra
-                    append (%encode-value-cells (second extra) (third extra) cell-width endian)))))
+                    append (%encode-value-cells (second extra) (third extra) cell-width
+                                               (or (fourth extra) endian))))))
 
 (defun %encode-instruction-resolved (descriptor values cell-width endian)
   (let ((layout (instruction-descriptor-word-layout descriptor)))

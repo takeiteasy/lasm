@@ -385,6 +385,9 @@ common case (no REGIONS at all) so an unregioned memory element's MREF/
   (width-cells nil :type (integer 1))
   (cell-width nil :type (integer 1))
   (endian nil :type (or null keyword cons)) ; :little/:big or (outer inner group), #66
+  ;; #216: the default layout's own (instruction-word :endian ORDER), which
+  ;; overrides the memory's endian for the word and its extra cells.
+  (declared-endian nil :type (or null keyword cons))
   (fields nil :type list)           ; (name width shift), MSB-first as declared
   ;; #191: field names, in the order their trailing words follow the
   ;; instruction word. NIL (the default) is operand-hole order. Default
