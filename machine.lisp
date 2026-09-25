@@ -117,7 +117,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
         (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
 
 ;; #107: (region NAME start end [:kind :ram/:rom/:device] [:banks n] [:on-write
-;; :ignore/:error] [:read fn] [:write fn]) -- one sub-range of a memory
+;; :ignore/:error] [:read fn] [:write fn] [:device NAME]) -- one sub-range of a memory
 ;; element with distinct access behavior. NAME is validated as a symbol
 ;; here; PARSE-MEMORY-CLAUSE cross-checks it against every other name in the
 ;; machine's namespace (BUILD-MACHINE-DESCRIPTOR's SEEN table) once the whole
@@ -125,7 +125,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
 ;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
 ;; alone knows the element's address range.
 (defun %parse-memory-region-form (form context)
-  (%definition-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write) form
+  (%definition-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write device) form
     (unless (eq head 'region)
       (%defmachine-error "~A: expected (region name start end ...), got ~S" context form))
     (unless (symbolp name)
@@ -153,8 +153,15 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
         (%defmachine-error "~A region ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" context name (car fn) (cdr fn))))
+    (when device
+      (unless (symbolp device)
+        (%defmachine-error "~A region ~S: :device must be a device name, got ~S" context name device))
+      (unless (eq kind :device)
+        (%defmachine-error "~A region ~S: :device only applies to a :DEVICE region" context name))
+      (when (or read write)
+        (%defmachine-error "~A region ~S: :device cannot be combined with :read/:write" context name)))
     (make-memory-region :name name :start start :end end :kind kind :banks banks
-                         :on-write on-write :read read :write write)))
+                         :on-write on-write :read read :write write :device device)))
 
 ;; Cross-region checks (#107): unique names and non-overlapping ranges,
 ;; applied once every (region ...) form in the clause is parsed -- mirrors
@@ -220,14 +227,15 @@ function), got ~S" context name (car fn) (cdr fn))))
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
 ;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
-;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]) -- a bus-addressed peripheral,
-;; independent of #107's memory regions (a machine can declare one without
-;; declaring any MMIO region at all). NAME is validated as a symbol here;
+;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
+;;   [:read fn] [:write fn]) -- a bus-addressed peripheral. A #107 :DEVICE
+;; region may bind to it with :DEVICE (#158) to route MREF through :READ/
+;; :WRITE; a device no region binds is bus-only. NAME is validated as a symbol here;
 ;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
 ;; machine's namespace, same as a region's or a register alias's name.
 (defun parse-device-clause (form)
   (%definition-bind (name &key (id 0) (version 0) (manufacturer 0)
-                             init tick receive detach save load)
+                             init tick receive detach save load read write)
       form
     (unless (symbolp name)
       (%defmachine-error "device ~S: name must be a symbol" name))
@@ -236,13 +244,14 @@ function), got ~S" context name (car fn) (cdr fn))))
         (%defmachine-error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
     (dolist (fn (list (cons :init init) (cons :tick tick)
                        (cons :receive receive) (cons :detach detach)
-                       (cons :save save) (cons :load load)))
+                       (cons :save save) (cons :load load)
+                       (cons :read read) (cons :write write)))
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
         (%defmachine-error "device ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" name (car fn) (cdr fn))))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
                              :init init :tick tick :receive receive :detach detach
-                             :save save :load load)))
+                             :save save :load load :read read :write write)))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
@@ -807,6 +816,17 @@ rationale as CELL-WIDTH-CACHE (#63)."
           (%defmachine-error "Duplicate storage element name ~S in machine ~S"
                  (device-descriptor-name device-descriptor) name))
         (setf (gethash (device-descriptor-name device-descriptor) seen) t))
+      ;; #158: a region's :DEVICE resolves to the device's fixed bus index --
+      ;; its position among the (merged) declared devices.
+      (dolist (element elements)
+        (dolist (region (storage-element-regions element))
+          (when (memory-region-device region)
+            (let ((index (position (memory-region-device region) devices
+                                   :key #'device-descriptor-name)))
+              (unless index
+                (%defmachine-error "Region ~S in machine ~S: no device named ~S"
+                       (memory-region-name region) name (memory-region-device region)))
+              (setf (memory-region-device-index region) index)))))
       (setf (machine-descriptor-elements descriptor) elements)
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
       ;; now that every MEMORY element is known (#53, #66) -- see

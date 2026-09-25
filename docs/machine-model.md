@@ -85,6 +85,7 @@ Regions cover inclusive address ranges and cannot overlap:
 | `:ram` | Backing storage. | Backing storage. |
 | `:rom` | Backing storage. | Ignored by default, or `memory-write-protected` with `:on-write :error`. |
 | `:device` | `:read` hook, or `0`. | `:write` hook, or discarded. |
+| `:device` with `:device NAME` | Bound [device's](devices.md#memory-mapped-devices) `:read`. | Its `:write`. |
 
 Hooks are bare function names. Device hooks receive the **absolute**
 address: `(read machine address)` and `(write machine address value)`.

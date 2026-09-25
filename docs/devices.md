@@ -1,7 +1,8 @@
 # Devices
 
-A `(device ...)` clause adds a bus-addressed peripheral, independent of
-[memory regions](machine-model.md#memory-regions).
+A `(device ...)` clause adds a bus-addressed peripheral. A `:device`
+[memory region](machine-model.md#memory-regions) can bind to it, so one
+object is both enumerated and memory-mapped.
 
 ```lisp
 (defmachine devfoo
@@ -16,7 +17,7 @@ A `(device ...)` clause adds a bus-addressed peripheral, independent of
 ```lisp
 (device NAME [:id n] [:version n] [:manufacturer n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn]
-             [:save fn] [:load fn])
+             [:save fn] [:load fn] [:read fn] [:write fn])
 ```
 
 Identity fields default to zero. Hooks are bare function names:
@@ -29,6 +30,8 @@ Identity fields default to zero. Hooks are bare function names:
 | `:detach` | `(fn machine device)` | Before detachment. |
 | `:save` | `(fn machine device)` | Snapshot capture. |
 | `:load` | `(fn machine device data)` | Snapshot restore. |
+| `:read` | `(fn machine device address)` | `mref` in a [bound region](#memory-mapped-devices). |
+| `:write` | `(fn machine device address value)` | `(setf mref)` in a bound region. |
 
 See [Snapshots](snapshots.md) for device state. A device with no hooks is
 still enumerable.
@@ -54,6 +57,30 @@ Declared devices receive fixed indices in declaration order.
 
 `reset` restores the declared bus and reruns each declared device's
 `:init`; runtime attachments disappear.
+
+## Memory-mapped devices
+
+A `:device` region with `:device NAME` routes `mref` through that declared
+device's `:read` and `:write` hooks. The address is absolute, and `:write`
+receives the cell-width-wrapped value.
+
+```lisp
+(defmachine devfoo
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region io #xff00 #xff0f :kind :device :device latch))
+  (device latch :id 9 :init latch-init :read latch-read :write latch-write))
+```
+
+| Case | Result |
+| --- | --- |
+| No `:read` / `:write` hook | Reads `0`; writes discarded. |
+| Device detached | Reads `0`; writes discarded. |
+| After `reset` | Binding restored to the freshly initialised device. |
+| `mpeek`, `%poke` | Skip the hooks. |
+
+`:device` cannot be combined with the region's own `:read`/`:write`, and
+applies only to `:device` regions. The name must be a declared device.
 
 ## Ticking
 
@@ -84,5 +111,6 @@ or drops the signal when none is installed. Machines with an `(interrupts
 
 - A device ticks once for a whole instruction cost; intra-instruction
   timing is unavailable.
-- A bus device and a `:device` memory region are independent. One object
-  cannot serve as both through a built-in binding.
+- A region binds to a declared device's fixed bus index. A device added with
+  `attach-device` cannot be memory-mapped, and a re-attached copy of a
+  declared device is not bound. ([#264](https://todo.sr.ht/~takeiteasy/lasm/264))

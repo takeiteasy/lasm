@@ -319,3 +319,110 @@ at the start of each test that reads it.")
     (fiveam:signals lasm-trap (step-machine m))
     (fiveam:is (= 1 (car (device-state (device-at m 0)))))
     (fiveam:is (= 5 (machine-cycles m)))))
+
+;;; Memory-mapped devices (#158)
+
+;; A latch device: INIT seeds STATE with a fresh (value . writes) cons;
+;; READ returns the latched value, WRITE latches it and counts the store.
+(defun %latch-init (machine device)
+  (declare (ignore machine device))
+  (cons 5 0))
+
+(defun %latch-read (machine device address)
+  (declare (ignore machine address))
+  (car (device-state device)))
+
+(defun %latch-write (machine device address value)
+  (declare (ignore machine))
+  (cl:push (list :write (device-index device) address value) *device-log*)
+  (incf (cdr (device-state device)))
+  (setf (car (device-state device)) value))
+
+(defmachine mapped-device-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 8
+    (region io #x40 #x4F :kind :device :device latch))
+  (device latch :id 9 :version 2 :manufacturer 3
+          :init %latch-init :read %latch-read :write %latch-write))
+
+(fiveam:test bound-region-routes-mref-through-the-device
+  (let ((*device-log* nil)
+        (m (make-machine 'mapped-device-test-machine)))
+    (fiveam:is (= 5 (mref m 'ram #x41)))
+    (setf (mref m 'ram #x42) 300)
+    (fiveam:is (equal (list (list :write 0 #x42 44)) *device-log*)) ; absolute address, wrapped value
+    (fiveam:is (= 44 (mref m 'ram #x40)))
+    (fiveam:is (= 1 (cdr (device-state (find-device m 'latch)))))))
+
+(fiveam:test bound-device-is-also-bus-addressed
+  (let ((m (make-machine 'mapped-device-test-machine)))
+    (fiveam:is (equal '(9 2 3) (multiple-value-list (device-info m 0))))
+    (setf (mref m 'ram #x40) 7)
+    (fiveam:is (= 7 (car (device-state (device-at m 0)))))))
+
+(fiveam:test bound-region-mpeek-and-poke-skip-the-device
+  (let ((*device-log* nil)
+        (m (make-machine 'mapped-device-test-machine)))
+    (fiveam:is (= 0 (mpeek m 'ram #x40)))
+    (%poke m 'ram #x40 9)
+    (fiveam:is (null *device-log*))
+    (fiveam:is (= 5 (mref m 'ram #x40)))))
+
+(fiveam:test bound-region-sees-fresh-state-after-reset
+  (let ((m (make-machine 'mapped-device-test-machine)))
+    (setf (mref m 'ram #x40) 7)
+    (reset m)
+    (fiveam:is (= 5 (mref m 'ram #x40)))))
+
+(fiveam:test bound-region-is-open-bus-while-detached
+  (let ((*device-log* nil)
+        (m (make-machine 'mapped-device-test-machine)))
+    (detach-device m 0)
+    (fiveam:is (= 0 (mref m 'ram #x40)))
+    (setf (mref m 'ram #x40) 7)
+    (fiveam:is (null *device-log*))
+    (reset m)
+    (fiveam:is (= 5 (mref m 'ram #x40)))))
+
+(fiveam:test bound-device-without-hooks-reads-zero-and-discards-writes
+  (let ((m (make-machine 'mapped-silent-test-machine)))
+    (fiveam:is (= 0 (mref m 'ram 0)))
+    (setf (mref m 'ram 0) 7)
+    (fiveam:is (= 0 (mref m 'ram 0)))))
+
+(defmachine mapped-silent-test-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 4
+    (region io 0 3 :kind :device :device quiet))
+  (device quiet))
+
+(defmachine (mapped-child-test-machine (:extends mapped-device-test-machine))
+  (device extra :id 1))
+
+(fiveam:test bound-region-resolves-a-device-inherited-from-the-parent
+  (let ((m (make-machine 'mapped-child-test-machine)))
+    (fiveam:is (= 5 (mref m 'ram #x40)))))
+
+(fiveam:test defmachine-rejects-bad-device-binding
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine bind-unknown-device-test
+            (memory ram :width 8 :addr-width 8
+              (region io 0 15 :kind :device :device nonesuch)))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine bind-with-read-test
+            (memory ram :width 8 :addr-width 8
+              (region io 0 15 :kind :device :device d :read some-fn))
+            (device d))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine bind-on-rom-test
+            (memory ram :width 8 :addr-width 8
+              (region io 0 15 :kind :rom :device d))
+            (device d))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine bind-non-symbol-test
+            (memory ram :width 8 :addr-width 8
+              (region io 0 15 :kind :device :device 3))
+            (device d))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine device-bad-read-hook-test
+            (device d :read 3)))))

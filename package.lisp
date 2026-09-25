@@ -117,6 +117,8 @@
    #:memory-region-on-write
    #:memory-region-read
    #:memory-region-write
+   #:memory-region-device
+   #:memory-region-device-index
    #:machine-descriptor-instruction-word
    #:instruction-word-layout
    #:instruction-word-layout-p
@@ -143,6 +145,8 @@
    #:device-descriptor-detach
    #:device-descriptor-save
    #:device-descriptor-load
+   #:device-descriptor-read
+   #:device-descriptor-write
    #:device
    #:device-p
    #:device-index

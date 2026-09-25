@@ -3,8 +3,8 @@
 ;;;; #108: the device bus -- a small machine with two declared devices (a
 ;;;; countdown clock, an output port) enumerated and messaged HWN/HWQ/HWI-
 ;;;; style, plus one host-attached device to show runtime attach/detach.
-;;;; Independent of #107's memory regions -- neither device here is
-;;;; address-mapped at all.
+;;;; The port is also memory-mapped (#158): a :DEVICE region bound to it
+;;;; routes MREF through the same device's :WRITE hook.
 ;;;;
 ;;;; Run with:  sbcl --script examples/devices.lisp
 
@@ -39,16 +39,23 @@
   (declare (ignore device))
   (format t "  port received: ~D~%" (sref machine 'a)))
 
+;;; #158: the same port answers memory writes too, via a region bound with
+;;; :DEVICE. WRITE gets the device and the absolute address.
+(defun port-write (machine device address value)
+  (declare (ignore machine device))
+  (format t "  port written at $~4,'0X: ~D~%" address value))
+
 (defmachine devfoo
   (register pc :width 16)
   (register a :width 16)
   (register b :width 16)
   (register c :width 16)
-  (memory ram :width 8 :addr-width 16)
+  (memory ram :width 8 :addr-width 16
+    (region port-io #xFF00 #xFF00 :kind :device :device port))
   (device clock :id #x0001 :version 1 :manufacturer #x1000
           :init clock-init :tick clock-tick)
   (device port :id #x0002 :version 1 :manufacturer #x1000
-          :receive port-receive))
+          :receive port-receive :write port-write))
 
 ;; HWN/HWQ/HWI, DCPU-16-style -- deliberately not bound inside WITH-MACHINE-
 ;; BINDINGS (see semantics.md), so an instruction's semantics call the bus
@@ -95,6 +102,10 @@
   (load-program m (list #x02 #xff)) ; hwi[a=1]; hlt
   (format t "~%Sending a message to the port:~%")
   (run m)
+
+  ;; The same port, memory-mapped: one object, bus- and address-addressed.
+  (format t "~%Writing to the port's memory-mapped address:~%")
+  (setf (mref m 'ram #xFF00) 42)
 
   ;; Tick the clock down to expiry -- DEVICE-SIGNAL fires but is dropped:
   ;; this machine declares no (interrupts ...) clause, so MAKE-MACHINE

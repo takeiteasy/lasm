@@ -2,11 +2,10 @@
 ;;;; #108: the device bus -- enumeration, attach/detach, the CPU-facing
 ;;;; message and tick API, and the interrupt signal seam.
 ;;;;
-;;;; A device is addressed by instruction and bus index (HWN/HWQ/HWI-style),
-;;;; independent of #107's memory regions -- a :DEVICE region's :READ/:WRITE
-;;;; are still the right tool for an address-mapped peripheral; this file is
-;;;; for one enumerated and messaged the DCPU-16/ANIMA-16 way. A machine may
-;;;; use either, both, or neither.
+;;;; A device is addressed by instruction and bus index (HWN/HWQ/HWI-style).
+;;;; It may also be memory-mapped: a #107 :DEVICE region naming it with
+;;;; :DEVICE (#158) routes MREF through its :READ/:WRITE hooks. A region's own
+;;;; :READ/:WRITE remain for a peripheral that needs no bus identity.
 ;;;;
 ;;;; DEVICE-SIGNAL below is unchanged by #109's interrupt subsystem --
 ;;;; it still only calls whatever MACHINE-INTERRUPT-HOOK is installed, and

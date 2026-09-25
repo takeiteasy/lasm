@@ -203,9 +203,14 @@ memory ~S on machine ~S"
 ;;              to the literal list (FUNCTION NAME) rather than an actual
 ;;              function; a bare symbol survives quoting unevaluated and
 ;;              FUNCALL resolves it to the live function at call time. Kept
-;;              to a plain function-designator pair rather than a device
-;;              object so #108's device model can layer over this hook
-;;              without this ticket knowing devices exist.
+;;              to a plain function-designator pair, so a region needs no
+;;              device object.
+;;              DEVICE (#158) instead names a declared (device ...) clause and
+;;              routes the region through that device's own READ/WRITE hooks
+;;              (see DEVICE-DESCRIPTOR), so one object is both bus-addressed
+;;              and memory-mapped. DEVICE-INDEX is its fixed bus index,
+;;              resolved at DEFMACHINE time; a detached slot reads 0 and
+;;              discards writes. Exclusive with READ/WRITE.
 ;; BANKS, on a :RAM or :ROM region, replaces the region's window of backing
 ;; storage with that many separate arrays, one live at a time (machine.lisp's
 ;; MACHINE-BANKS holds them and the live index). NIL when not banked.
@@ -217,7 +222,9 @@ memory ~S on machine ~S"
   (banks nil :type (or null (integer 1)))
   (on-write :ignore :type (member :ignore :error))     ; :rom only
   (read nil :type (or null symbol function))           ; :device only
-  (write nil :type (or null symbol function)))         ; :device only
+  (write nil :type (or null symbol function))          ; :device only
+  (device nil :type (or null symbol))                  ; :device only, exclusive with read/write
+  (device-index nil :type (or null (integer 0))))      ; bus index DEVICE resolves to
 
 ;; #108: a machine's declared (device ...) clause (machine.lisp) -- identity
 ;; (the ID/VERSION/MANUFACTURER triple an HWQ-style instruction reads back,
@@ -240,6 +247,10 @@ memory ~S on machine ~S"
 ;;   LOAD    (machine device data) -- called by RESTORE-SNAPSHOT on a freshly
 ;;           INIT'd device with the data SAVE returned. A device without
 ;;           both hooks is re-INIT'd on restore and carries no saved state.
+;;   READ    (machine device address) -> value, WRITE (machine device
+;;           address value) -- MREF/(SETF MREF) hooks for a #107 :DEVICE
+;;           region bound to this device with :DEVICE (#158); ADDRESS is
+;;           absolute. Unused unless a region binds the device.
 (defstruct device-descriptor
   (name nil :type symbol)
   (id 0 :type (integer 0))
@@ -250,7 +261,9 @@ memory ~S on machine ~S"
   (receive nil :type (or null symbol function))
   (detach nil :type (or null symbol function))
   (save nil :type (or null symbol function))
-  (load nil :type (or null symbol function)))
+  (load nil :type (or null symbol function))
+  (read nil :type (or null symbol function))
+  (write nil :type (or null symbol function)))
 
 ;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
@@ -965,10 +978,33 @@ declares no NAMES or INDEX is outside them."
   (let ((entry (gethash (memory-region-name region) (machine-banks machine))))
     (svref (cdr entry) (car entry))))
 
+;; #158: the live device a bound :DEVICE REGION's hooks belong to, or NIL when
+;; that bus slot is detached (open bus). A direct AREF, not DEVICE-AT
+;; (device.lisp loads after this file).
+(defun %region-device (machine region)
+  (aref (machine-devices machine) (memory-region-device-index region)))
+
+(defun %device-region-read (machine region address)
+  "The value a :DEVICE REGION yields for ADDRESS, before cell-width masking."
+  (if (memory-region-device-index region)
+      (let* ((device (%region-device machine region))
+             (read (and device (device-descriptor-read (device-descriptor device)))))
+        (if read (funcall read machine device address) 0))
+      (let ((read (memory-region-read region)))
+        (if read (funcall read machine address) 0))))
+
+(defun %device-region-write (machine region address value)
+  (if (memory-region-device-index region)
+      (let* ((device (%region-device machine region))
+             (write (and device (device-descriptor-write (device-descriptor device)))))
+        (when write (funcall write machine device address value)))
+      (let ((write (memory-region-write region)))
+        (when write (funcall write machine address value)))))
+
 (defun %mref (machine name address)
   "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
-in a :DEVICE region calls that region's READ instead of touching backing
-storage (0 when the region declares no READ); an address in a banked region
+in a :DEVICE region calls that region's READ (or its bound device's, #158)
+instead of touching backing storage (0 when there is none); an address in a banked region
 reads the live bank; every other address -- including one in an unbanked
 :RAM or :ROM region -- reads backing storage directly. A device read is
 masked to the cell width, as writes are."
@@ -976,9 +1012,8 @@ masked to the cell width, as writes are."
     (cond
       ((null region) (aref slot address))
       ((eq (memory-region-kind region) :device)
-       (let ((read (memory-region-read region)))
-         (wrap-value (if read (funcall read machine address) 0)
-                     (storage-element-cell-width element))))
+       (wrap-value (%device-region-read machine region address)
+                   (storage-element-cell-width element)))
       ((memory-region-banks region)
        (aref (%live-bank machine region) (- address (memory-region-start region))))
       (t (aref slot address)))))
@@ -994,8 +1029,8 @@ the machine's ACCESS-HOOK."
   "Write memory element NAME on MACHINE at ADDRESS. #107: a store into a
 :ROM region is dropped (:ON-WRITE :IGNORE, the default) or signals
 MEMORY-WRITE-PROTECTED (:ON-WRITE :ERROR); a store into a :DEVICE region
-calls that region's WRITE instead of touching backing storage (discarded
-when the region declares no WRITE), passed the same cell-width-wrapped
+calls that region's WRITE (or its bound device's, #158) instead of touching
+backing storage (discarded when there is none), passed the same cell-width-wrapped
 value every other memory write receives; a store into a banked :RAM region
 writes the live bank. Use %POKE to bypass region write policy entirely --
 LOAD-PROGRAM and the debugger burn a ROM image in that way. Returns the
@@ -1010,8 +1045,7 @@ contract."
            (error 'memory-write-protected :machine (machine-descriptor-name (machine-descriptor machine))
                                            :name name :address address)))
         ((and region (eq (memory-region-kind region) :device))
-         (let ((write (memory-region-write region)))
-           (when write (funcall write machine address wrapped))))
+         (%device-region-write machine region address wrapped))
         ((and region (memory-region-banks region))
          (setf (aref (%live-bank machine region) (- address (memory-region-start region))) wrapped))
         (t (setf (aref slot address) wrapped)))
