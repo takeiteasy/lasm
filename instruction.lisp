@@ -3242,30 +3242,49 @@ narrower extra word before one needing a wider one."
     ',semantics-operand-map ,alternatives-form ',hole-sources ',layout-name
     ,constants-form ',choice-selections ,cycles ,semantics-fn-form))
 
+(defun %key-hole-roles (key min)
+  "One role per hole of KEY's shape, in hole order: :BASE for the first MIN holes of
+its minimum shape, the position among its varying ONE-OFs of the one that adds a
+hole, else :OWN, a hole beyond MIN that no varying ONE-OF adds."
+  (if (atom key)
+      (append (make-list min :initial-element :base)
+              (make-list (max 0 (- (%option-hole-count key) min)) :initial-element :own))
+      (let* ((alt (%choice-key-descriptor key))
+             (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
+             (seen 0))
+        (mapcar (lambda (role)
+                  (if (eq role :minimum)
+                      (if (<= (incf seen) min) :base :own)
+                      role))
+                (loop for element in (mode-descriptor-pattern alt)
+                      append (ecase (first element)
+                               (:literal nil)
+                               (:expr (list :minimum))
+                               (:one-of
+                                (let ((element-min (%element-min-hole-count element))
+                                      (i (position element varying :test #'eq)))
+                                  (if i
+                                      (mapcar (lambda (role) (if (eq role :base) :minimum i))
+                                              (%key-hole-roles (nth i (rest key)) element-min))
+                                      (make-list element-min :initial-element :minimum))))))))))
+
+(defun %extra-roles (key min)
+  "The roles of KEY's extra holes, in hole order."
+  (remove :base (%key-hole-roles key min)))
+
 (defun %extra-placements (key min offset)
   "((INDEX . COUNT)...) in ascending order: where the holes KEY adds beyond MIN
-fall among the base holes that start at OFFSET. An alternative whose varying
-ONE-OFs sit inside its own pattern spreads its extras to those positions;
-otherwise they follow the base holes."
-  (let ((extra (- (%option-hole-count key) min)))
-    (cond ((<= extra 0) nil)
-          ((or (atom key) (/= (%mode-hole-count (%choice-key-descriptor key)) min))
-           (list (cons (+ offset min) extra)))
-          (t (let* ((alt (%choice-key-descriptor key))
-                    (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
-                    (cursor offset)
-                    placements)
-               (dolist (element (mode-descriptor-pattern alt) (nreverse placements))
-                 (ecase (first element)
-                   (:literal)
-                   (:expr (incf cursor))
-                   (:one-of
-                    (let ((element-min (%element-min-hole-count element))
-                          (i (position element varying :test #'eq)))
-                      (when i
-                        (dolist (placement (%extra-placements (nth i (rest key)) element-min cursor))
-                          (cl:push placement placements)))
-                      (incf cursor element-min))))))))))
+fall among the base holes that start at OFFSET. Each extra hole sits at its
+pattern position."
+  (let ((base 0) placements)
+    (dolist (role (%key-hole-roles key min))
+      (if (eq role :base)
+          (incf base)
+          (let ((index (+ offset base)))
+            (if (and placements (= (car (first placements)) index))
+                (incf (cdr (first placements)))
+                (cl:push (cons index 1) placements)))))
+    (nreverse placements)))
 
 (defun %extra-hole-indices (key base-count)
   "Hole indices within KEY's own hole list of its extras, in extras order."
@@ -3302,8 +3321,9 @@ slot, (VALUES element-index element subkey), else NIL."
   "Resolve each group to (slot base-hole-index option-key), validating its extras.
 Qualified selectors are (operand-or-slot . key), a tree naming a nested varying
 alternative; short selectors must be unique. An alternative with several varying
-ONE-OFs takes one clause per ONE-OF and pick, (operand alt slot subkey), whose
-extras join in pattern order."
+ONE-OFs takes one clause per ONE-OF and pick, (operand alt slot subkey), plus one,
+(operand alt), for the holes of its minimum shape beyond the operand's base; the
+extras join in pattern order (%EXTRA-ROLES)."
   (let ((groups (mode-hole-tuple-groups (first (%mode-hole-tuples mode))))
         (names (mapcar #'%parse-operand-subclause operand-subclauses))
         entries partials)
@@ -3319,10 +3339,13 @@ extras join in pattern order."
                (alt (cond (element-p (first parts))
                           (qualified (if (rest parts) parts (first parts)))
                           (t selector)))
+               (own-p (and (not element-p) (symbolp alt) (gethash alt *modes*)
+                           (rest (%pattern-varying-one-of-elements
+                                  (mode-descriptor-pattern (gethash alt *modes*))))))
                (position (and qualified (position (first selector) names)))
                (matches (remove-if-not
                          (lambda (g)
-                           (and (if element-p
+                           (and (if (or element-p own-p)
                                     (some (lambda (option)
                                             (and (consp option) (eq (first option) alt)))
                                           (mode-hole-group-options g))
@@ -3350,10 +3373,16 @@ slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
                           (list (mode-hole-group-slot group) (mode-hole-group-base-start group)
                                 alt (second parts) (third parts))
                           (list (mode-hole-group-slot group) (mode-hole-group-base-start group) alt)))
-                 (needed (if element-p
-                             (- (%option-hole-count (third element-info))
-                                (%element-min-hole-count (second element-info)))
-                             (- (%option-hole-count alt) (mode-hole-group-base-count group)))))
+                 (needed (cond (element-p
+                                (- (%option-hole-count (third element-info))
+                                   (%element-min-hole-count (second element-info))))
+                               (own-p
+                                (- (%mode-hole-count (find-mode-descriptor alt))
+                                   (mode-hole-group-base-count group)))
+                               (t (- (%option-hole-count alt) (mode-hole-group-base-count group))))))
+            (when (and own-p (<= needed 0))
+              (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S has no holes beyond the operand's ~D base hole~:P"
+                                     selector alt (mode-hole-group-base-count group)))
             (when (and element-p
                        (not (member (third element-info)
                                     (mapcar #'car (%one-of-element-options (second element-info)))
@@ -3368,7 +3397,7 @@ slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
                         (every (lambda (s) (and (consp s) (eq (first s) 'field-value))) extras))
               (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
                      selector needed))
-            (if element-p
+            (if (or element-p own-p)
                 (cl:push (cons key extras) partials)
                 (cl:push (cons key extras) entries))))))
     (dolist (group groups)
@@ -3378,34 +3407,34 @@ slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
                              (mode-descriptor-pattern (find-mode-descriptor (first alt)))))))
           (cond
             ((rest varying)
-             ;; TODO: several varying ONE-OFs need the alternative's minimum shape to equal the
-             ;; operand's base holes; an alternative with more fixed holes than its siblings
-             ;; would need its own-excess extras declared as well (#276).
-             (unless (= (%mode-hole-count (find-mode-descriptor (first alt)))
-                        (mode-hole-group-base-count group))
-               (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S has several varying ONE-OFs, so its minimum ~
-shape must have the operand's ~D base hole~:P" alt (first alt) (mode-hole-group-base-count group)))
-             (let ((composed
-                     (loop for element in varying
-                           for subkey in (rest alt)
-                           append (cdr (assoc (list (mode-hole-group-slot group)
-                                                    (mode-hole-group-base-start group)
-                                                    (first alt) (%one-of-slot element) subkey)
-                                              partials :test #'equal))
-                           into extras
-                           when (and (plusp (- (%option-hole-count subkey) (%element-min-hole-count element)))
-                                     (null (assoc (list (mode-hole-group-slot group)
-                                                        (mode-hole-group-base-start group)
-                                                        (first alt) (%one-of-slot element) subkey)
-                                                  partials :test #'equal)))
-                             do (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S ~S ~S at operand hole ~D"
-                                                       (first alt) (%one-of-slot element) subkey
-                                                       (mode-hole-group-base-start group))
-                           finally (return extras))))
-               (when (or composed (> (%option-hole-count alt) (mode-hole-group-base-count group)))
-                 (cl:push (cons (list (mode-hole-group-slot group) (mode-hole-group-base-start group) alt)
-                                composed)
-                          entries))))
+             (let* ((prefix (list (mode-hole-group-slot group) (mode-hole-group-base-start group)))
+                    (own-needed (- (%mode-hole-count (find-mode-descriptor (first alt)))
+                                   (mode-hole-group-base-count group)))
+                    (own (cdr (assoc (append prefix (list (first alt))) partials :test #'equal)))
+                    (element-partials
+                      (loop for element in varying
+                            for subkey in (rest alt)
+                            for partial = (assoc (append prefix (list (first alt) (%one-of-slot element) subkey))
+                                                 partials :test #'equal)
+                            when (and (plusp (- (%option-hole-count subkey) (%element-min-hole-count element)))
+                                      (null partial))
+                              do (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S ~S ~S at operand hole ~D"
+                                                        (first alt) (%one-of-slot element) subkey
+                                                        (mode-hole-group-base-start group))
+                            collect (cdr partial))))
+               (when (and (plusp own-needed) (null own))
+                 (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D -- ~
+its ~D own extra hole~:P beyond the operand's base"
+                                        (first alt) (mode-hole-group-base-start group) own-needed))
+               (let* ((sources (mapcar (lambda (extras) (remove-if-not (lambda (s) (eq (first s) 'operand)) extras))
+                                       (cons own element-partials)))
+                      (composed (append
+                                 (loop for role in (%extra-roles alt (mode-hole-group-base-count group))
+                                       collect (cl:pop (nth (if (eq role :own) 0 (1+ role)) sources)))
+                                 (remove-if-not (lambda (s) (eq (first s) 'field-value))
+                                                (apply #'append own element-partials)))))
+                 (when (or composed (> (%option-hole-count alt) (mode-hole-group-base-count group)))
+                   (cl:push (cons (append prefix (list alt)) composed) entries)))))
             ((> (%option-hole-count alt) (mode-hole-group-base-count group))
              (unless (assoc (list (mode-hole-group-slot group)
                                   (mode-hole-group-base-start group) alt)

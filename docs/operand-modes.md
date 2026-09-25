@@ -125,6 +125,17 @@ Extra operands land at the position of their own `one-of`, so an operand
 declared after the nested alternative keeps its binding. See
 [`nesttree.lisp`](../examples/nesttree.lisp).
 
+When the alternative's minimum shape has more holes than the operand's base,
+`(for-choice (src pair) ...)` declares the excess. Those operands land at
+their pattern position, between the extras of the `one-of`s:
+
+```lisp
+(defmode any (one-of pair lit))     ; lit is "#" expr, one hole
+(for-choice (src pair) (operand rv :width 1))   ; pair's second hole
+```
+
+See [`nestexcess.lisp`](../examples/nestexcess.lisp).
+
 ## Per-hole attributes
 
 A plain hole can override mode defaults:
@@ -182,9 +193,6 @@ prefixes select the alternative first and then the variant. See
   alternative, or beside a varying one) rejects alternatives that declare
   `:signed`, `:relative`, `:width`, or `:strict`
   ([#275](https://todo.sr.ht/~takeiteasy/lasm/275)).[^nested]
-- An alternative with several varying `one-of`s must have the same
-  minimum shape as the operand's base holes
-  ([#276](https://todo.sr.ht/~takeiteasy/lasm/276)).
 
 [^nested]: A tree lists the selected alternative at each varying level:
   `(a (b c))` picks `b` inside `a`, then `c` inside `b`. A bare outer name

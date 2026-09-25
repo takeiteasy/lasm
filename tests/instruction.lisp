@@ -6620,3 +6620,169 @@ wgl #5" 'word-group-machine)))
                  (variant (choice we-x) (extra-word :escape #xfff :cells 2 :endian :big))
                  (variant (choice we-y) (extra-word :escape #xfff :cells 2 :endian :big :alias t))))
              (semantics (set! a value))))))
+
+;;; Own-excess extras (#276): OE-PAIR's minimum shape has two holes and OE-LIT
+;;; one, so the operand has one base hole and (for-choice (src oe-pair) ...)
+;;; declares OE-PAIR's second minimum hole.
+
+(defmachine own-excess-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(defmode oe-abs expr)
+(defmode oe-idx "[" expr "," expr "]")
+(defmode oe-pair (one-of (lhs oe-abs oe-idx)) "," (one-of (rhs oe-abs oe-idx)))
+(defmode oe-lit "#" expr)
+(defmode oe-mode (one-of oe-pair oe-lit))
+
+(definstruction own-excess-machine oex
+  (modes oe-mode)
+  (encoding
+    (opcode 1)
+    (operand src :width 1
+      (variant (choice (oe-pair oe-abs oe-abs)) (sub 0))
+      (variant (choice (oe-pair oe-abs oe-idx)) (sub 1))
+      (variant (choice (oe-pair oe-idx oe-abs)) (sub 2))
+      (variant (choice (oe-pair oe-idx oe-idx)) (sub 3))
+      (variant (choice oe-lit) (sub 4)))
+    (for-choice (src oe-pair) (operand rv :width 1))
+    (for-choice (src oe-pair lhs oe-idx) (operand loff :width 1))
+    (for-choice (src oe-pair rhs oe-idx) (operand roff :width 1)))
+  (semantics
+    (choice-case src
+      (oe-lit (set! a src))
+      (oe-pair (choice-case (src oe-pair lhs)
+                 (oe-abs (choice-case (src oe-pair rhs)
+                           (oe-abs (set! a (+ src rv)))
+                           (oe-idx (set! a (+ src rv (* 100 roff))))))
+                 (oe-idx (choice-case (src oe-pair rhs)
+                           (oe-abs (set! a (+ src rv (* 10 loff))))
+                           (oe-idx (set! a (+ src rv (* 10 loff) (* 100 roff)))))))))))
+
+(defun %oe-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'own-excess-machine)) 'list))
+
+(fiveam:test own-excess-extras-land-at-their-pattern-position
+  (fiveam:is (equal '(1 0 1 3) (%oe-cells "oex 1, 3")))
+  (fiveam:is (equal '(1 2 1 2 3) (%oe-cells "oex [1, 2], 3")))
+  (fiveam:is (equal '(1 1 1 3 4) (%oe-cells "oex 1, [3, 4]")))
+  (fiveam:is (equal '(1 3 1 2 3 4) (%oe-cells "oex [1, 2], [3, 4]")))
+  (fiveam:is (equal '(1 4 1) (%oe-cells "oex #1"))))
+
+(fiveam:test own-excess-decode-names-every-extra-in-pattern-order
+  (multiple-value-bind (descriptor values size)
+      (decode-instruction-at (vector-cell-reader #(1 3 1 2 3 4)) 0 'own-excess-machine)
+    (fiveam:is (equal '(src loff rv roff) (instruction-descriptor-operand-names descriptor)))
+    (fiveam:is (equal '(1 2 3 4) values))
+    (fiveam:is (= 6 size))))
+
+(fiveam:test own-excess-semantics-bind-each-extra
+  (dolist (case '(("oex 1, 3" 4) ("oex [1, 2], 3" 24) ("oex 1, [3, 4]" 404)
+                  ("oex [1, 2], [3, 4]" 424) ("oex #1" 1)))
+    (let ((m (make-machine 'own-excess-machine)))
+      (load-program m (assembly-cells (assemble (first case) :machine 'own-excess-machine)))
+      (step-machine m)
+      (fiveam:is (= (second case) (sref m 'a))))))
+
+(fiveam:test own-excess-disassembles-each-shape
+  (dolist (case '(("oex 1, 3" "oex $1,$3") ("oex [1, 2], [3, 4]" "oex [$1,$2],[$3,$4]")
+                  ("oex #1" "oex #$1")))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'own-excess-machine))
+                                    :machine 'own-excess-machine)))
+      (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
+
+(defmacro %oe-instruction (opcode name &rest clauses)
+  `(definstruction own-excess-machine ,name
+     (modes oe-mode)
+     (encoding
+       (opcode ,opcode)
+       (operand src :width 1
+         (variant (choice (oe-pair oe-abs oe-abs)) (sub 0))
+         (variant (choice (oe-pair oe-abs oe-idx)) (sub 1))
+         (variant (choice (oe-pair oe-idx oe-abs)) (sub 2))
+         (variant (choice (oe-pair oe-idx oe-idx)) (sub 3))
+         (variant (choice oe-lit) (sub 4)))
+       ,@clauses)
+     (semantics nil)))
+
+(defparameter *oe-index-clauses*
+  '((for-choice (src oe-pair lhs oe-idx) (operand loff :width 1))
+    (for-choice (src oe-pair rhs oe-idx) (operand roff :width 1))))
+
+(fiveam:test own-excess-for-choice-is-required
+  (fiveam:is (search "missing FOR-CHOICE for OE-PAIR"
+                     (%error-text (lambda () (eval `(%oe-instruction 2 oexbad1 ,@*oe-index-clauses*)))))))
+
+(fiveam:test own-excess-for-choice-needs-the-right-operand-count
+  (fiveam:is (search "requires 1 extra OPERAND"
+                     (%error-text
+                      (lambda ()
+                        (eval `(%oe-instruction 3 oexbad2
+                                 (for-choice (src oe-pair) (operand rv :width 1) (operand rw :width 1))
+                                 ,@*oe-index-clauses*)))))))
+
+(fiveam:test own-excess-for-choice-is-rejected-without-excess
+  (fiveam:is (search "has no holes beyond"
+                     (%error-text (lambda () (eval '(%nm-instruction 6 nmbad5
+                                                     (for-choice (src nm-pair) (operand x :width 1))
+                                                     (for-choice (src nm-pair lhs nm-idx) (operand loff :width 1))
+                                                     (for-choice (src nm-pair rhs nm-idx) (operand roff :width 1)))))))))
+
+(fiveam:test own-excess-for-choice-is-rejected-twice
+  (fiveam:is (search "duplicate FOR-CHOICE"
+                     (%error-text
+                      (lambda ()
+                        (eval `(%oe-instruction 7 oexbad3
+                                 (for-choice (src oe-pair) (operand rv :width 1))
+                                 (for-choice (src oe-pair) (operand rw :width 1))
+                                 ,@*oe-index-clauses*)))))))
+
+(defmode oe-mix (one-of (p oe-abs oe-idx)) "," expr "," expr)
+(defmode oe-two expr "," expr)
+(defmode oe-mixed (one-of oe-mix oe-two))
+
+(fiveam:test extra-placements-follow-the-pattern
+  (fiveam:is (null (%extra-placements 'oe-lit 1 0)))
+  (fiveam:is (equal '((1 . 1)) (%extra-placements '(oe-pair oe-abs oe-abs) 1 0)))
+  (fiveam:is (equal '((1 . 3)) (%extra-placements '(oe-pair oe-idx oe-idx) 1 0)))
+  (fiveam:is (equal '((3 . 3)) (%extra-placements '(oe-pair oe-idx oe-idx) 1 2)))
+  ;; an extra that sits between two base holes is spliced between them
+  (fiveam:is (equal '((1 . 1) (2 . 1)) (%extra-placements '(oe-mix oe-idx) 2 0)))
+  (fiveam:is (equal '(:base 0 :base :own) (%key-hole-roles '(oe-mix oe-idx) 2))))
+
+;;; The same shape, word-encoded.
+
+(defmode ow-abs expr)
+(defmode ow-idx "[" expr "," expr "]")
+(defmode ow-pair (one-of (lhs ow-abs ow-idx)) "," (one-of (rhs ow-abs ow-idx)))
+(defmode ow-lit "#" expr)
+(defmode ow-mode (one-of ow-pair ow-lit))
+
+(definstruction varying-hole-test-machine oew
+  (modes ow-mode)
+  (encoding
+    (opcode 9)
+    (operand src :field src
+      (variant (choice (ow-pair ow-abs ow-abs)) inline :range (0 7) :bias #x00)
+      (variant (choice (ow-pair ow-abs ow-idx)) inline :range (0 7) :bias #x08)
+      (variant (choice (ow-pair ow-idx ow-abs)) inline :range (0 7) :bias #x10)
+      (variant (choice (ow-pair ow-idx ow-idx)) inline :range (0 7) :bias #x18)
+      (variant (choice ow-lit) inline :range (0 7) :bias #x20))
+    (for-choice (src ow-pair) (operand rv :trailing-word))
+    (for-choice (src ow-pair lhs ow-idx) (operand loff :trailing-word))
+    (for-choice (src ow-pair rhs ow-idx) (operand roff :trailing-word)))
+  (semantics nil))
+
+(fiveam:test own-excess-word-encoded-round-trip
+  (dolist (case '(("oew 1, 3" (1 3) (src rv)) ("oew [1, 2], 3" (1 2 3) (src loff rv))
+                  ("oew 1, [3, 4]" (1 3 4) (src rv roff))
+                  ("oew [1, 2], [3, 4]" (1 2 3 4) (src loff rv roff)) ("oew #1" (1) (src))))
+    (destructuring-bind (source values names) case
+      (let ((cells (assembly-cells (assemble source :machine 'varying-hole-test-machine))))
+        (fiveam:is (equal (rest values) (coerce (subseq cells 1) 'list)))
+        (multiple-value-bind (descriptor decoded size)
+            (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
+          (fiveam:is (equal names (instruction-descriptor-operand-names descriptor)))
+          (fiveam:is (equal values decoded))
+          (fiveam:is (= (length values) size)))))))

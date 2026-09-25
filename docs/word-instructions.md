@@ -177,8 +177,9 @@ available inside its `choice-case` branch.[^varying]
 Multiple varying elements use separate `for-choice` groups. Nested
 alternatives use tree keys such as `(choice (outer inner))` and
 `(for-choice (src outer inner) ...)`; an alternative with several varying
-`one-of`s takes one group per slot, `(for-choice (src outer lhs inner) ...)`.
-An inner option with no hole pins a field with
+`one-of`s takes one group per slot, `(for-choice (src outer lhs inner) ...)`,
+and holes of its minimum shape beyond the operand's base take their own group,
+`(for-choice (src outer) ...)`. An inner option with no hole pins a field with
 `(for-choice (slot outer inner) (field-value f n))`. See
 [Addressing modes](operand-modes.md#nested-varying-alternatives).
 
