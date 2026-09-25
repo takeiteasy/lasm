@@ -5912,3 +5912,169 @@ present, so an error comes from the ENCODING under test."
     (destructuring-bind (source cells) case
       (fiveam:is (equalp cells (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine)))
                  "~A" source))))
+
+;;; Sub-opcode tables that select a ONE-OF element by slot (#218), including
+;;; nested alternatives with hole-less options (#219).
+
+(defmachine slot-sub-machine
+  (register pc :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16))
+
+(defmode ss-sp "SP")
+(defmode ss-pc "PC")
+(defmode ss-reg expr)
+(defmode ss-none "-")
+(defmode ss-idx "[" expr "," expr "]")
+(defmode ss-pop "POP")
+(defmode ss-stk (one-of ss-pop ss-idx))
+(defmode ss-fixed (one-of (fixed ss-sp ss-pc)))
+(defmode ss-kind (one-of (kind ss-sp ss-pc ss-reg)))
+(defmode ss-opt (one-of (opt ss-none ss-idx)))
+(defmode ss-nested (one-of (nest ss-reg ss-stk)))
+(defmode ss-both (one-of (kind ss-sp ss-reg)) "," (one-of ss-reg ss-idx))
+
+(definstruction slot-sub-machine fx
+  (modes ss-fixed)
+  (encoding (opcode #x10)
+            (sub-opcode (variant (choice ss-sp) (sub 0))
+                        (variant (choice ss-pc) (sub 1))))
+  (semantics (choice-case fixed (ss-sp (set! a 1)) (ss-pc (set! a 2)))))
+
+(definstruction slot-sub-machine kd
+  (modes ss-kind)
+  (encoding (opcode #x11)
+            (sub-opcode (holes kind)
+                        (variant (choice ss-sp) (sub 0))
+                        (variant (choice ss-pc) (sub 1))
+                        (variant (choice ss-reg) (sub 2)))
+            (for-choice (kind ss-reg) (operand v :width 1)))
+  (semantics (choice-case kind (ss-sp (set! a 1)) (ss-pc (set! a 2)) (ss-reg (set! a v)))))
+
+(definstruction slot-sub-machine op
+  (modes ss-opt)
+  (encoding (opcode #x12)
+            (sub-opcode (variant (choice ss-none) (sub 0))
+                        (variant (choice ss-idx) (sub 1)))
+            (for-choice (opt ss-idx) (operand base :width 1) (operand off :width 1)))
+  (semantics (choice-case opt (ss-none (set! a 9)) (ss-idx (set! a (+ base off))))))
+
+(definstruction slot-sub-machine nd
+  (modes ss-nested)
+  (encoding (opcode #x13)
+            (sub-opcode (holes nest)
+                        (variant (choice ss-reg) (sub 0))
+                        (variant (choice (ss-stk ss-pop)) (sub 1))
+                        (variant (choice (ss-stk ss-idx)) (sub 2)))
+            (for-choice (nest ss-reg) (operand v :width 1))
+            (for-choice (nest ss-stk ss-idx) (operand base :width 1) (operand off :width 1)))
+  (semantics (choice-case (nest ss-stk)
+               (ss-pop (set! a 9))
+               (ss-idx (set! a (+ base off)))
+               (otherwise (set! a v)))))
+
+(definstruction slot-sub-machine bt
+  (modes ss-both)
+  (encoding (opcode #x14)
+            (sub-opcode (holes kind 0)
+                        (variant (choice ss-sp ss-reg) (sub 0))
+                        (variant (choice ss-sp ss-idx) (sub 1))
+                        (variant (choice ss-reg ss-reg) (sub 2))
+                        (variant (choice ss-reg ss-idx) (sub 3)))
+            (operand right :width 1)
+            (for-choice (kind ss-reg) (operand left :width 1))
+            (for-choice ss-idx (operand off :width 1)))
+  (semantics (set! a (+ (choice-case kind (ss-sp 100) (ss-reg left)) right (or off 0)))))
+
+(definstruction slot-sub-machine hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(defun %slot-sub-run (source)
+  (let ((machine (make-machine 'slot-sub-machine))
+        (assembly (assemble (format nil "~A~%hlt" source) :machine 'slot-sub-machine)))
+    (load-program machine assembly)
+    (run machine)
+    (values (sref machine 'a) (assembly-cells assembly))))
+
+(fiveam:test hole-less-slot-selections-encode-decode-and-run
+  (loop for (source cells result text) in
+        '(("fx SP" #(#x10 0 0) 1 "fx SP")
+          ("fx PC" #(#x10 1 0) 2 "fx PC")
+          ("kd SP" #(#x11 0 0) 1 "kd SP")
+          ("kd PC" #(#x11 1 0) 2 "kd PC")
+          ("kd 5" #(#x11 2 5 0) 5 "kd $5")
+          ("op -" #(#x12 0 0) 9 "op -")
+          ("op [3, 4]" #(#x12 1 3 4 0) 7 "op [$3,$4]")
+          ("nd 5" #(#x13 0 5 0) 5 "nd $5")
+          ("nd POP" #(#x13 1 0) 9 "nd POP")
+          ("nd [3, 4]" #(#x13 2 3 4 0) 7 "nd [$3,$4]")
+          ("bt SP, 6" #(#x14 0 6 0) 106 "bt SP,$6")
+          ("bt SP, [6, 1]" #(#x14 1 6 1 0) 107 "bt SP,[$6,$1]")
+          ("bt 4, 6" #(#x14 2 4 6 0) 10 "bt $4,$6")
+          ("bt 4, [6, 1]" #(#x14 3 4 6 1 0) 11 "bt $4,[$6,$1]"))
+        do (multiple-value-bind (a assembled) (%slot-sub-run source)
+             (fiveam:is (equalp cells assembled))
+             (fiveam:is (= result a))
+             (fiveam:is (string= text (disassembly-line-text
+                                       (first (disassemble-assembly
+                                               (assemble source :machine 'slot-sub-machine)
+                                               :machine 'slot-sub-machine :labels nil :suffixes nil))))))))
+
+(fiveam:test decode-reports-hole-less-slot-selections
+  (loop for (cells selections) in
+        '((#(#x10 1) ((fixed . ss-pc)))
+          (#(#x11 0) ((kind . ss-sp)))
+          (#(#x13 1) ((nest ss-stk ss-pop)))
+          (#(#x13 2 3 4) ((nest ss-stk ss-idx)))
+          (#(#x14 1 6 1) ((kind . ss-sp))))
+        do (multiple-value-bind (descriptor values size choices found)
+               (decode-instruction-at (vector-cell-reader cells) 0 'slot-sub-machine)
+             (declare (ignore descriptor values size choices))
+             (fiveam:is (equal selections found)))))
+
+(defun %slot-sub-definition-error (form)
+  (handler-case (progn (eval form) nil)
+    (instruction-definition-error (c) (princ-to-string c))))
+
+(defmode ss-unnamed (one-of ss-none ss-idx))
+
+(fiveam:test hole-less-slot-requires-a-selector
+  (fiveam:is-true
+   (search "name it"
+           (%slot-sub-definition-error
+            '(definstruction slot-sub-machine bad1
+               (modes ss-unnamed)
+               (encoding (opcode #x20)
+                         (for-choice ss-idx (operand base :width 1) (operand off :width 1)))
+               (semantics nil)))))
+  (fiveam:is-true
+   (search "slot FIXED"
+           (%slot-sub-definition-error
+            '(definstruction slot-sub-machine bad2
+               (modes ss-fixed)
+               (encoding (opcode #x21))
+               (semantics nil)))))
+  (fiveam:is-true
+   (search "slot KIND"
+           (%slot-sub-definition-error
+            '(definstruction slot-sub-machine bad3
+               (modes ss-both)
+               (encoding (opcode #x22)
+                         (sub-opcode (holes 0)
+                                     (variant (choice ss-reg) (sub 0))
+                                     (variant (choice ss-idx) (sub 1)))
+                         (operand right :width 1)
+                         (for-choice (kind ss-reg) (operand left :width 1))
+                         (for-choice ss-idx (operand off :width 1)))
+               (semantics nil)))))
+  (fiveam:is-true
+   (search "not a hole index or a named ONE-OF slot"
+           (%slot-sub-definition-error
+            '(definstruction slot-sub-machine bad4
+               (modes ss-fixed)
+               (encoding (opcode #x23)
+                         (sub-opcode (holes nope)
+                                     (variant (choice ss-sp) (sub 0))
+                                     (variant (choice ss-pc) (sub 1))))
+               (semantics nil))))))

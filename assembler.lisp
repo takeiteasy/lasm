@@ -379,7 +379,7 @@ its own hole count actually matches CHOICES' length."
               (/= (length (instruction-descriptor-word-fields descriptor)) (length choices)))
     (return-from %choices-eligible-p nil))
   (unless (every (lambda (selection)
-                   (eq (cdr selection) (cdr (assoc (car selection) selections))))
+                   (equal (cdr selection) (cdr (assoc (car selection) selections))))
                  (instruction-descriptor-choice-selections descriptor))
     (return-from %choices-eligible-p nil))
   ;; WORD-FIELDS and SUB-CHOICES are mutually exclusive by construction (a

@@ -27,7 +27,9 @@ expression hole:
 ```
 
 Matching returns named selections alongside the hole-aligned `choices`
-record. Encodings can use a named slot to distinguish fixed alternatives.
+record. A selection is the alternative's name, or its path for a varying
+nested alternative: `(slot stk pop)`. Encodings can use a named slot to
+distinguish fixed alternatives.
 
 ## Matching and backtracking
 
@@ -62,6 +64,7 @@ alternative matched if decode or semantics need to recover it.
 | --- | --- |
 | Cell-encoded, one hole | [Hole-selected sub-opcode](instructions.md#variant-choice-m-sub-s--hole-selected-sub-opcode). |
 | Cell-encoded, several holes | [Sub-opcode table](instructions.md#sub-opcode-table). |
+| Cell-encoded, hole-less slot | [Slot participant](instructions.md#slot-participants). |
 | Word-encoded | [`choice`-selected field](word-instructions.md#choice-selected-fields). |
 
 Without a discriminator, disassembly renders the first alternative and
@@ -91,6 +94,16 @@ A varying alternative inside another `one-of` uses a path such as
 `(choice (ind ind-idx))`. `for-choice` uses the same path to name extra
 holes. `choice-case` can inspect the outer or inner selection. See
 [`nestvarying.lisp`](../examples/nestvarying.lisp).[^nested]
+
+An inner option with no hole, such as `POP`, needs a named outer `one-of`;
+the slot records the pick as a path:
+
+```lisp
+(defmode stk (one-of pop idx))
+(defmode src (one-of (src-slot reg stk)))
+```
+
+See [`slotvarying.lisp`](../examples/slotvarying.lisp).
 
 ## Per-hole attributes
 
@@ -128,8 +141,9 @@ prefixes select the alternative first and then the variant. See
 
 ## Limitations
 
-- A cell-encoded varying alternative must contribute at least one base
-  hole so its sub-opcode can identify the shape.
+- A hole-less `one-of` alternative needs a slot on its element. A
+  cell-encoded one must be selected by a
+  [sub-opcode table](instructions.md#slot-participants).
 - A nested varying alternative has one varying `one-of` of its own. Set
   width, signedness, relative, suffix, and strict options on holes or outer
   alternatives instead.[^nested]

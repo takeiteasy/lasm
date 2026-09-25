@@ -790,3 +790,20 @@ looks like."
   (fiveam:signals mode-definition-error
     (eval '(defmode hp-bad-twins (one-of hp-plain hp-plain-copy))))
   (fiveam:finishes (eval '(defmode hp-ok-twins (one-of hp-twin-a hp-twin-b)))))
+
+(defmode mz-pop "POP")
+(defmode mz-idx "[" expr "," expr "]")
+(defmode mz-stk (one-of mz-pop mz-idx))
+(defmode mz-outer (one-of (mz-slot oo-reg mz-stk)))
+
+(fiveam:test nested-hole-less-option-selection-carries-the-path
+  (flet ((selections (text)
+           (nth-value 3 (try-match-operand-mode (%tokens-for text) 'mz-outer))))
+    (fiveam:is (equal '((mz-slot mz-stk mz-pop)) (selections "POP")))
+    (fiveam:is (equal '((mz-slot mz-stk mz-idx)) (selections "[1, 2]")))
+    (fiveam:is (equal '((mz-slot . oo-reg)) (selections "5")))))
+
+(fiveam:test nested-hole-less-option-needs-a-named-outer-one-of
+  (fiveam:is (null (nv-error-text '(defmode mz-ok (one-of (mz-ok-slot oo-reg mz-stk))))))
+  (let ((text (nv-error-text '(defmode mz-bad (one-of oo-reg mz-stk)))))
+    (fiveam:is-true (search "name the outer ONE-OF" text))))

@@ -364,11 +364,16 @@ lists every site that declares a prefix, whatever the policy."
                                (write-string (%render-value v lexer :label (or alias (gethash v reverse-symbols))) s))))
                       (:one-of
                        (let* ((alternatives (%one-of-alternatives el))
-                              (path (cond ((eq tail :top) (%key-list (%matched-choice-key choices 0)))
+                              (selected (let ((key (cdr (assoc (%one-of-slot el) choice-selections))))
+                                          (and key (%key-list key))))
+                              (path (cond ((eq tail :top)
+                                           (or selected
+                                               (let ((key (%matched-choice-key choices 0)))
+                                                 (and key (%key-list key)))))
                                           ((eq el (%pattern-varying-one-of-element pattern)) tail)))
                               (matched (first path))
                               (alt-name (or (and (member matched alternatives) matched)
-                                            (cdr (assoc (%one-of-slot el) choice-selections))
+                                            (first selected)
                                             (first alternatives)))
                               (alt (find-mode-descriptor alt-name)))
                          (when (and prefix-separator (mode-descriptor-suffix alt)
@@ -436,7 +441,8 @@ DESCRIPTOR's decoded one. T when TEXT cannot be re-assembled."
                                            (and c (member (second site)
                                                           (mapcar #'mode-descriptor-name (%key-list c)))))
                                          choices)
-                                   (rassoc (second site) selections))))
+                                   (find (second site) selections
+                                         :key (lambda (selection) (%key-head (cdr selection)))))))
                   collect site)))
     (error () t)))
 

@@ -1118,54 +1118,99 @@ order."
                names tail))
       (values names (second (first tail))))))
 
-(defun %parse-byte-sub-table-holes-clause (variant-forms hole-alternatives-list machine name)
+(defun %mode-named-elements (mode)
+  "((SLOT BASE-START BASE-COUNT OPTIONS)...) for each named ONE-OF element of MODE,
+in pattern order. BASE-START indexes the mode's minimum-shape holes."
+  (let ((start 0)
+        result)
+    (dolist (element (mode-descriptor-pattern mode) (nreverse result))
+      (ecase (first element)
+        (:literal)
+        (:expr (incf start))
+        (:one-of
+         (let* ((options (%one-of-element-options element))
+                (count (reduce #'min (mapcar #'cdr options))))
+           (when (%one-of-slot element)
+             (cl:push (list (%one-of-slot element) start count (mapcar #'car options)) result))
+           (incf start count)))))))
+
+(defun %mode-hole-less-slot-p (mode)
+  "T if MODE has a named ONE-OF element whose shortest alternative has no operand hole."
+  (some (lambda (element) (zerop (third element))) (%mode-named-elements mode)))
+
+(defun %sub-table-participant-alternatives (participant hole-alternatives-list named-elements)
+  (if (integerp participant)
+      (nth participant hole-alternatives-list)
+      (fourth (assoc participant named-elements))))
+
+(defun %sub-table-participant-position (participant named-elements)
+  "Pattern order key: a hole-less slot sorts before the hole at its base start."
+  (if (integerp participant)
+      (1+ (* 2 participant))
+      (* 2 (second (assoc participant named-elements)))))
+
+(defun %parse-byte-sub-table-holes-clause (variant-forms hole-alternatives-list machine name
+                                           &optional named-elements)
   "VARIANT-FORMS is the full body of a (sub-opcode ...) subclause (#128),
-optionally led by one (holes h1 h2 ...) form naming, by 0-based
-pattern-order index (the same indexing HOLE-ALTERNATIVES-LIST -- mode.lisp's
-%MODE-HOLE-ALTERNATIVES -- is aligned against), which of the mode's ONE-OF
-holes this table covers (#131). Returns (VALUES hole-indices
-remaining-variant-forms): with a leading (holes ...) form, HOLE-INDICES is
-its own names sorted into ascending pattern order regardless of how (holes
-...) listed them -- so a variant's (choice m1 m2 ...) stays positional in
-pattern order unambiguously either way, not in (holes ...)'s own writing
-order -- and REMAINING-VARIANT-FORMS has that leading form stripped off;
-with no (holes ...) form, HOLE-INDICES is every ONE-OF hole of the mode (in
-pattern order, today's original meaning) and REMAINING-VARIANT-FORMS is
-VARIANT-FORMS unchanged.
+optionally led by one (holes p1 p2 ...) form (#131) naming which ONE-OF
+elements the table covers. A participant is a 0-based hole index (the same
+indexing HOLE-ALTERNATIVES-LIST -- mode.lisp's %MODE-HOLE-ALTERNATIVES -- is
+aligned against) or the slot name of a named ONE-OF element in
+NAMED-ELEMENTS (%MODE-NAMED-ELEMENTS). A slot whose shortest alternative has
+no hole stays a slot participant; any other slot resolves to its first hole.
+Returns (VALUES participants remaining-variant-forms), PARTICIPANTS in
+pattern order.
+
+With no (holes ...) form, every ONE-OF hole and every hole-less named
+element participates.
 
 Signals a DEFINSTRUCTION-time error, naming MACHINE/NAME, for a (holes ...)
-form that: names no hole at all; repeats an index; names an index out of
-range for HOLE-ALTERNATIVES-LIST; or names an index whose hole is not
-governed by any ONE-OF -- a sub-opcode table, full or subset, only chooses
-between ONE-OF alternatives. A ONE-OF hole left unnamed by (holes ...) is
-simply not covered by this table -- it gets no sub-opcode-selector record of
-its own (%CHECK-BYTE-ONE-OF-SIGNED/-WIDTH/-RELATIVE, below, still require
-such a hole's alternatives to agree with each other, exactly as an
-ungoverned or fully-uncovered ONE-OF hole always has)."
-  (if (and variant-forms (consp (first variant-forms)) (eq (first (first variant-forms)) 'holes))
-      (let ((indices (rest (first variant-forms))))
-        (unless indices
-          (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes) names no hole -- give at ~
-least one hole index, or omit (holes ...) entirely to cover every ONE-OF hole" machine name))
-        (let ((dup (loop for (i . later) on indices when (member i later) return i)))
-          (when dup
-            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D more than once"
-                   machine name dup)))
-        (dolist (i indices)
-          (unless (and (integerp i) (<= 0 i) (< i (length hole-alternatives-list)))
-            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, not a valid ~
+form that: names nothing; repeats a participant; names an index out of range
+or not governed by a ONE-OF; or names an unknown slot. A ONE-OF hole left
+unnamed by (holes ...) is not covered by this table -- it gets no
+sub-opcode-selector record of its own (%CHECK-BYTE-ONE-OF-SIGNED/-WIDTH/
+-RELATIVE, below, still require such a hole's alternatives to agree with each
+other)."
+  (flet ((in-pattern-order (participants)
+           (sort (copy-list participants) #'<
+                 :key (lambda (p) (%sub-table-participant-position p named-elements)))))
+    (if (and variant-forms (consp (first variant-forms)) (eq (first (first variant-forms)) 'holes))
+        (let ((indices (rest (first variant-forms))))
+          (unless indices
+            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes) names no hole -- give at ~
+least one hole index or slot, or omit (holes ...) entirely to cover every ONE-OF element" machine name))
+          (let ((resolved
+                  (loop for i in indices
+                        collect (cond
+                                  ((integerp i)
+                                   (unless (and (<= 0 i) (< i (length hole-alternatives-list)))
+                                     (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, not a valid ~
 hole index for this mode (0-~D)" machine name i (1- (length hole-alternatives-list))))
-          (unless (nth i hole-alternatives-list)
-            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D, which is ~
+                                   (unless (nth i hole-alternatives-list)
+                                     (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names hole ~D, which is ~
 not a ONE-OF pattern element -- a sub-opcode table only chooses between ONE-OF alternatives"
-                   machine name i)))
-        (values (sort (copy-list indices) #'<) (rest variant-forms)))
-      (values (loop for alts in hole-alternatives-list
-                    for i from 0
-                    when alts collect i)
-              variant-forms)))
+                                            machine name i))
+                                   i)
+                                  ((assoc i named-elements)
+                                   (destructuring-bind (slot start count options) (assoc i named-elements)
+                                     (declare (ignore slot options))
+                                     (if (zerop count) i start)))
+                                  (t (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S, ~
+not a hole index or a named ONE-OF slot of this mode" machine name i))))))
+            (let ((dup (loop for (i . later) on resolved when (member i later) return i)))
+              (when dup
+                (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (holes ...) names ~S more than once"
+                       machine name dup)))
+            (values (in-pattern-order resolved) (rest variant-forms))))
+        (values (in-pattern-order
+                 (append (loop for alts in hole-alternatives-list
+                               for i from 0
+                               when alts collect i)
+                         (loop for (slot nil count nil) in named-elements
+                               when (zerop count) collect slot)))
+                variant-forms))))
 
-(defun %check-byte-sub-table! (variant-forms hole-alternatives-list machine name)
+(defun %check-byte-sub-table! (variant-forms hole-alternatives-list machine name &optional named-elements)
   "Validate VARIANT-FORMS -- an optional leading (holes ...) form (#131)
 followed by the (variant (choice m1 m2 ...) (sub s)) forms -- declared by a
 (sub-opcode ...) subclause (#128) -- against HOLE-ALTERNATIVES-LIST, the
@@ -1202,13 +1247,14 @@ participating holes in pattern order (every ONE-OF hole, or (holes ...)'s
 own subset), PAIRS the ((name-list . sub) ...) entries in VARIANT-FORMS'
 own declaration order."
   (multiple-value-bind (hole-indices variant-forms)
-      (%parse-byte-sub-table-holes-clause variant-forms hole-alternatives-list machine name)
+      (%parse-byte-sub-table-holes-clause variant-forms hole-alternatives-list machine name named-elements)
     (unless hole-indices
       (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but this mode has no ONE-OF ~
 operand hole -- a sub-opcode table only chooses between ONE-OF alternatives" machine name))
     (let* ((width (%machine-cell-width machine))
            (n (length hole-indices))
-           (alt-lists (mapcar (lambda (i) (nth i hole-alternatives-list)) hole-indices))
+           (alt-lists (mapcar (lambda (i) (%sub-table-participant-alternatives i hole-alternatives-list named-elements))
+                              hole-indices))
            (all-combos (labels ((cross (lists)
                                    (if (null lists)
                                        (list nil)
@@ -1233,8 +1279,8 @@ but this mode has ~D participating ONE-OF hole~:P" machine name (car p) (length 
               for i in hole-indices
               unless (member choice-name alts :test #'equal)
                 do (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): (choice ~S) names ~S, not ~
-one of operand hole ~D's ONE-OF alternatives ~S~A" machine name (car p) choice-name i alts
-                          (%choice-hint choice-name)))
+one of ~:[slot ~S~;operand hole ~D~]'s ONE-OF alternatives ~S~A" machine name (car p) choice-name
+                          (integerp i) i alts (%choice-hint choice-name)))
         (when (or (minusp (cdr p)) (>= (cdr p) (ash 1 width)))
           (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...): sub-opcode ~D for (choice ~S) does not ~
 fit machine ~S's ~D-bit code cell" machine name (cdr p) (car p) machine width)))
@@ -1324,7 +1370,8 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
             (cond
               (sub-opcode-subclause
                (multiple-value-bind (hole-indices pairs)
-                   (%check-byte-sub-table! (rest sub-opcode-subclause) hole-alternatives machine name)
+                   (%check-byte-sub-table! (rest sub-opcode-subclause) hole-alternatives machine name
+                                           (%mode-named-elements mode))
                  (cons hole-indices pairs)))
               (carrying
                (destructuring-bind (hole-index . pairs) (first carrying)
@@ -1475,21 +1522,22 @@ governing hole is what selects which descriptor ran in the first place."
              (hole-alternatives (if (eq index :selection)
                                     (cdr (assoc (%key-head name) named-slot-alternatives))
                                     (nth index hole-alternatives-list))))
-        (when (and prefix (or (eq index :selection) (null hole-alternatives)))
+        (when (and prefix (null hole-alternatives))
           (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE ~S: only an operand hole governed by a ONE-OF can ~
 be qualified" name))
         (dolist (clause clauses)
           (%check-choice-case-keys! name (first clause)
                                     (cond (prefix (%choice-case-components (first name) prefix
                                                                            hole-alternatives))
-                                          ((eq index :selection) hole-alternatives)
-                                          (t (mapcar #'%key-head hole-alternatives)))))))
+                                          (t (remove-duplicates (mapcar #'%key-head hole-alternatives))))))))
     (let ((has-fallback (some (lambda (c) (member (first c) '(otherwise t))) clauses))
           (choice-var (gensym "CHOICE"))
           (name (if (consp name) (first name) name))
           (prefix (and (consp name) (rest name))))
       `(let ((,choice-var ,(cond ((not foundp) nil)
-                                 ((eq index :selection) `(cdr (assoc ',name selections)))
+                                 ((and (eq index :selection) prefix)
+                                  `(%key-component (cdr (assoc ',name selections)) ',prefix))
+                                 ((eq index :selection) `(%key-head (cdr (assoc ',name selections))))
                                  (prefix `(%matched-choice-component choices ,index ',prefix
                                                                      ,operand-map-form))
                                  (t `(%matched-choice-name choices ,index ,operand-map-form)))))
@@ -1748,7 +1796,13 @@ subclauses, their count must match MODE's hole count exactly, and SUB-SPEC
       (%parse-operand-subclauses mode operand-subclauses machine name mode-name machine-name
                                   sub-opcode-subclause)
       (case (%mode-hole-count mode)
-        (0 (values nil nil nil nil nil))
+        (0 (values nil nil
+                   (when sub-opcode-subclause
+                     (multiple-value-bind (participants pairs)
+                         (%check-byte-sub-table! (rest sub-opcode-subclause) nil machine name
+                                                 (%mode-named-elements mode))
+                       (cons participants pairs)))
+                   nil nil))
         (1
          (when sub-opcode-subclause
            (%definstruction-error "DEFINSTRUCTION ~S ~S: (sub-opcode ...) given but addressing mode ~S has no ~
@@ -1812,30 +1866,41 @@ hole-selected one would both be trying to write it."
              sum (- (mode-hole-group-count group) (mode-hole-group-base-count group)))))
 
 (defun %check-byte-varying-selectors! (mode sub-spec machine name)
-  "Signal a DEFINSTRUCTION-time error unless SUB-SPEC selects, at the first
-minimum-shape hole of every varying ONE-OF element of MODE, which alternative
-matched. That sub-opcode is the only thing a byte-encoded decode can read to
-learn how many operand cells follow. Only the first hole of an element may
-participate: its alternatives govern the element's other holes alike."
+  "Signal a DEFINSTRUCTION-time error unless SUB-SPEC selects, for every
+varying or hole-less named ONE-OF element of MODE, which alternative matched:
+at the element's first minimum-shape hole, or by slot when the element has
+none. That sub-opcode is the only thing a byte-encoded decode can read to
+learn which shape follows. Only the first hole of an element may participate:
+its alternatives govern the element's other holes alike."
   (dolist (group (remove-duplicates (loop for tuple in (%mode-hole-tuples mode)
                                           append (mode-hole-tuple-groups tuple))
-                                    :key #'mode-hole-group-base-start))
+                                    :key (lambda (g) (cons (mode-hole-group-slot g)
+                                                           (mode-hole-group-base-start g)))
+                                    :test #'equal))
     (let ((first-hole (mode-hole-group-base-start group))
-          (base-count (mode-hole-group-base-count group)))
-      (when (zerop base-count)
-        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a varying ONE-OF whose shortest ~
-alternative has no operand hole -- there is no hole to carry its sub-opcode selector"
-               machine name (mode-descriptor-name mode)))
-      (unless (member first-hole (car sub-spec))
-        (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree on ~
+          (base-count (mode-hole-group-base-count group))
+          (slot (mode-hole-group-slot group)))
+      (cond
+        ((and (zerop base-count) (null slot))
+         (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a varying ONE-OF whose shortest ~
+alternative has no operand hole -- name it, (one-of (slot alternative...)), and select it with (sub-opcode ~
+(holes slot ...) ...)" machine name (mode-descriptor-name mode)))
+        ((zerop base-count)
+         (unless (member slot (car sub-spec))
+           (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF slot ~S with no operand ~
+hole -- a (sub-opcode (holes ~S ...) ...) table must select its alternative so decode can tell them apart"
+                  machine name (mode-descriptor-name mode) slot slot)))
+        (t
+         (unless (member first-hole (car sub-spec))
+           (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has a ONE-OF whose alternatives disagree on ~
 hole count -- operand hole ~D must carry a sub-opcode selector, alone or inside a (sub-opcode ...) ~
 table, so decode can tell how many operand cells follow"
-               machine name (mode-descriptor-name mode) first-hole))
-      (loop for hole from (1+ first-hole) below (+ first-hole base-count)
-            when (member hole (car sub-spec))
-              do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D shares a varying ONE-OF element with ~
+                  machine name (mode-descriptor-name mode) first-hole))
+         (loop for hole from (1+ first-hole) below (+ first-hole base-count)
+               when (member hole (car sub-spec))
+                 do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D shares a varying ONE-OF element with ~
 hole ~D -- only the element's first hole may carry a sub-opcode selector"
-                        machine name hole first-hole)))))
+                           machine name hole first-hole)))))))
 
 (defun %parse-byte-tuple-fields (mode tuple subclauses base-subclauses machine name mode-name)
   "Resolve one alternative-tuple's operand SUBCLAUSES (the shared BASE-SUBCLAUSES
@@ -1859,8 +1924,13 @@ sub-opcode selector -- its alternative is chosen at the element's first hole"
       (values (mapcar #'first parsed) names (mapcar #'third parsed) registers))))
 
 (defun %byte-pair-chosen (pair hole-indices group)
-  "The alternative PAIR, a (name-list . sub) sub-opcode table entry, names at GROUP's first hole."
-  (nth (position (mode-hole-group-base-start group) hole-indices) (car pair)))
+  "The alternative PAIR, a (name-list . sub) sub-opcode table entry, names for GROUP:
+at its first hole, or by slot when it has no base hole."
+  (nth (position (if (zerop (mode-hole-group-base-count group))
+                     (mode-hole-group-slot group)
+                     (mode-hole-group-base-start group))
+                 hole-indices)
+       (car pair)))
 
 (defun %byte-pair-in-tuple-p (pair hole-indices tuple)
   "T if PAIR's alternatives select TUPLE's shape at every varying element."
@@ -1878,7 +1948,8 @@ varying element records the alternative matched at its first hole."
   (let ((choices (make-list (length (mode-hole-tuple-hole-alternatives tuple)))))
     (loop for hole in hole-indices
           for chosen in (car pair)
-          do (setf (nth (%tuple-hole-index tuple hole) choices) chosen))
+          when (integerp hole)
+            do (setf (nth (%tuple-hole-index tuple hole) choices) chosen))
     (dolist (group (mode-hole-tuple-groups tuple) choices)
       (loop with chosen = (%byte-pair-chosen pair hole-indices group)
             for i from (mode-hole-group-start group)
@@ -1922,18 +1993,24 @@ bindings forms) like %BYTE-DESCRIPTOR-FORMS."
                                                 names cycles semantics-fn-gensym (cdr pair) sub-choices
                                                 (%byte-operand-signedness mode sub-choices sources)
                                                 (%byte-relative-flags mode sub-choices sources)
-                                                nil nil registers nil operand-map)))))))
+                                                nil nil registers (%tuple-choice-selections tuple)
+                                                operand-map)))))))
         (assert (= (length forms) (length pairs)))
         (values (list (list semantics-fn-gensym
                             (%semantics-fn-form semantics-forms machine name shared-names shared-alternatives
-                                                shared-names)))
+                                                shared-names (%tuples-named-slot-alternatives tuples))))
                 forms)))))
+
+(defun %byte-selected-mode-p (mode)
+  "T if MODE needs one descriptor per alternative-tuple: a varying ONE-OF, or a named
+ONE-OF element with a hole-less shortest alternative."
+  (or (mode-descriptor-varyingp mode) (%mode-hole-less-slot-p mode)))
 
 (defun %byte-mode-descriptor-forms (machine name mode-form mode mode-name opcode explicit-sub
                                      operand-subclauses for-choice-subclauses sub-opcode-subclause
                                      cycles semantics-forms)
   "Descriptor forms for one byte-encoded use of MODE: (VALUES bindings forms)."
-  (when (and for-choice-subclauses (not (mode-descriptor-varyingp mode)))
+  (when (and for-choice-subclauses (not (%byte-selected-mode-p mode)))
     (%definstruction-error "DEFINSTRUCTION ~S ~S: (for-choice ...) given but addressing mode ~S has no ONE-OF whose ~
 alternatives disagree on hole count" machine name mode-name))
   (multiple-value-bind (operand-widths operand-names sub-spec mode-specified operand-registers)
@@ -1942,7 +2019,7 @@ alternatives disagree on hole count" machine name mode-name))
       (%check-byte-one-of-signed mode hole-alternatives sub-spec machine name)
       (%check-byte-one-of-width hole-alternatives sub-spec mode-specified machine name)
       (%check-byte-one-of-relative mode hole-alternatives sub-spec machine name)
-      (if (mode-descriptor-varyingp mode)
+      (if (%byte-selected-mode-p mode)
           (%byte-varying-descriptor-forms machine name mode-form opcode explicit-sub mode mode-name
                                           operand-subclauses for-choice-subclauses sub-spec cycles
                                           semantics-forms)
@@ -2116,14 +2193,19 @@ unchanged, for a caller that already extracted a key itself."
   "The mode-name symbol INDEX's hole actually matched: the head of its option key."
   (%key-head (%matched-choice-key choices index mapping)))
 
-(defun %matched-choice-component (choices index prefix &optional mapping)
-  "The path component INDEX's hole matched just after PREFIX (a list of mode
-names), or NIL when its key does not start with PREFIX."
-  (let ((key (%key-list (%matched-choice-key choices index mapping)))
+(defun %key-component (key prefix)
+  "The path component of option KEY just after PREFIX (a list of mode names),
+or NIL when KEY does not start with PREFIX."
+  (let ((path (%key-list key))
         (n (length prefix)))
-    (and (> (length key) n)
-         (equal prefix (subseq key 0 n))
-         (nth n key))))
+    (and key
+         (> (length path) n)
+         (equal prefix (subseq path 0 n))
+         (nth n path))))
+
+(defun %matched-choice-component (choices index prefix &optional mapping)
+  "The path component INDEX's hole matched just after PREFIX, or NIL."
+  (%key-component (%matched-choice-key choices index mapping) prefix))
 
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
@@ -3240,10 +3322,20 @@ over-count tuple records its selected alternative directly."
         when (and (mode-hole-group-slot group) alt)
           collect (cons (mode-hole-group-slot group) alt)))
 
+(defun %tuples-named-slot-alternatives (tuples)
+  "((SLOT . OPTION-KEYS)...) for every named ONE-OF group of TUPLES."
+  (remove-duplicates
+   (loop for tuple in tuples
+         append (loop for group in (mode-hole-tuple-groups tuple)
+                      when (mode-hole-group-slot group)
+                        collect (cons (mode-hole-group-slot group)
+                                      (mode-hole-group-options group))))
+   :key #'car :test #'eq))
+
 (defun %tuple-choice-selections (tuple)
-  "Return named ONE-OF selections represented by TUPLE, by outer alternative."
-  (loop for (slot . key) in (%tuple-choice-keys tuple)
-        collect (cons slot (%key-head key))))
+  "Return TUPLE's named ONE-OF selections, (SLOT . OPTION-KEY): a bare mode name, or
+a path for a varying nested alternative."
+  (%tuple-choice-keys tuple))
 
 (defun %same-semantics-operand-subclause-p (a b)
   "Whether A and B represent the same semantics operand across mode shapes."
@@ -3341,14 +3433,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                  (semantics-subclauses (first shared-shape))
                  (mode-operand-names (second shared-shape))
                  (mode-hole-alternatives (third shared-shape))
-                 (named-slot-alternatives
-                   (remove-duplicates
-                    (loop for (tuple nil nil) in tuple-specs
-                          append (loop for group in (mode-hole-tuple-groups tuple)
-                                      when (mode-hole-group-slot group)
-                                        collect (cons (mode-hole-group-slot group)
-                                                      (mode-hole-group-alternatives group))))
-                    :key #'car :test #'eq))
+                 (named-slot-alternatives (%tuples-named-slot-alternatives (mapcar #'first tuple-specs)))
                  (bindings nil)
                  (semantics-fn-gensym (gensym "SEMANTICS-FN"))
                  (forms nil))

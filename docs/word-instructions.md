@@ -153,7 +153,8 @@ available inside its `choice-case` branch.[^varying]
 
 Multiple varying elements use separate `for-choice` groups. Nested
 alternatives use paths such as `(choice (outer inner))` and
-`(for-choice (src outer inner) ...)`. See
+`(for-choice (src outer inner) ...)`. An inner option with no hole pins a
+field with `(for-choice (slot outer inner) (field-value f n))`. See
 [Addressing modes](operand-modes.md#nested-varying-alternatives).
 
 A named alternative with no holes can use `(for-choice (slot alternative)

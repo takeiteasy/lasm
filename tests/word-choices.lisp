@@ -719,3 +719,64 @@
 (fiveam:test choice-overflow-after-a-trailing-word-hole-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble "move [0, 5], 99" :machine 'independent-choice-machine)))
+
+;;; Nested varying alternative with a hole-less inner option (#219)
+
+(defmachine nested-zero-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field src 6)
+    (field dst 6)))
+
+(defmode nz-reg expr)
+(defmode nz-pop "POP")
+(defmode nz-idx "[" expr "," expr "]")
+(defmode nz-stk (one-of nz-pop nz-idx))
+(defmode nz-src (one-of (src-slot nz-reg nz-stk)))
+
+(definstruction nested-zero-machine get
+  (modes nz-src)
+  (encoding
+    (opcode 1)
+    (for-choice (src-slot nz-reg)
+      (operand v :field src (variant (choice nz-reg) inline :range (0 7))))
+    (for-choice (src-slot nz-stk nz-pop) (field-value src 8))
+    (for-choice (src-slot nz-stk nz-idx)
+      (operand v :field src (variant (choice (nz-stk nz-idx)) inline :range (0 7) :bias 16))
+      (operand off :trailing-word :cells 1)))
+  (semantics
+    (choice-case (src-slot nz-stk)
+      (nz-pop (set! a 99))
+      (nz-idx (set! a (+ v off)))
+      (otherwise (set! a v)))))
+
+(fiveam:test nested-hole-less-option-encodes-decodes-and-runs
+  (dolist (case '(("get 5" 5 "get $5")
+                  ("get POP" 99 "get POP")
+                  ("get [3, 4]" 7 "get [$3,$4]")))
+    (destructuring-bind (source expected text) case
+      (let* ((assembly (assemble source :machine 'nested-zero-machine))
+             (machine (make-machine 'nested-zero-machine)))
+        (multiple-value-bind (descriptor values size choices selections)
+            (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'nested-zero-machine)
+          (declare (ignore size choices))
+          (execute-instruction descriptor machine values selections)
+          (fiveam:is (= expected (sref machine 'a))))
+        (fiveam:is (equal (list text)
+                          (mapcar #'disassembly-line-text
+                                  (disassemble-assembly assembly :machine 'nested-zero-machine
+                                                                  :labels nil :suffixes nil))))))))
+
+(fiveam:test nested-hole-less-option-selection-is-a-path
+  (multiple-value-bind (descriptor values size choices selections)
+      (decode-instruction-at
+       (vector-cell-reader (assembly-cells (assemble "get POP" :machine 'nested-zero-machine)))
+       0 'nested-zero-machine)
+    (declare (ignore descriptor size choices))
+    (fiveam:is (null values))
+    (fiveam:is (equal '((src-slot nz-stk nz-pop)) selections)))
+  (fiveam:is (not (equalp (assembly-cells (assemble "get POP" :machine 'nested-zero-machine))
+                          (assembly-cells (assemble "get 0" :machine 'nested-zero-machine))))))

@@ -153,6 +153,28 @@ Unlisted `one-of` holes must have alternatives that agree on width,
 signedness, and relative behavior. Their alternative is not recorded for
 decode, so disassembly renders the first alternative.[^subcodes]
 
+#### Slot participants
+
+A named `one-of` whose shortest alternative has no hole has no operand to
+carry a selector. Name its slot in `(holes ...)` instead:
+
+```lisp
+(defmode any (one-of (kind sp pc reg)))
+
+(encoding (opcode #x11)
+  (sub-opcode (holes kind)
+    (variant (choice sp)  (sub 0))
+    (variant (choice pc)  (sub 1))
+    (variant (choice reg) (sub 2)))
+  (for-choice (kind reg) (operand v :width 1)))
+```
+
+Without `(holes ...)`, every `one-of` hole and every such slot
+participates. A slot and a hole index can share one table:
+`(holes kind 0)`. A `one-of` with no slot and no hole is rejected; name it.
+Nested alternatives use paths: `(choice (stk pop))`. See
+[`slotvarying.lisp`](../examples/slotvarying.lisp).
+
 ### `operand-signedness`
 
 A cell-encoded descriptor records signedness and encoded width for each
