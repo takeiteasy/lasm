@@ -82,16 +82,17 @@ cross a data boundary.
 | Machine | Region renders as |
 | --- | --- |
 | Byte-encoded | `.byte` per cell |
-| Word-encoded, two-cell instruction word | `.word` per cell pair, else `.byte` |
-| Word-encoded, other word width | `.byte` per cell[^wide] |
+| Word-encoded, instruction word a multiple of four cells | `.long` per four cells, a trailing `.word` for the rest, else `.byte` |
+| Word-encoded, other even instruction word | `.word` per cell pair, else `.byte` |
+| Word-encoded, odd instruction word | `.byte` per cell[^wide] |
 
-Pairs start at the region's first cell and read in the memory's endian
+Groups start at the region's first cell and read in the memory's endian
 order, so the text reassembles to the same cells. The region is first
 clipped to the disassembled range. An odd length after merging and clipping
 stays `.byte`; `.byte 1,2,3` followed by `.word 4` is one five-cell region.
 
 ```text
-.word $1234
+.long $12345678
 .word $BEEF
 ```
 
@@ -162,5 +163,5 @@ without an ambiguous local substitution.
   as a number to keep the text unambiguous. An alias for an encoded choice
   decodes using the canonical alternative.
 
-[^wide]: A word wider than two cells has no single directive to render as
-    ([ticket 269](https://todo.sr.ht/~takeiteasy/lasm/269)).
+[^wide]: An odd width has no built-in directive of its own
+    ([ticket 298](https://todo.sr.ht/~takeiteasy/lasm/298)).

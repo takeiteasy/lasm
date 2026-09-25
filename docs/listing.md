@@ -82,8 +82,8 @@ Pass `:cycles t` for a cycles column after the address:
 ```
 
 Each value is the instruction's declared `(cycles n)`, or `1` when
-undeclared. A `+` marks an instruction whose semantics call `extra-cycles`
-or `elapse`, so its real cost is only known at run time.[^variable] The
+undeclared. A `+` marks a mode whose semantics call `elapse`, directly or
+through a macro, so its real cost is only known at run time.[^variable] The
 column is blank for data and non-emitting lines. `lasm listing --cycle-costs`
 prints it from the [command line](cli.md#commands).
 
@@ -150,9 +150,8 @@ from assignments with the same value.
 
 ## Limitations
 
-- The `+` marker is decided per instruction, not per mode, and misses
-  `extra-cycles` or `elapse` produced by a user macro
-  ([ticket 270](https://todo.sr.ht/~takeiteasy/lasm/270)).
+- The `+` marker misses `elapse` produced by a macro defined inside the
+  semantics body itself ([ticket 297](https://todo.sr.ht/~takeiteasy/lasm/297)).
 - Address lookup scans the listing linearly. An indexed lookup may help
   larger programs.
 

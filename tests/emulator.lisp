@@ -55,30 +55,30 @@
   (semantics (idle))
   (cycles 1))
 
-;; #90: dynamic cycle penalties. PEN always adds 3 to its declared 2; JMPP adds
+;; #90/#178: dynamic cycle penalties via ELAPSE. PEN always adds 3 to its declared 2; JMPP adds
 ;; 1 only when the jump crosses a 256-cell page; BNP adds 1 only when taken;
 ;; XHLT traps after adding extra cycles.
 (definstruction emu-test-machine pen
   (encoding (opcode #xE0))
-  (semantics (extra-cycles 3))
+  (semantics (elapse 3))
   (cycles 2))
 
 (definstruction emu-test-machine jmpp
   (modes absolute)
   (encoding (opcode #xE1) (operand :mode))
-  (semantics (when (page-crossed? pc operand) (extra-cycles 1))
+  (semantics (when (page-crossed? pc operand) (elapse 1))
              (set! pc operand))
   (cycles 3))
 
 (definstruction emu-test-machine bnp
   (modes absolute)
   (encoding (opcode #xE3) (operand :mode))
-  (semantics (when (zerop z) (set! pc operand) (extra-cycles 1)))
+  (semantics (when (zerop z) (set! pc operand) (elapse 1)))
   (cycles 2))
 
 (definstruction emu-test-machine xhlt
   (encoding (opcode #xE2))
-  (semantics (extra-cycles 4) (trap :halt))
+  (semantics (elapse 4) (trap :halt))
   (cycles 1))
 
 ;; Sub-opcode cell (#125): IMMEDIATE and ABSOLUTE share opcode #xB0, told
@@ -1445,7 +1445,7 @@ nop" :machine 'cycle-test-machine)))
 
 ;;; Dynamic cycle penalties (#90)
 
-(fiveam:test extra-cycles-add-to-cost-and-machine-cycles
+(fiveam:test elapse-penalty-adds-to-cost-and-machine-cycles
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (list #xE0))
     (multiple-value-bind (result cost) (step-machine m)
@@ -1453,7 +1453,7 @@ nop" :machine 'cycle-test-machine)))
       (fiveam:is (= 5 cost))
       (fiveam:is (= 5 (machine-cycles m))))))
 
-(fiveam:test extra-cycles-do-not-leak-into-the-next-step
+(fiveam:test elapse-penalty-does-not-leak-into-the-next-step
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (list #xE0 #xCA))
     (step-machine m)
@@ -1480,27 +1480,19 @@ nop" :machine 'cycle-test-machine)))
     (fiveam:is (= 3 (nth-value 1 (step-machine m))))
     (fiveam:is (= #x200 (sref m 'pc)))))
 
-(fiveam:test extra-cycles-count-on-a-trapping-step
+(fiveam:test elapse-penalty-counts-on-a-trapping-step
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (list #xE2))
     (fiveam:signals lasm-trap (step-machine m))
     (fiveam:is (= 5 (machine-cycles m)))))
 
-(fiveam:test run-for-cycles-budget-includes-extra-cycles
+(fiveam:test run-for-cycles-budget-includes-elapse-penalties
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (list #xE0 #xE0 #xE0)) ; 5 cycles each
     (multiple-value-bind (reason steps) (run-for-cycles m 6)
       (fiveam:is (eq :max-cycles reason))
       (fiveam:is (= 2 steps))
       (fiveam:is (= 10 (machine-cycles m))))))
-
-(fiveam:test reset-clears-pending-extra-cycles
-  (let ((m (make-machine 'emu-test-machine)))
-    (load-program m (list #xE2))
-    (fiveam:signals lasm-trap (step-machine m))
-    (reset m)
-    (fiveam:is (= 0 (machine-extra-cycles m)))
-    (fiveam:is (= 0 (machine-cycles m)))))
 
 (fiveam:test page-crossed-predicate
   (fiveam:is (not (page-crossed? #x00 #xFF)))

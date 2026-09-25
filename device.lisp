@@ -164,9 +164,8 @@ via DEVICE-AT."
   "Call every live device's :TICK hook on MACHINE with CYCLES -- the elapsed
 cost of the instruction step that just ran (STEP-MACHINE, emulator.lisp),
 zero-cost when a device declares no :TICK. Called once per STEP-MACHINE for the
-instruction's declared cost (before its semantics run), once per (elapse n)
-call (#159), and again for any EXTRA-CYCLES (#90), in bus index order,
-skipping holes."
+instruction's declared cost (before its semantics run) and once per (elapse n)
+call (#159), in bus index order, skipping holes."
   (loop for device across (machine-devices machine)
         when device
           do (let ((tick (device-descriptor-tick (device-descriptor device))))

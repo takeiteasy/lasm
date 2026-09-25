@@ -76,15 +76,15 @@ at the start of each test that reads it.")
   (semantics (trap :halt))
   (cycles 2))
 
-;; #90: 2 declared cycles plus 3 extra.
+;; #90: 2 declared cycles plus 3 elapsed.
 (definstruction device-test-machine pen
   (encoding (opcode #x05))
-  (semantics (extra-cycles 3))
+  (semantics (elapse 3))
   (cycles 2))
 
 (definstruction device-test-machine xboom
   (encoding (opcode #x06))
-  (semantics (extra-cycles 4) (trap :halt))
+  (semantics (elapse 4) (trap :halt))
   (cycles 1))
 
 (definstruction device-test-machine bad
@@ -284,7 +284,7 @@ at the start of each test that reads it.")
              (memory ram :width 8 :addr-width 8 (region io #x00 #x0F :kind :device))
              (device io)))))
 
-(fiveam:test step-machine-ticks-devices-for-extra-cycles
+(fiveam:test step-machine-ticks-devices-for-elapse-penalties
   (let ((m (make-machine 'device-test-machine)))
     (load-program m (list #x05))
     (step-machine m)
@@ -303,21 +303,21 @@ at the start of each test that reads it.")
 
 (definstruction tick-log-machine pen
   (encoding (opcode #x05))
-  (semantics (extra-cycles 3))
+  (semantics (elapse 3))
   (cycles 2))
 
-(fiveam:test step-machine-ticks-extra-cycles-separately-from-the-declared-cost
+(fiveam:test step-machine-ticks-elapsed-cycles-separately-from-the-declared-cost
   (let ((m (make-machine 'tick-log-machine))
         (*tick-log* nil))
     (load-program m (list #x05))
     (step-machine m)
     (fiveam:is (equal '(2 3) (reverse *tick-log*)))))
 
-(fiveam:test step-machine-skips-the-extra-tick-when-the-instruction-traps
+(fiveam:test step-machine-ticks-devices-for-elapsed-cycles-when-the-instruction-traps
   (let ((m (make-machine 'device-test-machine)))
     (load-program m (list #x06))
     (fiveam:signals lasm-trap (step-machine m))
-    (fiveam:is (= 1 (car (device-state (device-at m 0)))))
+    (fiveam:is (= 5 (car (device-state (device-at m 0)))))
     (fiveam:is (= 5 (machine-cycles m)))))
 
 ;;; #159: (elapse n) ticks devices mid-body
@@ -334,7 +334,7 @@ at the start of each test that reads it.")
 
 (definstruction elapse-machine split
   (encoding (opcode #x01))
-  (semantics (set! a 1) (elapse 3) (set! a 2) (extra-cycles 4))
+  (semantics (set! a 1) (elapse 3) (set! a 2) (elapse 4))
   (cycles 2))
 
 (definstruction elapse-machine splittrap

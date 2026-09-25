@@ -104,13 +104,13 @@ the region open bus. `reset` drops runtime bindings with runtime devices;
 ## Ticking
 
 `step-machine` ticks devices for the instruction's declared cycles before
-semantics run, including a trapping instruction.
+semantics run, including a trapping instruction. Devices stay in lockstep
+with `machine-cycles`.
 
 | Source | Tick |
 | --- | --- |
 | Declared `(cycles n)` | Before the semantics body. |
 | `(elapse n)` | At the call, mid-body. |
-| `(extra-cycles n)` | After the body returns; a trap skips it. |
 | Interrupt delivery, idle | Once, whole. |
 
 Decode failure does not tick. See [Emulator](emulator.md#device-ticking).

@@ -231,19 +231,14 @@ than a crash. COST is the executed instruction's cycle cost (#75,
 %DESCRIPTOR-CYCLE-COST), already added to MACHINE-CYCLES by the time this
 returns.
 
-#90: an instruction's semantics may add cycles beyond its declared cost
-with (extra-cycles n) (semantics.lisp) -- a page-crossing or branch-taken
-penalty, say. They are added to MACHINE-CYCLES even if the instruction
-traps, ticked to devices in a second TICK-DEVICES call once the semantics
-return (never during a trap's unwind, where a signalling device would
-replace the LASM-TRAP), and included in the returned COST. A machine that
-never calls EXTRA-CYCLES sees exactly one tick per step.
-
-#159: (elapse n) (semantics.lisp) ticks devices for N cycles immediately,
-mid-body, so a device observes the time before the semantics' later side
-effects. Elapsed cycles are counted in MACHINE-CYCLES and the returned COST
-(which is MACHINE-CYCLES' delta over the step) and stay counted if the
-instruction then traps. Delivery and idle steps have no body and tick whole.
+#159, #178: an instruction's semantics may add cycles beyond its declared
+cost with (elapse n) (semantics.lisp) -- a page-crossing or branch-taken
+penalty, say. It ticks devices for N cycles immediately, mid-body, so a
+device observes the time before the semantics' later side effects. Elapsed
+cycles are counted in MACHINE-CYCLES and the returned COST (which is
+MACHINE-CYCLES' delta over the step), and stay counted -- and ticked -- if
+the instruction then traps, so devices never lag MACHINE-CYCLES. Delivery and
+idle steps have no body and tick whole.
 
 PC is advanced past the whole instruction *before* executing its
 semantics, not after -- so a branch instruction's own (set! pc operand)
@@ -310,13 +305,8 @@ decoded, not just the values."
               (setf (%sref machine pc) (+ address size))
               (incf (machine-cycles machine) cost)
               (tick-devices machine cost)
-              (setf (machine-extra-cycles machine) 0)
-              (unwind-protect (execute-instruction descriptor machine values choices)
-                (incf (machine-cycles machine) (machine-extra-cycles machine)))
-              (let ((extra (machine-extra-cycles machine)))
-                (when (plusp extra)
-                  (tick-devices machine extra))
-                (values descriptor (- (machine-cycles machine) start-cycles)))))))))
+              (execute-instruction descriptor machine values choices)
+              (values descriptor (- (machine-cycles machine) start-cycles))))))))
 
 (defun step-machine (machine &key pc memory)
   "Execute one instruction, returning its descriptor and cycle cost, or

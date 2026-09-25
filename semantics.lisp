@@ -21,7 +21,7 @@
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
 operators SET!, MREF, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
-SET-BANK!, SET-FLAGS!, TRAP, ELAPSE, EXTRA-CYCLES, and
+SET-BANK!, SET-FLAGS!, TRAP, ELAPSE, and
 INTERRUPT-RETURN.
 
 The device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND, device.lisp)
@@ -214,13 +214,10 @@ clause declared" machine-name)))
                       ;; completion.
                       (idle ()
                         `(setf (machine-idle ,',machine-var) t))
-                      ;; #90: like IDLE, records state STEP-MACHINE reads once
-                      ;; the semantics body returns.
-                      ;; #159: unlike EXTRA-CYCLES, ticks devices now.
+                      ;; #159: counts and ticks devices now, so a trapping
+                      ;; step's devices stay in lockstep with MACHINE-CYCLES (#178).
                       (elapse (n)
                         `(%elapse ,',machine-var ,n))
-                      (extra-cycles (n)
-                        `(incf (machine-extra-cycles ,',machine-var) ,n))
                       (interrupt-return ()
                         (when ',interrupt-error (%definstruction-error ',interrupt-error))
                         ',interrupt-form))

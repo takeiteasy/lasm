@@ -46,14 +46,15 @@ here: .org $8000
 The operand can use earlier assignments or labels when its address
 dependencies are acyclic. See [Assembler](assembler.md#convergence).
 
-## `.byte` / `.word`
+## `.byte` / `.word` / `.long`
 
 | Directive | Width of each value | Example |
 | --- | --- | --- |
 | `.byte` | One memory cell | `.byte 1, 2, 3` |
 | `.word` | Two memory cells | `.word $1234` |
+| `.long` | Four memory cells | `.long $12345678` |
 
-Both accept zero or more expressions, or [string operands](#ascii--asciz).
+All accept zero or more expressions, or [string operands](#ascii--asciz).
 Values are resolved during encoding, so forward labels work. Fields follow the machine's byte order unless a
 custom `emit` action sets `:endian`; out-of-range values wrap.
 On a machine with 16-bit cells, `.byte` means one 16-bit cell and `.word`

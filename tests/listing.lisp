@@ -394,7 +394,7 @@ nop" :machine 'instr-test-machine)))
 
 (definstruction cyc-list-machine nop (encoding (opcode #x01)) (semantics (set! a a)))
 (definstruction cyc-list-machine slow (encoding (opcode #x02)) (semantics (set! a a)) (cycles 3))
-(definstruction cyc-list-machine jmpx (encoding (opcode #x03)) (semantics (extra-cycles 1)) (cycles 2))
+(definstruction cyc-list-machine jmpx (encoding (opcode #x03)) (semantics (elapse 1)) (cycles 2))
 (definstruction cyc-list-machine wait (encoding (opcode #x04)) (semantics (elapse 5)) (cycles 4))
 
 (defmachine (cyc-list-child (:extends cyc-list-machine)))
@@ -427,6 +427,43 @@ nop" :machine 'instr-test-machine)))
 (fiveam:test cycles-column-works-on-a-word-encoded-machine
   (let ((text (listing-text (assemble "set 1,1000" :machine 'disasm-word-machine) :cycles t)))
     (fiveam:is (search "1  " text))))
+
+;;; Per-mode, macro-aware cycles marker (#270)
+
+(defmacro cyc-list-penalty ()
+  `(elapse 1))
+
+(defmacro cyc-list-nested-penalty ()
+  `(progn (set! a a) (cyc-list-penalty)))
+
+(defmachine cyc-mode-machine
+  (register pc :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction cyc-mode-machine viamacro (encoding (opcode #x01)) (semantics (cyc-list-nested-penalty)))
+(definstruction cyc-mode-machine quoted (encoding (opcode #x02)) (semantics (set! a (quote (elapse 1)))))
+(definstruction cyc-mode-machine onemode
+  (modes (immediate (opcode #x10) (semantics (elapse 1)))
+         (absolute (opcode #x11) (semantics (set! a a)))))
+(definstruction cyc-mode-machine overrides
+  (modes (immediate (opcode #x20) (semantics (set! a a)))
+         (absolute (opcode #x21)))
+  (semantics (elapse 1)))
+
+(macrolet ((local-penalty () `(elapse 2)))
+  (definstruction cyc-mode-machine viamacrolet (encoding (opcode #x03)) (semantics (local-penalty))))
+
+(fiveam:test cycles-marker-sees-a-primitive-hidden-behind-user-macros
+  (fiveam:is (equal '("1+" "1+")
+                    (%cycles-rows 'cyc-mode-machine :source (format nil "viamacro~%viamacrolet"))))
+  (fiveam:is (equal '("1") (%cycles-rows 'cyc-mode-machine :source "quoted"))))
+
+(fiveam:test cycles-marker-is-decided-per-mode
+  (fiveam:is (equal '("1+" "1")
+                    (%cycles-rows 'cyc-mode-machine :source (format nil "onemode #1~%onemode $10"))))
+  (fiveam:is (equal '("1" "1+")
+                    (%cycles-rows 'cyc-mode-machine :source (format nil "overrides #1~%overrides $10")))))
 
 ;;; Nearest label
 

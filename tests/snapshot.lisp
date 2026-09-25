@@ -47,7 +47,6 @@
     (%poke m 'ram 1 1)
     (%poke m 'ram #xFFFF 200)
     (setf (machine-cycles m) 123
-          (machine-extra-cycles m) 4
           (machine-idle m) t)
     (setf (car (device-state (device-at m 0))) 99)
     m))
@@ -56,7 +55,7 @@
   (list (sref m 'a) (regref m 'bank 2) (flag m 'c) (stack-depth m 's)
         (stack-ref m 's 0)
         (mpeek m 'ram 0) (mpeek m 'ram 1) (mpeek m 'ram 2) (mpeek m 'ram #xFFFF)
-        (machine-cycles m) (machine-extra-cycles m) (machine-idle m)))
+        (machine-cycles m) (machine-idle m)))
 
 ;;; Round trip
 
@@ -250,7 +249,7 @@
 ;;; Coverage guard
 
 (fiveam:test snapshot-covers-every-machine-slot
-  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks loaded-banks region-bindings))
+  (let ((covered '(cycles idle devices interrupt-queue banks loaded-banks region-bindings))
         (host-only '(descriptor slots interrupt-hook access-hook dirty program program-memory program-offset)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))

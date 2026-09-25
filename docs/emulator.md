@@ -74,10 +74,9 @@ entry on its first lookup. See [Word-encoded instructions](word-instructions.md)
 ### Device ticking
 
 Each completed instruction ticks live devices with its declared cycle cost
-before semantics run. `elapse` ticks them inline; `extra-cycles` ticks them
-again after semantics returns. A trapping
-instruction still ticks for its declared cost; a decode failure does not
-tick. See [Devices](devices.md#ticking).
+before semantics run. `elapse` ticks them inline. A trapping instruction
+still ticks for its declared cost and any `elapse` before the trap; a decode
+failure does not tick. See [Devices](devices.md#ticking).
 
 ### Interrupt delivery
 
@@ -169,10 +168,15 @@ individual mode; see [Instructions](instructions.md#cycles-n).
 
 ### Dynamic cycle costs
 
-Call `(extra-cycles n)` inside semantics for a runtime-dependent cost, such
-as a taken branch. The extra cost contributes to cycle budgets and elapsed
-time. Devices receive it in a second tick when semantics returns; a trap
-skips that second tick. The [listing](listing.md#rendering-listing-text--print-listing)
+Call `(elapse n)` inside semantics for a runtime-dependent cost, such as a
+taken branch:
+
+```lisp
+(semantics (when (zero? z) (set! pc operand) (elapse 1)))
+```
+
+The cost contributes to cycle budgets and elapsed time, and devices receive
+it at the call, so a trapping step still ticks them. The [listing](listing.md#rendering-listing-text--print-listing)
 marks such instructions with `+` in its cycles column.
 
 ## Limitations

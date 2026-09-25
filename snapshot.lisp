@@ -6,7 +6,7 @@
 
 (in-package #:lasm)
 
-(defconstant +snapshot-version+ 4)
+(defconstant +snapshot-version+ 5)
 
 (define-condition snapshot-error (lasm-error)
   ((detail :initarg :detail :reader snapshot-error-detail))
@@ -79,7 +79,6 @@ Such a partial snapshot only restores through %RESTORE-SNAPSHOT with CELLS NIL."
           :shape (mapcar #'%element-shape (machine-descriptor-elements descriptor))
           :bank-shape (%bank-shape descriptor)
           :cycles (machine-cycles machine)
-          :extra-cycles (machine-extra-cycles machine)
           :idle (machine-idle machine)
           :elements (mapcar (lambda (element) (%snapshot-element machine element cells))
                             (machine-descriptor-elements descriptor))
@@ -287,9 +286,8 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
                      (< -1 (cdr entry) (length plan)) (nth (cdr entry) plan)
                      (ignore-errors (%bindable-region machine (car entry))))
           (%snapshot-fail 'snapshot-malformed "bad region binding ~S" entry)))
-      (dolist (key '(:cycles :extra-cycles))
-        (unless (typep (%snapshot-field snapshot key) 'unsigned-byte)
-          (%snapshot-fail 'snapshot-malformed "bad ~S" key)))
+      (unless (typep (%snapshot-field snapshot :cycles) 'unsigned-byte)
+        (%snapshot-fail 'snapshot-malformed "bad ~S" :cycles))
       (values values plan (%decode-banks machine (%snapshot-field snapshot :banks) cells)))))
 
 ;;; Restore
@@ -321,7 +319,6 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
                    for target across (cdr state)
                    do (replace target array)))
     (setf (machine-cycles machine) (%snapshot-field snapshot :cycles)
-          (machine-extra-cycles machine) (%snapshot-field snapshot :extra-cycles)
           (machine-idle machine) (%snapshot-field snapshot :idle))
     (let ((devices (machine-devices machine)))
       (setf (fill-pointer devices) 0)

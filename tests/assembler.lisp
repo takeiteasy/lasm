@@ -1479,7 +1479,6 @@ next: wnop" :machine 'word-relative-test-machine)))
   (register a :width 8)
   (memory ram :width 8 :addr-width 8 :endian (:big :little 2)))
 
-(defdirective ".long" (&rest values) (emit 4 values))
 (defdirective ".beword" (&rest values) (emit 2 values :endian :big))
 (defdirective ".pdpword" (&rest values) (emit 4 values :endian (:big :little 2)))
 

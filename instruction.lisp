@@ -262,9 +262,9 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; T when the definstruction declared (fallback): a general encoding that
   ;; may overlap strictly more specific co-tenants, which decode ahead of it.
   (fallback nil :type boolean)
-  ;; True when the instruction's (semantics ...) call (extra-cycles n) or
-  ;; (elapse n) (#90, #159), so its declared cost is only a lower bound.
-  ;; Decided per DEFINSTRUCTION, not per mode: see %USES-DYNAMIC-CYCLES-P.
+  ;; True when this mode's (semantics ...) call (elapse n) (#159), directly or
+  ;; through a macro, so its declared cost is only a lower bound. See
+  ;; %USES-DYNAMIC-CYCLES-P.
   (variable-cycles nil :type boolean)
   ;; Named ONE-OF selections that do not have an operand hole, such as a
   ;; literal-only alternative.  This is separate from the hole-aligned
@@ -1675,6 +1675,13 @@ on each descendant holding a copy."
             installed proxy))
     proxy))
 
+(defvar *definstruction-environment* nil
+  "The lexical environment of the DEFINSTRUCTION being expanded, so semantics
+macros bound by an enclosing MACROLET are visible to %USES-DYNAMIC-CYCLES-P.")
+
+(defvar *mode-variable-cycles* nil
+  "True while descriptor forms are built for a mode whose semantics may elapse cycles.")
+
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list
                              &optional mode-operand-names named-slot-alternatives)
   "MODE-OPERAND-NAMES (#120), when given, is the union of every sibling
@@ -1751,6 +1758,7 @@ SUB-CHOICES or field-variant combo."
      :choice-selections ',choice-selections
     :semantics-operand-map ',semantics-operand-map
     :cycles ,cycles
+    :variable-cycles ,*mode-variable-cycles*
     :semantics-fn ,semantics-fn-form))
 
 (defun %byte-operand-signedness (mode sub-choices &optional (sources (%mode-hole-sources mode)))
@@ -3196,7 +3204,8 @@ narrower extra word before one needing a wider one."
 
 (defun %make-word-instruction-descriptors (name machine mode opcode operand-names operand-registers
                                             semantics-operand-map alternatives relative-sources layout-name
-                                            constants choice-selections cycles semantics-fn)
+                                            constants choice-selections cycles semantics-fn
+                                            &optional variable-cycles)
   "Build concrete descriptor siblings from one compact field-alternative menu."
   (let* ((siblings
            (mapcar
@@ -3217,7 +3226,8 @@ narrower extra word before one needing a wider one."
                      collect (%hole-source-attribute mode source :relative
                                                      (word-field-choice-choice choice)))
                :word-layout-name layout-name :word-constants constants
-               :choice-selections choice-selections :cycles cycles :semantics-fn semantics-fn))
+               :choice-selections choice-selections :cycles cycles
+               :variable-cycles variable-cycles :semantics-fn semantics-fn))
             (%expand-word-field-choice-combos alternatives)))
          (index (make-hash-table :test 'equal)))
     (dolist (descriptor siblings)
@@ -3234,7 +3244,7 @@ narrower extra word before one needing a wider one."
     ',(mapcar #'word-operand-spec-name specs)
     ',(mapcar #'word-operand-spec-register specs)
     ',semantics-operand-map ,alternatives-form ',hole-sources ',layout-name
-    ,constants-form ',choice-selections ,cycles ,semantics-fn-form))
+    ,constants-form ',choice-selections ,cycles ,semantics-fn-form ,*mode-variable-cycles*))
 
 (defun %key-hole-roles (key min)
   "One role per hole of KEY's shape, in hole order: :BASE for the first MIN holes of
@@ -3647,6 +3657,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                         :word-layout-name ',layout-name
                         :word-constants ,constants-form
                         :cycles ,cycles
+                        :variable-cycles ,*mode-variable-cycles*
                         :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil))))
         ;; Keep each source operand subclause as the stable identity of one
         ;; semantics position. This includes unnamed holes, which cannot be
@@ -4124,14 +4135,15 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 (semantics ...) of its own and no shared top-level (semantics ...) default"
                                             machine name mode-sym)))))
           (%check-word-opcode machine name opcode)
-          (if (%word-machine-p machine)
-              (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
-                                            opcode operand-subclauses mode mode-sym machine
-                                            cycles-form semantics-forms layout-name
-                                            field-value-subclauses for-choice-subclauses)
-              (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
-                                           opcode sub operand-subclauses for-choice-subclauses
-                                           sub-opcode-subclause cycles-form semantics-forms))))))))
+          (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p semantics-forms)))
+            (if (%word-machine-p machine)
+                (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
+                                              opcode operand-subclauses mode mode-sym machine
+                                              cycles-form semantics-forms layout-name
+                                              field-value-subclauses for-choice-subclauses)
+                (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
+                                             opcode sub operand-subclauses for-choice-subclauses
+                                             sub-opcode-subclause cycles-form semantics-forms)))))))))
 
 (defvar *definstruction-fallback* nil
   "True while DEFINSTRUCTION expands an instruction declaring (fallback).")
@@ -4140,28 +4152,29 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
   (dolist (descriptor descriptors descriptors)
     (setf (instruction-descriptor-fallback descriptor) t)))
 
-(defvar *definstruction-variable-cycles* nil
-  "True while DEFINSTRUCTION expands an instruction whose semantics may add cycles.")
-
 (defun %uses-dynamic-cycles-p (form)
-  "True when FORM mentions the EXTRA-CYCLES or ELAPSE semantics primitive.
-A primitive hidden behind a user macro is not seen (docs/listing.md)."
-  (cond ((consp form) (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))
-        (t (member form '(extra-cycles elapse)))))
-
-(defun %mark-variable-cycles (descriptors)
-  (dolist (descriptor descriptors descriptors)
-    (setf (instruction-descriptor-variable-cycles descriptor) t)))
+  "True when FORM calls the ELAPSE semantics primitive, directly or through a
+macro expanded in *DEFINSTRUCTION-ENVIRONMENT*. A macro whose expansion fails
+is walked as written."
+  (cond ((atom form) nil)
+        ((eq (car form) 'elapse) t)
+        ((eq (car form) 'quote) nil)
+        ((and (symbolp (car form))
+              (not (eq (car form) 'lambda)) ; expands to (function (lambda ...)), forever
+              (macro-function (car form) *definstruction-environment*))
+         (let ((expansion (handler-case (macroexpand-1 form *definstruction-environment*)
+                            (error () nil))))
+           (if expansion
+               (%uses-dynamic-cycles-p expansion)
+               (some #'%uses-dynamic-cycles-p (rest form)))))
+        (t (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))))
 
 (defun %instruction-registration-form (machine name descriptors-form)
   (let ((registration `(register-instruction-variants!
                         ',machine
-                        ,(let ((form (if *definstruction-fallback*
-                                         `(%mark-fallback ,descriptors-form)
-                                         descriptors-form)))
-                           (if *definstruction-variable-cycles*
-                               `(%mark-variable-cycles ,form)
-                               form)))))
+                        ,(if *definstruction-fallback*
+                             `(%mark-fallback ,descriptors-form)
+                             descriptors-form))))
     (%definition-toplevel-form (if (%word-machine-p machine)
                                    `(%evaluate-instruction-registration ',registration)
                                    registration)
@@ -4184,7 +4197,7 @@ A primitive hidden behind a user macro is not seen (docs/listing.md)."
                        (remove (first subclauses) (rest encoding-clause)))
                  t)))))
 
-(defmacro definstruction (machine name &body clauses)
+(defmacro definstruction (&environment env machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
 one of:
   (modes MODE)                       -- 0 or 1 addressing mode, sharing the
@@ -4355,8 +4368,8 @@ NO-MATCHING-CHOICE rather than silently falling through."
       (multiple-value-setq (encoding-clause fallbackp)
         (%extract-fallback machine name encoding-clause))
       (let* ((*definstruction-fallback* fallbackp)
+             (*definstruction-environment* env)
              (*mode-scope* machine)
-             (*definstruction-variable-cycles* (and (%uses-dynamic-cycles-p clauses) t))
              (mode-forms (rest modes-clause))
              (cycles-form (and cycles-clause (second cycles-clause))))
         (cond
@@ -4404,12 +4417,13 @@ layout has no effect" machine name))
                         (constants (%parse-field-value-subclauses machine name nil layout layout-name
                                                                     field-value-subclauses nil))
                         (constants-form (%word-constants-form constants)))
-                   (%instruction-registration-form
-                    machine name
-                    `(list ,(%descriptor-form machine name nil opcode nil nil
-                                              cycles-form
-                                              (%semantics-fn-form (rest semantics-clause) machine name nil nil)
-                                              sub nil nil nil layout-name constants-form))))))))
+                   (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause))))
+                     (%instruction-registration-form
+                      machine name
+                      `(list ,(%descriptor-form machine name nil opcode nil nil
+                                                cycles-form
+                                                (%semantics-fn-form (rest semantics-clause) machine name nil nil)
+                                                sub nil nil nil layout-name constants-form)))))))))
           ;; Multi-mode form: (modes (MODE ...) (MODE ...) ...).
           ((consp (first mode-forms))
            (when encoding-clause
@@ -4486,23 +4500,24 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
              (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
              (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
                (%check-word-opcode machine name opcode)
-               (if (%word-machine-p machine)
-                   (multiple-value-bind (bindings forms)
-                       (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
-                                                     opcode operand-subclauses
-                                                     mode mode-sym machine
-                                                     cycles-form (rest semantics-clause) layout-name
-                                                     field-value-subclauses for-choice-subclauses)
-                     (%instruction-registration-form
-                      machine name
-                      `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
-                   (multiple-value-bind (bindings forms)
-                       (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
-                                                    opcode sub operand-subclauses for-choice-subclauses
-                                                    sub-opcode-subclause cycles-form (rest semantics-clause))
-                     (%instruction-registration-form
-                      machine name
-                      `(let* (,@bindings) (list ,@forms))))))))))))))
+               (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause))))
+                 (if (%word-machine-p machine)
+                     (multiple-value-bind (bindings forms)
+                         (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
+                                                       opcode operand-subclauses
+                                                       mode mode-sym machine
+                                                       cycles-form (rest semantics-clause) layout-name
+                                                       field-value-subclauses for-choice-subclauses)
+                       (%instruction-registration-form
+                        machine name
+                        `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
+                     (multiple-value-bind (bindings forms)
+                         (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
+                                                      opcode sub operand-subclauses for-choice-subclauses
+                                                      sub-opcode-subclause cycles-form (rest semantics-clause))
+                       (%instruction-registration-form
+                        machine name
+                        `(let* (,@bindings) (list ,@forms)))))))))))))))
 
 (defun %evaluate-instruction-registration (form)
   (eval form))

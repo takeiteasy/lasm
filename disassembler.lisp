@@ -42,11 +42,12 @@
 ;;;; own .byte/.word/.res statements, so this straddle case only arises for
 ;;;; hand-declared regions.
 ;;;;
-;;;; #179: on a word-encoded machine whose instruction word is two cells (.WORD's
-;;;; width), a region renders as ".word" lines, cells paired from the region's
-;;;; start in the memory's own endian order. The region is clipped to the
-;;;; disassembled range first, and stays ".byte" lines unless the clipped,
-;;;; merged length is even.
+;;;; #179, #269: on a word-encoded machine whose instruction word is an even
+;;;; number of cells, a region renders as ".word" lines (2 cells), or ".long"
+;;;; lines (4 cells, then a trailing ".word" for the remainder) when the word is
+;;;; a multiple of four cells wide. Cells group from the region's start in the
+;;;; memory's own endian order. The region is clipped to the disassembled range
+;;;; first, and stays ".byte" lines unless the clipped, merged length is even.
 ;;;;
 ;;;; ROUND-TRIP FIDELITY -- the honest scope (see docs/disassembler.md):
 ;;;; ASSEMBLE -> DISASSEMBLE-* -> ASSEMBLE reproduces identical cells when
@@ -113,14 +114,16 @@ returned sorted by START with overlapping or adjacent ranges merged."
           (cl:push r merged)))
     (nreverse merged)))
 
-(defun %data-word-endian (machine-name memory)
-  "MEMORY's cell endianness when a data region on MACHINE-NAME renders as
-.word lines: the machine is word-encoded with a two-cell instruction word,
-.word's own width. NIL otherwise."
+(defun %data-word-width (machine-name)
+  "The cell width of the widest built-in emit directive that a data region on
+MACHINE-NAME renders as: 4 (.long) when the machine is word-encoded with an
+instruction word a multiple of four cells wide, 2 (.word) for any other even
+width, else NIL (.byte lines)."
   (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor machine-name))))
-    (and layout
-         (= 2 (instruction-word-layout-width-cells layout))
-         (%machine-endian machine-name memory))))
+    (when layout
+      (let ((cells (instruction-word-layout-width-cells layout)))
+        (cond ((and (>= cells 4) (zerop (mod cells 4))) 4)
+              ((and (>= cells 2) (evenp cells)) 2))))))
 
 (defun %disassemble-raw-lines (read-cell origin end machine-name memory cell-width &optional data-regions)
   "Walk READ-CELL from ORIGIN to END (exclusive), decoding one instruction
@@ -129,9 +132,10 @@ DISASSEMBLY-LINE per instruction or undecodable cell -- see this file's
 header comment for the mid-stream decode-failure and data-region policies.
 TEXT and LABEL are left NIL; %RENDER-LINES! fills them in once every line's
 address is known."
-  (let ((regions (%normalize-data-regions data-regions))
-        (word-endian (%data-word-endian machine-name memory))
-        lines)
+  (let* ((regions (%normalize-data-regions data-regions))
+         (word-width (%data-word-width machine-name))
+         (word-endian (and word-width (%machine-endian machine-name memory)))
+         lines)
     (labels ((read-cells (address count)
                "COUNT cells from ADDRESS, or NIL when any is unreadable."
                (handler-case (loop for i below count collect (funcall read-cell (+ address i)))
@@ -142,18 +146,21 @@ address is known."
                  (when cells
                    (cl:push (make-disassembly-line
                              :address address :size size :cells cells :cell-width cell-width
-                             :word (and (= size 2)
+                             :word (and (> size 1)
                                         (%fetch-cells (lambda (a) (nth (- a address) cells))
-                                                      address 2 cell-width word-endian)))
+                                                      address size cell-width word-endian)))
                             lines))
                  (and cells t)))
              (region-data-line (address)
-               "Emit ADDRESS's data line: a .word pair when the region, clipped
-to the disassembled range, holds a whole number of pairs; else one cell."
-               (let* ((start (max (car (first regions)) origin))
-                      (stop (min (cdr (first regions)) end)))
-                 (if (and word-endian (evenp (- stop start)) (data-line address 2))
-                     2
+               "Emit ADDRESS's data line: a .long or .word when the region, clipped
+to the disassembled range, has an even length; else one cell."
+               (let* ((stop (min (cdr (first regions)) end))
+                      (length (- stop (max (car (first regions)) origin)))
+                      (size (cond ((not (and word-width (evenp length))) 1)
+                                  ((and (eql word-width 4) (>= (- stop address) 4)) 4)
+                                  (t 2))))
+                 (if (and (> size 1) (data-line address size))
+                     size
                      (and (data-line address 1) 1)))))
       (loop with address = origin
             while (< address end)
@@ -488,7 +495,8 @@ selects it. Each line declaring a prefix is re-parsed and re-selected."
 
 (defun %data-line-text (line lexer)
   (if (disassembly-line-word line)
-      (format nil ".word ~A" (%render-value (disassembly-line-word line) lexer))
+      (format nil "~:[.word~;.long~] ~A" (= 4 (disassembly-line-size line))
+              (%render-value (disassembly-line-word line) lexer))
       (format nil ".byte ~A" (%render-value (first (disassembly-line-cells line)) lexer))))
 
 (defun %render-lines! (lines lexer labels suffixes symbols &optional symbol-info)

@@ -577,10 +577,6 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; itself is always meaningful, only the cycles-to-seconds conversion needs
   ;; one.
   (cycles 0 :type unsigned-byte)
-  ;; #90: cycles the running instruction's semantics added with EXTRA-CYCLES
-  ;; (semantics.lisp) beyond its declared cost. STEP-MACHINE zeroes it before
-  ;; each execute and folds it into CYCLES afterwards.
-  (extra-cycles 0 :type unsigned-byte)
   ;; #108: the device bus -- an adjustable, fill-pointered vector of DEVICE
   ;; or NIL (a detached hole, see DEVICE struct above). Seeded from the
   ;; descriptor's own DEVICES by MAKE-MACHINE/RESET below; ATTACH-DEVICE
@@ -894,7 +890,6 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
              (unless (member name rom-banks)
                (map nil (lambda (bank) (fill bank 0)) (cdr entry)))))
   (setf (machine-cycles machine) 0)
-  (setf (machine-extra-cycles machine) 0)
   (let ((devices (machine-devices machine)))
     (setf (fill-pointer devices) 0)
     (dolist (device-descriptor (machine-descriptor-devices (machine-descriptor machine)))

@@ -30,7 +30,7 @@ Snapshots hold:
 
 - every register (banked ones cell by cell), flag, stack (whole backing
   vector and stack pointer) and memory element
-- `machine-cycles`, `machine-extra-cycles` and the idle flag
+- `machine-cycles` and the idle flag
 - pending interrupts
 - banked regions: the mapped bank, every bank's contents, and the bank
   `load-program` wrote the main image into

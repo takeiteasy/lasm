@@ -15,7 +15,6 @@
   (register pc :width 16)
   (memory ram :width 8 :addr-width 16 :endian (:big :little 2)))
 
-(defdirective ".long" (&rest values) (emit 4 values))
 (defdirective ".beword" (&rest values) (emit 2 values :endian :big))
 
 (definstruction pdpfoo hlt

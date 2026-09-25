@@ -283,7 +283,7 @@ ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
 
 CYCLES (#180), when true, adds a column after the address holding each
 instruction's declared cycle cost (%DESCRIPTOR-CYCLE-COST), marked with a +
-when its semantics call EXTRA-CYCLES or ELAPSE, so the real cost is only
+when its semantics call ELAPSE, so the real cost is only
 known at run time. Data and non-emitting rows leave it blank."
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
          (*listing-cycles* cycles)

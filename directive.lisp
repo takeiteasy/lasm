@@ -211,6 +211,7 @@ anything -- see this file's header comment."
 (defdirective ".org"  (address)      (set-origin! address))
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
+(defdirective ".long" (&rest values) (emit 4 values))
 ;; .RES's count is also in cells (#53) -- on a word-addressed machine
 ;; ".res 4" reserves 4 cells, not 4 bytes. .ORG's operand was always an
 ;; address, and addresses were always cell-indexed, so .ORG itself needs no

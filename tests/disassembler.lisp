@@ -938,6 +938,62 @@ hlt" :machine 'disasm-test-machine))
                         (texts :assembly a :data-regions '((0 . 4)))))
       (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (texts))))))
 
+;;; Wide-word data regions (#269)
+
+(defmachine disasm-long-le
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 32 (field opcode 32)))
+
+(defmachine disasm-long-pdp
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16 :endian (:big :little 2))
+  (instruction-word :width 32 (field opcode 32)))
+
+(defmachine disasm-six-cell
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 48 (field opcode 48)))
+
+(defmachine disasm-three-cell
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 24 (field opcode 24)))
+
+(dolist (machine '(disasm-long-le disasm-long-pdp disasm-six-cell disasm-three-cell))
+  (eval `(definstruction ,machine nop (encoding (opcode 1)) (semantics (trap :nop)))))
+
+(fiveam:test data-region-renders-long-lines-on-a-four-cell-word-machine
+  (let ((lines (disassemble-cells (list #x78 #x56 #x34 #x12 1 0 0 0) :machine 'disasm-long-le
+                                                                     :labels nil :data-regions '((0 . 8)))))
+    (fiveam:is (equal '(".long $12345678" ".long $1") (mapcar #'disassembly-line-text lines)))
+    (fiveam:is (equal '(4 4) (mapcar #'disassembly-line-size lines)))))
+
+(fiveam:test data-region-of-two-cells-on-a-four-cell-word-machine-renders-a-word
+  (let ((lines (disassemble-cells (list #x34 #x12) :machine 'disasm-long-le
+                                                   :labels nil :data-regions '((0 . 2)))))
+    (fiveam:is (equal '(".word $1234") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-renders-word-lines-on-a-six-cell-word-machine
+  (let ((lines (disassemble-cells (list 1 0 2 0 3 0) :machine 'disasm-six-cell
+                                                     :labels nil :data-regions '((0 . 6)))))
+    (fiveam:is (equal '(".word $1" ".word $2" ".word $3") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-stays-byte-lines-on-a-three-cell-word-machine
+  (let ((lines (disassemble-cells (list 1 2 3 4) :machine 'disasm-three-cell
+                                                 :labels nil :data-regions '((0 . 4)))))
+    (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3" ".byte $4")
+                      (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-long-lines-round-trip
+  (dolist (machine '(disasm-long-le disasm-long-pdp disasm-six-cell))
+    (let* ((source (format nil "nop~%.long $12345678, $DEADBEEF~%.word $1234~%nop"))
+           (a (assemble source :machine machine))
+           (text (disassembly-text (disassemble-assembly a :machine machine :labels nil)))
+           (b (assemble text :machine machine)))
+      (fiveam:is (eq (not (eq machine 'disasm-six-cell)) (and (search ".long" text) t)))
+      (fiveam:is (equalp (assembly-cells a) (assembly-cells b))))))
+
 ;;; .word data regions (#179)
 
 (defmachine disasm-pair-le
