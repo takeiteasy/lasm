@@ -15,12 +15,13 @@ object is both enumerated and memory-mapped.
 ## `defmachine`'s `device` clause
 
 ```lisp
-(device NAME [:id n] [:version n] [:manufacturer n]
+(device NAME [:id n] [:version n] [:manufacturer n] [:priority n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn]
              [:save fn] [:load fn] [:read fn] [:write fn])
 ```
 
-Identity fields default to zero. Hooks are bare function names:
+Identity fields default to zero. `:priority` (default `0`) orders the
+device's [interrupt signals](interrupts.md#priority). Hooks are bare function names:
 
 | Hook | Called as | When |
 | --- | --- | --- |

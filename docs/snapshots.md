@@ -31,7 +31,7 @@ Snapshots hold:
 - every register (banked ones cell by cell), flag, stack (whole backing
   vector and stack pointer) and memory element
 - `machine-cycles` and the idle flag
-- pending interrupts
+- pending interrupts with their priorities, and the running-handler depth
 - banked regions: the mapped bank, every bank's contents, and the bank
   `load-program` wrote the main image into
 - the device bus, holes and bus order included

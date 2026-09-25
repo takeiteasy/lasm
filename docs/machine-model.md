@@ -30,6 +30,7 @@ one namespace.
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
 | `(device NAME ...)` | Bus-addressed peripheral. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
+| `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
 | `(privilege :level NAME :levels (...))` | Privilege levels for gated regions and instructions. | [Privilege levels](privilege.md) |
 | `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |

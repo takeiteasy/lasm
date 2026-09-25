@@ -151,7 +151,8 @@ clause declared" machine-name)))
                                 ',(stack-pointer-descriptor-memory sp) ',(stack-pointer-descriptor-grows sp)))
                      `(stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)))))
              (interrupt-form (when interrupts
-                                `(progn ,@(mapcar
+                                `(progn (%interrupt-returned ,machine-var)
+                                        ,@(mapcar
                                            (lambda (place)
                                              (if (consp place)
                                                  `(setf (regref ,machine-var ',(first place) ,(second place))

@@ -238,6 +238,7 @@
    #:signal-interrupt
    #:deliver-pending-interrupt
    #:machine-interrupt-queue
+   #:machine-interrupt-depth
 
    ;; Semantics vocabulary
    #:with-machine

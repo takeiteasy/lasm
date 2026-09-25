@@ -19,7 +19,8 @@ a machine. Devices and software instructions can signal the same queue.
 (interrupts :vector reg :message reg :save (name...)
             [:stack name] [:queue n] [:on-overflow policy]
             [:mask-when fn] [:mask-flag name] [:cycles n]
-            [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
+            [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil]
+            [:nesting :allow/:priority] [:max-depth n])
 ```
 
 | Key | Effect |
@@ -34,6 +35,8 @@ a machine. Devices and software instructions can signal the same queue.
 | `:cycles` | Delivery cost, default `0`. |
 | `:drop-on-zero-vector` | Drop signals while vector is zero; default `t`. |
 | `:mask-on-deliver` | Set the mask flag before handler execution. |
+| `:nesting` | `:allow` (default) or `:priority`; see [Nesting](#nesting). |
+| `:max-depth` | Cap on running handlers; default unlimited. |
 
 Registers can be scalar names or indexed bank cells such as `(reg 0)`.
 `:save` order determines push order; `interrupt-return` reverses it.
@@ -43,7 +46,7 @@ Registers can be scalar names or indexed bank cells such as `(reg 0)`.
 | Function | Use |
 | --- | --- |
 | `device-signal machine device [data]` | Signal through the machine's device hook. |
-| `signal-interrupt machine data [device]` | Signal directly from software semantics or a host. |
+| `signal-interrupt machine data [device] [priority]` | Signal directly from software semantics or a host. |
 
 A machine with an interrupt clause installs the queue hook when created.
 A software instruction can call `signal-interrupt` inside semantics.
@@ -55,7 +58,36 @@ A software instruction can call `signal-interrupt` inside semantics.
 | `:error` (default) | Signal `interrupt-queue-full`. |
 | `:trap` | Signal `lasm-trap` tagged `:interrupt-queue-overflow`. |
 | `:drop` | Ignore the incoming signal. |
-| `:drop-oldest` | Replace the oldest pending signal. |
+| `:drop-oldest` | Evict the oldest signal of the lowest [priority](#priority); the incoming signal is dropped instead when it ranks below everything queued. |
+
+## Priority
+
+Each signal has an integer priority; higher delivers first, and signals of
+equal priority deliver in arrival order. A device signal takes its
+device's `:priority`; a software signal takes the `priority` argument.
+Both default to `0`.
+
+```lisp
+(device disk :priority 3)
+(signal-interrupt machine data nil 5)   ; software signal, priority 5
+```
+
+## Nesting
+
+Machines track running handlers only when `(interrupts ...)` declares
+`:nesting :priority` or `:max-depth`. Delivery starts a handler and
+`interrupt-return` ends the innermost one; `machine-interrupt-depth`
+reports how many run.
+
+| Key | A pending signal waits while |
+| --- | --- |
+| `:nesting :allow` | Never held by depth (default). |
+| `:nesting :priority` | A handler runs and the signal does not strictly outrank it. |
+| `:max-depth n` | `n` handlers already run; `1` forbids nesting. |
+
+```lisp
+(interrupts :vector ia :message a :save (pc) :nesting :priority :max-depth 4)
+```
 
 ## Zero vector
 
@@ -73,7 +105,8 @@ mask flag before the handler runs.
 
 A pending unmasked signal is delivered before `step-machine` fetches:
 
-1. Remove the queue's head.
+1. Unless masked or held by [nesting](#nesting), remove the queue's head, the
+   highest-priority pending signal.
 2. Push `:save` places in declared order.
 3. Write data to `:message` and handler address to `pc`.
 4. Add `:cycles` and tick devices when the cost is nonzero.
@@ -105,7 +138,7 @@ step's device tick wakes it on the next step. A host can call
 
 ## `reset`
 
-`reset` clears the queue and idle flag. It leaves the installed interrupt
+`reset` clears the queue, handler depth, and idle flag. It leaves the installed interrupt
 hook in place as host wiring.
 
 ## Limitations
@@ -115,6 +148,14 @@ hook in place as host wiring.
   tracked in [ticket 165](https://todo.sr.ht/~takeiteasy/lasm/165).
 - A register-backed stack saves each place in one cell; splitting wider
   places across cells is unavailable.
-- Nested-interrupt priority and a unified trap/interrupt model are outside
-  this subsystem.
+- Handler depth unwinds only through `interrupt-return`; a handler that
+  leaves another way keeps its depth raised until `reset`.
+- Priority orders and gates delivery only; per-level masking and
+  non-maskable signals are tracked in
+  [ticket 305](https://todo.sr.ht/~takeiteasy/lasm/305).
+- The queue is a sorted list, O(depth) per signal; see
+  [ticket 304](https://todo.sr.ht/~takeiteasy/lasm/304).
+- The debugger does not display pending priorities or handler depth; see
+  [ticket 306](https://todo.sr.ht/~takeiteasy/lasm/306).
+- A unified trap/interrupt model is outside this subsystem.
 - Delivery does not change the [privilege level](privilege.md#limitations).

@@ -1662,3 +1662,51 @@ hlt" :machine 'stack-test-machine)))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1 :memory 'rom))))
     (fiveam:is (null (machine-listing-line m 1 :memory 'ram)))))
+
+;;; declarable idle cost (#164)
+
+(defmachine (emu-slow-idle-machine (:extends emu-test-machine))
+  (idle :cycles 4))
+
+(defmachine (emu-slower-idle-machine (:extends emu-slow-idle-machine))
+  (idle :cycles 9))
+
+(defun %idle-step-cost (machine-name)
+  (let ((m (make-machine machine-name)))
+    (load-program m (list #x04) :origin 0)
+    (step-machine m)
+    (let ((before (machine-cycles m)))
+      (values (nth-value 1 (step-machine m)) (- (machine-cycles m) before)))))
+
+(fiveam:test idle-step-costs-one-cycle-by-default
+  (multiple-value-bind (cost elapsed) (%idle-step-cost 'emu-test-machine)
+    (fiveam:is (= 1 cost))
+    (fiveam:is (= 1 elapsed))))
+
+(fiveam:test idle-clause-sets-the-idle-step-cost
+  (multiple-value-bind (cost elapsed) (%idle-step-cost 'emu-slow-idle-machine)
+    (fiveam:is (= 4 cost))
+    (fiveam:is (= 4 elapsed))))
+
+(fiveam:test idle-clause-overrides-the-parents-under-extends
+  (fiveam:is (= 9 (%idle-step-cost 'emu-slower-idle-machine))))
+
+(fiveam:test run-for-cycles-counts-the-declared-idle-cost
+  (let ((m (make-machine 'emu-slow-idle-machine)))
+    (load-program m (list #x04) :origin 0)
+    (multiple-value-bind (reason steps) (run-for-cycles m 13)
+      (fiveam:is (eq :max-cycles reason))
+      ;; slp (1) then idle steps of 4 -- the budget is met on the 4th step
+      (fiveam:is (= 4 steps)))))
+
+(fiveam:test defmachine-rejects-a-non-positive-idle-cost
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine idle-zero-cost-test
+             (register pc :width 8) (memory ram :width 8 :addr-width 8)
+             (idle :cycles 0)))))
+
+(fiveam:test defmachine-rejects-more-than-one-idle-clause
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine idle-dup-clause-test
+             (register pc :width 8) (memory ram :width 8 :addr-width 8)
+             (idle :cycles 2) (idle :cycles 3)))))

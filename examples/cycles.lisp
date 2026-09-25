@@ -94,3 +94,22 @@
     (multiple-value-bind (reason steps) (run-for-duration m 15.0d-6)
       (format t "  stopped: ~A after ~D step~:P, ~,1F us simulated~%"
               reason steps (* 1.0d6 (machine-elapsed-seconds m))))))
+
+;;; #164: an idle step costs (idle :cycles n), default 1. SLEEPY is a machine
+;;; whose sleep instruction parks the CPU with a 4-cycle idle step.
+
+(defmachine sleepy
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (idle :cycles 4))
+
+(definstruction sleepy slp (encoding (opcode #x01)) (semantics (idle)) (cycles 1))
+
+(let ((m (make-machine 'sleepy)))
+  (load-program m (list #x01) :origin 0)
+  (step-machine m)                    ; slp itself: 1 cycle
+  (multiple-value-bind (result cost) (step-machine m)
+    (format t "~%Idle step: ~S costs ~D cycles (total ~D)~%" result cost (machine-cycles m))
+    (assert (eq :idle result))
+    (assert (= 4 cost))
+    (assert (= 5 (machine-cycles m)))))

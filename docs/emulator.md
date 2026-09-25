@@ -56,7 +56,7 @@ instruction. Decode uses the same logic as
 | Instruction descriptor | Declared plus extra cycles | Executes semantics. |
 | `:decode-failure` | `0` | Leaves PC unchanged. |
 | `:nop` | Skipped cells | Skips an undefined opcode under `:nop` policy. |
-| `:idle` | `1` | Ticks devices without fetching or advancing PC. |
+| `:idle` | `(idle :cycles n)`, default `1` | Ticks devices without fetching or advancing PC. |
 
 The selected instruction's cost is added to `machine-cycles`. A storage
 fault signals during a direct step; `run` catches it. See
@@ -87,8 +87,18 @@ See [Interrupts](interrupts.md#delivery).
 ### Idle steps
 
 An idle machine first checks for an interrupt. If it stays idle, a step
-ticks devices for one cycle and returns `:idle` without changing PC.
+ticks devices for the idle cost and returns `:idle` without changing PC.
 See [Interrupts](interrupts.md#waking-an-idle-machine).
+
+An `(idle :cycles n)` clause sets that cost; `n` is a positive integer and
+defaults to `1`. A child machine's clause overrides its parent's.
+
+```lisp
+(defmachine sleepy
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (idle :cycles 4))
+```
 
 ## `run`
 
@@ -181,8 +191,6 @@ marks such instructions with `+` in its cycles column.
 
 ## Limitations
 
-- An idle step always costs one cycle. A declarable idle cost is tracked in
-  [ticket 164](https://todo.sr.ht/~takeiteasy/lasm/164).
 - A unified trap/interrupt model is outside this execution model.
   [Privilege levels](privilege.md) gate regions and instructions only.
 - `machine-program` holds one assembly, so a machine that loads several

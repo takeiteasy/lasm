@@ -39,7 +39,7 @@ A child clause is merged over the parent's clause of the same kind:
 | `register`, `stack`, `memory`, `device` | matched by name; the child's keywords override the parent's, the rest are kept |
 | `memory` `(region ...)` forms | if the child gives any, they replace the parent's regions |
 | `flags` | added to the parent's |
-| `interrupts`, `properties` | merged key by key |
+| `interrupts`, `properties`, `idle` | merged key by key |
 | `clock-speed`, `undefined-opcode` | replaced |
 
 A clause naming something the parent does not have adds it. Element order and

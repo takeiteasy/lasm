@@ -110,9 +110,9 @@
     (device-signal source (device-at source 0) 11)
     (signal-interrupt source 22)
     (restore-snapshot target (machine-snapshot source))
-    (fiveam:is (equal '(11 22) (mapcar #'cdr (machine-interrupt-queue target))))
-    (fiveam:is (eq (device-at target 0) (car (first (machine-interrupt-queue target)))))
-    (fiveam:is (null (car (second (machine-interrupt-queue target)))))))
+    (fiveam:is (equal '(11 22) (mapcar #'second (machine-interrupt-queue target))))
+    (fiveam:is (eq (device-at target 0) (first (first (machine-interrupt-queue target)))))
+    (fiveam:is (null (first (second (machine-interrupt-queue target)))))))
 
 (fiveam:test snapshot-device-state-round-trips-through-hooks
   (let ((target (%fresh)))
@@ -249,7 +249,7 @@
 ;;; Coverage guard
 
 (fiveam:test snapshot-covers-every-machine-slot
-  (let ((covered '(cycles idle devices interrupt-queue banks loaded-banks region-bindings))
+  (let ((covered '(cycles idle devices interrupt-queue interrupt-active banks loaded-banks region-bindings))
         (host-only '(descriptor slots interrupt-hook access-hook dirty program program-memory program-offset)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))
@@ -534,3 +534,13 @@ twice
 (fiveam:test restore-snapshot-ignores-the-embedded-program
   (let ((other (make-machine 'instr-test-machine)))
     (fiveam:is (eq other (restore-snapshot other (%program-snapshot))))))
+
+(fiveam:test snapshot-round-trips-signal-priorities-and-handler-depth
+  (let ((source (%fresh)) (target (%fresh)))
+    (setf (sref source 'pc) #x100)
+    (signal-interrupt source 1 nil 2)
+    (signal-interrupt source 2 nil 7)
+    (setf (machine-interrupt-active source) '(4 1))
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (equal '(7 2) (mapcar #'third (machine-interrupt-queue target))))
+    (fiveam:is (equal '(4 1) (machine-interrupt-active target)))))

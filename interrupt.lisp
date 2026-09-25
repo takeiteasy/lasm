@@ -16,14 +16,17 @@
 
 ;;; Software-raised interrupts
 
-(defun signal-interrupt (machine data &optional device)
+(defun signal-interrupt (machine data &optional device priority)
   "The public, DEVICE-optional entry point for raising an interrupt --
 called directly by an INT-style instruction's semantics, MACHINE passed
 explicitly, the same convention as DEVICE-INFO/DEVICE-SEND (docs/
 devices.md). DEVICE-SIGNAL (device.lisp) reaches the same queue through
 MACHINE-INTERRUPT-HOOK instead, for a device rather than an instruction
-raising its hand -- both funnel into %ENQUEUE-INTERRUPT (storage.lisp)."
-  (%enqueue-interrupt machine (cons device data)))
+raising its hand -- both funnel into %ENQUEUE-INTERRUPT (storage.lisp).
+
+#161: PRIORITY (an integer, higher delivers first) defaults to DEVICE's
+declared :PRIORITY, or 0 for a software-raised signal."
+  (%enqueue-interrupt machine (list device data (or priority (%device-interrupt-priority device)))))
 
 ;;; Masking
 
@@ -38,6 +41,33 @@ masked machine still queues incoming signals (subject to :QUEUE/
     ((interrupt-descriptor-mask-flag interrupts)
      (plusp (flag machine (interrupt-descriptor-mask-flag interrupts))))
     (t nil)))
+
+;;; Nesting
+
+(defun %interrupt-tracks-depth-p (interrupts)
+  (or (eq (interrupt-descriptor-nesting interrupts) :priority)
+      (interrupt-descriptor-max-depth interrupts)))
+
+(defun %interrupt-nesting-blocked-p (machine interrupts priority)
+  "T when a signal of PRIORITY may not start a handler now (#161): the
+handler depth is at :MAX-DEPTH, or :NESTING :PRIORITY and it does not
+outrank the running handler."
+  (let ((active (machine-interrupt-active machine))
+        (max-depth (interrupt-descriptor-max-depth interrupts)))
+    (or (and max-depth (>= (length active) max-depth))
+        (and active
+             (eq (interrupt-descriptor-nesting interrupts) :priority)
+             (<= priority (first active))))))
+
+(defun %interrupt-returned (machine)
+  "Leave the innermost running handler. INTERRUPT-RETURN always calls this,
+since a child machine can add nesting to a parent's compiled RFI."
+  (cl:pop (machine-interrupt-active machine)))
+
+(defun machine-interrupt-depth (machine)
+  "How many interrupt handlers are running, on a machine whose (interrupts
+...) declares :NESTING :PRIORITY or :MAX-DEPTH; always 0 otherwise."
+  (length (machine-interrupt-active machine)))
 
 ;;; Delivery
 
@@ -56,15 +86,20 @@ redundant TICK-DEVICES call to every delivering step. Does nothing when
 the machine declares no (interrupts ...) clause, the queue is empty, or
 the queue's head is currently masked.
 
+#161: the head is the highest-priority pending signal, and is also held back
+while :NESTING/:MAX-DEPTH forbid another handler (%INTERRUPT-NESTING-BLOCKED-P).
+
 #110: also clears MACHINE-IDLE (storage.lisp) -- delivery is the only thing
 that wakes an idling machine; a masked machine's queue still fills, but it
 stays idle until unmasked, same as delivery itself."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (when (and interrupts
                (machine-interrupt-queue machine)
-               (not (%interrupt-masked-p machine interrupts)))
+               (not (%interrupt-masked-p machine interrupts))
+               (not (%interrupt-nesting-blocked-p
+                     machine interrupts (third (first (machine-interrupt-queue machine))))))
       (let* ((entry (cl:pop (machine-interrupt-queue machine)))
-             (data (cdr entry))
+             (data (second entry))
              (stack (interrupt-descriptor-stack-name interrupts)))
         ;; #166: a :POINTER stack pushes through SP-PUSH instead of
         ;; STACK-PUSH -- STACK names the bound register, and its
@@ -81,6 +116,8 @@ stays idle until unmasked, same as delivery itself."
         (setf (sref machine pc) (%interrupt-place machine (interrupt-descriptor-vector interrupts)))
         (when (interrupt-descriptor-mask-on-deliver interrupts)
           (setf (flag machine (interrupt-descriptor-mask-flag interrupts)) t))
+        (when (%interrupt-tracks-depth-p interrupts)
+          (cl:push (third entry) (machine-interrupt-active machine)))
         (setf (machine-idle machine) nil)
         (let ((cost (interrupt-descriptor-cycles interrupts)))
           (incf (machine-cycles machine) cost)

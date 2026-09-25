@@ -242,13 +242,15 @@ function), got ~S" context name (car fn) (cdr fn))))
 ;; machine's namespace, same as a region's or a register alias's name.
 (defun parse-device-clause (form)
   (%definition-bind (name &key (id 0) (version 0) (manufacturer 0)
-                             init tick receive detach save load read write)
+                             init tick receive detach save load read write (priority 0))
       form
     (unless (symbolp name)
       (%defmachine-error "device ~S: name must be a symbol" name))
     (dolist (v (list (cons :id id) (cons :version version) (cons :manufacturer manufacturer)))
       (unless (and (integerp (cdr v)) (>= (cdr v) 0))
         (%defmachine-error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
+    (unless (integerp priority)
+      (%defmachine-error "device ~S: :priority must be an integer, got ~S" name priority))
     (dolist (fn (list (cons :init init) (cons :tick tick)
                        (cons :receive receive) (cons :detach detach)
                        (cons :save save) (cons :load load)
@@ -258,12 +260,13 @@ function), got ~S" context name (car fn) (cdr fn))))
 function), got ~S" name (car fn) (cdr fn))))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
                              :init init :tick tick :receive receive :detach detach
-                             :save save :load load :read read :write write)))
+                             :save save :load load :read read :write write
+                             :priority priority)))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
 ;;   [:mask-flag name] [:cycles n] [:drop-on-zero-vector t/nil]
-;;   [:mask-on-deliver t/nil]) -- the
+;;   [:mask-on-deliver t/nil] [:nesting :allow/:priority] [:max-depth n]) -- the
 ;; machine's whole interrupt-delivery model. VECTOR/MESSAGE/SAVE/STACK/
 ;; MASK-FLAG are validated as symbols here only -- whether each actually
 ;; names a real storage element of the right kind can't be checked until
@@ -283,7 +286,7 @@ register (#163)."
 (defun parse-interrupts-clause (form)
   (%definition-bind (&key vector message save stack (queue 256) (on-overflow :error)
                              mask-when mask-flag (cycles 0) (drop-on-zero-vector t)
-                             mask-on-deliver)
+                             mask-on-deliver (nesting :allow) max-depth)
       form
     (unless vector (%defmachine-error "interrupts requires :vector"))
     (unless (%interrupt-place-designator-p vector)
@@ -312,11 +315,21 @@ function), got ~S" mask-when))
       (%defmachine-error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
     (when (and mask-on-deliver (not mask-flag))
       (%defmachine-error "interrupts :mask-on-deliver requires :mask-flag"))
+    (unless (member nesting '(:allow :priority))
+      (%defmachine-error "interrupts :nesting must be :ALLOW or :PRIORITY, got ~S" nesting))
+    (unless (or (null max-depth) (and (integerp max-depth) (plusp max-depth)))
+      (%defmachine-error "interrupts :max-depth must be a positive integer, got ~S" max-depth))
     (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
                                 :queue-depth queue :on-overflow on-overflow
                                 :mask-when mask-when :mask-flag mask-flag :cycles cycles
                                 :drop-on-zero-vector (and drop-on-zero-vector t)
-                                :mask-on-deliver (and mask-on-deliver t))))
+                                :mask-on-deliver (and mask-on-deliver t)
+                                :nesting nesting :max-depth max-depth)))
+
+;; #164: (idle [:cycles n]) -- the cycle cost of one idle step.
+(defun parse-idle-clause (form)
+  (%definition-bind (&key (cycles 1)) form
+    (%check-positive cycles ":cycles" 'idle)))
 
 ;; #109/#166: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or,
 ;; absent one, the machine's sole declared stack element -- exactly the way
@@ -813,7 +826,7 @@ DESCRIPTOR's finished elements."
 
 (defun parse-machine-clauses (clauses)
   (let (elements instruction-word clock-speed devices interrupts stack-pointers privilege
-        (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
+        (idle-cycles 1) idle-seen (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -838,6 +851,11 @@ DESCRIPTOR's finished elements."
          (when privilege
            (%defmachine-error "DEFMACHINE: more than one privilege clause"))
          (setf privilege (parse-privilege-clause (rest clause))))
+        (idle
+         (when idle-seen
+           (%defmachine-error "DEFMACHINE: more than one idle clause"))
+         (setf idle-seen t
+               idle-cycles (parse-idle-clause (rest clause))))
         (undefined-opcode
          (when undefined-opcode-seen
            (%defmachine-error "DEFMACHINE: more than one undefined-opcode clause"))
@@ -853,15 +871,16 @@ DESCRIPTOR's finished elements."
                 (first clause)))
         (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
-            (nreverse stack-pointers) undefined-opcode properties privilege)))
+            (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles)))
 
 (defun build-machine-descriptor (name clauses)
   (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
-                        undefined-opcode properties privilege)
+                        undefined-opcode properties privilege idle-cycles)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
                                                 :clock-speed clock-speed :devices devices
                                                 :interrupts interrupts :privilege privilege
+                                                :idle-cycles idle-cycles
                                                 :undefined-opcode undefined-opcode
                                                 :properties properties
                                                 :source-clauses clauses))
@@ -969,7 +988,7 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
 existing register/stack/memory/device merges into the parent's in place, a new
 one is appended. Singletons replace (clock-speed, undefined-opcode) or merge
-key by key (interrupts, properties, privilege); flags are additive."
+key by key (interrupts, properties, privilege, idle); flags are additive."
   (let ((merged (copy-list parent-clauses))
         (added '()))
     (dolist (clause child-clauses)
@@ -995,7 +1014,7 @@ instructions are compiled against the parent's" head))
              (if position
                  (setf (nth position merged) clause)
                  (cl:push clause added))))
-          ((interrupts properties privilege)
+          ((interrupts properties privilege idle)
            (let ((position (position head merged :key #'first)))
              (if position
                  (setf (nth position merged)

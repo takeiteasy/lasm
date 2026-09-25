@@ -122,13 +122,13 @@
   (let ((m (make-machine 'interrupt-test-machine)))
     (setf (sref m 'ia) #x0100)
     (device-signal m (device-at m 0) :hello)
-    (fiveam:is (equal (list (cons (device-at m 0) :hello)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list (device-at m 0) :hello 0)) (machine-interrupt-queue m)))))
 
 (fiveam:test signal-interrupt-enqueues-with-no-device
   (let ((m (make-machine 'interrupt-test-machine)))
     (setf (sref m 'ia) #x0100)
     (signal-interrupt m 42)
-    (fiveam:is (equal (list (cons nil 42)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 42 0)) (machine-interrupt-queue m)))))
 
 (fiveam:test signal-interrupt-with-zero-vector-drops-the-signal-by-default
   (let ((m (make-machine 'interrupt-test-machine)))
@@ -180,14 +180,14 @@
     (setf (sref m 'ia) 1)
     (signal-interrupt m 1)
     (fiveam:finishes (signal-interrupt m 2))
-    (fiveam:is (equal (list (cons nil 1)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 1 0)) (machine-interrupt-queue m)))))
 
 (fiveam:test overflow-drop-oldest-policy-evicts-the-head
   (let ((m (make-machine 'interrupt-overflow-drop-oldest-test-machine)))
     (setf (sref m 'ia) 1)
     (signal-interrupt m 1)
     (fiveam:finishes (signal-interrupt m 2))
-    (fiveam:is (equal (list (cons nil 2)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 2 0)) (machine-interrupt-queue m)))))
 
 ;;; Delivery under STEP-MACHINE
 
@@ -758,3 +758,146 @@
              (stack sp :width 8 :depth 4)
              (memory ram :width 8 :addr-width 8)
              (interrupts :vector ia :message a :save (pc) :mask-on-deliver t)))))
+
+;;; Priority and nesting (#161)
+
+(defmacro %define-nesting-machine (name &rest interrupts-keys)
+  `(progn
+     (defmachine ,name
+       (register pc :width 16) (register ia :width 16) (register a :width 16)
+       (stack sp :width 16 :depth 8)
+       (memory ram :width 8 :addr-width 16)
+       (device urgent :priority 5)
+       (device routine)
+       (interrupts :vector ia :message a :save (pc) ,@interrupts-keys))
+     (definstruction ,name nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+     (definstruction ,name rfi (encoding (opcode #x01)) (semantics (interrupt-return)))))
+
+(%define-nesting-machine interrupt-plain-nesting-test-machine :queue 2 :on-overflow :drop-oldest)
+(%define-nesting-machine interrupt-depth-test-machine :max-depth 1)
+(%define-nesting-machine interrupt-priority-test-machine :nesting :priority)
+
+(defun %nesting-machine (name)
+  "A NAME machine with a nop-filled handler at #x10 ending in RFI at #x12."
+  (let ((m (make-machine name)))
+    (load-program m (list #x00 #x00 #x01) :origin #x10)
+    (load-program m (list #x00 #x00 #x00) :origin 0)
+    (setf (sref m 'ia) #x10)
+    m))
+
+(defun %queued-data (m) (mapcar #'second (machine-interrupt-queue m)))
+
+(fiveam:test higher-priority-signals-queue-ahead-fifo-within-a-level
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x10)
+    (signal-interrupt m 10 nil 1)
+    (signal-interrupt m 20 nil 5)
+    (signal-interrupt m 30 nil 3)
+    (signal-interrupt m 40 nil 5)
+    (fiveam:is (equal '(20 40 30 10) (%queued-data m)))))
+
+(fiveam:test device-priority-is-the-default-signal-priority
+  (let ((m (make-machine 'interrupt-priority-test-machine)))
+    (setf (sref m 'ia) #x10)
+    (device-signal m (device-at m 1) 1)
+    (device-signal m (device-at m 0) 2)
+    (signal-interrupt m 3)
+    (fiveam:is (equal '(2 1 3) (%queued-data m)))
+    (fiveam:is (equal '(5 0 0) (mapcar #'third (machine-interrupt-queue m))))))
+
+(fiveam:test delivery-takes-the-highest-priority-signal-first
+  (let ((m (%nesting-machine 'interrupt-plain-nesting-test-machine)))
+    (signal-interrupt m 1 nil 1)
+    (signal-interrupt m 2 nil 4)
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'a)))))
+
+(fiveam:test drop-oldest-evicts-the-oldest-lowest-priority-signal
+  (let ((m (%nesting-machine 'interrupt-plain-nesting-test-machine)))
+    (signal-interrupt m 1 nil 1)
+    (signal-interrupt m 2 nil 3)
+    (signal-interrupt m 3 nil 2)
+    (fiveam:is (equal '(2 3) (%queued-data m)))
+    (signal-interrupt m 4 nil 0)
+    (fiveam:is (equal '(2 3) (%queued-data m)) "an incoming signal below everything queued is dropped")
+    (signal-interrupt m 5 nil 2)
+    (fiveam:is (equal '(2 5) (%queued-data m)) "an equal-priority incoming signal evicts the older one")))
+
+(fiveam:test nesting-allow-does-not-track-depth
+  (let ((m (%nesting-machine 'interrupt-plain-nesting-test-machine)))
+    (signal-interrupt m 1)
+    (step-machine m)
+    (fiveam:is (zerop (machine-interrupt-depth m)))
+    (fiveam:is (null (machine-interrupt-active m)))))
+
+(fiveam:test max-depth-holds-a-signal-until-the-handler-returns
+  (let ((m (%nesting-machine 'interrupt-depth-test-machine)))
+    (signal-interrupt m 1)
+    (step-machine m)                    ; delivers, runs nop at #x10
+    (fiveam:is (= 1 (machine-interrupt-depth m)))
+    (signal-interrupt m 2)
+    (step-machine m)                    ; blocked: nop at #x11
+    (fiveam:is (equal '(2) (%queued-data m)))
+    (step-machine m)                    ; rfi at #x12, still blocked while it runs
+    (fiveam:is (zerop (machine-interrupt-depth m)))
+    (fiveam:is (equal '(2) (%queued-data m)))
+    (step-machine m)                    ; delivers the held signal
+    (fiveam:is (= 2 (sref m 'a)))
+    (fiveam:is (= 1 (machine-interrupt-depth m)))
+    (fiveam:is (null (machine-interrupt-queue m)))))
+
+(fiveam:test nesting-priority-preempts-only-a-strictly-higher-priority-signal
+  (let ((m (%nesting-machine 'interrupt-priority-test-machine)))
+    (signal-interrupt m 1 nil 2)
+    (step-machine m)
+    (signal-interrupt m 2 nil 2)
+    (step-machine m)
+    (fiveam:is (= 1 (machine-interrupt-depth m)) "an equal priority waits")
+    (fiveam:is (equal '(2) (%queued-data m)))
+    (signal-interrupt m 3 nil 3)
+    (step-machine m)
+    (fiveam:is (= 2 (machine-interrupt-depth m)))
+    (fiveam:is (= 3 (sref m 'a)))
+    (fiveam:is (equal '(3 2) (machine-interrupt-active m)) "innermost first")))
+
+(fiveam:test reset-clears-the-handler-depth
+  (let ((m (%nesting-machine 'interrupt-depth-test-machine)))
+    (signal-interrupt m 1)
+    (step-machine m)
+    (reset m)
+    (fiveam:is (zerop (machine-interrupt-depth m)))))
+
+;; The parent's RFI is compiled without nesting; a child that adds :MAX-DEPTH
+;; through :EXTENDS must still unwind it.
+(defmachine interrupt-ext-parent
+  (register pc :width 16) (register ia :width 16) (register a :width 16)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16)
+  (interrupts :vector ia :message a :save (pc)))
+(definstruction interrupt-ext-parent nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction interrupt-ext-parent rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+(defmachine (interrupt-ext-child (:extends interrupt-ext-parent))
+  (interrupts :max-depth 1))
+
+(fiveam:test inherited-rfi-unwinds-depth-a-child-adds
+  (let ((m (%nesting-machine 'interrupt-ext-child)))
+    (signal-interrupt m 1)
+    (step-machine m)
+    (fiveam:is (= 1 (machine-interrupt-depth m)))
+    (signal-interrupt m 2)
+    (step-machine m)
+    (step-machine m)                    ; the inherited rfi
+    (fiveam:is (zerop (machine-interrupt-depth m)))
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'a)))))
+
+(fiveam:test defmachine-rejects-bad-nesting-and-priority-options
+  (dolist (form '((interrupts :vector ia :message a :save (pc) :nesting :bogus)
+                  (interrupts :vector ia :message a :save (pc) :max-depth 0)
+                  (device dev :priority :high)))
+    (fiveam:signals machine-definition-error
+      (eval `(defmachine interrupt-bad-option-test
+               (register pc :width 8) (register ia :width 8) (register a :width 8)
+               (stack sp :width 8 :depth 4)
+               (memory ram :width 8 :addr-width 8)
+               ,form)))))

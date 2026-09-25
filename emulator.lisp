@@ -273,11 +273,11 @@ single NULL test on MACHINE-DESCRIPTOR-INTERRUPTS.
 semantics primitive, semantics.lisp, ran on some earlier step and nothing
 has woken it since), this step ticks devices and accounts one cycle but
 does not fetch, decode, execute, or advance PC -- returning (VALUES :IDLE
-1) instead. Checked after DELIVER-PENDING-INTERRUPT, not before, so a
+COST) instead, COST being the machine's declared (idle :cycles n) (#164), 1
+by default. Checked after DELIVER-PENDING-INTERRUPT, not before, so a
 signal delivered this same step both wakes the machine and executes the
 handler's first instruction, exactly the same one-step coincidence #109's
-own delivery gets against an ordinary fetch. TODO: the idle cost is fixed
-at 1 cycle -- a declarable idle cost is a follow-up ticket (#164).
+own delivery gets against an ordinary fetch.
 
 The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
 is shared with the disassembler through the decoder. This function advances
@@ -289,9 +289,10 @@ so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
 decoded, not just the values."
   (deliver-pending-interrupt machine pc)
   (when (machine-idle machine)
-    (incf (machine-cycles machine) 1)
-    (tick-devices machine 1)
-    (return-from %step-machine-resolved (values :idle 1)))
+    (let ((cost (machine-descriptor-idle-cycles (machine-descriptor machine))))
+      (incf (machine-cycles machine) cost)
+      (tick-devices machine cost)
+      (return-from %step-machine-resolved (values :idle cost))))
   (let ((address (%sref machine pc)))
     (handler-bind ((runtime-location
                     (lambda (c) (%locate-runtime-condition c machine address memory))))

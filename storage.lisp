@@ -301,7 +301,9 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (save nil :type (or null symbol function))
   (load nil :type (or null symbol function))
   (read nil :type (or null symbol function))
-  (write nil :type (or null symbol function)))
+  (write nil :type (or null symbol function))
+  ;; #161: interrupt priority of this device's signals; higher delivers first.
+  (priority 0 :type integer))
 
 ;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
@@ -353,7 +355,12 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (mask-flag nil :type (or null symbol))
   (cycles 0 :type (integer 0))
   (drop-on-zero-vector t :type boolean)
-  (mask-on-deliver nil :type boolean))
+  (mask-on-deliver nil :type boolean)
+  ;; #161: :PRIORITY lets a running handler be preempted by a strictly
+  ;; higher-priority signal; MAX-DEPTH caps nested handlers. Either one makes
+  ;; delivery track handler depth in MACHINE-INTERRUPT-ACTIVE.
+  (nesting :allow :type (member :allow :priority))
+  (max-depth nil :type (or null (integer 1))))
 
 ;; #166: a (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
 ;; binds an existing scalar :register element as an address pointer into a
@@ -492,6 +499,8 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; single NULL test on a machine declaring no interrupt model, the same
   ;; way DEVICES being NIL keeps TICK-DEVICES a no-op loop.
   (interrupts nil :type (or null interrupt-descriptor))
+  ;; #164: cycle cost of one idle step; declared by (idle :cycles n).
+  (idle-cycles 1 :type (integer 1))
   ;; #111: NIL unless DEFMACHINE declares a (privilege ...) clause. NIL keeps
   ;; every region access and instruction step free of privilege work.
   (privilege nil :type (or null privilege-descriptor))
@@ -640,12 +649,17 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; like ACCESS-HOOK -- RESET leaves it alone, snapshots do not save it.
   (dirty nil :type (or null dirty-pages))
   ;; #109: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp) but
-  ;; not yet delivered -- a list of (DEVICE . DATA) conses, oldest first,
-  ;; DEVICE possibly NIL for a software-raised (INT-style) signal. Capped at
+  ;; not yet delivered -- a list of (DEVICE DATA PRIORITY) entries, highest
+  ;; priority first and oldest first within a priority (#161), DEVICE
+  ;; possibly NIL for a software-raised (INT-style) signal. Capped at
   ;; the descriptor's INTERRUPT-DESCRIPTOR-QUEUE-DEPTH by SIGNAL-INTERRUPT
   ;; itself; this slot has no depth of its own. Machine state, unlike
   ;; INTERRUPT-HOOK above -- RESET clears it.
   (interrupt-queue nil :type list)
+  ;; #161: priorities of the handlers currently running, innermost first.
+  ;; Only maintained on a machine whose (interrupts ...) declares :NESTING
+  ;; :PRIORITY or :MAX-DEPTH; popped by INTERRUPT-RETURN. RESET clears it.
+  (interrupt-active nil :type list)
   ;; #110: set by the IDLE semantics primitive (semantics.lisp) -- STEP-
   ;; MACHINE (emulator.lisp) skips fetch/decode/execute while this is true,
   ;; but still ticks devices and accounts cycles. Cleared by DELIVER-
@@ -745,6 +759,8 @@ when MACHINE is tracking dirty pages."
 ;; (this calling out to interrupt.lisp) without creating the forward
 ;; reference this split avoids.
 (defun %enqueue-interrupt (machine entry)
+  "Queue ENTRY, a (DEVICE DATA PRIORITY) list, behind every pending signal of
+equal or higher priority."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (unless interrupts
       (%emulator-usage-error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
@@ -752,20 +768,29 @@ when MACHINE is tracking dirty pages."
     (when (and (interrupt-descriptor-drop-on-zero-vector interrupts)
                (zerop (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
       (return-from %enqueue-interrupt (values)))
-    ;; TODO: a plain list with LENGTH/NCONC here is O(depth) per signal --
-    ;; fine at :QUEUE's modest default (256) but a real cost at a much
-    ;; deeper declared queue. A ring buffer (sized to :QUEUE, tracking its
-    ;; own count) would make depth checks and both ends O(1) if that ever
-    ;; matters.
-    (when (>= (length (machine-interrupt-queue machine)) (interrupt-descriptor-queue-depth interrupts))
-      (ecase (interrupt-descriptor-on-overflow interrupts)
-        (:error (error 'interrupt-queue-full
-                        :machine (machine-descriptor-name (machine-descriptor machine))))
-        (:trap (error 'lasm-trap :tag :interrupt-queue-overflow :data entry))
-        (:drop (return-from %enqueue-interrupt (values)))
-        (:drop-oldest (cl:pop (machine-interrupt-queue machine)))))
-    (setf (machine-interrupt-queue machine)
-          (nconc (machine-interrupt-queue machine) (list entry))))
+    ;; TODO: a plain list with LENGTH and a linear sorted insert is O(depth)
+    ;; per signal -- fine at :QUEUE's modest default (256) but a real cost at
+    ;; a much deeper declared queue. Per-priority ring buffers would make
+    ;; both O(1) if that ever matters (#304).
+    (let ((priority (third entry))
+          (queue (machine-interrupt-queue machine)))
+      (when (>= (length queue) (interrupt-descriptor-queue-depth interrupts))
+        (ecase (interrupt-descriptor-on-overflow interrupts)
+          (:error (error 'interrupt-queue-full
+                          :machine (machine-descriptor-name (machine-descriptor machine))))
+          (:trap (error 'lasm-trap :tag :interrupt-queue-overflow :data entry))
+          (:drop (return-from %enqueue-interrupt (values)))
+          (:drop-oldest
+           ;; Evicts the oldest of the lowest priority. The incoming signal
+           ;; counts as newest, so it is dropped itself when it ranks below
+           ;; everything queued.
+           (let ((lowest (reduce #'min queue :key #'third)))
+             (when (< priority lowest)
+               (return-from %enqueue-interrupt (values)))
+             (setf queue (remove lowest queue :key #'third :count 1))))))
+      (let ((split (or (position priority queue :key #'third :test #'>) (length queue))))
+        (setf (machine-interrupt-queue machine)
+              (append (subseq queue 0 split) (list entry) (nthcdr split queue))))))
   (values))
 
 ;; #109: the hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
@@ -779,8 +804,11 @@ when MACHINE is tracking dirty pages."
 ;; default" from "something else was installed" -- RESET itself does not
 ;; make this distinction (see its own docstring below): it leaves whatever
 ;; is currently installed alone either way.
+(defun %device-interrupt-priority (device)
+  (if device (device-descriptor-priority (device-descriptor device)) 0))
+
 (defun %default-interrupt-hook (machine device data)
-  (%enqueue-interrupt machine (cons device data)))
+  (%enqueue-interrupt machine (list device data (%device-interrupt-priority device))))
 
 ;; #108: instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
 ;; its INIT hook (if any). Shared by MAKE-MACHINE/RESET below (seeding the
@@ -934,7 +962,8 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
        (%instantiate-device machine device-descriptor (fill-pointer devices))
        devices)))
   (clrhash (machine-region-bindings machine))
-  (setf (machine-interrupt-queue machine) nil)
+  (setf (machine-interrupt-queue machine) nil
+        (machine-interrupt-active machine) nil)
   (setf (machine-idle machine) nil)
   machine)
 

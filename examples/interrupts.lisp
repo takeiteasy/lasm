@@ -164,3 +164,44 @@
   (assert (zerop (sref m 'sp)))
 
   (format t "~%All register-indexed-stack assertions passed.~%"))
+
+;;; #161: priority and nesting. Devices declare a :priority; a higher-priority
+;;; signal is delivered ahead of a lower one already queued, and :nesting
+;;; :priority lets it preempt a running handler only when it strictly
+;;; outranks that handler. Handler depth is tracked until interrupt-return.
+
+(defmachine intfoo-prio
+  (register pc :width 16)
+  (register ia :width 16)
+  (register a :width 16)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16)
+  (device timer :priority 1)
+  (device disk :priority 3)
+  (interrupts :vector ia :message a :save (pc) :nesting :priority))
+
+(definstruction intfoo-prio nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction intfoo-prio rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(let ((m (make-machine 'intfoo-prio)))
+  (setf (sref m 'ia) #x0100)
+  (load-program m (list #x00 #x00 #x00 #x01) :origin #x0100) ; handler: nops, then rfi
+  (setf (sref m 'pc) 0)
+  (format t "~%Priority: the timer (1) signals first, then the disk (3)...~%")
+  (device-signal m (device-at m 0) #x11)
+  (device-signal m (device-at m 1) #x33)
+  (step-machine m)
+  (format t "First delivered: a=~2,'0X depth=~D~%" (sref m 'a) (machine-interrupt-depth m))
+  (assert (= #x33 (sref m 'a)))       ; the disk jumped the queue
+  (assert (= 1 (machine-interrupt-depth m)))
+  (step-machine m)
+  (assert (= 1 (machine-interrupt-depth m))) ; the timer (1) cannot preempt the disk handler (3)
+  (format t "Timer held while the disk handler runs: depth=~D~%" (machine-interrupt-depth m))
+  (step-machine m)
+  (step-machine m)                    ; rfi
+  (assert (zerop (machine-interrupt-depth m)))
+  (step-machine m)                    ; the timer is delivered now
+  (assert (= #x11 (sref m 'a)))
+  (format t "Timer delivered after return: a=~2,'0X~%" (sref m 'a))
+
+  (format t "~%All priority assertions passed.~%"))
