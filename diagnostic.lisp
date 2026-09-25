@@ -221,6 +221,14 @@ element match an operand equally well. HOLE is the element's first hole
 index and SLOT its slot name, or NIL. CHOSEN and ALTERNATIVES name the
 alternatives' own MODE-DESCRIPTORs."))
 
+(define-condition stale-mode (lasm-warning style-warning)
+  ((mode :initarg :mode :reader stale-mode-mode)
+   (dependents :initarg :dependents :initform nil :reader stale-mode-dependents)
+   (instructions :initarg :instructions :initform nil :reader stale-mode-instructions))
+  (:documentation "Signalled when redefining MODE leaves modes that reference it
+invalid (DEPENDENTS, innermost first) or leaves compiled instructions built
+against its old shape (INSTRUCTIONS, a list of (MACHINE . MNEMONIC))."))
+
 ;;; Source-context propagation
 
 (defmacro with-source-context (source &body body)

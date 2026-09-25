@@ -581,6 +581,88 @@ a mode with no varying :ONE-OF element."
                   (%expr-hole-attribute element descriptor :signed)))
               descriptor)))))))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun %mode-references (mode)
+    (loop for element in (mode-descriptor-pattern mode)
+          when (eq (first element) :one-of)
+            append (%one-of-alternatives element)))
+
+  (defun %mode-dependents (name)
+    "Modes that reference NAME through ONE-OF, transitively, innermost first."
+    (let ((depths (make-hash-table :test 'eq)))
+      (labels ((depth (mode-name visiting)
+                 (multiple-value-bind (known foundp) (gethash mode-name depths)
+                   (cond (foundp known)
+                         ((eq mode-name name) 0)
+                         ((member mode-name visiting) nil)
+                         (t (let* ((mode (gethash mode-name *modes*))
+                                   (inner (and mode
+                                               (loop for ref in (%mode-references mode)
+                                                     for d = (depth ref (cons mode-name visiting))
+                                                     when d collect d))))
+                              (setf (gethash mode-name depths)
+                                    (and inner (1+ (reduce #'max inner))))))))))
+        (let (result)
+          (maphash (lambda (mode-name mode)
+                     (declare (ignore mode))
+                     (unless (eq mode-name name)
+                       (let ((d (depth mode-name nil)))
+                         (when d (cl:push (cons d mode-name) result)))))
+                   *modes*)
+          (mapcar #'cdr (stable-sort (sort result #'string< :key (lambda (e) (symbol-name (cdr e))))
+                                     #'< :key #'car))))))
+
+  (defun %mode-signature (mode)
+    (list (mode-descriptor-pattern mode) (mode-descriptor-width mode)
+          (mode-descriptor-relativep mode) (mode-descriptor-signedp mode)
+          (mode-descriptor-strictp mode) (mode-descriptor-suffix mode)))
+
+  (defun %instructions-using-modes (mode-names)
+    "((MACHINE . MNEMONIC)...) of registered instructions whose mode is in MODE-NAMES."
+    (let (result)
+      (maphash (lambda (machine md)
+                 (declare (ignore machine))
+                 (maphash (lambda (mnemonic descriptors)
+                            (dolist (d descriptors)
+                              (let ((mode (instruction-descriptor-mode d)))
+                                (when (and mode (member (mode-descriptor-name mode) mode-names))
+                                  (pushnew (cons (instruction-descriptor-machine d) mnemonic) result
+                                           :test #'equal)))))
+                          (machine-descriptor-instructions md)))
+               *machines*)
+      (nreverse result)))
+
+  (defun %recheck-mode-dependents! (name)
+    "Warn (STALE-MODE) about modes that reference the redefined mode NAME and no
+longer validate, and about instructions compiled against NAME or its dependents."
+    (let ((dependents (%mode-dependents name)))
+      (dolist (dependent dependents)
+        (let ((failure (handler-case
+                           (progn (%check-one-of-elements!
+                                   dependent (mode-descriptor-pattern (gethash dependent *modes*)))
+                                  nil)
+                         (lasm-error (c) c))))
+          (when failure
+            (warn 'stale-mode :mode name :dependents (list dependent)
+                              :message (format nil "Redefining mode ~S invalidates mode ~S: ~A"
+                                               name dependent failure)))))
+      (let ((instructions (%instructions-using-modes (cons name dependents))))
+        (when instructions
+          (warn 'stale-mode :mode name :dependents dependents :instructions instructions
+                            :message (format nil "Redefining mode ~S leaves instructions built against its old shape: ~
+~{~A~^, ~} -- re-evaluate their DEFINSTRUCTIONs"
+                                             name (mapcar (lambda (i) (format nil "~A ~A" (car i) (cdr i)))
+                                                          instructions)))))))
+
+  (defun %register-mode (name body)
+    (let* ((old (gethash name *modes*))
+           (new (build-mode-descriptor name body)))
+      (setf (gethash name *modes*) new)
+      (incf *mode-generation*)
+      (when (and old (not (equalp (%mode-signature old) (%mode-signature new))))
+        (%recheck-mode-dependents! name))
+      name)))
+
 (defmacro defmode (name &body pattern)
   "Define a mode from literal tokens, EXPR holes, and ONE-OF alternatives.
 A hole may use (EXPR :REGISTER name :SIGNED boolean :RELATIVE boolean).
@@ -589,8 +671,7 @@ hole is signed, and any number of holes may be relative. :WIDTH supplies
 the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
 checks ordinary operand ranges. See docs/modes.md."
   `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (setf (gethash ',name *modes*) (build-mode-descriptor ',name ',pattern))
-     (incf *mode-generation*)
+     (%register-mode ',name ',pattern)
      ',name))
 
 ;;; Pattern matching

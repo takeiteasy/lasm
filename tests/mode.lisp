@@ -905,3 +905,47 @@ looks like."
                  (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair rhs))))
   (fiveam:is (eq 'oo-reg (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair lhs))))
   (fiveam:is (null (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair)))))
+
+;;; Redefinition warnings (#277)
+
+(defun rs-stale-warnings (form)
+  (let (warnings)
+    (handler-bind ((stale-mode (lambda (c) (cl:push c warnings) (muffle-warning c))))
+      (eval form))
+    (nreverse warnings)))
+
+(defun rs-define-modes ()
+  (eval '(defmode rs-x "a" expr))
+  (eval '(defmode rs-y "b" expr))
+  (eval '(defmode rs-mid (one-of rs-x rs-y)))
+  (eval '(defmode rs-outer (one-of rs-mid rs-x))))
+
+(fiveam:test redefining-a-mode-with-the-same-shape-does-not-warn
+  (rs-define-modes)
+  (fiveam:is (null (rs-stale-warnings '(defmode rs-y "b" expr)))))
+
+(fiveam:test redefining-a-mode-warns-about-invalidated-dependents
+  (rs-define-modes)
+  (let ((warnings (rs-stale-warnings '(defmode rs-y "b"))))
+    (fiveam:is (equal '((rs-outer)) (mapcar #'stale-mode-dependents warnings)))
+    (fiveam:is (search "RS-OUTER" (princ-to-string (first warnings)))))
+  (rs-define-modes))
+
+(fiveam:test stale-mode-warnings-name-dependents-innermost-first
+  (rs-define-modes)
+  (eval '(defmode rs-top (one-of rs-outer rs-x)))
+  (eval '(defmode rs-y "b"))
+  (fiveam:is (equal '(rs-mid rs-outer rs-top) (%mode-dependents 'rs-y)))
+  (rs-define-modes))
+
+(defmachine restale-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(fiveam:test redefining-a-mode-warns-about-compiled-instructions
+  (eval '(defmode rs-inst "(" expr ")"))
+  (eval '(definstruction restale-machine rsop (modes rs-inst) (encoding (opcode 1) (operand v :width 1)) (semantics)))
+  (let ((warnings (rs-stale-warnings '(defmode rs-inst "[" expr "]"))))
+    (fiveam:is (= 1 (length warnings)))
+    (fiveam:is (equal '((restale-machine . "RSOP")) (stale-mode-instructions (first warnings))))
+    (fiveam:is (search "RSOP" (princ-to-string (first warnings))))))

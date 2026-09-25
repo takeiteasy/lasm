@@ -60,3 +60,4 @@ For context, see [Machine model](machine-model.md#conditions),
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
 | `ambiguous-alternative` | `ambiguous-mode` | `ambiguous-alternative-hole`, `ambiguous-alternative-slot` |
+| `stale-mode` | `lasm-warning`, `style-warning` | `stale-mode-mode`, `stale-mode-dependents`, `stale-mode-instructions` |

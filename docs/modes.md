@@ -144,15 +144,20 @@ already split at top-level commas, but a mode may include commas as literal
 pattern elements. See [Parser](parser.md) and
 [Per-operand modes](operand-modes.md#matching-and-backtracking).
 
+## Redefining a mode
+
+Redefining a mode updates the hole counts and option keys of modes that
+reference it through `one-of`. When the shape changes, DEFMODE re-validates
+those modes, innermost first, and signals a `stale-mode` warning for each
+that no longer validates. Instructions already compiled keep their old
+shapes; one more `stale-mode` warning lists them, and re-evaluating their
+`definstruction` forms updates them. Redefining a mode with an identical
+shape is silent.
+
 ## Limitations
 
 Modes are global. Machines that need different syntax for the same concept
 use distinct mode names; a machine-local mode namespace is future work.
-
-Redefining a mode updates the hole counts and option keys of modes that
-reference it through `one-of`. Those modes are not re-validated, and
-instructions already compiled keep their old shapes
-([#277](https://todo.sr.ht/~takeiteasy/lasm/277)).
 
 ## Note on operand binding
 
