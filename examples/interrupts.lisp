@@ -227,9 +227,28 @@
   (setf (sref m 'ia) #x0100 (sref m 'mask) 3)
   (signal-interrupt m 1 :priority 3)
   (step-machine m)
-  (format t "~%Level mask 3: priority 3 held, queue depth ~D~%" (length (machine-interrupt-queue m)))
+  (format t "~%Level mask 3: priority 3 held, queue depth ~D~%" (machine-interrupt-pending-count m))
   (assert (/= 1 (sref m 'a)))
   (signal-interrupt m 2 :priority 1 :non-maskable t)
   (step-machine m)
   (format t "Non-maskable priority 1 delivered: a=~D~%" (sref m 'a))
   (assert (= 2 (sref m 'a))))
+
+;;; Separate vector for non-maskable signals (#311)
+
+(defmachine intnmi
+  (register pc :width 16) (register irq :width 16) (register nmi :width 16)
+  (register a :width 16)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16)
+  (interrupts :vector irq :nmi-vector nmi :message a :save (pc)))
+
+(definstruction intnmi nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+
+(let ((m (make-machine 'intnmi)))
+  (load-program m (list #x00 #x00) :origin 0)
+  (setf (sref m 'irq) #x0100 (sref m 'nmi) #x0200)
+  (signal-interrupt m 1 :non-maskable t)
+  (step-machine m)
+  (format t "~%NMI handler entered: pc=~X~%" (sref m 'pc))
+  (assert (= #x0201 (sref m 'pc))))

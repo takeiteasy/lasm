@@ -17,7 +17,7 @@ a machine. Devices and software instructions can signal the same queue.
 
 ```lisp
 (interrupts :vector reg :message reg :save (name...)
-            [:stack name] [:queue n] [:on-overflow policy]
+            [:nmi-vector place] [:stack name] [:queue n] [:on-overflow policy]
             [:mask-when fn] [:mask-flag name]
             [:mask-level place] [:mask-level-when fn] [:mask-level-on-deliver t/nil]
             [:cycles n]
@@ -29,6 +29,7 @@ a machine. Devices and software instructions can signal the same queue.
 | Key | Effect |
 | --- | --- |
 | `:vector` | Register holding the handler address. |
+| `:nmi-vector` | Register holding the handler address for [non-maskable signals](#non-maskable-signals); defaults to `:vector`. |
 | `:message` | Register receiving signal data. |
 | `:save` | Registers and flags pushed before delivery. |
 | `:stack` | Fixed stack or register-backed stack pointer; defaults when unique. |
@@ -38,7 +39,7 @@ a machine. Devices and software instructions can signal the same queue.
 | `:mask-level`, `:mask-level-when` | Priority threshold: a register, or a function of the machine; use at most one. See [Level masking](#level-masking). |
 | `:mask-level-on-deliver` | Set the `:mask-level` register to the delivered signal's priority. |
 | `:cycles` | Delivery cost, default `0`. |
-| `:drop-on-zero-vector` | Drop signals while vector is zero; default `t`. |
+| `:drop-on-zero-vector` | Drop signals while their vector is zero; default `t`. |
 | `:mask-on-deliver` | Set the mask flag before handler execution. |
 | `:nesting` | `:allow` (default) or `:priority`; see [Nesting](#nesting). |
 | `:max-depth` | Cap on running handlers; default unlimited. |
@@ -53,6 +54,13 @@ Registers can be scalar names or indexed bank cells such as `(reg 0)`.
 | --- | --- |
 | `device-signal machine device [data]` | Signal through the machine's device hook. |
 | `signal-interrupt machine data [:device d] [:priority n] [:non-maskable t/nil]` | Signal directly from software semantics or a host. |
+
+| Function | Use |
+| --- | --- |
+| `machine-interrupt-pending-count machine` | Number of pending signals. |
+| `map-pending-interrupts fn machine` | Call `fn` with `device data priority non-maskable` for each pending signal, in delivery order. |
+
+Pending signals deliver by priority, then arrival order within a priority.
 
 A machine with an interrupt clause installs the queue hook when created.
 A software instruction can call `signal-interrupt` inside semantics.
@@ -139,6 +147,13 @@ It still obeys [nesting](#nesting) and the queue's overflow policy.
 | Software or host | `(signal-interrupt machine data :non-maskable t)`; the keyword overrides a device's default. |
 | Privilege violation | `:on-violation (:interrupt DATA :non-maskable t)`; see [Violations as interrupts](privilege.md#violations-as-interrupts). |
 
+With `:nmi-vector`, a non-maskable signal jumps through that register and
+`:drop-on-zero-vector` checks it; other signals use `:vector`.
+
+```lisp
+(interrupts :vector irq :nmi-vector nmi :message a :save (pc))
+```
+
 ## Delivery
 
 A pending unmasked signal is delivered before `step-machine` fetches:
@@ -192,10 +207,10 @@ hook in place as host wiring.
   places across cells is unavailable.
 - Handler depth unwinds only through `interrupt-return`; a handler that
   leaves another way keeps its depth raised until `reset`.
-- Non-maskable signals share the maskable vector; see
-  [ticket 311](https://todo.sr.ht/~takeiteasy/lasm/311).
-- The queue is a sorted list, O(depth) per signal; see
-  [ticket 304](https://todo.sr.ht/~takeiteasy/lasm/304).
+- Vectors are registers; memory-resident vectors are unavailable; see
+  [ticket 313](https://todo.sr.ht/~takeiteasy/lasm/313).
+- Queue operations cost O(distinct pending priorities); see
+  [ticket 312](https://todo.sr.ht/~takeiteasy/lasm/312).
 - The debugger does not display pending priorities or handler depth; see
   [ticket 306](https://todo.sr.ht/~takeiteasy/lasm/306).
 - A unified trap/interrupt model is outside this subsystem.

@@ -280,7 +280,7 @@ function), got ~S" name (car fn) (cdr fn))))
                              :priority priority :non-maskable non-maskable)))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
-;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
+;;   [:nmi-vector NAME] [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
 ;;   [:mask-flag name] [:mask-level place] [:mask-level-when fn]
 ;;   [:mask-level-on-deliver t/nil] [:cycles n] [:drop-on-zero-vector t/nil]
 ;;   [:mask-on-deliver t/nil] [:nesting :allow/:priority] [:max-depth n]
@@ -302,13 +302,15 @@ register (#163)."
            (symbolp (first place)) (integerp (second place)))))
 
 (defun parse-interrupts-clause (form)
-  (%definition-bind (&key vector message save stack (queue 256) (on-overflow :error)
+  (%definition-bind (&key vector nmi-vector message save stack (queue 256) (on-overflow :error)
                              mask-when mask-flag mask-level mask-level-when mask-level-on-deliver
                              (cycles 0) (drop-on-zero-vector t) mask-on-deliver (nesting :allow) max-depth deliver-level)
       form
     (unless vector (%defmachine-error "interrupts requires :vector"))
     (unless (%interrupt-place-designator-p vector)
       (%defmachine-error "interrupts :vector must be a symbol or (NAME INDEX), got ~S" vector))
+    (when (and nmi-vector (not (%interrupt-place-designator-p nmi-vector)))
+      (%defmachine-error "interrupts :nmi-vector must be a symbol or (NAME INDEX), got ~S" nmi-vector))
     (unless message (%defmachine-error "interrupts requires :message"))
     (unless (%interrupt-place-designator-p message)
       (%defmachine-error "interrupts :message must be a symbol or (NAME INDEX), got ~S" message))
@@ -348,7 +350,7 @@ function), got ~S" mask-level-when))
       (%defmachine-error "interrupts :max-depth must be a positive integer, got ~S" max-depth))
     (unless (or (null deliver-level) (and (symbolp deliver-level) (not (keywordp deliver-level))))
       (%defmachine-error "interrupts :deliver-level must be a privilege level name, got ~S" deliver-level))
-    (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
+    (make-interrupt-descriptor :vector vector :nmi-vector nmi-vector :message message :save save :stack-name stack
                                 :queue-depth queue :on-overflow on-overflow
                                 :mask-when mask-when :mask-flag mask-flag
                                 :mask-level mask-level :mask-level-when mask-level-when
@@ -441,6 +443,8 @@ got ~S" name what n kinds (storage-element-kind e)))
                        (%defmachine-error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
 name one cell as (~S INDEX), or use a scalar register" name what n n))))))
       (require-kind (interrupt-descriptor-vector interrupts) '(:register) ":vector")
+      (when (interrupt-descriptor-nmi-vector interrupts)
+        (require-kind (interrupt-descriptor-nmi-vector interrupts) '(:register) ":nmi-vector"))
       (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
       (dolist (n (interrupt-descriptor-save interrupts))
         (require-kind n '(:register :flag) ":save"))
@@ -1253,7 +1257,7 @@ and the parent's instructions are copied in."
              [:priority n] [:non-maskable t/nil])
      (stack-pointer REGISTER [:memory name] [:grows :down/:up])
      (interrupts :vector reg :message reg :save (name...)
-                 [:stack name] [:queue n] [:on-overflow policy]
+                 [:nmi-vector reg] [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:mask-level place]
                  [:mask-level-when fn] [:mask-level-on-deliver t/nil] [:cycles n]
                  [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil]
@@ -1363,8 +1367,9 @@ REGISTER may be wider than the address space.
 
 INTERRUPTS (#109) declares the machine's interrupt-delivery model:
 :VECTOR names the register holding the handler address, written to PC on
-delivery; :MESSAGE names the register a delivered signal's data is written
-to; :SAVE names the registers/flags pushed, in order, before MESSAGE/VECTOR
+delivery (:NMI-VECTOR, #311, names a second one used for non-maskable
+signals, and is what :DROP-ON-ZERO-VECTOR checks for them);
+:MESSAGE names the register a delivered signal's data is written to; :SAVE names the registers/flags pushed, in order, before MESSAGE/VECTOR
 are written -- INTERRUPT-RETURN (semantics.lisp) pops them in reverse.
 :STACK names which declared stack SAVE pushes onto -- a (stack ...) element
 or a (stack-pointer ...)-bound register -- defaulting to the machine's sole

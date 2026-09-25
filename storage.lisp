@@ -335,6 +335,8 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
 ;; slot below except VECTOR/MESSAGE/SAVE/STACK-NAME/MASK-FLAG can assume
 ;; those names are already valid.
 ;;   VECTOR       register holding the handler address written to PC.
+;;   NMI-VECTOR   register used instead of VECTOR for non-maskable signals
+;;                (#311); NIL shares VECTOR.
 ;;   MESSAGE      register a delivered signal's DATA is written to.
 ;;   SAVE         list of register/flag names pushed, in order, before
 ;;                MESSAGE/VECTOR are written -- INTERRUPT-RETURN (semantics.
@@ -367,6 +369,8 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   ;; A place is a scalar register/flag name, or (NAME INDEX) for one cell of
   ;; a banked register (#163).
   (vector nil :type (or symbol list))
+  ;; #311: handler-address place for non-maskable signals, or NIL to share VECTOR.
+  (nmi-vector nil :type (or symbol list))
   (message nil :type (or symbol list))
   (save nil :type list)
   (stack-name nil :type (or null symbol))
@@ -677,14 +681,17 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; NIL, or the DIRTY-PAGES a debug session's checkpoints read. Host wiring
   ;; like ACCESS-HOOK -- RESET leaves it alone, snapshots do not save it.
   (dirty nil :type (or null dirty-pages))
-  ;; #109: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp) but
-  ;; not yet delivered -- a list of (DEVICE DATA PRIORITY) entries, highest
-  ;; priority first and oldest first within a priority (#161), DEVICE
-  ;; possibly NIL for a software-raised (INT-style) signal. Capped at
-  ;; the descriptor's INTERRUPT-DESCRIPTOR-QUEUE-DEPTH by SIGNAL-INTERRUPT
-  ;; itself; this slot has no depth of its own. Machine state, unlike
+  ;; #109/#304: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp)
+  ;; but not yet delivered, held as INTERRUPT-BUCKETs -- one per distinct
+  ;; pending priority, highest first (#161). Each bucket keeps arrival-order
+  ;; FIFOs of PENDING-INTERRUPT entries, split by maskability. COUNT is the
+  ;; total pending; SEQUENCE stamps arrivals so the two FIFOs of one bucket
+  ;; merge in arrival order. Capped at the descriptor's INTERRUPT-DESCRIPTOR-
+  ;; QUEUE-DEPTH by %ENQUEUE-INTERRUPT itself. Machine state, unlike
   ;; INTERRUPT-HOOK above -- RESET clears it.
-  (interrupt-queue nil :type list)
+  (interrupt-buckets nil :type list)
+  (interrupt-count 0 :type (integer 0))
+  (interrupt-sequence 0 :type (integer 0))
   ;; #161: priorities of the handlers currently running, innermost first.
   ;; Only maintained on a machine whose (interrupts ...) declares :NESTING
   ;; :PRIORITY or :MAX-DEPTH; popped by INTERRUPT-RETURN. RESET clears it.
@@ -779,54 +786,152 @@ when MACHINE is tracking dirty pages."
                  :element-type `(unsigned-byte ,(storage-element-cell-width element))
                  :initial-element 0))))
 
-;; #109: append ENTRY (a (DEVICE . DATA) cons, DEVICE possibly NIL for a
-;; software-raised signal) to MACHINE's pending interrupt queue, honoring
-;; its descriptor's :DROP-ON-ZERO-VECTOR/:QUEUE/:ON-OVERFLOW policy. Lives
-;; here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below (which
-;; MAKE-MACHINE sharp-quotes) needs it and LASM.ASD is :SERIAL T with
-;; interrupt.lisp loading after this file -- the same reason %INSTANTIATE-
-;; DEVICE lives here rather than in device.lisp. SIGNAL-INTERRUPT
-;; (interrupt.lisp), the public device-optional entry point, is a second,
-;; equally thin wrapper around this -- it can't be the other way around
-;; (this calling out to interrupt.lisp) without creating the forward
-;; reference this split avoids.
+;; #304: the pending queue -- see MACHINE-INTERRUPT-BUCKETS. A FIFO is a
+;; (HEAD . TAIL) cons pair over a shared list, so push and pop are O(1).
+(defstruct (pending-interrupt (:conc-name pending-))
+  (device nil)
+  (data nil)
+  (priority 0 :type integer)
+  (non-maskable nil :type boolean)
+  (seq 0 :type (integer 0)))
+
+(defstruct (interrupt-bucket (:conc-name bucket-))
+  (priority 0 :type integer)
+  (maskable (cons nil nil) :type cons)
+  (non-maskable (cons nil nil) :type cons))
+
+(defun %fifo-push (fifo entry)
+  (let ((cell (list entry)))
+    (if (car fifo)
+        (setf (cdr (cdr fifo)) cell)
+        (setf (car fifo) cell))
+    (setf (cdr fifo) cell)))
+
+(defun %fifo-pop (fifo)
+  (let ((entry (cl:pop (car fifo))))
+    (unless (car fifo) (setf (cdr fifo) nil))
+    entry))
+
+(defun %fifo-head (fifo)
+  (first (car fifo)))
+
+(defun %bucket-empty-p (bucket)
+  (and (null (car (bucket-maskable bucket)))
+       (null (car (bucket-non-maskable bucket)))))
+
+(defun %bucket-head (bucket &optional non-maskable-only)
+  "BUCKET's next entry in arrival order, or only its non-maskable one when NON-MASKABLE-ONLY."
+  (let ((m (and (not non-maskable-only) (%fifo-head (bucket-maskable bucket))))
+        (n (%fifo-head (bucket-non-maskable bucket))))
+    (cond ((and m n) (if (< (pending-seq m) (pending-seq n)) m n))
+          (t (or m n)))))
+
+(defun %bucket-for (machine priority)
+  "The INTERRUPT-BUCKET for PRIORITY, inserted in sorted position when absent."
+  ;; TODO: a sorted list walk is O(distinct pending priorities) per signal --
+  ;; O(depth) when every signal has its own priority. A priority-indexed table
+  ;; or heap would make it O(log n) (#312).
+  (let ((buckets (machine-interrupt-buckets machine)))
+    (loop for cell on buckets
+          for bucket = (car cell)
+          when (= (bucket-priority bucket) priority) do (return-from %bucket-for bucket)
+          when (< (bucket-priority bucket) priority)
+            do (let ((new (make-interrupt-bucket :priority priority)))
+                 (setf (cdr cell) (cons bucket (cdr cell))
+                       (car cell) new)
+                 (return-from %bucket-for new)))
+    (let ((new (make-interrupt-bucket :priority priority)))
+      (setf (machine-interrupt-buckets machine) (append buckets (list new)))
+      new)))
+
+(defun %push-pending (machine entry)
+  (let ((bucket (%bucket-for machine (pending-priority entry))))
+    (setf (pending-seq entry) (incf (machine-interrupt-sequence machine)))
+    (%fifo-push (if (pending-non-maskable entry) (bucket-non-maskable bucket) (bucket-maskable bucket))
+                entry)
+    (incf (machine-interrupt-count machine))))
+
+(defun %pop-pending (machine entry)
+  "Remove ENTRY, the head of one of its bucket's FIFOs."
+  (let ((bucket (find (pending-priority entry) (machine-interrupt-buckets machine)
+                      :key #'bucket-priority)))
+    (%fifo-pop (if (pending-non-maskable entry) (bucket-non-maskable bucket) (bucket-maskable bucket)))
+    (when (%bucket-empty-p bucket)
+      (setf (machine-interrupt-buckets machine) (delete bucket (machine-interrupt-buckets machine))))
+    (decf (machine-interrupt-count machine))
+    entry))
+
+(defun %clear-interrupt-queue (machine)
+  (setf (machine-interrupt-buckets machine) nil
+        (machine-interrupt-count machine) 0
+        (machine-interrupt-sequence machine) 0))
+
+(defun machine-interrupt-pending-count (machine)
+  "How many interrupts MACHINE has queued and not yet delivered."
+  (machine-interrupt-count machine))
+
+(defun map-pending-interrupts (function machine)
+  "Call FUNCTION with each pending interrupt's DEVICE, DATA, PRIORITY and
+NON-MASKABLE, in delivery order: highest priority first, then arrival order."
+  (dolist (bucket (machine-interrupt-buckets machine))
+    (let ((m (car (bucket-maskable bucket)))
+          (n (car (bucket-non-maskable bucket))))
+      (loop while (or m n)
+            do (let ((entry (cond ((and m n) (if (< (pending-seq (car m)) (pending-seq (car n)))
+                                                  (cl:pop m) (cl:pop n)))
+                                  (m (cl:pop m))
+                                  (t (cl:pop n)))))
+                 (funcall function (pending-device entry) (pending-data entry)
+                          (pending-priority entry) (pending-non-maskable entry)))))))
+
+(defun %interrupt-vector (interrupts non-maskable)
+  "The place holding the handler address for a signal of the given maskability (#311)."
+  (or (and non-maskable (interrupt-descriptor-nmi-vector interrupts))
+      (interrupt-descriptor-vector interrupts)))
+
+(defun %evict-oldest-pending (machine incoming)
+  "Make room for INCOMING under :DROP-OLDEST. Evicts the oldest entry of the
+lowest priority, maskable ones first (#305). The incoming signal counts as
+newest, so it is dropped itself (returns NIL) when it ranks below every
+candidate -- except a non-maskable one, which displaces a maskable entry
+regardless."
+  (let* ((buckets (machine-interrupt-buckets machine))
+         (maskable (find-if (lambda (b) (car (bucket-maskable b))) buckets :from-end t))
+         (victim-bucket (or maskable (find-if-not #'%bucket-empty-p buckets :from-end t)))
+         (lowest (bucket-priority victim-bucket)))
+    (when (and (< (pending-priority incoming) lowest)
+               (not (and (pending-non-maskable incoming) maskable)))
+      (return-from %evict-oldest-pending nil))
+    (%pop-pending machine (if maskable
+                              (%fifo-head (bucket-maskable victim-bucket))
+                              (%fifo-head (bucket-non-maskable victim-bucket))))
+    t))
+
 (defun %enqueue-interrupt (machine entry)
   "Queue ENTRY, a (DEVICE DATA PRIORITY NON-MASKABLE) list, behind every pending signal of
 equal or higher priority. Returns true when ENTRY was queued, NIL when it
-was dropped."
+was dropped. Honors the descriptor's :DROP-ON-ZERO-VECTOR/:QUEUE/:ON-OVERFLOW
+policy. Lives here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below
+(which MAKE-MACHINE sharp-quotes) needs it and LASM.ASD is :SERIAL T."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (unless interrupts
       (%emulator-usage-error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
              (machine-descriptor-name (machine-descriptor machine))))
     (when (and (interrupt-descriptor-drop-on-zero-vector interrupts)
-               (zerop (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
+               (zerop (%interrupt-place machine (%interrupt-vector interrupts (fourth entry)))))
       (return-from %enqueue-interrupt (values)))
-    ;; TODO: a plain list with LENGTH and a linear sorted insert is O(depth)
-    ;; per signal -- fine at :QUEUE's modest default (256) but a real cost at
-    ;; a much deeper declared queue. Per-priority ring buffers would make
-    ;; both O(1) if that ever matters (#304).
-    (let ((priority (third entry))
-          (queue (machine-interrupt-queue machine)))
-      (when (>= (length queue) (interrupt-descriptor-queue-depth interrupts))
+    (let ((pending (make-pending-interrupt :device (first entry) :data (second entry)
+                                           :priority (third entry) :non-maskable (and (fourth entry) t))))
+      (when (>= (machine-interrupt-count machine) (interrupt-descriptor-queue-depth interrupts))
         (ecase (interrupt-descriptor-on-overflow interrupts)
           (:error (error 'interrupt-queue-full
                           :machine (machine-descriptor-name (machine-descriptor machine))))
           (:trap (error 'lasm-trap :tag :interrupt-queue-overflow :data entry))
           (:drop (return-from %enqueue-interrupt (values)))
           (:drop-oldest
-           ;; Evicts the oldest of the lowest priority, maskable entries
-           ;; first (#305). The incoming signal counts as newest, so it is
-           ;; dropped itself when it ranks below every candidate -- except a
-           ;; non-maskable one, which displaces a maskable entry regardless.
-           (let* ((maskable (remove-if #'fourth queue))
-                  (lowest (reduce #'min (or maskable queue) :key #'third)))
-             (when (and (< priority lowest) (not (and (fourth entry) maskable)))
-               (return-from %enqueue-interrupt (values)))
-             (setf queue (remove-if (lambda (e) (and (= (third e) lowest) (or (null maskable) (not (fourth e)))))
-                                    queue :count 1))))))
-      (let ((split (or (position priority queue :key #'third :test #'>) (length queue))))
-        (setf (machine-interrupt-queue machine)
-              (append (subseq queue 0 split) (list entry) (nthcdr split queue))))))
+           (unless (%evict-oldest-pending machine pending)
+             (return-from %enqueue-interrupt (values))))))
+      (%push-pending machine pending)))
   t)
 
 ;; #109: the hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
@@ -1002,8 +1107,8 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
        (%instantiate-device machine device-descriptor (fill-pointer devices))
        devices)))
   (clrhash (machine-region-bindings machine))
-  (setf (machine-interrupt-queue machine) nil
-        (machine-interrupt-active machine) nil
+  (%clear-interrupt-queue machine)
+  (setf (machine-interrupt-active machine) nil
         (machine-privilege-violation machine) nil)
   (setf (machine-idle machine) nil)
   machine)

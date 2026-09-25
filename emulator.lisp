@@ -422,7 +422,7 @@ exactly as it already can after :TRAP."
                  (when (and idle-stop
                             (eq result :idle)
                             (machine-idle machine)
-                            (null (machine-interrupt-queue machine))
+                            (zerop (machine-interrupt-pending-count machine))
                             (notany #'identity (machine-devices machine)))
                    (return-from %run-loop (values :idle (1+ steps)))))
              (lasm-trap (c)

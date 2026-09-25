@@ -34,26 +34,32 @@ ignores every mask; it defaults to DEVICE's declared :NON-MASKABLE."
 
 ;;; Masking
 
-(defun %interrupt-masked-p (machine interrupts entry)
-  "T when INTERRUPTS' :MASK-WHEN or :MASK-FLAG, or its #305 mask level (:MASK-
-LEVEL/:MASK-LEVEL-WHEN, holding back priorities at or below it), currently
-rejects delivery of queue ENTRY. A non-maskable ENTRY is never masked.
-Masking gates delivery only, never enqueueing -- a masked machine still
-queues incoming signals (subject to :QUEUE/:ON-OVERFLOW), it just doesn't
-deliver them until unmasked."
-  (and (not (fourth entry))
-       (or (cond
-             ((interrupt-descriptor-mask-when interrupts)
-              (funcall (interrupt-descriptor-mask-when interrupts) machine))
-             ((interrupt-descriptor-mask-flag interrupts)
-              (plusp (flag machine (interrupt-descriptor-mask-flag interrupts)))))
-           (let ((level (cond
-                          ((interrupt-descriptor-mask-level-when interrupts)
-                           (funcall (interrupt-descriptor-mask-level-when interrupts) machine))
-                          ((interrupt-descriptor-mask-level interrupts)
-                           (%interrupt-place machine (interrupt-descriptor-mask-level interrupts))))))
-             (and level (<= (third entry) level))))
-       t))
+(defun %interrupt-mask-state (machine interrupts)
+  "What currently holds back maskable signals: T when :MASK-WHEN/:MASK-FLAG masks
+everything, otherwise the #305 mask level (:MASK-LEVEL/:MASK-LEVEL-WHEN) -- an
+integer holding back priorities at or below it -- or NIL. Evaluated once per
+delivery attempt. Masking gates delivery only, never enqueueing -- a masked
+machine still queues incoming signals (subject to :QUEUE/:ON-OVERFLOW)."
+  (cond
+    ((and (interrupt-descriptor-mask-when interrupts)
+          (funcall (interrupt-descriptor-mask-when interrupts) machine))
+     t)
+    ((and (interrupt-descriptor-mask-flag interrupts)
+          (plusp (flag machine (interrupt-descriptor-mask-flag interrupts))))
+     t)
+    ((interrupt-descriptor-mask-level-when interrupts)
+     (funcall (interrupt-descriptor-mask-level-when interrupts) machine))
+    ((interrupt-descriptor-mask-level interrupts)
+     (%interrupt-place machine (interrupt-descriptor-mask-level interrupts)))))
+
+(defun %next-deliverable-interrupt (machine interrupts)
+  "The highest-priority pending entry that is not masked, oldest first within
+a priority, or NIL. A non-maskable entry is never masked."
+  (let ((mask (%interrupt-mask-state machine interrupts)))
+    (dolist (bucket (machine-interrupt-buckets machine))
+      (let ((entry (%bucket-head bucket (or (eq mask t)
+                                            (and mask (<= (bucket-priority bucket) mask))))))
+        (when entry (return entry))))))
 
 ;;; Nesting
 
@@ -103,7 +109,8 @@ variant see delivery the same way. PC is the already-%RESOLVE-PC'd register
 name STEP-MACHINE is about to fetch through, so delivery sets the same
 register STEP-MACHINE reads next, honoring any :PC override the same way
 STEP-MACHINE itself does. Pushes every :SAVE place in declared order,
-writes the signal's DATA into :MESSAGE, sets :VECTOR's value into PC, adds
+writes the signal's DATA into :MESSAGE, sets :VECTOR's value (:NMI-VECTOR's for a
+non-maskable signal that has one, #311) into PC, adds
 :CYCLES to MACHINE-CYCLES, and ticks devices with that delivery cost -- but
 only when it's non-zero, so the default :CYCLES 0 doesn't add a second,
 redundant TICK-DEVICES call to every delivering step. Does nothing when
@@ -122,11 +129,11 @@ that wakes an idling machine; a masked machine's queue still fills, but it
 stays idle until unmasked, same as delivery itself."
   (let* ((interrupts (machine-descriptor-interrupts (machine-descriptor machine)))
          (entry (and interrupts
-                     (find-if-not (lambda (e) (%interrupt-masked-p machine interrupts e))
-                                  (machine-interrupt-queue machine)))))
-    (when (and entry (not (%interrupt-nesting-blocked-p machine interrupts (third entry))))
-      (setf (machine-interrupt-queue machine) (delete entry (machine-interrupt-queue machine) :count 1))
-      (let* ((data (second entry))
+                     (plusp (machine-interrupt-count machine))
+                     (%next-deliverable-interrupt machine interrupts))))
+    (when (and entry (not (%interrupt-nesting-blocked-p machine interrupts (pending-priority entry))))
+      (%pop-pending machine entry)
+      (let* ((data (pending-data entry))
              (stack (interrupt-descriptor-stack-name interrupts))
              (interrupted (%sref machine pc))
              (saved (mapcar (lambda (place) (%interrupt-place machine place))
@@ -146,13 +153,13 @@ stays idle until unmasked, same as delivery itself."
               (dolist (value saved)
                 (stack-push machine stack value)))
           (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data)
-          (setf (sref machine pc) (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
+          (setf (sref machine pc) (%interrupt-place machine (%interrupt-vector interrupts (pending-non-maskable entry)))))
         (when (interrupt-descriptor-mask-on-deliver interrupts)
           (setf (flag machine (interrupt-descriptor-mask-flag interrupts)) t))
         (when (interrupt-descriptor-mask-level-on-deliver interrupts)
-          (setf (%interrupt-place machine (interrupt-descriptor-mask-level interrupts)) (third entry)))
+          (setf (%interrupt-place machine (interrupt-descriptor-mask-level interrupts)) (pending-priority entry)))
         (when (%interrupt-tracks-depth-p interrupts)
-          (cl:push (third entry) (machine-interrupt-active machine)))
+          (cl:push (pending-priority entry) (machine-interrupt-active machine)))
         (setf (machine-idle machine) nil)
         (let ((cost (interrupt-descriptor-cycles interrupts)))
           (incf (machine-cycles machine) cost)

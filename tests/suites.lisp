@@ -6,6 +6,12 @@
 
 (fiveam:def-suite lasm)
 
+(defun %pending (machine)
+  "MACHINE's pending interrupts as (DEVICE DATA PRIORITY NON-MASKABLE) lists, in delivery order."
+  (let (entries)
+    (map-pending-interrupts (lambda (&rest entry) (cl:push entry entries)) machine)
+    (nreverse entries)))
+
 ;; Defined here, then used both by storage.lisp's tests (in this same file's
 ;; suite tree) and by a WITH-MACHINE form in semantics.lisp -- this is the
 ;; compile-time check that DEFMACHINE's descriptor is available at

@@ -239,7 +239,8 @@
    ;; Interrupts (#109)
    #:signal-interrupt
    #:deliver-pending-interrupt
-   #:machine-interrupt-queue
+   #:machine-interrupt-pending-count
+   #:map-pending-interrupts
    #:machine-interrupt-depth
 
    ;; Semantics vocabulary

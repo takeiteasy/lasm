@@ -510,7 +510,7 @@ rte")))
     (fiveam:is (eq :privilege-violation (step-machine m)))
     (fiveam:is (= 0 (sref m 'pc)))
     (fiveam:is (= 0 (sref m 'a)))
-    (fiveam:is (= 1 (length (machine-interrupt-queue m))))
+    (fiveam:is (= 1 (machine-interrupt-pending-count m)))
     (step-machine m)
     (fiveam:is (= 7 (sref m 'a)))
     (fiveam:is (eq 'supervisor (privilege-level m)))
@@ -548,18 +548,18 @@ rte")))
 (fiveam:test violation-interrupt-honours-priority
   (let ((m (%priv-irq-machine (list #x02))))
     (step-machine m)
-    (fiveam:is (= 3 (third (first (machine-interrupt-queue m)))))))
+    (fiveam:is (= 3 (third (first (%pending m)))))))
 
 (fiveam:test violation-interrupt-falls-back-to-a-fault-when-the-signal-is-dropped
   (let ((m (%priv-irq-machine (list #x02) :vector 0)))
     (fiveam:signals privilege-violation (step-machine m))
-    (fiveam:is (null (machine-interrupt-queue m)))
+    (fiveam:is (null (%pending m)))
     (fiveam:is (null (privilege-violation-info m)))))
 
 (fiveam:test violation-interrupt-outside-a-step-faults
   (let ((m (%priv-irq-machine (list #x00))))
     (fiveam:signals privilege-violation (%gated-sref m 'cr 'supervisor))
-    (fiveam:is (null (machine-interrupt-queue m)))))
+    (fiveam:is (null (%pending m)))))
 
 (fiveam:test violation-interrupt-run-keeps-going
   (let ((m (%priv-irq-machine (list #x02))))
@@ -620,7 +620,7 @@ rte")))
   (let ((m (%priv-irq-machine (list #x02) :name 'priv-masked-machine)))
     (setf (flag m 'im) 1)
     (dotimes (i 3) (fiveam:is (eq :privilege-violation (step-machine m))))
-    (fiveam:is (= 3 (length (machine-interrupt-queue m))))))
+    (fiveam:is (= 3 (machine-interrupt-pending-count m)))))
 
 (fiveam:test non-maskable-violation-interrupt-delivers-on-a-masked-machine
   (let ((m (%priv-irq-machine (list #x02) :name 'priv-nmi-machine)))
