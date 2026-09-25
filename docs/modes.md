@@ -149,6 +149,11 @@ pattern elements. See [Parser](parser.md) and
 Modes are global. Machines that need different syntax for the same concept
 use distinct mode names; a machine-local mode namespace is future work.
 
+Redefining a mode updates the hole counts and option keys of modes that
+reference it through `one-of`. Those modes are not re-validated, and
+instructions already compiled keep their old shapes
+([#277](https://todo.sr.ht/~takeiteasy/lasm/277)).
+
 ## Note on operand binding
 
 A mode only parses syntax. `operand` holds the decoded integer; semantics

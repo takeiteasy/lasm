@@ -63,8 +63,7 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL preserves #28/#43's
                ; original wrap-on-overflow behavior.
-    varyingp)  ; T if this mode's pattern has a varying ONE-OF element: one
-               ; whose options (%ONE-OF-ELEMENT-OPTIONS) disagree on hole count.
+    varying-cache)  ; (GENERATION . VARYINGP), read through MODE-DESCRIPTOR-VARYINGP
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -75,7 +74,11 @@
 ;; top-level DEFVAR's initial value is only guaranteed set at load time, which
 ;; is too late for a DEFMODE compiled later in the same compilation unit.
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defvar *modes* (make-hash-table :test 'eq)))
+  (defvar *modes* (make-hash-table :test 'eq))
+  ;; Bumped by every DEFMODE, invalidating cached MODE-DESCRIPTOR-VARYINGP
+  ;; values of modes that reference a redefined one.
+  (defvar *mode-generation* 0)
+  (defvar *varyingp-in-progress* nil))
 
 (defun find-mode-descriptor (name)
   "Look up the MODE-DESCRIPTOR registered under NAME (a symbol) with DEFMODE.
@@ -260,6 +263,23 @@ varying elements, one subkey for each, in pattern order."
 
   (defun %pattern-varying-one-of-element (pattern &optional seen)
     (first (%pattern-varying-one-of-elements pattern seen)))
+
+  (defun mode-descriptor-varyingp (mode)
+    "T if MODE's pattern has a varying ONE-OF element: one whose options
+(%ONE-OF-ELEMENT-OPTIONS) disagree on hole count. Recomputed when a DEFMODE has
+run since the last call, so redefining an inner mode is seen by its dependents."
+    (let ((cache (mode-descriptor-varying-cache mode))
+          (name (mode-descriptor-name mode)))
+      (if (and cache (eql (car cache) *mode-generation*))
+          (cdr cache)
+          (progn
+            (when (member name *varyingp-in-progress*)
+              (%defmode-error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
+                              name (reverse *varyingp-in-progress*) name))
+            (let* ((*varyingp-in-progress* (cons name *varyingp-in-progress*))
+                   (value (and (%pattern-varying-one-of-element (mode-descriptor-pattern mode)) t)))
+              (setf (mode-descriptor-varying-cache mode) (cons *mode-generation* value))
+              value)))))
 
   (defun %choice-entry-key (entry)
     "The option key for a matcher CHOICES ENTRY: a descriptor, or a tree
@@ -555,8 +575,7 @@ a mode with no varying :ONE-OF element."
             (let ((descriptor
                     (make-mode-descriptor :name name :pattern pattern :width width
                                           :relativep relative :signedp (or relative signed)
-                                          :suffix suffix :strictp strict
-                                          :varyingp (and (%pattern-varying-one-of-element pattern) t))))
+                                          :suffix suffix :strictp strict)))
               (dolist (element pattern)
                 (when (eq (first element) :expr)
                   (%expr-hole-attribute element descriptor :signed)))
@@ -571,6 +590,7 @@ the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
 checks ordinary operand ranges. See docs/modes.md."
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (setf (gethash ',name *modes*) (build-mode-descriptor ',name ',pattern))
+     (incf *mode-generation*)
      ',name))
 
 ;;; Pattern matching

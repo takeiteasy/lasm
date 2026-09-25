@@ -527,6 +527,37 @@ looks like."
   (eval '(defmode nv-pair-outer (one-of nv-pair-a nv-pair-b)))
   (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'nv-pair-outer))))
 
+(fiveam:test redefining-an-inner-mode-updates-its-dependents-varyingp
+  (eval '(defmode rv-inner "(" expr ")"))
+  (eval '(defmode rv-plain "#" expr))
+  (eval '(defmode rv-outer (one-of rv-inner rv-plain)))
+  (flet ((counts ()
+           (mapcar #'cdr (%one-of-element-options
+                          (first (mode-descriptor-pattern (find-mode-descriptor 'rv-outer)))))))
+    (fiveam:is-false (mode-descriptor-varyingp (find-mode-descriptor 'rv-outer)))
+    (eval '(defmode rv-inner "(" expr "," expr ")"))
+    (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'rv-outer)))
+    (fiveam:is (equal '(2 1) (counts)))
+    (eval '(defmode rv-inner "(" expr ")"))
+    (fiveam:is-false (mode-descriptor-varyingp (find-mode-descriptor 'rv-outer)))
+    (fiveam:is (equal '(1 1) (counts)))))
+
+(fiveam:test redefining-an-inner-one-of-updates-nested-varyingp
+  (eval '(defmode rv-leaf-a "a" expr))
+  (eval '(defmode rv-leaf-b "b" expr))
+  (eval '(defmode rv-mid (one-of rv-leaf-a rv-leaf-b)))
+  (eval '(defmode rv-top (one-of rv-mid rv-leaf-a)))
+  (flet ((top-varying-p () (mode-descriptor-varyingp (find-mode-descriptor 'rv-top))))
+    (fiveam:is-false (top-varying-p))
+    (eval '(defmode rv-leaf-b "b" expr "," expr))
+    (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'rv-mid)))
+    (fiveam:is-true (top-varying-p))
+    (fiveam:is (equal '((rv-mid rv-leaf-a) (rv-mid rv-leaf-b) rv-leaf-a)
+                      (mapcar #'car (%one-of-element-options
+                                     (first (mode-descriptor-pattern (find-mode-descriptor 'rv-top)))))))
+    (eval '(defmode rv-leaf-b "b" expr))
+    (fiveam:is-false (top-varying-p))))
+
 (defun nv-error-text (form)
   (handler-case (progn (eval form) nil)
     (error (c) (princ-to-string c))))
