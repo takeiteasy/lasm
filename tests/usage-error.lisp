@@ -44,3 +44,9 @@
 (fiveam:test output-misuse-is-an-output-usage-error
   (fiveam:signals output-usage-error
     (bytes-to-cells (list 1 2 3) 16)))
+
+(fiveam:test unknown-packing-is-an-output-usage-error
+  (fiveam:signals output-usage-error
+    (bytes-to-cells (list 1 2) 12 :packing :nibbles))
+  (fiveam:signals output-usage-error
+    (assembly-bytes (assemble "hlt" :machine 'emu-test-machine) :packing :nibbles)))

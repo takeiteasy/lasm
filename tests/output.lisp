@@ -40,9 +40,30 @@ hlt" :machine 'disasm-test-machine)))
 (fiveam:test assembly-bytes-wide-cells-need-an-endian-source
   (fiveam:signals error (assembly-bytes (%cells-assembly 16 0 1))))
 
-(fiveam:test assembly-bytes-rejects-non-byte-multiple-cell-width
-  (fiveam:signals error (assembly-bytes (%cells-assembly 12 0 1) :endian :little))
-  (fiveam:signals error (hex-text (%cells-assembly 12 0 1) :endian :little)))
+(fiveam:test assembly-bytes-pads-sub-byte-multiple-cells
+  (let ((a (%cells-assembly 12 0 #xABC #x123)))
+    (fiveam:is (equalp #(#x0A #xBC #x01 #x23) (assembly-bytes a :endian :big)))
+    (fiveam:is (equalp #(#xBC #x0A #x23 #x01) (assembly-bytes a :endian :little)))
+    (fiveam:is (equalp #(#x0A #xBC #x01 #x23) (assembly-bytes a :endian :big :packing :pad)))))
+
+(fiveam:test assembly-bytes-packs-bits
+  (let ((a (%cells-assembly 12 0 #xABC #x123)))
+    (fiveam:is (equalp #(#xAB #xC1 #x23) (assembly-bytes a :endian :big :packing :bits)))
+    (fiveam:is (equalp #(#xBC #x3A #x12) (assembly-bytes a :endian :little :packing :bits))))
+  (let ((a (%cells-assembly 4 0 #x1 #x2 #x3)))
+    (fiveam:is (equalp #(#x12 #x30) (assembly-bytes a :endian :big :packing :bits)))
+    (fiveam:is (equalp #(#x21 #x03) (assembly-bytes a :endian :little :packing :bits)))))
+
+(fiveam:test assembly-bytes-bits-matches-pad-for-whole-byte-cells
+  (let ((a (%cells-assembly 16 0 #x1234 #xABCD)))
+    (dolist (endian '(:little :big))
+      (fiveam:is (equalp (assembly-bytes a :endian endian :packing :pad)
+                         (assembly-bytes a :endian endian :packing :bits))))))
+
+(fiveam:test assembly-bytes-sub-byte-cells-need-an-endian-source
+  (fiveam:signals error (assembly-bytes (%cells-assembly 12 0 1)))
+  (fiveam:signals error (assembly-bytes (%cells-assembly 4 0 1) :packing :bits))
+  (fiveam:is (equalp #(1) (assembly-bytes (%cells-assembly 4 0 1)))))
 
 ;;; bytes-to-cells
 
@@ -55,6 +76,21 @@ hlt" :machine 'disasm-test-machine)))
 
 (fiveam:test bytes-to-cells-rejects-a-partial-cell
   (fiveam:signals error (bytes-to-cells #(1 2 3) 16)))
+
+(fiveam:test bytes-to-cells-inverts-assembly-bytes-for-sub-byte-cells
+  (dolist (packing '(:pad :bits))
+    (dolist (endian '(:little :big))
+      (let* ((a (%cells-assembly 12 0 #xABC #x123 #x001 #xFFF))
+             (cells (bytes-to-cells (assembly-bytes a :endian endian :packing packing) 12
+                                    :endian endian :packing packing)))
+        (fiveam:is (equalp (assembly-cells a) cells))))))
+
+(fiveam:test bytes-to-cells-rejects-a-value-wider-than-the-cell
+  (fiveam:signals error (bytes-to-cells #(#x1F #xFF) 12 :endian :big)))
+
+(fiveam:test bytes-to-cells-bits-rejects-a-leftover-byte
+  (fiveam:signals error (bytes-to-cells #(1 2 3 4) 12 :endian :big :packing :bits))
+  (fiveam:is (= 2 (length (bytes-to-cells #(1 2 3) 12 :endian :big :packing :bits)))))
 
 ;;; write-binary
 
@@ -126,3 +162,16 @@ hlt" :machine 'disasm-test-machine)))
   (let ((a (%cells-assembly 16 0 #x1234)))
     (fiveam:is (equalp #(#x34 #x12)
                        (assembly-bytes a :machine 'mixed-endian-output-test-machine)))))
+
+;;; sub-byte-multiple cells in Intel HEX
+
+(fiveam:test hex-text-pad-addresses-scale-by-whole-bytes
+  (let ((lines (%hex-lines (hex-text (%cells-assembly 12 3 #xABC) :endian :big))))
+    (fiveam:is (equal '(#x02 #x00 #x06 #x00 #x0A #xBC) (butlast (%hex-record-bytes (first lines)))))))
+
+(fiveam:test hex-text-bits-addresses-count-packed-bytes
+  (let ((lines (%hex-lines (hex-text (%cells-assembly 12 2 #xABC #x123) :endian :big :packing :bits))))
+    (fiveam:is (equal '(#x03 #x00 #x03 #x00 #xAB #xC1 #x23) (butlast (%hex-record-bytes (first lines)))))))
+
+(fiveam:test hex-text-bits-rejects-an-origin-off-a-byte-boundary
+  (fiveam:signals error (hex-text (%cells-assembly 12 1 #xABC) :endian :big :packing :bits)))

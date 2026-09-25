@@ -217,3 +217,30 @@
     (fiveam:is (eq before (gethash 'immediate *modes*)))
     (fiveam:is (null (gethash 'cli-leak-probe *modes*)))
     (fiveam:is (null (gethash 'cli-local-mode *machine-modes*)))))
+
+(defun %twelve-args (command file &rest more)
+  (list* command (%cli-path file) "-m" (%cli-path "examples/cli/twelve.lasm") more))
+
+(fiveam:test cli-assemble-pads-twelve-bit-cells-by-default
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (fiveam:is (= 0 (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+                                      (list "-o" (namestring path))))))
+    (fiveam:is (equalp #(#x0A #x01 #x0A #xBC #x0B #x02 #x01 #x23 0 0) (%cli-read-bytes path)))))
+
+(fiveam:test cli-assemble-and-disassemble-bit-packed-cells
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (multiple-value-bind (status out)
+        (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+                          (list "-o" (namestring path) "--packing" "bits")))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "8 bytes" out)))
+    (fiveam:is (equalp #(#xA0 #x1A #xBC #xB0 #x21 #x23 0 0) (%cli-read-bytes path)))
+    (let ((text (nth-value 1 (%run-cli (list "disassemble" (namestring path) "-m"
+                                             (%cli-path "examples/cli/twelve.lasm")
+                                             "--packing" "bits")))))
+      (dolist (line '("lda #$ABC" "sta $123" "hlt"))
+        (fiveam:is (search line text) "~S missing from:~%~A" line text)))))
+
+(fiveam:test cli-packing-rejects-an-unknown-value
+  (fiveam:is (= 2 (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+                                    (list "--packing" "nibbles"))))))

@@ -17,9 +17,9 @@
 
 commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
-                    [--bank N] [--region NAME]
+                    [--bank N] [--region NAME] [--packing pad|bits]
   run FILE          assemble and run          [--max-steps N] [--cycles N]
-  disassemble FILE  disassemble a binary file [--origin N] [--annotate]
+  disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
                     [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
 
@@ -30,6 +30,8 @@ options:
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
+  --packing pad|bits     cells that are not whole bytes: pad each to bytes (default)
+                         or pack them as a bitstream
   -h, --help             show this help
 ")
 
@@ -38,7 +40,7 @@ options:
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
-    ("--bank" . :bank) ("--region" . :region)
+    ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)))
 
 (defparameter *cli-repeatable-options*
@@ -158,6 +160,12 @@ the calling image."
   (let ((name (getf options :memory)))
     (and name (intern (string-upcase name) '#:lasm))))
 
+(defun %cli-packing (options)
+  (let ((name (getf options :packing)))
+    (cond ((null name) :pad)
+          ((member name '("pad" "bits") :test #'string-equal) (intern (string-upcase name) :keyword))
+          (t (%usage-error "--packing must be pad or bits, got ~A" name)))))
+
 (defun %cli-read-bytes (path)
   (with-open-file (in path :element-type '(unsigned-byte 8))
     (let ((bytes (make-array (file-length in) :element-type '(unsigned-byte 8))))
@@ -175,12 +183,14 @@ the calling image."
          (memory (%cli-memory options))
          (bank (%cli-option-integer options :bank "--bank"))
          (region (and (getf options :region)
-                      (intern (string-upcase (getf options :region)) '#:lasm))))
+                      (intern (string-upcase (getf options :region)) '#:lasm)))
+         (packing (%cli-packing options)))
     (funcall (if (string= format "hex") #'write-intel-hex #'write-binary)
-             assembly path :machine machine :memory memory :bank bank :region region)
+             assembly path :machine machine :memory memory :bank bank :region region
+                           :packing packing)
     (format out "wrote ~A (~D bytes)~%" path
             (length (assembly-bytes assembly :machine machine :memory memory
-                                             :bank bank :region region)))
+                                             :bank bank :region region :packing packing)))
     0))
 
 (defun %cli-command-run (file machine lexer options out)
@@ -211,11 +221,13 @@ the calling image."
 (defun %cli-command-disassemble (file machine lexer options out)
   (let* ((memory (%cli-memory options))
          (cell-width (%machine-cell-width machine memory))
-         (endian (if (> cell-width 8)
-                       (%endian-byte-order (%machine-endian machine memory))
-                       :little))
+         (endian (if (= cell-width 8)
+                       :little
+                       (%endian-byte-order (%machine-endian machine memory))))
+         (packing (%cli-packing options))
          (origin (or (%cli-option-integer options :origin "--origin") 0))
-         (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian)
+         (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian
+                                                                  :packing packing)
                                    :machine machine :origin origin :lexer lexer :memory memory
                                    :data-regions (%cli-data-regions options))))
     (if (getf options :annotate)

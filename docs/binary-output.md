@@ -12,15 +12,35 @@ flasher, a hex viewer.
 
 ## Cells to bytes
 
-An 8-bit cell is one byte. A wider cell splits into `cell-width / 8` bytes,
-ordered by the memory element's `:endian` ([Machine model](machine-model.md)):
-`:little` writes the low byte at the lower offset. `:machine` (with `:memory`
-when the machine has several memory elements) supplies the endianness, or pass
-`:endian` directly. A wide cell with neither signals. A memory element with a
-grouped order such as `(:big :little 2)` orders the bytes inside each cell by
+An 8-bit cell is one byte. A wider cell splits into bytes ordered by the
+memory element's `:endian` ([Machine model](machine-model.md)): `:little`
+writes the low byte at the lower offset. `:machine` (with `:memory` when the
+machine has several memory elements) supplies the endianness, or pass `:endian`
+directly. A cell wider than 8 bits with neither signals. A memory element with
+a grouped order such as `(:big :little 2)` orders the bytes inside each cell by
 its inner order (`:little` here).
 
-A `cell-width` that is not a multiple of 8 signals for both formats.
+## Packing
+
+`:packing` chooses how a cell width that is not a multiple of 8 is written.
+For 12-bit cells `#xABC #x123`:
+
+| `:packing` | `:endian :big` | `:endian :little` |
+|---|---|---|
+| `:pad` (default) | `0A BC 01 23` | `BC 0A 23 01` |
+| `:bits` | `AB C1 23` | `BC 3A 12` |
+
+- `:pad` zero-extends each cell to `ceil(cell-width / 8)` bytes.
+- `:bits` lays the cells end to end as one bitstream, high bit first for
+  `:big` and low bit first for `:little`. The last byte is zero-padded.
+
+The two agree when the width is a multiple of 8. `:bits` always needs an
+endian source unless the width is 8; `:pad` needs one only for cells wider than
+8 bits.[^bits]
+
+```sh
+lasm assemble examples/cli/twelve.asm -m examples/cli/twelve.lasm --packing bits
+```
 
 Gaps left by `.org` and `.res` are already zero-filled in the cells, so the
 output is one contiguous run starting at the assembly's `origin`.
@@ -42,19 +62,32 @@ past the 32-bit range signals.
 
 HEX addresses count bytes. On a machine with `:cell-width 16` the record
 address of a cell is `2 * (cell address)`, so it differs from the address its
-labels resolve to.
+labels resolve to. With `:packing :bits` the start is `origin * cell-width / 8`,
+and a start that is not a whole byte signals.
 
 ## Entry points
 
 ```lisp
-(assembly-bytes ASSEMBLY &key machine memory endian bank region)
-(bytes-to-cells BYTES CELL-WIDTH &key (endian :little))
-(write-binary ASSEMBLY PATH &key machine memory endian bank region)
-(hex-text ASSEMBLY &key stream machine memory endian bank region)
-(write-intel-hex ASSEMBLY PATH &key machine memory endian bank region)
+(assembly-bytes ASSEMBLY &key machine memory endian bank region (packing :pad))
+(bytes-to-cells BYTES CELL-WIDTH &key (endian :little) (packing :pad))
+(write-binary ASSEMBLY PATH &key machine memory endian bank region (packing :pad))
+(hex-text ASSEMBLY &key stream machine memory endian bank region (packing :pad))
+(write-intel-hex ASSEMBLY PATH &key machine memory endian bank region (packing :pad))
 ```
 
 `assembly-bytes` returns the byte vector both writers use; `bytes-to-cells` is
 its inverse. `write-binary` and `write-intel-hex` replace an existing file and
 return `path`. `hex-text` returns the HEX text as a string, or writes it to
 `stream` and returns `nil`.
+
+## Limitations
+
+- `bytes-to-cells` cannot tell `:bits` padding from cells when the width is
+  below 8, so trailing zero cells can appear ([#282]).
+
+[#282]: https://todo.sr.ht/~takeiteasy/lasm/282
+
+[^bits]: Without `:bank`, the banks are concatenated as cells, so under
+    `:bits` a bank boundary falls mid-byte when `region size * cell-width` is
+    not a multiple of 8. `bytes-to-cells` accepts up to 7 trailing padding
+    bits and signals on a whole leftover byte.
