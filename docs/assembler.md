@@ -237,7 +237,8 @@ move that origin before any cells are emitted. See [Directives](directives.md#or
 | --- | --- |
 | `assembly-error` | Duplicate or invalid symbols, mismatched operands, relative overflow, strict range failure, invalid directive use, or layout failure. |
 | `include-error`, `macro-error`, `conditional-error` | Invalid preprocessing input. |
-| `unknown-instruction` | Unregistered mnemonic. |
+| `unknown-mnemonic` | Unregistered mnemonic in a statement; positioned like an `assembly-error` and also an `unknown-instruction`. |
+| `unknown-instruction` | Unregistered mnemonic or opcode in a direct lookup. |
 | `unresolved-label` | Operand names a label that is never bound. |
 | `unresolved-location` | `*` is evaluated without `:pc` outside assembly. |
 | `lex-error`, `parse-failure` | Invalid source text passed to `assemble`. |

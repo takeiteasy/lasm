@@ -258,3 +258,40 @@
                            (%hex-lines text)))))
         (fiveam:is (= 3 (nops "--cells" "3")))
         (fiveam:is (= 2 (%run-cli (list "disassemble" (namestring path) "-m" lasm "--cells" "x"))))))))
+
+(fiveam:test cli-unknown-mnemonic-names-file-and-line
+  (multiple-value-bind (status out err)
+      (%run-cli (%cli-args "assemble" "tests/fixtures/cli/bad.asm"))
+    (fiveam:is (= 1 status))
+    (fiveam:is (string= "" out))
+    (fiveam:is (search "bad.asm:1" err))
+    (fiveam:is (search "frobnicate" err))))
+
+(fiveam:test cli-unknown-mnemonic-in-include-names-the-include
+  (multiple-value-bind (status out err)
+      (%run-cli (%cli-args "assemble" "tests/fixtures/cli/include-bad.asm"))
+    (declare (ignore out))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "bad-included.asm:1" err))))
+
+(fiveam:test cli-unknown-mnemonic-in-macro-names-the-invocation
+  (multiple-value-bind (status out err)
+      (%run-cli (%cli-args "assemble" "tests/fixtures/cli/macro-bad.asm"))
+    (declare (ignore out))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "macro-bad.asm:5" err))
+    (fiveam:is (search "frobnicate" err))))
+
+(defun %ambi-args (&rest more)
+  (list* "assemble" (%cli-path "tests/fixtures/cli/ambi.asm")
+         "-m" (%cli-path "tests/fixtures/cli/ambi.lasm") "-o" "/dev/null" more))
+
+(fiveam:test cli-warnings-print-to-err-and-quiet-suppresses-them
+  (multiple-value-bind (status out err) (%run-cli (%ambi-args))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "wrote /dev/null" out))
+    (fiveam:is (search "ambi.asm:1: warning:" err)))
+  (multiple-value-bind (status out err) (%run-cli (%ambi-args "--quiet"))
+    (declare (ignore out))
+    (fiveam:is (= 0 status))
+    (fiveam:is (string= "" err))))

@@ -31,7 +31,8 @@ defined, the default lexer is used.
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
 Every command takes `-m FILE` (required), `--machine-name`, `--lexer`,
-`--memory` (the memory element to target), and `--origin N` (decimal, `$hex`
+`--memory` (the memory element to target), `--quiet` (drop assembly
+warnings), and `--origin N` (decimal, `$hex`
 or `0xhex`; `assemble`, `run`, `listing` and `disassemble`). `-h` prints the
 usage.
 
@@ -60,7 +61,14 @@ instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 | 1 | load, assembly or file error, or a `run` ending in a decode failure, storage fault or undefined-opcode trap |
 | 2 | usage error |
 
-Diagnostics go to standard error.
+Diagnostics go to standard error. An error names its source position, for
+example `prog.asm:3: No instruction "frobnicate" registered on machine M`,
+with the include file or macro body when the statement came from one.
+Assembly warnings such as an
+[ambiguous mode](diagnostics.md#mode-selection-ambiguity) print as
+`prog.asm:3: warning: ...` and do not change the exit status; `--quiet`
+drops them. Warnings raised while loading the machine file are never
+printed.
 
 ## Entry point
 

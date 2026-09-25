@@ -91,6 +91,11 @@ of the instruction declares. Undefined labels are not this condition -- they
 surface as UNRESOLVED-LABEL from EVAL-EXPR, since that condition already
 names exactly this failure."))
 
+(define-condition unknown-mnemonic (assembly-error unknown-instruction) ()
+  (:documentation "An instruction statement whose mnemonic no variant of the
+machine registers. Positioned like any ASSEMBLY-ERROR, and still an
+UNKNOWN-INSTRUCTION."))
+
 (define-condition assertion-error (assembly-error) ()
   (:documentation "Signalled by a failed .assert or a reached .error."))
 
@@ -717,6 +722,10 @@ this far from parsing to point at just the offending hole."
                            (statement-mnemonic statement) value lo hi
                            choice-name operand-name))))
 
+(defun %statement-file (statement)
+  (let ((unit (statement-source-unit statement)))
+    (and unit (source-unit-file unit))))
+
 (defun %maybe-warn-ambiguous-mode (statement candidates chosen)
   "WARN with an AMBIGUOUS-MODE condition (#74) if CANDIDATES (the full
 syntax-and-floor-matching list %CHOOSE-VARIANT built, one (descriptor asts)
@@ -741,6 +750,7 @@ CHOSEN's own mode is NIL (a no-operand variant, which nothing can tie against)."
                 :chosen chosen-mode
                 :alternatives ties
                 :line (statement-line statement)
+                :file (%statement-file statement)
                 :message (format nil "~A: operand matches ~D addressing modes of equal ~
 width (~(~A~)~{, ~(~A~)~}) -- picked ~(~A~) by declaration order"
                                   (statement-mnemonic statement) (1+ (length ties))
@@ -760,6 +770,7 @@ decided -- see TRY-MATCH-OPERAND-MODE's tie records."
                  :hole hole
                  :slot slot
                  :line (statement-line statement)
+                 :file (%statement-file statement)
                  :message (format nil "~A: operand hole ~D matches ~D alternatives equally ~
 (~(~A~)~{, ~(~A~)~}) -- picked ~(~A~) by declaration order"
                                   (statement-mnemonic statement) hole (1+ (length runners-up))
@@ -1172,6 +1183,16 @@ this statement. AST itself is never modified (it may be a cached operand AST,
                    (visit (after i))))))
     labels))
 
+(defun %statement-variants (machine mnemonic statement)
+  "MNEMONIC's variants on MACHINE. An unregistered mnemonic signals
+UNKNOWN-MNEMONIC at STATEMENT's line, or yields no variants when STATEMENT is NIL."
+  (handler-case (find-instruction-variants machine mnemonic)
+    (unknown-instruction ()
+      (when statement
+        (error 'unknown-mnemonic
+               :machine machine :mnemonic mnemonic :line (statement-line statement)
+               :message (format nil "No instruction ~S registered on machine ~S" mnemonic machine))))))
+
 (defun %layout-iteration-bound (statements machine)
   "Allow one full symbol-propagation sweep between instruction widenings."
   (let ((widenings
@@ -1181,7 +1202,7 @@ this statement. AST itself is never modified (it may be a cached operand AST,
                           (not (%assert-statement-p statement)))
                   sum (max 0 (1- (length (remove-duplicates
                                          (mapcar #'instruction-descriptor-size
-                                                 (find-instruction-variants machine mnemonic)))))))))
+                                                 (%statement-variants machine mnemonic nil)))))))))
     (+ 2 (* (1+ widenings) (1+ (length statements))))))
 
 (defun %same-symbols-p (left right)
@@ -1362,7 +1383,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                               (incf address (* width (length asts)))
                               (unless region (setf emitted-p t main-end address)))))))
                       (t
-                       (let ((variants (find-instruction-variants machine mnemonic)))
+                       (let ((variants (%statement-variants machine mnemonic statement)))
                          (multiple-value-bind (descriptor asts choices)
                              (%choose-variant statement variants address
                                                :symbols mode-symbols :scope scope :floor (aref floors i)

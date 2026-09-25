@@ -200,7 +200,8 @@ through untouched."
 ;; ZERO-PAGE/ABSOLUTE, whose widths differ.
 (define-condition lasm-warning (warning)
   ((message :initarg :message :initform nil :reader lasm-warning-message)
-   (line :initarg :line :initform nil :reader lasm-warning-line))
+   (line :initarg :line :initform nil :reader lasm-warning-line)
+   (file :initarg :file :initform nil :reader lasm-warning-file))
   (:report (lambda (c s)
              (format s "~A~@[ (line ~D)~]" (lasm-warning-message c) (lasm-warning-line c)))))
 

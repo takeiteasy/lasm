@@ -26,6 +26,7 @@ commands:
 options:
   -m, --machine FILE     machine definition (.lasm), required
   --machine-name NAME    machine to use when FILE defines several
+  --quiet                suppress assembly warnings
   --lexer NAME           lexer to use when FILE defines several
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
@@ -49,6 +50,7 @@ options:
 
 (defparameter *cli-flag-options*
   '(("--symbols" . :symbols) ("--cycle-costs" . :cycle-costs) ("--annotate" . :annotate)
+    ("--quiet" . :quiet)
     ("-h" . :help) ("--help" . :help)))
 
 (defun %cli-parse (args)
@@ -245,6 +247,16 @@ the calling image."
       (print-symbols assembly :stream out))
     0))
 
+(defun %cli-report-warning (err quiet)
+  "A HANDLER-BIND handler that prints an assembly warning to ERR as
+FILE:LINE: warning: MESSAGE, or drops it under QUIET."
+  (lambda (warning)
+    (unless quiet
+      (format err "~@[~A:~]~@[~D:~] warning: ~A~%"
+              (lasm-warning-file warning) (lasm-warning-line warning)
+              (lasm-warning-message warning)))
+    (muffle-warning warning)))
+
 (defun run-cli (args &key (out *standard-output*) (err *error-output*))
   "Run the lasm command line over ARGS (a list of strings, without the program
 name) and return its exit status: 0 on success, 1 on an assembly, load or run
@@ -266,7 +278,8 @@ failure, 2 on a usage error. Output goes to OUT, diagnostics to ERR."
                  (%cli-call-with-definitions
                   options
                   (lambda (machine lexer)
-                    (funcall handler file machine lexer options out)))))))
+                    (handler-bind ((lasm-warning (%cli-report-warning err (getf options :quiet))))
+                      (funcall handler file machine lexer options out))))))))
     (cli-usage-error (c)
       (format err "lasm: ~A~%~%~A" c *cli-usage*)
       2)

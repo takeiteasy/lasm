@@ -41,6 +41,12 @@ A mismatched operand names the instruction, echoes its operand text, and
 lists accepted mode syntax. Forced mode and hole prefixes also report
 accepted forms. A `one-of` displays alternatives separated by `|`.
 
+## Unknown mnemonic
+
+An unregistered mnemonic signals `unknown-mnemonic`, positioned at its line
+like other assembly errors and naming the include file or macro body it came
+from. It is also an `unknown-instruction`.
+
 ## Mode-selection ambiguity
 
 When equally specific modes tie on encoded width, assembly warns with

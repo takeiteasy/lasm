@@ -81,6 +81,7 @@
    #:lasm-warning
    #:lasm-warning-message
    #:lasm-warning-line
+   #:lasm-warning-file
    #:ambiguous-mode
    #:ambiguous-mode-mnemonic
    #:ambiguous-mode-chosen
@@ -347,6 +348,7 @@
    #:unresolved-label
    #:unresolved-label-name
    #:unknown-instruction
+   #:unknown-mnemonic
    #:unknown-instruction-machine
    #:unknown-instruction-mnemonic
    #:unknown-instruction-opcode
