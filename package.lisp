@@ -51,6 +51,7 @@
    #:unknown-mode
    #:unknown-lexer
    #:definition-error
+   #:with-definition-errors
    #:definition-error-message
    #:definition-error-name
    #:machine-definition-error

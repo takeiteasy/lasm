@@ -128,9 +128,22 @@ name being defined. `opcode-conflict` is an `instruction-definition-error`.
 ```
 
 Errors from a word-encoded machine's `semantics` surface on the
-first execution of the instruction.[^definition] Under `compile-file`, SBCL
-reports them as `compiled-program-error`; see
-[Limitations](#limitations).
+first execution of the instruction.[^definition]
+
+### Under `compile-file`
+
+SBCL reports a definer's error during `compile-file` as a compile-time error,
+and the loaded fasl signals `compiled-program-error`. Wrap the build in
+`with-definition-errors` to get the typed condition:
+
+```lisp
+(handler-case (with-definition-errors (compile-file "machine.lisp"))
+  (definition-error (c) (definition-error-name c)))
+```
+
+It signals the first `definition-error` a definer raised, either when the body
+returns or in place of any other error escaping it, such as ASDF's
+`compile-file-error`.[^handled]
 
 ## Usage errors
 
@@ -160,9 +173,12 @@ declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
 
 ## Limitations
 
-- `compile-file` of a malformed definition loses the condition type; it is
-  tracked in [ticket 258](https://todo.sr.ht/~takeiteasy/lasm/258).
+- Loading a fasl compiled outside `with-definition-errors` signals
+  `compiled-program-error`; the definer never runs at load time. See
+  [ticket 294](https://todo.sr.ht/~takeiteasy/lasm/294).
 
 [^definition]: Word-encoded semantics compile lazily on first use. The
   compile step re-signals the typed condition, so the caller sees the same
   `instruction-definition-error` as at definition time.
+[^handled]: A `definition-error` that the body handles itself, such as inside
+  `ignore-errors`, is still signalled when the body returns.

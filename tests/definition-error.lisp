@@ -70,3 +70,38 @@
   (let ((*definition-type* 'mode-definition-error))
     (fiveam:signals type-error
       (%definition-bind (a) '(1) (+ a :not-a-number)))))
+
+(fiveam:test with-definition-errors-returns-body-values
+  (fiveam:is (equal '(1 2) (multiple-value-list (with-definition-errors (values 1 2))))))
+
+(fiveam:test with-definition-errors-passes-a-definition-error-through
+  (fiveam:signals mode-definition-error
+    (with-definition-errors (eval '(defmode bad-def-mode-3 (one-of just-one))))))
+
+(fiveam:test with-definition-errors-replaces-an-escaping-error
+  (let ((c (handler-case
+               (with-definition-errors
+                 (ignore-errors (eval '(defmode bad-def-mode-4 (one-of just-one))))
+                 (error "unrelated"))
+             (definition-error (c) c))))
+    (fiveam:is (typep c 'mode-definition-error))
+    (fiveam:is (eq 'bad-def-mode-4 (definition-error-name c)))))
+
+(fiveam:test with-definition-errors-resignals-an-error-the-body-handled
+  (fiveam:signals mode-definition-error
+    (with-definition-errors
+      (ignore-errors (eval '(defmode bad-def-mode-5 (one-of just-one)))))))
+
+(fiveam:test with-definition-errors-types-a-compile-file-failure
+  (let* ((source (asdf:system-relative-pathname :lasm "tests/fixtures/definition/bad-mode.lisp"))
+         (output (uiop:tmpize-pathname (merge-pathnames "bad-mode.fasl" (uiop:temporary-directory))))
+         (c (unwind-protect
+                 (handler-case
+                     (let ((*error-output* (make-broadcast-stream))
+                           (*standard-output* (make-broadcast-stream)))
+                       (with-definition-errors (compile-file source :output-file output))
+                       nil)
+                   (definition-error (c) c))
+              (uiop:delete-file-if-exists output))))
+    (fiveam:is (typep c 'mode-definition-error))
+    (fiveam:is (eq 'compile-file-bad-mode (definition-error-name c)))))

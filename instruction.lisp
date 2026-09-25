@@ -1631,15 +1631,12 @@ actually run for this descriptor."
 (defun %compile-definition (form name)
   "COMPILE FORM, re-signalling a DEFINITION-ERROR raised while it expanded,
 which SBCL would otherwise defer to a COMPILED-PROGRAM-ERROR at call time."
-  (let* ((*definition-name* name)
-         (*last-definition-error* nil)
-         (function (if *fast-compile-policy*
-                       (with-compilation-unit (:policy *fast-compile-policy*)
-                         (compile nil form))
-                       (compile nil form))))
-    (when *last-definition-error*
-      (error *last-definition-error*))
-    function))
+  (let ((*definition-name* name))
+    (with-definition-errors
+      (if *fast-compile-policy*
+          (with-compilation-unit (:policy *fast-compile-policy*)
+            (compile nil form))
+          (compile nil form)))))
 
 (defparameter *semantics-promotion-calls* 1000
   "Calls after which a quickly compiled word semantics is recompiled at the

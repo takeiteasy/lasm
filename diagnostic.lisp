@@ -71,9 +71,12 @@ a line, only the message appears. Without a column, the caret is omitted."
 (defvar *definition-name* nil
   "Name of the definition being built, recorded on DEFINITION-ERRORs.")
 
-(defvar *last-definition-error* nil
-  "The last DEFINITION-ERROR signalled; lets a caller of COMPILE re-signal one
-SBCL turned into a COMPILED-PROGRAM-ERROR.")
+(defvar *definition-errors* nil
+  "Inside WITH-DEFINITION-ERRORS, the DEFINITION-ERRORs signalled so far,
+newest first.")
+
+(defvar *collecting-definition-errors* nil
+  "True inside WITH-DEFINITION-ERRORS.")
 
 (define-condition definition-error (lasm-error)
   ((message :initarg :message :initform nil :reader definition-error-message)
@@ -89,7 +92,8 @@ SBCL turned into a COMPILED-PROGRAM-ERROR.")
 (defun %definition-error (type control &rest args)
   (let ((condition (make-condition type :message (apply #'format nil control args)
                                         :name *definition-name*)))
-    (setf *last-definition-error* condition)
+    (when *collecting-definition-errors*
+      (cl:push condition *definition-errors*))
     (error condition)))
 
 (defun %defmachine-error (control &rest args)
@@ -106,6 +110,27 @@ SBCL turned into a COMPILED-PROGRAM-ERROR.")
 
 (defun %defdirective-error (control &rest args)
   (apply #'%definition-error 'directive-definition-error control args))
+
+(defun %call-with-definition-errors (thunk)
+  (let ((*collecting-definition-errors* t)
+        (*definition-errors* nil))
+    (flet ((first-recorded () (car (last *definition-errors*))))
+      (multiple-value-prog1
+          (handler-bind ((error (lambda (c)
+                                  (when (and *definition-errors*
+                                             (not (typep c 'definition-error)))
+                                    (error (first-recorded))))))
+            (funcall thunk))
+        (when *definition-errors*
+          (error (first-recorded)))))))
+
+(defmacro with-definition-errors (&body body)
+  "Run BODY, surfacing the typed DEFINITION-ERROR a definer signalled even when
+SBCL's COMPILE-FILE or COMPILE turned it into a compile-time error. Signals the
+first recorded DEFINITION-ERROR when BODY returns, or in place of any other
+error that escapes BODY. An error BODY handles itself is still re-signalled on
+return."
+  `(%call-with-definition-errors (lambda () ,@body)))
 
 ;;; Usage errors: a caller misusing the library API or a tool's input, as
 ;;; opposed to a malformed definition (DEFINITION-ERROR) or program source.
