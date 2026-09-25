@@ -63,7 +63,7 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL preserves #28/#43's
                ; original wrap-on-overflow behavior.
-    varying-cache)  ; (GENERATION . VARYINGP), read through MODE-DESCRIPTOR-VARYINGP
+    shape-cache)  ; (GENERATION VARYING KEYED STRICTP), read through %MODE-SHAPE
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -75,10 +75,10 @@
 ;; is too late for a DEFMODE compiled later in the same compilation unit.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defvar *modes* (make-hash-table :test 'eq))
-  ;; Bumped by every DEFMODE, invalidating cached MODE-DESCRIPTOR-VARYINGP
-  ;; values of modes that reference a redefined one.
+  ;; Bumped by every DEFMODE, invalidating the cached %MODE-SHAPE of modes
+  ;; that reference a redefined one.
   (defvar *mode-generation* 0)
-  (defvar *varyingp-in-progress* nil))
+  (defvar *shape-in-progress* nil))
 
 (defun find-mode-descriptor (name)
   "Look up the MODE-DESCRIPTOR registered under NAME (a symbol) with DEFMODE.
@@ -204,7 +204,7 @@ options start at the first keyword symbol; everything before it is pattern."
     (if (consp key) (first key) key))
 
   (defun %key-subkeys (key)
-    "The subkeys of an option KEY, one per varying ONE-OF of its head alternative."
+    "The subkeys of an option KEY, one per keyed ONE-OF of its head alternative."
     (and (consp key) (rest key)))
 
   (defun %key-names (key)
@@ -226,28 +226,26 @@ options start at the first keyword symbol; everything before it is pattern."
   (defun %option-hole-count (key &optional seen)
     "Hole count of an option KEY (see %ONE-OF-ELEMENT-OPTIONS)."
     (if (consp key)
-        (let* ((alt (find-mode-descriptor (first key)))
-               (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt) seen)))
+        (let ((alt (find-mode-descriptor (first key))))
           (+ (%mode-hole-count alt seen)
-             (loop for element in varying
+             (loop for element in (%mode-keyed-elements alt)
                    for sub in (rest key)
                    sum (- (%option-hole-count sub seen) (%element-min-hole-count element seen)))))
         (%mode-hole-count (find-mode-descriptor key) seen)))
 
   (defun %one-of-element-options (element &optional seen)
     "((KEY . HOLE-COUNT)...) for ELEMENT's alternatives in declaration order.
-A non-varying alternative is keyed by its name; a varying alternative
-contributes one key (NAME SUBKEY...) per combination of options of its
-varying elements, one subkey for each, in pattern order."
+An alternative with no keyed ONE-OF is keyed by its name; one with keyed
+ONE-OFs contributes one key (NAME SUBKEY...) per combination of options of
+those elements, one subkey for each, in pattern order."
     (loop for name in (%one-of-alternatives element)
           for alt = (find-mode-descriptor name)
-          for varying = (and (mode-descriptor-varyingp alt)
-                             (%pattern-varying-one-of-elements (mode-descriptor-pattern alt) seen))
-          append (if varying
+          for keyed = (%mode-keyed-elements alt)
+          append (if keyed
                      (loop for subs in (%cartesian
                                         (mapcar (lambda (inner)
                                                   (mapcar #'car (%one-of-element-options inner seen)))
-                                                varying))
+                                                keyed))
                            collect (let ((full (cons name subs)))
                                      (cons full (%option-hole-count full seen))))
                      (list (cons name (%mode-hole-count alt seen))))))
@@ -264,22 +262,66 @@ varying elements, one subkey for each, in pattern order."
   (defun %pattern-varying-one-of-element (pattern &optional seen)
     (first (%pattern-varying-one-of-elements pattern seen)))
 
-  (defun mode-descriptor-varyingp (mode)
-    "T if MODE's pattern has a varying ONE-OF element: one whose options
-(%ONE-OF-ELEMENT-OPTIONS) disagree on hole count. Recomputed when a DEFMODE has
-run since the last call, so redefining an inner mode is seen by its dependents."
-    (let ((cache (mode-descriptor-varying-cache mode))
+  (defun %option-signature (key)
+    "What a hole can differ in across options: the hole count and each per-hole attribute."
+    (cons (%option-hole-count key)
+          (mapcar (lambda (attribute) (%option-hole-attributes key attribute))
+                  '(:signed :relative :width :strict))))
+
+  (defun %one-of-element-keyed-p (element &optional seen)
+    "T if ELEMENT's options differ in hole count or in a per-hole attribute, so its
+pick must be recorded in a key tree."
+    (> (length (remove-duplicates
+                (mapcar (lambda (option) (%option-signature (car option)))
+                        (%one-of-element-options element seen))
+                :test #'equal))
+       1))
+
+  (defun %pattern-keyed-one-of-elements (pattern &optional seen)
+    (remove-if-not (lambda (element)
+                     (and (eq (first element) :one-of) (%one-of-element-keyed-p element seen)))
+                   pattern))
+
+  (defun %mode-shape (mode)
+    "(VARYING KEYED STRICTP) for MODE: the ONE-OF elements of its pattern whose
+options disagree on hole count, those that disagree on any per-hole attribute or
+hole count (the ones an option key names a subkey for), and whether a hole of it
+can be strict. Recomputed when a DEFMODE has run since the last call, so
+redefining an inner mode is seen by its dependents."
+    (let ((cache (mode-descriptor-shape-cache mode))
           (name (mode-descriptor-name mode)))
       (if (and cache (eql (car cache) *mode-generation*))
           (cdr cache)
           (progn
-            (when (member name *varyingp-in-progress*)
+            (when (member name *shape-in-progress*)
               (%defmode-error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
-                              name (reverse *varyingp-in-progress*) name))
-            (let* ((*varyingp-in-progress* (cons name *varyingp-in-progress*))
-                   (value (and (%pattern-varying-one-of-element (mode-descriptor-pattern mode)) t)))
-              (setf (mode-descriptor-varying-cache mode) (cons *mode-generation* value))
-              value)))))
+                              name (reverse *shape-in-progress*) name))
+            (let* ((*shape-in-progress* (cons name *shape-in-progress*))
+                   (pattern (mode-descriptor-pattern mode))
+                   (shape (list (%pattern-varying-one-of-elements pattern)
+                                (%pattern-keyed-one-of-elements pattern)
+                                (or (mode-descriptor-strictp mode)
+                                    (loop for element in pattern
+                                          thereis (and (eq (first element) :one-of)
+                                                       (some (lambda (alt)
+                                                               (%mode-strict-reachable-p (find-mode-descriptor alt)))
+                                                             (%one-of-alternatives element))))))))
+              (setf (mode-descriptor-shape-cache mode) (cons *mode-generation* shape))
+              shape)))))
+
+  (defun %mode-varying-elements (mode) (first (%mode-shape mode)))
+  (defun %mode-keyed-elements (mode) (second (%mode-shape mode)))
+  (defun %mode-strict-reachable-p (mode) (and (third (%mode-shape mode)) t))
+
+  (defun mode-descriptor-varyingp (mode)
+    "T if MODE's pattern has a varying ONE-OF element: one whose options
+(%ONE-OF-ELEMENT-OPTIONS) disagree on hole count."
+    (and (%mode-varying-elements mode) t))
+
+  (defun mode-descriptor-keyedp (mode)
+    "T if an option key for MODE is a tree: a ONE-OF of its pattern has options
+that differ in hole count or in a per-hole attribute."
+    (and (%mode-keyed-elements mode) t))
 
   (defun %choice-entry-key (entry)
     "The option key for a matcher CHOICES ENTRY: a descriptor, or a tree
@@ -380,61 +422,32 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
 
   (defun %mode-hole-attributes (mode attribute &optional subkeys)
     "Return default attributes in pattern order. SUBKEYS names the option taken
-by each of MODE's varying ONE-OF elements, in pattern order."
-    (let ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern mode))))
+by each of MODE's keyed ONE-OF elements, in pattern order. A hole a ONE-OF
+contributes takes MODE's own :WIDTH or :STRICT when its alternative has none."
+    (let ((keyed (%mode-keyed-elements mode))
+          (fallback (case attribute
+                      (:width (mode-descriptor-width mode))
+                      (:strict (mode-descriptor-strictp mode)))))
       (loop for element in (mode-descriptor-pattern mode)
             append (ecase (first element)
                      (:literal nil)
                      (:expr (list (%expr-hole-attribute element mode attribute)))
-                     (:one-of (%option-hole-attributes
-                               (let ((position (position element varying :test #'eq)))
-                                 (if (and subkeys position)
-                                     (nth position subkeys)
-                                     (car (first (%one-of-element-options element)))))
-                               attribute))))))
-
-  (defun %alternative-declares-p (alt attribute)
-    "T if ALT declares ATTRIBUTE (:SIGNED, :WIDTH or :STRICT) on itself or,
-for :SIGNED, on one of its own EXPR holes."
-    (ecase attribute
-      (:signed (or (mode-descriptor-signedp alt)
-                   (some (lambda (hole)
-                           (and (eq (first hole) :expr)
-                                (or (getf (cddr hole) :signed)
-                                    (getf (cddr hole) :relative))))
-                         (mode-descriptor-pattern alt))))
-      (:width (mode-descriptor-width alt))
-      (:strict (mode-descriptor-strictp alt))))
-
-  (defun %unrecorded-nested-attribute-p (pattern attribute recordedp &optional seen)
-    "T if a ONE-OF nested anywhere in PATTERN, whose pick no CHOICES entry
-records, has an alternative declaring ATTRIBUTE -- nothing at decode or
-assembly time could recover it. RECORDEDP says PATTERN's varying ONE-OF
-elements are recorded: they are when PATTERN belongs to a varying alternative
-whose own ONE-OF is recorded in turn (%NESTED-CHOICE-ENTRY), and their
-alternatives are then reached through the key tree. SEEN guards the same
-hand-written-redefinition-cycle case %MODE-HOLE-COUNT does."
-    (let ((varying (and recordedp (%pattern-varying-one-of-elements pattern))))
-      (loop for element in pattern
-            thereis (when (eq (first element) :one-of)
-                      (let ((alts (mapcar #'find-mode-descriptor (%one-of-alternatives element)))
-                            (recorded (member element varying :test #'eq)))
-                        (or (and (not recorded)
-                                 (some (lambda (alt) (%alternative-declares-p alt attribute)) alts))
-                            (some (lambda (alt)
-                                    (let ((alt-name (mode-descriptor-name alt)))
-                                      (unless (member alt-name seen)
-                                        (%unrecorded-nested-attribute-p
-                                         (mode-descriptor-pattern alt) attribute
-                                         (and recorded (mode-descriptor-varyingp alt))
-                                         (cons alt-name seen)))))
-                                  alts)))))))
+                     (:one-of
+                      (let* ((position (position element keyed :test #'eq))
+                             (holes (%option-hole-attributes
+                                     (if (and subkeys position)
+                                         (nth position subkeys)
+                                         (car (first (%one-of-element-options element))))
+                                     attribute)))
+                        (if fallback
+                            (mapcar (lambda (value) (or value fallback)) holes)
+                            holes)))))))
 
   (defun %check-one-of-elements! (name pattern)
     "Validate alternative syntax and supported ONE-OF nesting.
 Alternatives may vary in arity and operand attributes; DEFINSTRUCTION
 validates encoding support. Ambiguous syntax is rejected, as is a hole-less
-inner option of an unnamed ONE-OF, or wrapper options on a varying alternative."
+inner option of an unnamed ONE-OF, or wrapper options on an alternative selected by a tree."
     (dolist (element pattern)
       (when (eq (first element) :one-of)
          (let* ((alt-names (%one-of-alternatives element))
@@ -443,32 +456,24 @@ inner option of an unnamed ONE-OF, or wrapper options on a varying alternative."
             (%defmode-error "DEFMODE ~S: ONE-OF needs at least two alternative modes, got ~S"
                    name alt-names))
           (dolist (alt alts)
-            (when (mode-descriptor-varyingp alt)
-              (when (and (some (lambda (inner)
-                                 (some (lambda (option) (zerop (cdr option)))
-                                       (%one-of-element-options inner)))
-                               (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
-                         (null (%one-of-slot element)))
-                (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
+            (when (and (mode-descriptor-varyingp alt)
+                       (some (lambda (inner)
+                               (some (lambda (option) (zerop (cdr option)))
+                                     (%one-of-element-options inner)))
+                             (%mode-varying-elements alt))
+                       (null (%one-of-slot element)))
+              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
 alternative that has no operand hole -- name the outer ONE-OF, (one-of (slot alternative...)), so ~
 that pick can be selected"
-                       name (mode-descriptor-name alt)))
-                (when (or (mode-descriptor-width alt) (mode-descriptor-signedp alt)
-                          (mode-descriptor-relativep alt) (mode-descriptor-suffix alt)
-                          (mode-descriptor-strictp alt))
-                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF, so it cannot ~
+                     name (mode-descriptor-name alt)))
+            (when (and (mode-descriptor-keyedp alt)
+                       (or (mode-descriptor-width alt) (mode-descriptor-signedp alt)
+                           (mode-descriptor-relativep alt) (mode-descriptor-suffix alt)
+                           (mode-descriptor-strictp alt)))
+              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S is selected by a tree, so it cannot ~
 declare :WIDTH, :SIGNED, :RELATIVE, :SUFFIX or :STRICT -- declare them on its holes or inner ~
 alternatives instead"
-                         name (mode-descriptor-name alt))))
-            (loop for (attribute label) in '((:signed ":SIGNED T or :RELATIVE T") (:width ":WIDTH")
-                                             (:strict ":STRICT T"))
-                  when (%unrecorded-nested-attribute-p (mode-descriptor-pattern alt) attribute
-                                                       (mode-descriptor-varyingp alt))
-                    do (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
-alternative declares ~A -- only the outermost ONE-OF a hole belongs to, or a varying ONE-OF inside a ~
-varying alternative, keeps its CHOICES entry, so this can never be recovered at decode or assembly ~
-time; declare it on ~S itself, or move the alternative up to this ONE-OF directly"
-                                       name (mode-descriptor-name alt) label (mode-descriptor-name alt))))
+                     name (mode-descriptor-name alt))))
           (loop for (alt . later) on alts
                 do (dolist (other later)
                      (when (and (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
@@ -684,18 +689,18 @@ Literal count decides first; register-qualified hole count breaks its ties."
       (and (= (car a) (car b)) (> (cdr a) (cdr b)))))
 
 (defvar *recorded-elements* nil
-  "ONE-OF elements whose pick an enclosing varying alternative will read back
+  "ONE-OF elements whose pick an enclosing keyed alternative will read back
 from the matcher's selections (%NESTED-CHOICE-ENTRY).")
 
 (defun %nested-choice-entry (alt selections)
-  "The entry for ALT matched at a ONE-OF: ALT itself, or for a varying ALT the
-tree (ALT ENTRY...), one entry per varying ONE-OF of ALT in pattern order. Each
+  "The entry for ALT matched at a ONE-OF: ALT itself, or for a keyed ALT the
+tree (ALT ENTRY...), one entry per keyed ONE-OF of ALT in pattern order. Each
 inner pick comes from SELECTIONS, where the element records its own entry under
 itself (%MATCH-MODE-ELEMENTS, when listed in *RECORDED-ELEMENTS*), so an inner
 option with no hole is found too."
-  (if (mode-descriptor-varyingp alt)
+  (if (mode-descriptor-keyedp alt)
       (cons alt (mapcar (lambda (element) (cdr (assoc element selections :test #'eq)))
-                        (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
+                        (%mode-keyed-elements alt)))
       alt))
 
 (defun %match-mode-elements (tokens elements i end &optional require-end)
@@ -720,8 +725,8 @@ to always wins its CHOICES entry, preserving \"CHOICES[i] is one of the
 alternatives named by the pattern element that produced hole i\" as an
 invariant callers can validate against (mirrored by mode.lisp's
 %MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). A
-varying nested alternative is the exception: its entry is a tree, the
-descriptor followed by one entry for each of its varying ONE-OFs
+keyed nested alternative is the exception: its entry is a tree, the
+descriptor followed by one entry for each of its keyed ONE-OFs
 (%NESTED-CHOICE-ENTRY), matching an option key of %ONE-OF-ELEMENT-OPTIONS.
 
 A hand-written DEFMODE cycle -- redefining a mode that some :ONE-OF already
@@ -843,9 +848,8 @@ element on the winning path whose pick was decided by declaration order."
                                 (string-equal (mode-descriptor-suffix alt) alt-prefix)))
                   (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
                       (let ((*recorded-elements*
-                              (if (mode-descriptor-varyingp alt)
-                                  (append (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))
-                                          *recorded-elements*)
+                              (if (mode-descriptor-keyedp alt)
+                                  (append (%mode-keyed-elements alt) *recorded-elements*)
                                   *recorded-elements*)))
                         (%match-mode-elements tokens
                                               (append (mode-descriptor-pattern alt) rest-elements)
@@ -858,8 +862,7 @@ element on the winning path whose pick was decided by declaration order."
                                 (entry (%nested-choice-entry alt selections))
                                 (key (%choice-entry-key entry))
                                 (count (%option-hole-count key))
-                                (inner (and (mode-descriptor-varyingp alt)
-                                            (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
+                                (inner (%mode-keyed-elements alt))
                                 (recordedp (member element *recorded-elements* :test #'eq))
                                 (selections (let ((rest (if inner
                                                             (remove-if (lambda (selection)

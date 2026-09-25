@@ -65,12 +65,12 @@ slot. Keys name alternatives. A missing match without `otherwise` signals
 `choice` field or cell sub-opcode; otherwise only `otherwise` can handle
 it. See [Per-operand modes](operand-modes.md#encoding-a-selection).
 
-Nested varying alternatives can be queried by path: `(choice-case (src ind)
-...)` selects inside outer alternative `ind`. When `ind` has several varying
+Nested keyed alternatives can be queried by path: `(choice-case (src ind)
+...)` selects inside outer alternative `ind`. When `ind` has several keyed
 `one-of`s, name one by its slot: `(choice-case (src ind lhs) ...)`. A named
-slot works the same way, including for an inner option with no hole. An extra operand absent from
-a shorter alternative is bound to `nil` there; read it inside the matching
-branch. See [Per-operand modes](operand-modes.md#nested-varying-alternatives).
+slot works the same way, including for an inner option with no hole. An
+extra operand absent from a shorter alternative is bound to `nil` there;
+read it inside the matching branch. See [Per-operand modes](operand-modes.md#nested-varying-alternatives).
 
 ## `push`/`pop` and Common Lisp
 

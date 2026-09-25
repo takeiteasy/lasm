@@ -5780,9 +5780,9 @@ present, so an error comes from the ENCODING under test."
     (fiveam:is (search "varies in hole count" text))))
 
 (fiveam:test nested-varying-choice-case-rejects-bad-qualification
-  (dolist (case '(((choice-case (src nw-lit) (vh-reg 1)) "does not name a nested varying")
+  (dolist (case '(((choice-case (src nw-lit) (vh-reg 1)) "does not name a nested ONE-OF")
                   ((choice-case (src nw-ind) (nw-lit 1)) "is not one of this operand's")
-                  ((choice-case (src nw-ind vh-reg) (vh-reg 1)) "does not name a nested varying")))
+                  ((choice-case (src nw-ind vh-reg) (vh-reg 1)) "does not name a nested ONE-OF")))
     (destructuring-bind (body expected) case
       (let ((text (%error-text
                    (lambda ()
@@ -6314,7 +6314,7 @@ present, so an error comes from the ENCODING under test."
                                   (for-choice (src nm-pair rhs nm-idx) (operand roff :width 1)))))))
 
 (fiveam:test nested-multi-choice-case-needs-a-slot
-  (fiveam:is (search "name one of several varying ONE-OFs by its slot"
+  (fiveam:is (search "name one of several keyed ONE-OFs by its slot"
                      (%nm-error '(definstruction nested-multi-machine nmbad3
                                   (modes nm-mode)
                                   (encoding
@@ -6786,3 +6786,273 @@ wgl #5" 'word-group-machine)))
           (fiveam:is (equal names (instruction-descriptor-operand-names descriptor)))
           (fiveam:is (equal values decoded))
           (fiveam:is (= (length values) size)))))))
+
+;;; Keyed nested ONE-OFs (#275): a nested ONE-OF whose alternatives differ in a
+;;; per-hole attribute contributes a subkey to the option tree, so an
+;;; alternative can declare :signed, :relative, :width or :strict below a
+;;; non-varying alternative.
+
+(defmachine keyed-attr-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(defmode ky-near expr :width 1 :signed t)
+(defmode ky-abs "abs" expr :width 2)
+(defmode ky-ind "(" (one-of ky-near ky-abs) ")")
+(defmode ky-lit "#" expr :width 1)
+(defmode ky-mode (one-of ky-ind ky-lit))
+
+(definstruction keyed-attr-machine kld
+  (modes ky-mode)
+  (encoding
+    (opcode 1)
+    (operand src :mode
+      (variant (choice (ky-ind ky-near)) (sub 0))
+      (variant (choice (ky-ind ky-abs)) (sub 1))
+      (variant (choice ky-lit) (sub 2))))
+  (semantics
+    (choice-case src
+      (ky-lit (set! a src))
+      (ky-ind (choice-case (src ky-ind)
+                (ky-near (set! a (wrap-value src 16)))
+                (ky-abs (set! a (+ src 1))))))))
+
+(defun %ky-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'keyed-attr-machine)) 'list))
+
+(fiveam:test keyed-nested-attributes-size-each-hole
+  (fiveam:is (equal '(1 0 5) (%ky-cells "kld (5)")))
+  (fiveam:is (equal '(1 1 232 3) (%ky-cells "kld (abs 1000)")))
+  (fiveam:is (equal '(1 2 44) (%ky-cells "kld #300"))))
+
+(fiveam:test keyed-nested-attributes-decode-per-pick
+  (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader #(1 0 255)) 0
+                                                                   'keyed-attr-machine)
+    (fiveam:is (equal '(-1) values))
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness descriptor)))
+    (fiveam:is (equal '(1) (instruction-descriptor-operand-widths descriptor))))
+  (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader #(1 1 232 3)) 0
+                                                                   'keyed-attr-machine)
+    (fiveam:is (equal '(1000) values))
+    (fiveam:is (equal '(nil) (instruction-descriptor-operand-signedness descriptor)))
+    (fiveam:is (equal '(2) (instruction-descriptor-operand-widths descriptor)))))
+
+(fiveam:test keyed-nested-semantics-dispatch-on-the-inner-pick
+  (dolist (case '(("kld (7)" 7) ("kld (abs 1000)" 1001) ("kld #4" 4)))
+    (let ((m (make-machine 'keyed-attr-machine)))
+      (load-program m (assembly-cells (assemble (first case) :machine 'keyed-attr-machine)))
+      (step-machine m)
+      (fiveam:is (= (second case) (sref m 'a))))))
+
+(fiveam:test keyed-nested-disassembles-each-pick
+  (dolist (case '(("kld (5)" "kld ($5)") ("kld (abs 7)" "kld (abs$7)") ("kld #3" "kld #$3")))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'keyed-attr-machine))
+                                    :machine 'keyed-attr-machine)))
+      (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
+
+(fiveam:test keyed-nested-attribute-needs-a-selector
+  (fiveam:is (search "disagree on :SIGNED"
+                     (%error-text (lambda ()
+                                    (eval '(definstruction keyed-attr-machine kbad
+                                            (modes ky-mode)
+                                            (encoding (opcode 2) (operand src :mode))
+                                            (semantics nil))))))))
+
+;; :STRICT needs no selector: it is only an assembly-time range check.
+
+(defmode ks-loose expr)
+(defmode ks-tight "t" expr :strict t)
+(defmode ks-ind "(" (one-of ks-loose ks-tight) ")")
+(defmode ks-lit "#" expr)
+(defmode ks-mode (one-of ks-ind ks-lit))
+
+(definstruction keyed-attr-machine kstrict
+  (modes ks-mode)
+  (encoding (opcode 3) (operand src :width 1))
+  (semantics nil))
+
+(defmode kb-a "a" expr :strict t)
+(defmode kb-b "b" expr :strict t)
+(defmode kb-ind "(" (one-of kb-a kb-b) ")")
+(defmode kb-mode (one-of kb-ind ks-lit))
+
+(definstruction keyed-attr-machine kboth
+  (modes kb-mode)
+  (encoding (opcode 4) (operand src :width 1))
+  (semantics nil))
+
+(fiveam:test keyed-nested-strict-applies-to-the-picked-alternative
+  (fiveam:is (equal '(3 44) (%ky-cells "kstrict (300)")))
+  (fiveam:is (equal '(3 44) (%ky-cells "kstrict #300")))
+  (fiveam:signals assembly-error (assemble "kstrict (t 300)" :machine 'keyed-attr-machine)))
+
+(fiveam:test nested-alternatives-that-all-agree-on-strict-are-not-keyed
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'kb-ind)))
+  (fiveam:signals assembly-error (assemble "kboth (a 300)" :machine 'keyed-attr-machine))
+  (fiveam:signals assembly-error (assemble "kboth (b 300)" :machine 'keyed-attr-machine))
+  (fiveam:is (equal '(4 3) (%ky-cells "kboth (b 3)")))
+  (fiveam:is (equal '(4 44) (%ky-cells "kboth #300"))))
+
+;; A keyed ONE-OF beside a varying one in the same alternative.
+
+(defmode kv-abs expr)
+(defmode kv-idx "[" expr "," expr "]")
+(defmode kv-pair (one-of (lhs ky-near ky-abs)) "," (one-of (rhs kv-abs kv-idx)))
+(defmode kv-lit "#" expr "," expr)
+(defmode kv-mode (one-of kv-pair kv-lit))
+
+(definstruction keyed-attr-machine kvary
+  (modes kv-mode)
+  (encoding
+    (opcode 5)
+    (operand src :mode
+      (variant (choice (kv-pair ky-near kv-abs)) (sub 0))
+      (variant (choice (kv-pair ky-near kv-idx)) (sub 1))
+      (variant (choice (kv-pair ky-abs kv-abs)) (sub 2))
+      (variant (choice (kv-pair ky-abs kv-idx)) (sub 3))
+      (variant (choice kv-lit) (sub 4)))
+    (operand dst :width 1)
+    (for-choice (src kv-pair ky-near kv-idx) (operand roff :width 1))
+    (for-choice (src kv-pair ky-abs kv-idx) (operand roff :width 1)))
+  (semantics nil))
+
+(fiveam:test keyed-beside-varying-options-are-trees
+  (fiveam:is (equal '((kv-pair ky-near kv-abs) (kv-pair ky-near kv-idx)
+                      (kv-pair ky-abs kv-abs) (kv-pair ky-abs kv-idx) kv-lit)
+                    (%outer-options 'kv-mode)))
+  (fiveam:is (equal '(2 3 2 3 2)
+                    (mapcar #'cdr (%one-of-element-options
+                                   (first (mode-descriptor-pattern (find-mode-descriptor 'kv-mode))))))))
+
+(fiveam:test keyed-beside-varying-assembles-each-shape
+  (fiveam:is (equal '(5 0 1 2) (%ky-cells "kvary 1, 2")))
+  (fiveam:is (equal '(5 2 44 1 2) (%ky-cells "kvary abs 300, 2")))
+  (fiveam:is (equal '(5 1 1 2 3) (%ky-cells "kvary 1, [2, 3]")))
+  (fiveam:is (equal '(5 3 44 1 2 3) (%ky-cells "kvary abs 300, [2, 3]")))
+  (fiveam:is (equal '(5 4 1 2) (%ky-cells "kvary #1, 2"))))
+
+(fiveam:test keyed-beside-varying-decodes-attributes-per-path
+  (multiple-value-bind (descriptor values)
+      (decode-instruction-at (vector-cell-reader #(5 1 255 2 3)) 0 'keyed-attr-machine)
+    (fiveam:is (equal '(-1 2 3) values))
+    (fiveam:is (equal '(src dst roff) (instruction-descriptor-operand-names descriptor)))
+    (fiveam:is (equal '(t nil nil) (instruction-descriptor-operand-signedness descriptor))))
+  (multiple-value-bind (descriptor values)
+      (decode-instruction-at (vector-cell-reader #(5 3 44 1 2 3)) 0 'keyed-attr-machine)
+    (fiveam:is (equal '(300 2 3) values))
+    (fiveam:is (equal '(2 1 1) (instruction-descriptor-operand-widths descriptor)))))
+
+(fiveam:test keyed-beside-varying-requires-a-for-choice-per-key
+  (fiveam:is (search "missing FOR-CHOICE"
+                     (%error-text
+                      (lambda ()
+                        (eval '(definstruction keyed-attr-machine kvbad
+                                (modes kv-mode)
+                                (encoding
+                                  (opcode 6)
+                                  (operand src :mode
+                                    (variant (choice (kv-pair ky-near kv-abs)) (sub 0))
+                                    (variant (choice (kv-pair ky-near kv-idx)) (sub 1))
+                                    (variant (choice (kv-pair ky-abs kv-abs)) (sub 2))
+                                    (variant (choice (kv-pair ky-abs kv-idx)) (sub 3))
+                                    (variant (choice kv-lit) (sub 4)))
+                                  (operand dst :width 1)
+                                  (for-choice (src kv-pair ky-near kv-idx) (operand roff :width 1)))
+                                (semantics nil))))))))
+
+;; Two keyed ONE-OFs in one alternative are addressed by slot.
+
+(defmode kt-pair (one-of (lhs ky-near ky-abs)) "," (one-of (rhs ks-loose ks-tight)))
+(defmode kt-lit "#" expr "," expr)
+(defmode kt-mode (one-of kt-pair kt-lit))
+
+(definstruction keyed-attr-machine ktwo
+  (modes kt-mode)
+  (encoding
+    (opcode 7)
+    (operand src :mode
+      (variant (choice (kt-pair ky-near ks-loose)) (sub 0))
+      (variant (choice (kt-pair ky-near ks-tight)) (sub 1))
+      (variant (choice (kt-pair ky-abs ks-loose)) (sub 2))
+      (variant (choice (kt-pair ky-abs ks-tight)) (sub 3))
+      (variant (choice kt-lit) (sub 4)))
+    (operand dst :width 1))
+  (semantics
+    (choice-case src
+      (kt-lit (set! a 0))
+      (kt-pair (choice-case (src kt-pair lhs)
+                 (ky-near (choice-case (src kt-pair rhs)
+                            (ks-loose (set! a 1))
+                            (ks-tight (set! a 2))))
+                 (ky-abs (choice-case (src kt-pair rhs)
+                           (ks-loose (set! a 3))
+                           (ks-tight (set! a 4)))))))))
+
+(fiveam:test keyed-pair-choice-case-addresses-each-slot
+  (dolist (case '(("ktwo 1, 2" 1) ("ktwo 1, t 2" 2) ("ktwo abs 1, 2" 3) ("ktwo abs 1, t 2" 4)
+                  ("ktwo #1, 2" 0)))
+    (let ((m (make-machine 'keyed-attr-machine)))
+      (load-program m (assembly-cells (assemble (first case) :machine 'keyed-attr-machine)))
+      (step-machine m)
+      (fiveam:is (= (second case) (sref m 'a))))))
+
+(fiveam:test keyed-pair-choice-case-needs-a-slot
+  (fiveam:is (search "name one of several keyed ONE-OFs by its slot"
+                     (%error-text
+                      (lambda ()
+                        (eval '(definstruction keyed-attr-machine kunslot
+                                (modes kt-mode)
+                                (encoding
+                                  (opcode 8)
+                                  (operand src :mode
+                                    (variant (choice (kt-pair ky-near ks-loose)) (sub 0))
+                                    (variant (choice (kt-pair ky-near ks-tight)) (sub 1))
+                                    (variant (choice (kt-pair ky-abs ks-loose)) (sub 2))
+                                    (variant (choice (kt-pair ky-abs ks-tight)) (sub 3))
+                                    (variant (choice kt-lit) (sub 4)))
+                                  (operand dst :width 1))
+                                (semantics (choice-case (src kt-pair) (ky-near nil) (ky-abs nil))))))))))
+
+;; Word-encoded: the per-alternative signedness comes from the choice field.
+
+(defmachine keyed-word-machine
+  (register pc :width 16)
+  (register a :width 16 :count 8)
+  (memory ram :width 16 :addr-width 16)
+  (instruction-word :width 16
+    (field src 6)
+    (field dst 5)
+    (field opcode 5)))
+
+(defmode kw-near expr :signed t)
+(defmode kw-abs "abs" expr)
+(defmode kw-ind "(" (one-of kw-near kw-abs) ")")
+(defmode kw-lit "#" expr)
+(defmode kw-mode expr "," (one-of kw-ind kw-lit))
+
+(definstruction keyed-word-machine kwl
+  (modes kw-mode)
+  (encoding
+    (opcode 1)
+    (operand dst :field dst)
+    (operand src :field src
+      (variant (choice (kw-ind kw-near)) inline :range (0 7) :bias #x00)
+      (variant (choice (kw-ind kw-abs)) inline :range (0 7) :bias #x08)
+      (variant (choice kw-lit) inline :range (0 7) :bias #x10)))
+  (semantics nil))
+
+(fiveam:test keyed-word-round-trip-records-the-pick
+  (dolist (case '(("kwl 1, (2)" (kw-ind kw-near) "kwl $1,($2)")
+                  ("kwl 1, (abs 2)" (kw-ind kw-abs) "kwl $1,(abs$2)")
+                  ("kwl 1, #2" kw-lit "kwl $1,#$2")))
+    (destructuring-bind (source key text) case
+      (let ((cells (assembly-cells (assemble source :machine 'keyed-word-machine))))
+        (multiple-value-bind (descriptor values size choices)
+            (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'keyed-word-machine)
+          (declare (ignore descriptor))
+          (fiveam:is (equal '(1 2) values))
+          (fiveam:is (= 1 size))
+          (fiveam:is (equal key (word-field-choice-choice (second choices)))))
+        (fiveam:is (string= text (disassembly-line-text
+                                  (first (disassemble-cells cells :machine 'keyed-word-machine)))))))))

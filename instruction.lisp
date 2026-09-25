@@ -1024,21 +1024,20 @@ one subkey per varying ONE-OF of a varying nested alternative NAME."
 mode names such as (outer inner), got ~S" context form)))
 
 (defun %choice-hint (key)
-  "Extra diagnostic text for a KEY that does not select a shape: a varying mode
+  "Extra diagnostic text for a KEY that does not select a shape: a keyed mode
 without its inner alternatives, or a flat list where a tree is needed."
   (let ((mode (and (symbolp key) (gethash key *modes*))))
-    (cond ((and mode (mode-descriptor-varyingp mode))
-           (format nil " -- ~S varies in hole count; name its inner alternative with a tree such as ~S"
-                   key (cons key (mapcar (lambda (element)
-                                           (car (first (%one-of-element-options element))))
-                                         (%pattern-varying-one-of-elements
-                                          (mode-descriptor-pattern mode))))))
+    (cond ((and mode (mode-descriptor-keyedp mode))
+           (format nil " -- ~S ~:[is selected by a tree~;varies in hole count~]; name its inner alternative with a tree such as ~S"
+                   key (mode-descriptor-varyingp mode)
+                   (cons key (mapcar (lambda (element)
+                                       (car (first (%one-of-element-options element))))
+                                     (%mode-keyed-elements mode)))))
           ((and (consp key) (rest (rest key)) (every #'symbolp key)
                 (gethash (first key) *modes*)
                 (/= (length (rest key))
-                    (length (%pattern-varying-one-of-elements
-                             (mode-descriptor-pattern (gethash (first key) *modes*))))))
-           (format nil " -- nested alternatives form a tree, one subkey per varying ONE-OF, e.g. (~S (~S~{ ~S~}))"
+                    (length (%mode-keyed-elements (gethash (first key) *modes*)))))
+           (format nil " -- nested alternatives form a tree, one subkey per keyed ONE-OF, e.g. (~S (~S~{ ~S~}))"
                    (first key) (second key) (cddr key)))
           (t ""))))
 
@@ -1521,8 +1520,8 @@ between: the subkey head after PREFIX in each of HOLE-ALTERNATIVES' keys."
   (let ((components (remove nil (mapcar (lambda (key) (%key-component key prefix))
                                         hole-alternatives))))
     (unless components
-      (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested varying ~
-ONE-OF alternative of this operand (name one of several varying ONE-OFs by its slot)"
+      (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested ~
+ONE-OF alternative of this operand (name one of several keyed ONE-OFs by its slot)"
                              name prefix name prefix))
     (remove-duplicates components)))
 
@@ -2240,7 +2239,7 @@ unchanged, for a caller that already extracted a key itself."
 
 (defun %key-component (key prefix)
   "The head name of the subkey option KEY selects just after PREFIX, a list of
-mode names starting with KEY's head, or NIL. A head with several varying ONE-OFs
+mode names starting with KEY's head, or NIL. A head with several keyed ONE-OFs
 needs the next item of PREFIX to name one by its slot."
   (when (and (consp key) (eq (first key) (first prefix)))
     (let ((subs (rest key))
@@ -2248,8 +2247,7 @@ needs the next item of PREFIX to name one by its slot."
       (if (rest subs)
           (let ((i (and (first more)
                         (position (first more)
-                             (%pattern-varying-one-of-elements
-                              (mode-descriptor-pattern (find-mode-descriptor (first key))))
+                             (%mode-keyed-elements (find-mode-descriptor (first key)))
                              :key #'%one-of-slot))))
             (when i
               (if (rest more)
@@ -2261,15 +2259,14 @@ needs the next item of PREFIX to name one by its slot."
 
 (defun %prefix-steps (prefix)
   "((HEAD . INDEX)...) for a qualified CHOICE-CASE PREFIX: each mode name in it
-with the position, among that alternative's varying ONE-OFs, of the subkey the
+with the position, among that alternative's keyed ONE-OFs, of the subkey the
 next step continues in. A slot in PREFIX names one of several."
   (let ((items prefix) steps)
     (loop while items
           do (let* ((head (cl:pop items))
-                    (varying (%pattern-varying-one-of-elements
-                              (mode-descriptor-pattern (find-mode-descriptor head)))))
-               (cl:push (cons head (if (rest varying)
-                                       (or (position (cl:pop items) varying :key #'%one-of-slot) 0)
+                    (keyed (%mode-keyed-elements (find-mode-descriptor head))))
+               (cl:push (cons head (if (rest keyed)
+                                       (or (position (cl:pop items) keyed :key #'%one-of-slot) 0)
                                        0))
                         steps)))
     (nreverse steps)))
@@ -3244,13 +3241,13 @@ narrower extra word before one needing a wider one."
 
 (defun %key-hole-roles (key min)
   "One role per hole of KEY's shape, in hole order: :BASE for the first MIN holes of
-its minimum shape, the position among its varying ONE-OFs of the one that adds a
-hole, else :OWN, a hole beyond MIN that no varying ONE-OF adds."
+its minimum shape, the position among its keyed ONE-OFs of the one that adds a
+hole, else :OWN, a hole beyond MIN that no ONE-OF adds."
   (if (atom key)
       (append (make-list min :initial-element :base)
               (make-list (max 0 (- (%option-hole-count key) min)) :initial-element :own))
       (let* ((alt (%choice-key-descriptor key))
-             (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
+             (keyed (%mode-keyed-elements alt))
              (seen 0))
         (mapcar (lambda (role)
                   (if (eq role :minimum)
@@ -3262,7 +3259,7 @@ hole, else :OWN, a hole beyond MIN that no varying ONE-OF adds."
                                (:expr (list :minimum))
                                (:one-of
                                 (let ((element-min (%element-min-hole-count element))
-                                      (i (position element varying :test #'eq)))
+                                      (i (position element keyed :test #'eq)))
                                   (if i
                                       (mapcar (lambda (role) (if (eq role :base) :minimum i))
                                               (%key-hole-roles (nth i (rest key)) element-min))
@@ -3412,7 +3409,7 @@ slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
                                    (mode-hole-group-base-count group)))
                     (own (cdr (assoc (append prefix (list (first alt))) partials :test #'equal)))
                     (element-partials
-                      (loop for element in varying
+                      (loop for element in (%mode-keyed-elements (find-mode-descriptor (first alt)))
                             for subkey in (rest alt)
                             for partial = (assoc (append prefix (list (first alt) (%one-of-slot element) subkey))
                                                  partials :test #'equal)

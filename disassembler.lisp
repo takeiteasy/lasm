@@ -367,7 +367,7 @@ lists every site that declares a prefix, whatever the policy."
                               (selected (cdr (assoc (%one-of-slot el) choice-selections)))
                               (key (if (eq tail :top)
                                        (or selected (%matched-choice-key choices 0))
-                                       (let ((i (position el (%pattern-varying-one-of-elements pattern)
+                                       (let ((i (position el (%pattern-keyed-one-of-elements pattern)
                                                           :test #'eq)))
                                          (and i (nth i tail)))))
                               (matched (%key-head key))

@@ -90,8 +90,10 @@ and [`subvarying.lisp`](../examples/subvarying.lisp).
 
 ### Nested varying alternatives
 
-A varying alternative inside another `one-of` is selected by a tree with one
-subkey per varying `one-of` it contains: `(choice (ind ind-idx))`.
+A keyed alternative inside another `one-of` is selected by a tree with one
+subkey per keyed `one-of` it contains: `(choice (ind ind-idx))`. A `one-of` is
+keyed when its options differ in hole count (varying) or in a
+[per-hole attribute](#keyed-nested-alternatives).
 `for-choice` uses the same key to name extra holes, and `choice-case` can
 inspect the outer or inner selection. See
 [`nestvarying.lisp`](../examples/nestvarying.lisp).[^nested]
@@ -108,7 +110,7 @@ See [`slotvarying.lisp`](../examples/slotvarying.lisp).
 
 #### Several varying `one-of`s in one alternative
 
-Name each varying `one-of` with a slot. The option is a tree with a subkey
+Name each keyed `one-of` with a slot. The option is a tree with a subkey
 for each, and `for-choice` and `choice-case` address one `one-of` by its slot:
 
 ```lisp
@@ -163,9 +165,10 @@ An explicit `(operand :width n)` overrides an alternative's width.
 [Diagnostics](diagnostics.md#strict-operand-range) and
 [Assembler](assembler.md#pc-relative-offsets).
 
-Inner alternatives of a [varying nested `one-of`](#nested-varying-alternatives)
+Inner alternatives of a [nested `one-of`](#nested-varying-alternatives)
 can declare all four; each hole takes the attribute of the alternative that
-owns it:
+owns it, and an alternative's own `:width` or `:strict` applies to holes of
+its nested `one-of` that declare none:
 
 ```lisp
 (defmode near expr :width 1 :signed t)
@@ -173,6 +176,16 @@ owns it:
 (defmode ind (one-of near far))
 (defmode any (one-of ind lit))
 ```
+
+#### Keyed nested alternatives
+
+A nested `one-of` whose alternatives differ in hole count *or* in one of
+these attributes is keyed: its pick is a subkey of the option tree,
+`(choice (ind near))`. `ind` above has the same hole count either way, and
+its picks still decide width and signedness. `:signed`, `:relative` and
+`:width` need a selector for the hole, as at the top level, so decode
+recovers them; `:strict` does not. See
+[`nestkeyed.lisp`](../examples/nestkeyed.lisp).
 
 ## Forcing one hole
 
@@ -186,15 +199,18 @@ prefixes select the alternative first and then the variant. See
 - A `one-of` with hole-less alternatives needs a slot on it. A
   cell-encoded one must be selected by a
   [sub-opcode table](instructions.md#slot-participants).
-- A nested varying alternative cannot declare width, signedness, relative,
-  suffix, or strict options itself; declare them on its holes or inner
-  alternatives.[^nested]
-- A `one-of` nested where no path records the pick (inside a non-varying
-  alternative, or beside a varying one) rejects alternatives that declare
-  `:signed`, `:relative`, `:width`, or `:strict`
-  ([#275](https://todo.sr.ht/~takeiteasy/lasm/275)).[^nested]
+- An alternative selected by a tree cannot declare width, signedness,
+  relative, suffix, or strict options itself; declare them on its holes or
+  inner alternatives.[^nested]
+- A selector lists every tree key, even when a difference such as `:strict`
+  does not matter to it
+  ([#278](https://todo.sr.ht/~takeiteasy/lasm/278)).
+- An alternative with one varying `one-of` and further keyed ones repeats its
+  extras in a `for-choice` for each keyed pick
+  ([#279](https://todo.sr.ht/~takeiteasy/lasm/279)).
 
-[^nested]: A tree lists the selected alternative at each varying level:
+[^nested]: A tree lists the selected alternative at each keyed level:
   `(a (b c))` picks `b` inside `a`, then `c` inside `b`. A bare outer name
-  does not identify a unique shape. A nonvarying nested selection reports
-  its outer alternative only.
+  does not identify a unique shape. A nested `one-of` whose alternatives
+  agree on hole count and attributes is not keyed; a selection through it
+  reports its outer alternative only.

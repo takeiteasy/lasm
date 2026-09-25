@@ -1489,10 +1489,9 @@ field" (instruction-descriptor-name descriptor) offset)))
     offset))
 
 (defun %entry-strict-p (entry)
-  "T if any alternative in the matcher CHOICES ENTRY declares :STRICT."
-  (if (consp entry)
-      (some #'%entry-strict-p entry)
-      (and entry (mode-descriptor-strictp entry))))
+  "T if a hole the matcher CHOICES ENTRY covers can be strict: a nested ONE-OF
+whose pick no entry records may still hold a strict alternative."
+  (and entry (%mode-strict-reachable-p (if (consp entry) (first entry) entry))))
 
 (defun %hole-choice-strict-p (choices i)
   "T if the alternative CHOICES records for hole I declares :STRICT for it.

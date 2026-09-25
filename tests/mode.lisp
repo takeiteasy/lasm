@@ -82,13 +82,22 @@ looks like."
   (fiveam:signals mode-definition-error
     (eval '(defmode bogus-inherited-relative (expr :signed nil) :relative t))))
 
-(fiveam:test nested-one-of-cannot-hide-hole-signedness
+(defun %outer-options (name)
+  (mapcar #'car (%one-of-element-options (first (mode-descriptor-pattern (find-mode-descriptor name))))))
+
+(fiveam:test nested-one-of-records-hole-signedness
   (eval '(defmode nested-attr-signed "#" (expr :signed t)))
   (eval '(defmode nested-attr-plain "[" expr "]"))
   (eval '(defmode nested-attr-inner (one-of nested-attr-signed nested-attr-plain)))
   (eval '(defmode nested-attr-other "@" expr))
-  (fiveam:signals mode-definition-error
-    (eval '(defmode nested-attr-outer (one-of nested-attr-inner nested-attr-other)))))
+  (eval '(defmode nested-attr-outer (one-of nested-attr-inner nested-attr-other)))
+  (fiveam:is-true (mode-descriptor-keyedp (find-mode-descriptor 'nested-attr-inner)))
+  (fiveam:is-false (mode-descriptor-varyingp (find-mode-descriptor 'nested-attr-inner)))
+  (fiveam:is (equal '((nested-attr-inner nested-attr-signed) (nested-attr-inner nested-attr-plain)
+                      nested-attr-other)
+                    (%outer-options 'nested-attr-outer)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(nested-attr-inner nested-attr-signed) :signed)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(nested-attr-inner nested-attr-plain) :signed))))
 
 (fiveam:test defmode-allows-literal-only-pattern
   (let ((mode (find-mode-descriptor 'test-fixed-sp)))
@@ -735,9 +744,12 @@ looks like."
 (defmode no-signed-inner-b "[" expr "]")
 (defmode no-signed-inner (one-of no-signed-inner-a no-signed-inner-b))
 
-(fiveam:test nested-one-of-with-signed-alternative-signals-error
-  (fiveam:signals mode-definition-error
-    (eval '(defmode no-signed-outer (one-of no-signed-inner no-other)))))
+(fiveam:test nested-one-of-with-signed-alternative-is-keyed
+  (eval '(defmode no-signed-outer (one-of no-signed-inner no-other)))
+  (fiveam:is (equal '((no-signed-inner no-signed-inner-a) (no-signed-inner no-signed-inner-b) no-other)
+                    (%outer-options 'no-signed-outer)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(no-signed-inner no-signed-inner-a) :signed)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(no-signed-inner no-signed-inner-b) :signed))))
 
 ;;; Nested ONE-OF with a :WIDTH alternative (#129) -- the same
 ;;; outermost-ONE-OF-wins rule means a nested alternative's own :WIDTH would
@@ -748,9 +760,12 @@ looks like."
 (defmode no-widthed-inner-b "[" expr "]")
 (defmode no-widthed-inner (one-of no-widthed-inner-a no-widthed-inner-b))
 
-(fiveam:test nested-one-of-with-width-alternative-signals-error
-  (fiveam:signals mode-definition-error
-    (eval '(defmode no-widthed-outer (one-of no-widthed-inner no-other)))))
+(fiveam:test nested-one-of-with-width-alternative-is-keyed
+  (eval '(defmode no-widthed-outer (one-of no-widthed-inner no-other)))
+  (fiveam:is (equal '(2) (%option-hole-attributes '(no-widthed-inner no-widthed-inner-a) :width)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(no-widthed-inner no-widthed-inner-b) :width)))
+  (fiveam:is (equal '((no-widthed-inner no-widthed-inner-a) (no-widthed-inner no-widthed-inner-b) no-other)
+                    (%outer-options 'no-widthed-outer))))
 
 ;;; Nested ONE-OF with a :RELATIVE alternative (#130) -- MODE-DESCRIPTOR-
 ;;; SIGNEDP is (OR RELATIVE SIGNED), so %PATTERN-NESTED-ONE-OF-SIGNED-P
@@ -762,9 +777,11 @@ looks like."
 (defmode no-relative-inner-b "[" expr "]")
 (defmode no-relative-inner (one-of no-relative-inner-a no-relative-inner-b))
 
-(fiveam:test nested-one-of-with-relative-alternative-signals-error
-  (fiveam:signals mode-definition-error
-    (eval '(defmode no-relative-outer (one-of no-relative-inner no-other)))))
+(fiveam:test nested-one-of-with-relative-alternative-is-keyed
+  (eval '(defmode no-relative-outer (one-of no-relative-inner no-other)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(no-relative-inner no-relative-inner-a) :relative)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(no-relative-inner no-relative-inner-a) :signed)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(no-relative-inner no-relative-inner-b) :relative))))
 
 ;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
 ;;; references so the reference loops back to it must signal, not recurse
@@ -852,18 +869,21 @@ looks like."
   (fiveam:is (equal '(nil) (%option-hole-attributes '(nv-attr-ind nv-attr-near) :strict)))
   (fiveam:is (equal '(t t) (%option-hole-attributes '(nv-attr-ind nv-attr-far) :strict))))
 
-;; A non-varying ONE-OF beside the varying one is not recorded in a path, so
-;; an attribute declared on its alternatives is still rejected.
+;; A non-varying ONE-OF beside the varying one is keyed when its alternatives
+;; differ in an attribute.
 (defmode nv-attr-flat-a expr :strict t)
 (defmode nv-attr-flat-b "[" expr "]")
 (defmode nv-attr-flat (one-of nv-attr-flat-a nv-attr-flat-b))
 (defmode nv-attr-mixed (one-of nv-attr-near nv-attr-far) "," (one-of nv-attr-flat-a nv-attr-flat-b))
 
-(fiveam:test nested-unrecorded-one-of-still-rejects-strict
-  (fiveam:signals mode-definition-error
-    (eval '(defmode nv-attr-mixed-outer (one-of nv-attr-mixed nv-plain))))
-  (fiveam:signals mode-definition-error
-    (eval '(defmode nv-attr-flat-outer (one-of nv-attr-flat nv-plain)))))
+(fiveam:test nested-non-varying-one-of-with-strict-alternative-is-keyed
+  (eval '(defmode nv-attr-mixed-outer (one-of nv-attr-mixed nv-plain)))
+  (eval '(defmode nv-attr-flat-outer (one-of nv-attr-flat nv-plain)))
+  (fiveam:is (equal '((nv-attr-flat nv-attr-flat-a) (nv-attr-flat nv-attr-flat-b) nv-plain)
+                    (%outer-options 'nv-attr-flat-outer)))
+  (fiveam:is (= 5 (length (%outer-options 'nv-attr-mixed-outer))))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(nv-attr-flat nv-attr-flat-a) :strict)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(nv-attr-flat nv-attr-flat-b) :strict))))
 
 ;;; #220 -- a nested varying alternative may have several varying ONE-OFs; its
 ;;; options are trees with one subkey per ONE-OF.
@@ -949,3 +969,73 @@ looks like."
     (fiveam:is (= 1 (length warnings)))
     (fiveam:is (equal '((restale-machine . "RSOP")) (stale-mode-instructions (first warnings))))
     (fiveam:is (search "RSOP" (princ-to-string (first warnings))))))
+
+;;; #275 -- a nested ONE-OF whose alternatives differ in a per-hole attribute is
+;;; keyed: its pick is a subkey of the option tree, recorded by the matcher.
+
+(defmode ka-near expr :width 1 :signed t)
+(defmode ka-abs "abs" expr :width 2)
+(defmode ka-ind "(" (one-of ka-near ka-abs) ")")
+(defmode ka-lit "#" expr)
+(defmode ka-mode (one-of ka-ind ka-lit))
+
+(fiveam:test keyed-nested-one-of-is-not-varying
+  (fiveam:is-true (mode-descriptor-keyedp (find-mode-descriptor 'ka-ind)))
+  (fiveam:is-false (mode-descriptor-varyingp (find-mode-descriptor 'ka-ind)))
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'ka-lit))))
+
+(fiveam:test keyed-nested-one-of-options-are-trees
+  (fiveam:is (equal '((ka-ind ka-near) (ka-ind ka-abs) ka-lit) (%outer-options 'ka-mode)))
+  (fiveam:is (equal '(1 1 1) (mapcar #'cdr (%one-of-element-options
+                                            (first (mode-descriptor-pattern
+                                                    (find-mode-descriptor 'ka-mode))))))))
+
+(fiveam:test keyed-nested-one-of-attributes-follow-the-pick
+  (fiveam:is (equal '(1) (%option-hole-attributes '(ka-ind ka-near) :width)))
+  (fiveam:is (equal '(2) (%option-hole-attributes '(ka-ind ka-abs) :width)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(ka-ind ka-near) :signed)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(ka-ind ka-abs) :signed))))
+
+(fiveam:test keyed-nested-one-of-pick-is-recorded-by-the-matcher
+  (flet ((choices (text)
+           (mapcar #'%choice-entry-key
+                   (nth-value 2 (try-match-operand-mode (%tokens-for text) 'ka-mode)))))
+    (fiveam:is (equal '((ka-ind ka-abs)) (choices "(abs 5)")))
+    (fiveam:is (equal '((ka-ind ka-near)) (choices "(5)")))
+    (fiveam:is (equal '(ka-lit) (choices "#5")))))
+
+(defmode ag-a "a" expr :width 1)
+(defmode ag-b "b" expr :width 1)
+(defmode ag-inner "(" (one-of ag-a ag-b) ")")
+(defmode ag-outer (one-of ag-inner ka-lit))
+
+(fiveam:test nested-one-of-with-agreeing-attributes-is-not-keyed
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'ag-inner)))
+  (fiveam:is (equal '(ag-inner ka-lit) (%outer-options 'ag-outer))))
+
+(defmode wf-x "x" expr)
+(defmode wf-y "y" expr)
+(defmode wf-wrap "[" (one-of wf-x wf-y) "]" :width 2)
+(defmode wf-outer (one-of wf-wrap ka-lit))
+
+(fiveam:test wrapper-width-applies-to-a-nested-one-ofs-holes
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'wf-wrap)))
+  (fiveam:is (equal '(2) (%option-hole-attributes 'wf-wrap :width)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes 'ka-lit :width))))
+
+(fiveam:test alternative-selected-by-a-tree-cannot-declare-attributes
+  (eval '(defmode kb-wrap "(" (one-of ka-near ka-abs) ")" :width 1))
+  (fiveam:is (search "selected by a tree" (nv-error-text '(defmode kb-outer (one-of kb-wrap ka-lit))))))
+
+(fiveam:test keyedp-follows-a-redefined-inner-mode
+  (eval '(defmode kc-a "a" expr))
+  (eval '(defmode kc-b "b" expr))
+  (eval '(defmode kc-mid "(" (one-of kc-a kc-b) ")"))
+  (eval '(defmode kc-top (one-of kc-mid ka-lit)))
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'kc-mid)))
+  (eval '(defmode kc-b "b" expr :signed t))
+  (fiveam:is-true (mode-descriptor-keyedp (find-mode-descriptor 'kc-mid)))
+  (fiveam:is (equal '((kc-mid kc-a) (kc-mid kc-b) ka-lit) (%outer-options 'kc-top)))
+  (eval '(defmode kc-b "b" expr))
+  (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'kc-mid)))
+  (fiveam:is (equal '(kc-mid ka-lit) (%outer-options 'kc-top))))
