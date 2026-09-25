@@ -218,6 +218,7 @@
    #:restore-snapshot
    #:write-snapshot
    #:read-snapshot
+   #:snapshot-assembly
    #:+snapshot-version+
    #:snapshot-error
    #:snapshot-error-detail

@@ -1512,7 +1512,7 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
-  save PATH          write the machine's state to a snapshot file
+  save PATH [binary] write the machine's state to a snapshot file (binary: compact)
   load PATH          restore the machine's state from a snapshot file
   where              show pc, current instruction, and source context
   help               this text
@@ -1677,8 +1677,11 @@ this call."
                   ((string-equal cmd "save")
                    (if (zerop (length rest))
                        "save: missing path"
-                       (progn (write-snapshot (machine-snapshot (debug-session-machine session)) rest)
-                              (format nil "saved ~A~%" rest))))
+                       (multiple-value-bind (path format) (%split-save-arguments rest)
+                         (write-snapshot (machine-snapshot (debug-session-machine session)
+                                                           :assembly (debug-session-assembly session))
+                                         path :format format)
+                         (format nil "saved ~A~%" path))))
                   ((string-equal cmd "load")
                    (if (zerop (length rest))
                        "load: missing path"
@@ -1693,6 +1696,15 @@ this call."
     (let ((quit-p (eq body :quit))
           (text (if (eq body :quit) (format nil "Bye.~%") body)))
       (values (if stream (progn (write-string text stream) nil) text) quit-p))))
+
+(defun %split-save-arguments (rest)
+  "(VALUES PATH FORMAT) for the arguments of the save command: PATH, then an
+optional trailing word `binary`."
+  (let* ((line (string-trim '(#\Space #\Tab) rest))
+         (space (position-if (lambda (char) (member char '(#\Space #\Tab))) line :from-end t)))
+    (if (and space (plusp space) (string-equal "binary" line :start2 (1+ space)))
+        (values (string-trim '(#\Space #\Tab) (subseq line 0 space)) :binary)
+        (values rest :sexp))))
 
 (defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-dbg) "))
   "A thin read/dispatch/print loop over DEBUG-COMMAND -- the ticket's

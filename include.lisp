@@ -25,6 +25,11 @@ include."))
 *DEFAULT-PATHNAME-DEFAULTS*. ASSEMBLE-FILE and PREPROCESS rebind it per
 file.")
 
+(defvar *include-sources* nil
+  "NIL to read .include targets from disk, or an EQUAL hash table from
+namestring to (TRUENAME-NAMESTRING . TEXT): .include then reads only from it,
+and a file it does not hold is not found.")
+
 (defvar *include-chain* nil
   "Truenames of the files being included, innermost first, for cycle detection.")
 

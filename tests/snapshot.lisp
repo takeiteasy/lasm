@@ -315,3 +315,223 @@
     (fiveam:is (= 42 (sref other 'a)))
     (fiveam:is (= 99 (mref other 'ram 5)))
     (fiveam:is (null (search ":RUNS" (prin1-to-string (%machine-snapshot m nil)))))))
+
+;;; Binary files
+
+(defun %roundtrip-node (node)
+  (let ((out (%binary-buffer)))
+    (%put-node node out)
+    (%bin-node (make-bin-cursor (coerce out '(simple-array (unsigned-byte 8) (*))) "test") 0)))
+
+(defun %binary-octets (&rest parts)
+  "Magic, format byte 1, then PARTS: bytes, or strings written length-prefixed."
+  (let ((out (%binary-buffer)))
+    (loop for octet across *binary-snapshot-magic* do (vector-push-extend octet out))
+    (vector-push-extend +binary-snapshot-format+ out)
+    (dolist (part parts)
+      (if (stringp part)
+          (%put-string part out)
+          (vector-push-extend part out)))
+    (coerce out '(simple-array (unsigned-byte 8) (*)))))
+
+(defun %file-size (path)
+  (with-open-file (in path :element-type '(unsigned-byte 8)) (file-length in)))
+
+(fiveam:test binary-snapshot-round-trips-a-machine
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((m (%dirty)) (other (%fresh)))
+      (write-snapshot (machine-snapshot m) path :format :binary)
+      (fiveam:is (%binary-snapshot-file-p path))
+      (fiveam:is (equal (machine-snapshot m) (read-snapshot path)))
+      (restore-snapshot other (read-snapshot path))
+      (fiveam:is (equal (%state-of m) (%state-of other))))))
+
+(fiveam:test binary-snapshot-round-trips-every-node-type
+  (dolist (node (list nil t 0 127 128 300 -1 -128 (expt 2 70) (- (expt 2 70)) (expt 2 20000)
+                      :key 'lasm::pc 'cl:push "" "plain" (coerce '(#\é #\λ #\日 #.(code-char #x1F600)) 'string)
+                      '(1) '(1 2 3) '(1 . 2) '(1 2 . 3) '((1 . 2) (3 (4 . 5)) "x" :k)
+                      #\a 1.5d0 1/3 #(1 2 3) '#:uninterned))
+    (let ((back (%roundtrip-node node)))
+      (fiveam:is (if (symbolp node)
+                     (or (eq node back) (and (null (symbol-package node)) (string= node back)))
+                     (equalp node back))
+                 "~S came back as ~S" node back))))
+
+(fiveam:test binary-snapshot-is-smaller-for-dense-memory
+  (uiop:with-temporary-file (:pathname text :type "snap")
+    (uiop:with-temporary-file (:pathname binary :type "snap")
+      (let ((m (%fresh)))
+        (dotimes (i 2000) (%poke m 'ram i (random 256)))
+        (write-snapshot (machine-snapshot m) text)
+        (write-snapshot (machine-snapshot m) binary :format :binary)
+        (fiveam:is (< (%file-size binary) (%file-size text)))))))
+
+(fiveam:test read-snapshot-detects-either-format
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((snapshot (machine-snapshot (%dirty))))
+      (dolist (format '(:sexp :binary))
+        (write-snapshot snapshot path :format format)
+        (fiveam:is (equal snapshot (read-snapshot path)))))))
+
+(fiveam:test write-snapshot-rejects-an-unknown-format
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (fiveam:signals type-error (write-snapshot (machine-snapshot (%fresh)) path :format :xml))))
+
+(fiveam:test binary-snapshot-truncations-are-malformed
+  (let ((octets (%binary-octets)))
+    (uiop:with-temporary-file (:pathname path :type "snap")
+      (write-snapshot (machine-snapshot (%dirty)) path :format :binary)
+      (setf octets (%file-octets path)))
+    (loop for end from 0 below (length octets)
+          do (handler-case (%read-binary-snapshot (subseq octets 0 end) "test")
+               (snapshot-malformed () nil)
+               (:no-error (&rest _) (declare (ignore _)) (fiveam:fail "prefix ~D was accepted" end))))))
+
+(defvar *binary-eval-flag* nil)
+
+(fiveam:test binary-snapshot-bad-input-is-malformed
+  (flet ((malformed (&rest parts)
+           (handler-case (progn (%read-binary-snapshot (apply #'%binary-octets parts) "test") nil)
+             (snapshot-malformed () t))))
+    (fiveam:is (malformed #x0A) "reserved tag")
+    (fiveam:is (malformed #x07 #xFF #xFF #x7F) "list longer than the file")
+    (fiveam:is (malformed #x07 0) "empty list")
+    (fiveam:is (malformed #x06 100) "string longer than the file")
+    (fiveam:is (malformed #x06 1 #xFF) "bad UTF-8 lead")
+    (fiveam:is (malformed #x06 2 #xC3 #x28) "bad UTF-8 continuation")
+    (fiveam:is (malformed #x06 2 #xC0 #x80) "overlong UTF-8")
+    (fiveam:is (malformed #x06 4 #xF4 #x90 #x80 #x80) "code point beyond Unicode")
+    (fiveam:is (apply #'malformed #x02 (make-list 1030 :initial-element #x80)) "overlong varint")
+    (fiveam:is (malformed #x05 "NO-SUCH-PACKAGE" "X") "unknown package")
+    (fiveam:is (malformed 5) "root is not a snapshot")
+    (fiveam:is (malformed #x07 1 #x04 "OTHER") "wrong root head")
+    (fiveam:is (malformed #x07 1 #x04 "LASM-SNAPSHOT" 0) "trailing data" )
+    (fiveam:is (apply #'malformed (append (loop repeat 1002 append '(#x07 1)) '(0))) "nested too deeply")
+    (setf *binary-eval-flag* nil)
+    (fiveam:is (malformed #x09 "#.(setf lasm::*binary-eval-flag* t)") "reader evaluation")
+    (fiveam:is (null *binary-eval-flag*))
+    (fiveam:is (malformed #x09 "1 2") "two forms in a fallback")))
+
+(fiveam:test binary-snapshot-unknown-format-version
+  (let ((octets (%binary-octets)))
+    (setf (aref octets (length *binary-snapshot-magic*)) 2)
+    (fiveam:signals snapshot-version-mismatch (%read-binary-snapshot octets "test"))))
+
+;;; Embedded programs
+
+(defun %call-with-temp-sources (files function)
+  "Write FILES, an alist of relative name to text, under a fresh temp directory
+and call FUNCTION with the main file's path. The directory is deleted afterwards."
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "lasm-test-~36R/" (random (expt 36 8)))
+                               (uiop:temporary-directory)))))
+    (unwind-protect
+         (progn (loop for (name . text) in files
+                      do (let ((path (merge-pathnames name dir)))
+                           (ensure-directories-exist path)
+                           (with-open-file (out path :direction :output :if-exists :supersede)
+                             (write-string text out))))
+                (funcall function (merge-pathnames (car (first files)) dir) dir))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(defparameter *program-files*
+  '(("main.asm" . ".macro twice
+.include \"inc/c.asm\"
+.endm
+top:
+twice
+.include \"inc/b.asm\"
+")
+    ("inc/b.asm" . "mid: .include \"c.asm\"
+")
+    ("inc/c.asm" . "nop
+")))
+
+(defun %listing-files (assembly)
+  (mapcar (lambda (line) (listing-line-file line)) (assembly-listing assembly)))
+
+(fiveam:test machine-snapshot-embeds-a-program-only-for-an-assembly
+  (let ((m (make-machine 'instr-test-machine)))
+    (%call-with-temp-sources
+     *program-files*
+     (lambda (main dir)
+       (declare (ignore dir))
+       (let* ((assembly (assemble-file main :machine 'instr-test-machine))
+              (program (getf (cdr (machine-snapshot m :assembly assembly)) :program)))
+         (fiveam:is (null (getf (cdr (machine-snapshot m)) :program)))
+         (fiveam:is (null (getf (cdr (machine-snapshot m :assembly (assemble "nop" :machine 'instr-test-machine)))
+                                :program)))
+         (fiveam:is (= 3 (length (getf program :files))))
+         (fiveam:is (string= (getf program :path) (car (first (getf program :files)))))
+         (fiveam:is (= 2 (length (getf program :includes)))))))))
+
+(fiveam:test snapshot-assembly-rebuilds-without-the-files
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (let ((m (make-machine 'instr-test-machine)) original snapshot)
+      (%call-with-temp-sources
+       *program-files*
+       (lambda (main dir)
+         (declare (ignore dir))
+         (setf original (assemble-file main :machine 'instr-test-machine)
+               snapshot (machine-snapshot m :assembly original))))
+      (dolist (format '(:sexp :binary))
+        (write-snapshot snapshot snap :format format)
+        (let ((rebuilt (snapshot-assembly (read-snapshot snap) :machine 'instr-test-machine)))
+          (fiveam:is (equalp (assembly-cells original) (assembly-cells rebuilt)))
+          (fiveam:is (string= (assembly-source original) (assembly-source rebuilt)))
+          (fiveam:is (equal (%listing-files original) (%listing-files rebuilt)))
+          (fiveam:is (= (gethash "mid" (assembly-symbols original))
+                        (gethash "mid" (assembly-symbols rebuilt)))))))))
+
+(fiveam:test snapshot-assembly-rebuilds-a-rebuilt-assembly
+  (let ((m (make-machine 'instr-test-machine)) snapshot)
+    (%call-with-temp-sources
+     *program-files*
+     (lambda (main dir)
+       (declare (ignore dir))
+       (setf snapshot (machine-snapshot m :assembly (assemble-file main :machine 'instr-test-machine)))))
+    (let ((again (machine-snapshot m :assembly (snapshot-assembly snapshot))))
+      (fiveam:is (equal (getf (cdr snapshot) :program) (getf (cdr again) :program))))))
+
+(defun %program-snapshot (&key (files '(("/virt/main.asm" . "nop")))
+                            (includes '()) (path "/virt/main.asm") (origin 0) (lexer 'default))
+  (append (machine-snapshot (make-machine 'instr-test-machine))
+          (list :program (list :file path :path path :origin origin :memory nil :lexer lexer
+                               :files files :includes includes))))
+
+(fiveam:test snapshot-assembly-without-a-program-is-nil
+  (fiveam:is (null (snapshot-assembly (machine-snapshot (make-machine 'instr-test-machine))))))
+
+(fiveam:test snapshot-assembly-checks-the-machine-and-version
+  (let ((snapshot (%program-snapshot)))
+    (fiveam:is (typep (snapshot-assembly snapshot :machine 'instr-test-machine) 'assembly))
+    (fiveam:signals snapshot-machine-mismatch (snapshot-assembly snapshot :machine 'snapshot-test-machine))
+    (fiveam:signals snapshot-version-mismatch (snapshot-assembly (%with-field snapshot :version 99)))))
+
+(fiveam:test snapshot-assembly-rejects-a-damaged-program
+  (dolist (snapshot (list (%program-snapshot :origin -1)
+                          (%program-snapshot :lexer 'no-such-lexer)
+                          (%program-snapshot :files '(("/virt/main.asm" . 5)))
+                          (%program-snapshot :files '(("/virt/other.asm" . "nop")))
+                          (%program-snapshot :files '(("/virt/main.asm" . "nop") ("/virt/main.asm" . "nop")))
+                          (%program-snapshot :includes '(("x.asm" . "/virt/missing.asm")))
+                          (%program-snapshot :files 5)))
+    (fiveam:signals snapshot-malformed (snapshot-assembly snapshot))))
+
+(fiveam:test snapshot-assembly-include-only-reads-the-embedded-files
+  (let ((disk (asdf:system-relative-pathname :lasm "tests/fixtures/include/sub/c.asm")))
+    (fiveam:is (probe-file disk))
+    (fiveam:signals include-error
+      (snapshot-assembly (%program-snapshot :files `(("/virt/main.asm" . ,(format nil ".include ~S" (namestring disk)))))))))
+
+(fiveam:test snapshot-assembly-detects-a-circular-include
+  (handler-case
+      (snapshot-assembly (%program-snapshot
+                          :files '(("/virt/main.asm" . ".include \"main.asm\""))
+                          :includes '(("/virt/main.asm" . "/virt/main.asm"))))
+    (include-error (e) (fiveam:is (search "Circular" (lasm-syntax-error-message e))))
+    (:no-error (&rest _) (declare (ignore _)) (fiveam:fail "expected include-error"))))
+
+(fiveam:test restore-snapshot-ignores-the-embedded-program
+  (let ((other (make-machine 'instr-test-machine)))
+    (fiveam:is (eq other (restore-snapshot other (%program-snapshot))))))

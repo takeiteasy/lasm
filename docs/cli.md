@@ -26,8 +26,8 @@ defined, the default lexer is used.
 | Command | Does | Options |
 | --- | --- | --- |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
-| `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH` |
-| `debug FILE` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH` |
+| `run [FILE]` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
+| `debug [FILE]` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
@@ -83,18 +83,27 @@ PATH` and `load PATH` for snapshots.
 
 ## Snapshots
 
-`--save-snapshot PATH` writes the machine's state to `PATH` when `run` stops
-or `debug` ends. `--load-snapshot PATH` loads the program, then restores that
+`--save-snapshot PATH` writes the machine's state and the program's source to
+`PATH` when `run` stops or `debug` ends. `--load-snapshot PATH` restores that
 state before running, so `--max-steps` and `--cycles` count from the snapshot.
 Both work on `run` and `debug`.
+`--snapshot-format` picks `sexp` (readable, the default) or `binary`
+(compact); loading detects either.
 
 ```sh
 lasm run counter.asm -m sixtyfoo.lasm --max-steps 5 --save-snapshot s.snap
-lasm run counter.asm -m sixtyfoo.lasm --load-snapshot s.snap
+lasm run -m sixtyfoo.lasm --load-snapshot s.snap
 ```
 
-`FILE` is still assembled, which supplies source lines for faults. A
-snapshot that is unreadable or belongs to another machine exits 1; see
+With `FILE` the program is assembled from it. Without `FILE` it is rebuilt
+from the source in the snapshot, `.include`d files too, so the source files
+need not exist. `--origin`, `--memory` and `--lexer` then come from the
+snapshot and are usage errors. A snapshot with no embedded program (one
+written through the [library](snapshots.md#embedded-programs) without an
+assembly) needs `FILE`.
+
+A snapshot that is unreadable, has no program to resume from, or belongs to
+another machine exits 1; see
 [Snapshots](snapshots.md#versioning-and-validation).
 
 ## Exit status
@@ -136,7 +145,5 @@ ros build lasm.ros    # standalone ./lasm
 
 ## Limitations
 
-- `--load-snapshot` still needs the program's source `FILE`; it is tracked in
-  [ticket 283](https://todo.sr.ht/~takeiteasy/lasm/283).
 - `debug` reads plain lines, with no line editing or command history; it is
   tracked in [ticket 284](https://todo.sr.ht/~takeiteasy/lasm/284).

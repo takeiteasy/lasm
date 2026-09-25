@@ -150,3 +150,12 @@ after: nop" :machine 'instr-test-machine))
          (n (assembly-symbol a "n"))
          (after (assembly-symbol a "after")))
     (fiveam:is (< (symbol-info-order n) (symbol-info-order after)))))
+
+(fiveam:test source-units-record-the-path-they-were-read-from
+  (let* ((main (asdf:system-relative-pathname :lasm "tests/fixtures/include/nested.asm"))
+         (root (assembly-source-unit (%assemble-include-fixture "nested.asm")))
+         (child (first (gethash 2 (source-unit-children root)))))
+    (fiveam:is (string= (namestring (truename main)) (source-unit-path root)))
+    (fiveam:is (string= (namestring (truename (merge-pathnames "sub/b.asm" main)))
+                        (source-unit-path child)))
+    (fiveam:is (null (source-unit-path (assembly-source-unit (assemble "nop" :machine 'instr-test-machine)))))))

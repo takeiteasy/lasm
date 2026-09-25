@@ -1784,3 +1784,30 @@ loop:   sta $10
           (debug-step session 2)
           (debug-step-back session 2)
           (fiveam:is (= pc (%pc session))))))))
+
+;;; Snapshot commands
+
+(defun %dbg-file-session ()
+  (let* ((a (%assemble-include-fixture "nested.asm"))
+         (m (make-machine 'instr-test-machine)))
+    (load-program m a)
+    (make-debug-session m :assembly a)))
+
+(fiveam:test debug-save-writes-sexp-by-default-and-binary-on-request
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((session (%dbg-file-session))
+          (name (namestring path)))
+      (fiveam:is (search "saved" (debug-command session (format nil "save ~A" name))))
+      (fiveam:is (not (%binary-snapshot-file-p path)))
+      (fiveam:is (search "saved" (debug-command session (format nil "save ~A binary" name))))
+      (fiveam:is (%binary-snapshot-file-p path))
+      (fiveam:is (getf (cdr (read-snapshot path)) :program))
+      (fiveam:is (search "loaded" (debug-command session (format nil "load ~A" name)))))))
+
+(fiveam:test debug-save-binary-needs-a-path
+  (let ((session (%dbg-file-session)))
+    (fiveam:is (search "missing path" (debug-command session "save")))
+    (multiple-value-bind (path format) (%split-save-arguments "binary")
+      (fiveam:is (equal '("binary" :sexp) (list path format))))
+    (multiple-value-bind (path format) (%split-save-arguments "a b.snap  BINARY")
+      (fiveam:is (equal '("a b.snap" :binary) (list path format))))))

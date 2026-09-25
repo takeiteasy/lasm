@@ -40,7 +40,7 @@
   (%poke original 'ram #x10 99)
   (tick-devices original 5)
 
-  (write-snapshot (machine-snapshot original) path)
+  (write-snapshot (machine-snapshot original) path :format :binary)
   (restore-snapshot restored (read-snapshot path))
 
   (format t "a = ~D, stack depth = ~D, ram[#x10] = ~D, ticker = ~S~%"

@@ -228,6 +228,7 @@ body site when applicable. ORDER is the binding sequence across all files."
   (listing nil :type list)            ; LISTING-LINE list, ascending by
                                        ; address (#25) -- see listing.lisp
   source-unit
+  (parameters nil :type list)           ; (:ORIGIN :MEMORY :LEXER) it was assembled with
   (source nil :type (or null string)))  ; the original source text, or NIL
                                          ; when ASSEMBLE-STATEMENTS was
                                          ; called directly with no :SOURCE
@@ -1835,7 +1836,8 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                          :cell-width cell-width
                          :origin asm-origin :symbols symbols :symbol-info info
                          :listing (%build-listing sized) :source source
-                         :source-unit source-unit)))))))
+                         :source-unit source-unit
+                         :parameters (list :origin origin :memory memory :lexer lexer))))))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
@@ -1854,9 +1856,15 @@ diagnostics and listings when supplied."
   "Read the source file at PATH (conventionally .asm or .s) and ASSEMBLE its
 text; see ASSEMBLE for the keys and conditions. A missing or unreadable file
 signals the ordinary CL FILE-ERROR."
-  (let* ((text (%read-source-file path))
-         (file (truename path))
-         (*include-directory* (%file-directory file))
-         (*include-chain* (list file)))
-    (assemble text :machine machine :lexer lexer :origin origin :memory memory
-                   :file path)))
+  (%assemble-source (%read-source-file path) path (truename path)
+                    :machine machine :lexer lexer :origin origin :memory memory))
+
+(defun %assemble-source (text display truename &key machine lexer origin memory)
+  "ASSEMBLE TEXT as the file TRUENAME, shown as DISPLAY in diagnostics, with
+.include resolved against TRUENAME's directory."
+  (let* ((*include-directory* (%file-directory truename))
+         (*include-chain* (list truename))
+         (assembly (assemble text :machine machine :lexer lexer :origin origin :memory memory
+                                  :file display)))
+    (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
+    assembly))

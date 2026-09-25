@@ -26,7 +26,10 @@
 a macro body statement, else the innermost file being included."
   (let* ((unit (statement-definition-unit statement))
          (file (and unit (source-unit-file unit)))
-         (truename (and file (probe-file file))))
+         (truename (and file (if *include-sources*
+                                 (let ((hit (gethash file *include-sources*)))
+                                   (and hit (pathname (car hit))))
+                                 (probe-file file)))))
     (if truename
         (%file-directory truename)
         (or *include-directory* *default-pathname-defaults*))))
@@ -234,9 +237,14 @@ INCLUDE-ERROR, MACRO-ERROR or CONDITIONAL-ERROR on a malformed construct."
          (include (statement depth)
            (let* ((line (statement-line statement))
                   (path (%include-path statement))
-                  (file (probe-file (merge-pathnames path (%include-base-directory statement)))))
+                  (request (merge-pathnames path (%include-base-directory statement)))
+                  (hit (and *include-sources* (gethash (namestring request) *include-sources*)))
+                  (file (if *include-sources*
+                            (and hit (pathname (car hit)))
+                            (probe-file request))))
              (unless file
-               (%include-error line ".include ~S: file not found" path))
+               (%include-error line ".include ~S: file not found~:[~; in the snapshot~]"
+                               path *include-sources*))
              (when (member file *include-chain* :test #'equal)
                (%include-error line "Circular .include: ~{~A~^ -> ~}"
                                (mapcar #'namestring (reverse (cons file *include-chain*)))))
@@ -245,7 +253,8 @@ INCLUDE-ERROR, MACRO-ERROR or CONDITIONAL-ERROR on a malformed construct."
              (let ((*include-directory* (%file-directory file))
                    (*include-chain* (cons file *include-chain*)))
                (multiple-value-bind (parsed unit)
-                   (parse (%read-source-file file) :lexer lexer :file file)
+                   (parse (if hit (cdr hit) (%read-source-file file)) :lexer lexer :file file)
+                 (setf (source-unit-path unit) (namestring request))
                  (let ((parent (statement-source-unit statement)))
                    (when parent
                      (setf (gethash line (source-unit-children parent))

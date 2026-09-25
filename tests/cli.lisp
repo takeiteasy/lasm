@@ -391,3 +391,102 @@
                     (%debug-lines "continue"))
         (fiveam:is (= 0 status))
         (fiveam:is (search "PC=0009" (string-upcase out)))))))
+
+;;; Resuming from a snapshot alone
+
+(defun %sixtyfoo-args (command &rest more)
+  (list* command "-m" (%cli-path "examples/cli/sixtyfoo.lasm") more))
+
+(defun %save-counter-snapshot (path &rest more)
+  (%run-cli (append (%cli-args "run" "examples/cli/counter.asm")
+                    (list "--max-steps" "5" "--save-snapshot" (namestring path)) more)))
+
+(fiveam:test cli-run-resumes-without-the-source-file
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (%save-counter-snapshot path)
+    (multiple-value-bind (status out)
+        (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring path)))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "stopped: trap after 18 steps, pc = $0009" out)))))
+
+(fiveam:test cli-run-chains-resumes-without-the-source-file
+  (uiop:with-temporary-file (:pathname first :type "snap")
+    (uiop:with-temporary-file (:pathname second :type "snap")
+      (%save-counter-snapshot first)
+      (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring first)
+                                "--max-steps" "3" "--save-snapshot" (namestring second)))
+      (multiple-value-bind (status out)
+          (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring second)))
+        (fiveam:is (= 0 status))
+        (fiveam:is (search "stopped: trap after 15 steps, pc = $0009" out))))))
+
+(fiveam:test cli-run-resumes-after-the-included-files-are-gone
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%call-with-temp-sources
+     `(("main.asm" . ".include \"inc/body.asm\"")
+       ("inc/body.asm" . ,(uiop:read-file-string (%cli-path "examples/cli/counter.asm"))))
+     (lambda (main dir)
+       (declare (ignore dir))
+       (fiveam:is (= 0 (%run-cli (list "run" (namestring main) "-m" (%cli-path "examples/cli/sixtyfoo.lasm")
+                                       "--max-steps" "5" "--save-snapshot" (namestring snap)))))))
+    (multiple-value-bind (status out)
+        (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap)))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "stopped: trap after 18 steps" out)))))
+
+(fiveam:test cli-run-without-a-file-needs-a-snapshot-with-a-program
+  (multiple-value-bind (status out err) (%run-cli (%sixtyfoo-args "run"))
+    (declare (ignore out))
+    (fiveam:is (= 2 status))
+    (fiveam:is (search "needs a FILE" err)))
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%save-counter-snapshot snap)
+    (write-snapshot (let ((saved (read-snapshot snap)))
+                      (cons :lasm-snapshot
+                            (loop for (key value) on (cdr saved) by #'cddr
+                                  unless (eq key :program) append (list key value))))
+                    snap)
+    (multiple-value-bind (status out err) (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap)))
+      (fiveam:is (= 1 status))
+      (fiveam:is (string= "" out))
+      (fiveam:is (search "no embedded program" err)))))
+
+(fiveam:test cli-assembly-options-need-a-file
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%save-counter-snapshot snap)
+    (dolist (option '("--origin" "--memory" "--lexer"))
+      (multiple-value-bind (status out err)
+          (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap) option "1"))
+        (declare (ignore out))
+        (fiveam:is (= 2 status))
+        (fiveam:is (search "taken from the snapshot" err))))
+    (fiveam:is (= 2 (%run-cli (%sixtyfoo-args "listing" "--load-snapshot" (namestring snap)))))))
+
+(fiveam:test cli-snapshot-format-binary-writes-and-resumes
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%save-counter-snapshot snap "--snapshot-format" "binary")
+    (fiveam:is (%binary-snapshot-file-p snap))
+    (multiple-value-bind (status out)
+        (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap)))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "stopped: trap after 18 steps" out)))))
+
+(fiveam:test cli-snapshot-format-rejects-an-unknown-format-before-running
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (delete-file snap)
+    (multiple-value-bind (status out err) (%save-counter-snapshot snap "--snapshot-format" "xml")
+      (fiveam:is (= 2 status))
+      (fiveam:is (string= "" out))
+      (fiveam:is (search "--snapshot-format" err)))
+    (fiveam:is (null (probe-file snap)))))
+
+(fiveam:test cli-debug-resumes-without-the-source-file
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--save-snapshot" (namestring snap)))
+              (%debug-lines "step 3"))
+    (multiple-value-bind (status out)
+        (%run-cli (%sixtyfoo-args "debug" "--load-snapshot" (namestring snap))
+                  (%debug-lines "where" "break count.loop" "continue" "quit"))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "bne" out))
+      (fiveam:is (search "Breakpoint 1" out)))))

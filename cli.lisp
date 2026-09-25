@@ -18,13 +18,16 @@
 commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
                     [--bank N] [--region NAME] [--packing pad|bits]
-  run FILE          assemble and run          [--max-steps N] [--cycles N]
-                    [--load-snapshot PATH] [--save-snapshot PATH]
+  run [FILE]        assemble and run          [--max-steps N] [--cycles N]
+                    [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
                     [--cells N] [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
-  debug FILE        assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
-                    [--load-snapshot PATH] [--save-snapshot PATH]
+  debug [FILE]      assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
+                    [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
+
+FILE may be left out of run and debug with --load-snapshot when the snapshot
+was saved from a file: the program is rebuilt from the source it holds.
 
 options:
   -m, --machine FILE     machine definition (.lasm), required
@@ -37,7 +40,8 @@ options:
   --packing pad|bits     cells that are not whole bytes: pad each to bytes (default)
                          or pack them as a bitstream
   --load-snapshot PATH   restore machine state from a snapshot after loading (run, debug)
-  --save-snapshot PATH   write machine state to a snapshot at the end (run, debug)
+  --save-snapshot PATH   write machine state and program source to a snapshot at the end (run, debug)
+  --snapshot-format F    sexp (readable, default) or binary (compact) for --save-snapshot
   --break WHERE          set a breakpoint before the prompt appears (debug)
   --commands FILE        run debugger commands from FILE first (debug)
   --history N            keep N steps of step-back history (debug)
@@ -53,6 +57,7 @@ options:
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)
     ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)
+    ("--snapshot-format" . :snapshot-format)
     ("--history" . :history) ("--commands" . :commands)))
 
 (defparameter *cli-repeatable-options*
@@ -161,7 +166,8 @@ the calling image."
         (load file))
       (funcall function
                (%cli-pick-machine file (getf options :machine-name))
-               (%cli-pick-lexer file (getf options :lexer) before)))))
+               (and (not (getf options :snapshot-only))
+                    (%cli-pick-lexer file (getf options :lexer) before))))))
 
 ;;; Commands
 
@@ -206,33 +212,53 @@ the calling image."
                                              :bank bank :region region :packing packing)))
     0))
 
-(defun %cli-loaded-machine (assembly machine options)
-  "A MACHINE instance with ASSEMBLY loaded, then restored from
---load-snapshot when given."
-  ;; TODO: FILE must still be assembled to resume; store source or a listing in the snapshot (#283)
-  (let ((m (make-machine machine))
-        (snapshot (getf options :load-snapshot)))
-    (load-program m assembly :memory (%cli-memory options))
+(defun %cli-snapshot-format (options)
+  (let ((name (getf options :snapshot-format)))
+    (cond ((null name) :sexp)
+          ((member name '("sexp" "binary") :test #'string-equal) (intern (string-upcase name) :keyword))
+          (t (%usage-error "--snapshot-format must be sexp or binary, got ~A" name)))))
+
+(defun %cli-program (file machine lexer options)
+  "(VALUES ASSEMBLY SNAPSHOT): ASSEMBLY of FILE, or rebuilt from the
+--load-snapshot snapshot's embedded source when there is no FILE. SNAPSHOT is
+that snapshot, or NIL."
+  (let ((path (getf options :load-snapshot)))
+    (if file
+        (values (%cli-assemble file machine lexer options) (and path (read-snapshot path)))
+        (let ((snapshot (read-snapshot path)))
+          (values (or (snapshot-assembly snapshot :machine machine)
+                      (%snapshot-fail 'snapshot-malformed "~A has no embedded program; pass FILE" path))
+                  snapshot)))))
+
+(defun %cli-loaded-machine (assembly machine snapshot)
+  "A MACHINE instance with ASSEMBLY loaded, then restored from SNAPSHOT when
+there is one."
+  (let ((m (make-machine machine)))
+    (load-program m assembly :memory (getf (assembly-parameters assembly) :memory))
     (when snapshot
-      (restore-snapshot m (read-snapshot snapshot)))
+      (restore-snapshot m snapshot))
     m))
 
-(defun %cli-save-snapshot (m options)
+(defun %cli-save-snapshot (m assembly options)
   (let ((path (getf options :save-snapshot)))
     (when path
-      (write-snapshot (machine-snapshot m) path))))
+      (write-snapshot (machine-snapshot m :assembly assembly) path
+                      :format (%cli-snapshot-format options)))))
 
 (defun %cli-command-run (file machine lexer options out)
-  (let* ((assembly (%cli-assemble file machine lexer options))
-         (memory (%cli-memory options))
-         (m (%cli-loaded-machine assembly machine options))
+  (%cli-snapshot-format options)
+  (multiple-value-bind (assembly snapshot) (%cli-program file machine lexer options)
+    (%cli-run assembly (%cli-loaded-machine assembly machine snapshot) options out)))
+
+(defun %cli-run (assembly m options out)
+  (let* ((memory (getf (assembly-parameters assembly) :memory))
          (max-steps (or (%cli-option-integer options :max-steps "--max-steps") 10000))
          (cycles (%cli-option-integer options :cycles "--cycles")))
     (multiple-value-bind (reason steps condition)
         (if cycles
             (run-for-cycles m cycles :max-steps max-steps :memory memory)
             (run m :max-steps max-steps :memory memory))
-      (%cli-save-snapshot m options)
+      (%cli-save-snapshot m assembly options)
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
       (when (or (eq reason :fault)
                 (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
@@ -274,21 +300,24 @@ the calling image."
     0))
 
 (defun %cli-command-debug (file machine lexer options out)
-  (let* ((assembly (%cli-assemble file machine lexer options))
-         (memory (%cli-memory options))
-         (history (%cli-option-integer options :history "--history"))
-         (in (or (getf options :in) *standard-input*)))
+  (let ((history (%cli-option-integer options :history "--history"))
+        (in (or (getf options :in) *standard-input*)))
     (when (and history (< history 1))
       (%usage-error "--history needs a positive integer, got ~D" history))
-    (let ((session (make-debug-session (%cli-loaded-machine assembly machine options)
-                                       :assembly assembly :memory memory :history history)))
+    (%cli-snapshot-format options)
+    (multiple-value-bind (assembly snapshot) (%cli-program file machine lexer options)
+     ;; TODO: :lexer is not passed, so breakpoint conditions use the default lexer (#285)
+     (let ((session (make-debug-session (%cli-loaded-machine assembly machine snapshot)
+                                        :assembly assembly
+                                        :memory (getf (assembly-parameters assembly) :memory)
+                                        :history history)))
       (dolist (where (getf options :breaks))
         (write-string (debug-command session (format nil "break ~A" where)) out))
       (unless (%cli-run-command-file session (getf options :commands) out)
         ;; TODO: plain READ-LINE, no editing or history on a terminal (#284)
         (debugger-repl session :input in :output out))
-      (%cli-save-snapshot (debug-session-machine session) options)
-      0)))
+      (%cli-save-snapshot (debug-session-machine session) assembly options)
+      0))))
 
 (defun %cli-run-command-file (session path out)
   "Dispatch each line of the file at PATH, echoing it after the prompt. True
@@ -331,7 +360,15 @@ to OUT, diagnostics to ERR."
                                             ("debug" . %cli-command-debug))
                                           :test #'string=))))
                  (unless handler (%usage-error "unknown command ~A" command))
-                 (unless file (%usage-error "~A needs a FILE" command))
+                 (unless file
+                   (unless (and (member command '("run" "debug") :test #'string=)
+                                (getf options :load-snapshot))
+                     (%usage-error "~A needs a FILE~:[~; (or --load-snapshot PATH)~]"
+                                   command (member command '("run" "debug") :test #'string=)))
+                   (dolist (key '(:origin :lexer :memory))
+                     (when (getf options key)
+                       (%usage-error "--~(~A~) is taken from the snapshot when FILE is left out" key)))
+                   (setf (getf options :snapshot-only) t))
                  (%cli-call-with-definitions
                   options
                   (lambda (machine lexer)

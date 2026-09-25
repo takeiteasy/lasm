@@ -76,7 +76,10 @@
   definition-line ; macro body line, or NIL outside an expansion
   definition-unit)
 
-(defstruct source-unit file text (children (make-hash-table)))
+(defstruct source-unit
+  file text
+  (children (make-hash-table))
+  path)                                 ; absolute namestring the unit was read from, or NIL
 
 (defstruct operand
   tokens)     ; simple-vector of raw tokens for this operand -- MATCH-OPERAND-MODE
