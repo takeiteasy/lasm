@@ -133,3 +133,10 @@ library, `trivial-high-precision-timer` — see
 ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
 ros build lasm.ros    # standalone ./lasm
 ```
+
+## Limitations
+
+- `--load-snapshot` still needs the program's source `FILE`; it is tracked in
+  [ticket 283](https://todo.sr.ht/~takeiteasy/lasm/283).
+- `debug` reads plain lines, with no line editing or command history; it is
+  tracked in [ticket 284](https://todo.sr.ht/~takeiteasy/lasm/284).

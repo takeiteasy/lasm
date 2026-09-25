@@ -209,6 +209,7 @@ the calling image."
 (defun %cli-loaded-machine (assembly machine options)
   "A MACHINE instance with ASSEMBLY loaded, then restored from
 --load-snapshot when given."
+  ;; TODO: FILE must still be assembled to resume; store source or a listing in the snapshot (#283)
   (let ((m (make-machine machine))
         (snapshot (getf options :load-snapshot)))
     (load-program m assembly :memory (%cli-memory options))
@@ -284,6 +285,7 @@ the calling image."
       (dolist (where (getf options :breaks))
         (write-string (debug-command session (format nil "break ~A" where)) out))
       (unless (%cli-run-command-file session (getf options :commands) out)
+        ;; TODO: plain READ-LINE, no editing or history on a terminal (#284)
         (debugger-repl session :input in :output out))
       (%cli-save-snapshot (debug-session-machine session) options)
       0)))
