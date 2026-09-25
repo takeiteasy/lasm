@@ -90,13 +90,14 @@ and [`subvarying.lisp`](../examples/subvarying.lisp).
 
 ### Nested varying alternatives
 
-A varying alternative inside another `one-of` uses a path such as
-`(choice (ind ind-idx))`. `for-choice` uses the same path to name extra
-holes. `choice-case` can inspect the outer or inner selection. See
+A varying alternative inside another `one-of` is selected by a tree with one
+subkey per varying `one-of` it contains: `(choice (ind ind-idx))`.
+`for-choice` uses the same key to name extra holes, and `choice-case` can
+inspect the outer or inner selection. See
 [`nestvarying.lisp`](../examples/nestvarying.lisp).[^nested]
 
 An inner option with no hole, such as `POP`, needs a named outer `one-of`;
-the slot records the pick as a path:
+the slot records the pick as a tree:
 
 ```lisp
 (defmode stk (one-of pop idx))
@@ -104,6 +105,25 @@ the slot records the pick as a path:
 ```
 
 See [`slotvarying.lisp`](../examples/slotvarying.lisp).
+
+#### Several varying `one-of`s in one alternative
+
+Name each varying `one-of` with a slot. The option is a tree with a subkey
+for each, and `for-choice` and `choice-case` address one `one-of` by its slot:
+
+```lisp
+(defmode pair (one-of (lhs abs idx)) "," (one-of (rhs abs idx)))
+(defmode any (one-of pair lit))
+
+(choice (pair idx abs))                              ; lhs = idx, rhs = abs
+(for-choice (src pair lhs idx) (operand loff :width 1))
+(for-choice (src pair rhs idx) (operand roff :width 1))
+(choice-case (src pair lhs) (abs ...) (idx ...))
+```
+
+Extra operands land at the position of their own `one-of`, so an operand
+declared after the nested alternative keeps its binding. See
+[`nesttree.lisp`](../examples/nesttree.lisp).
 
 ## Per-hole attributes
 
@@ -155,14 +175,17 @@ prefixes select the alternative first and then the variant. See
 - A `one-of` with hole-less alternatives needs a slot on it. A
   cell-encoded one must be selected by a
   [sub-opcode table](instructions.md#slot-participants).
-- A nested varying alternative has one varying `one-of` of its own. It
-  cannot declare width, signedness, relative, suffix, or strict options
-  itself; declare them on its holes or inner alternatives.[^nested]
+- A nested varying alternative cannot declare width, signedness, relative,
+  suffix, or strict options itself; declare them on its holes or inner
+  alternatives.[^nested]
 - A `one-of` nested where no path records the pick (inside a non-varying
   alternative, or beside a varying one) rejects alternatives that declare
   `:signed`, `:relative`, `:width`, or `:strict`
   ([#275](https://todo.sr.ht/~takeiteasy/lasm/275)).[^nested]
+- An alternative with several varying `one-of`s must have the same
+  minimum shape as the operand's base holes.
 
-[^nested]: A path lists the selected alternative at each varying level.
-  A bare outer name does not identify a unique shape. A nonvarying nested
-  selection reports its outer alternative only.
+[^nested]: A tree lists the selected alternative at each varying level:
+  `(a (b c))` picks `b` inside `a`, then `c` inside `b`. A bare outer name
+  does not identify a unique shape. A nonvarying nested selection reports
+  its outer alternative only.

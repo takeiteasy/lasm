@@ -197,39 +197,56 @@ options start at the first keyword symbol; everything before it is pattern."
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
 
-  (defun %key-list (key)
-    (if (consp key) key (list key)))
-
-  (defun %collapse-key (names)
-    (if (rest names) names (first names)))
-
   (defun %key-head (key)
     (if (consp key) (first key) key))
+
+  (defun %key-subkeys (key)
+    "The subkeys of an option KEY, one per varying ONE-OF of its head alternative."
+    (and (consp key) (rest key)))
+
+  (defun %key-names (key)
+    "Every mode name in KEY, outermost first."
+    (if (consp key)
+        (cons (first key) (mapcan #'%key-names (rest key)))
+        (list key)))
+
+  (defun %cartesian (lists)
+    "Every choice of one element from each of LISTS, the first list varying slowest."
+    (if (null lists)
+        (list nil)
+        (loop for x in (first lists)
+              append (mapcar (lambda (more) (cons x more)) (%cartesian (rest lists))))))
+
+  (defun %element-min-hole-count (element &optional seen)
+    (reduce #'min (mapcar #'cdr (%one-of-element-options element seen))))
 
   (defun %option-hole-count (key &optional seen)
     "Hole count of an option KEY (see %ONE-OF-ELEMENT-OPTIONS)."
     (if (consp key)
         (let* ((alt (find-mode-descriptor (first key)))
-               (element (%pattern-varying-one-of-element (mode-descriptor-pattern alt) seen)))
-          (+ (- (%mode-hole-count alt seen)
-                (reduce #'min (mapcar #'cdr (%one-of-element-options element seen))))
-             (%option-hole-count (%collapse-key (rest key)) seen)))
+               (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt) seen)))
+          (+ (%mode-hole-count alt seen)
+             (loop for element in varying
+                   for sub in (rest key)
+                   sum (- (%option-hole-count sub seen) (%element-min-hole-count element seen)))))
         (%mode-hole-count (find-mode-descriptor key) seen)))
 
   (defun %one-of-element-options (element &optional seen)
     "((KEY . HOLE-COUNT)...) for ELEMENT's alternatives in declaration order.
 A non-varying alternative is keyed by its name; a varying alternative
-contributes one key (NAME . INNER-KEY-LIST) per option of its own varying
-element."
+contributes one key (NAME SUBKEY...) per combination of options of its
+varying elements, one subkey for each, in pattern order."
     (loop for name in (%one-of-alternatives element)
           for alt = (find-mode-descriptor name)
-          append (if (mode-descriptor-varyingp alt)
-                     (let ((options (%one-of-element-options
-                                     (%pattern-varying-one-of-element (mode-descriptor-pattern alt) seen)
-                                     seen)))
-                       (loop for (key . nil) in options
-                             collect (let ((full (cons name (%key-list key))))
-                                       (cons full (%option-hole-count full seen)))))
+          for varying = (and (mode-descriptor-varyingp alt)
+                             (%pattern-varying-one-of-elements (mode-descriptor-pattern alt) seen))
+          append (if varying
+                     (loop for subs in (%cartesian
+                                        (mapcar (lambda (inner)
+                                                  (mapcar #'car (%one-of-element-options inner seen)))
+                                                varying))
+                           collect (let ((full (cons name subs)))
+                                     (cons full (%option-hole-count full seen))))
                      (list (cons name (%mode-hole-count alt seen))))))
 
   (defun %pattern-varying-one-of-elements (pattern &optional seen)
@@ -245,9 +262,10 @@ element."
     (first (%pattern-varying-one-of-elements pattern seen)))
 
   (defun %choice-entry-key (entry)
-    "The option key for a matcher CHOICES ENTRY: a descriptor or a path list."
+    "The option key for a matcher CHOICES ENTRY: a descriptor, or a tree
+(DESCRIPTOR ENTRY...) for a varying alternative."
     (if (consp entry)
-        (%collapse-key (mapcar #'mode-descriptor-name entry))
+        (cons (mode-descriptor-name (first entry)) (mapcar #'%choice-entry-key (rest entry)))
         (mode-descriptor-name entry)))
 
   (defun %choice-key-descriptor (key)
@@ -337,22 +355,22 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
 
   (defun %option-hole-attributes (key attribute)
     (if (consp key)
-        (%mode-hole-attributes (find-mode-descriptor (first key)) attribute
-                               (%collapse-key (rest key)))
+        (%mode-hole-attributes (find-mode-descriptor (first key)) attribute (rest key))
         (%mode-hole-attributes (find-mode-descriptor key) attribute)))
 
-  (defun %mode-hole-attributes (mode attribute &optional inner-key)
-    "Return default attributes in pattern order. INNER-KEY names the option
-taken by MODE's varying ONE-OF element."
-    (let ((varying (%pattern-varying-one-of-element (mode-descriptor-pattern mode))))
+  (defun %mode-hole-attributes (mode attribute &optional subkeys)
+    "Return default attributes in pattern order. SUBKEYS names the option taken
+by each of MODE's varying ONE-OF elements, in pattern order."
+    (let ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern mode))))
       (loop for element in (mode-descriptor-pattern mode)
             append (ecase (first element)
                      (:literal nil)
                      (:expr (list (%expr-hole-attribute element mode attribute)))
                      (:one-of (%option-hole-attributes
-                               (if (and inner-key (eq element varying))
-                                   inner-key
-                                   (car (first (%one-of-element-options element))))
+                               (let ((position (position element varying :test #'eq)))
+                                 (if (and subkeys position)
+                                     (nth position subkeys)
+                                     (car (first (%one-of-element-options element)))))
                                attribute))))))
 
   (defun %alternative-declares-p (alt attribute)
@@ -395,9 +413,8 @@ hand-written-redefinition-cycle case %MODE-HOLE-COUNT does."
   (defun %check-one-of-elements! (name pattern)
     "Validate alternative syntax and supported ONE-OF nesting.
 Alternatives may vary in arity and operand attributes; DEFINSTRUCTION
-validates encoding support. Ambiguous syntax is rejected, as is a nested
-varying alternative with several varying elements, a hole-less inner option,
-or wrapper options."
+validates encoding support. Ambiguous syntax is rejected, as is a hole-less
+inner option of an unnamed ONE-OF, or wrapper options on a varying alternative."
     (dolist (element pattern)
       (when (eq (first element) :one-of)
          (let* ((alt-names (%one-of-alternatives element))
@@ -407,25 +424,22 @@ or wrapper options."
                    name alt-names))
           (dolist (alt alts)
             (when (mode-descriptor-varyingp alt)
-              (let ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
-                (when (rest varying)
-                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has more than one ONE-OF whose ~
-alternatives disagree on hole count -- a nested alternative may have only one"
-                         name (mode-descriptor-name alt)))
-                (when (and (some (lambda (option) (zerop (cdr option)))
-                                 (%one-of-element-options (first varying)))
-                           (null (%one-of-slot element)))
-                  (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
+              (when (and (some (lambda (inner)
+                                 (some (lambda (option) (zerop (cdr option)))
+                                       (%one-of-element-options inner)))
+                               (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
+                         (null (%one-of-slot element)))
+                (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF with an ~
 alternative that has no operand hole -- name the outer ONE-OF, (one-of (slot alternative...)), so ~
 that pick can be selected"
-                         name (mode-descriptor-name alt)))
+                       name (mode-descriptor-name alt)))
                 (when (or (mode-descriptor-width alt) (mode-descriptor-signedp alt)
                           (mode-descriptor-relativep alt) (mode-descriptor-suffix alt)
                           (mode-descriptor-strictp alt))
                   (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S nests a varying ONE-OF, so it cannot ~
 declare :WIDTH, :SIGNED, :RELATIVE, :SUFFIX or :STRICT -- declare them on its holes or inner ~
 alternatives instead"
-                         name (mode-descriptor-name alt)))))
+                         name (mode-descriptor-name alt))))
             (loop for (attribute label) in '((:signed ":SIGNED T or :RELATIVE T") (:width ":WIDTH")
                                              (:strict ":STRICT T"))
                   when (%unrecorded-nested-attribute-p (mode-descriptor-pattern alt) attribute
@@ -574,13 +588,13 @@ from the matcher's selections (%NESTED-CHOICE-ENTRY).")
 
 (defun %nested-choice-entry (alt selections)
   "The entry for ALT matched at a ONE-OF: ALT itself, or for a varying ALT the
-path (ALT . inner descriptors). The inner pick comes from SELECTIONS, where
-the element records its own entry under itself (%MATCH-MODE-ELEMENTS, when
-listed in *RECORDED-ELEMENTS*), so an inner option with no hole is found too."
+tree (ALT ENTRY...), one entry per varying ONE-OF of ALT in pattern order. Each
+inner pick comes from SELECTIONS, where the element records its own entry under
+itself (%MATCH-MODE-ELEMENTS, when listed in *RECORDED-ELEMENTS*), so an inner
+option with no hole is found too."
   (if (mode-descriptor-varyingp alt)
-      (let ((inner (cdr (assoc (%pattern-varying-one-of-element (mode-descriptor-pattern alt))
-                               selections :test #'eq))))
-        (cons alt (if (consp inner) inner (list inner))))
+      (cons alt (mapcar (lambda (element) (cdr (assoc element selections :test #'eq)))
+                        (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
       alt))
 
 (defun %match-mode-elements (tokens elements i end &optional require-end)
@@ -729,8 +743,8 @@ element on the winning path whose pick was decided by declaration order."
                   (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
                       (let ((*recorded-elements*
                               (if (mode-descriptor-varyingp alt)
-                                  (cons (%pattern-varying-one-of-element (mode-descriptor-pattern alt))
-                                        *recorded-elements*)
+                                  (append (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))
+                                          *recorded-elements*)
                                   *recorded-elements*)))
                         (%match-mode-elements tokens
                                               (append (mode-descriptor-pattern alt) rest-elements)
@@ -744,11 +758,14 @@ element on the winning path whose pick was decided by declaration order."
                                 (key (%choice-entry-key entry))
                                 (count (%option-hole-count key))
                                 (inner (and (mode-descriptor-varyingp alt)
-                                            (%pattern-varying-one-of-element (mode-descriptor-pattern alt))))
+                                            (%pattern-varying-one-of-elements (mode-descriptor-pattern alt))))
+                                (recordedp (member element *recorded-elements* :test #'eq))
                                 (selections (let ((rest (if inner
-                                                            (remove inner selections :key #'car :test #'eq :count 1)
+                                                            (remove-if (lambda (selection)
+                                                                         (member (car selection) inner :test #'eq))
+                                                                       selections)
                                                             selections)))
-                                              (if (member element *recorded-elements* :test #'eq)
+                                              (if recordedp
                                                   (cons (cons element entry) rest)
                                                   rest))))
                          (setf best-score score
@@ -758,7 +775,7 @@ element on the winning path whose pick was decided by declaration order."
                                      (append (make-list count :initial-element entry)
                                              (nthcdr count choices))
                                      next-i t nil nil
-                                     (if slot
+                                     (if (and slot (not recordedp))
                                          (cons (cons slot key)
                                                (remove slot selections :key #'car :test #'eq))
                                          selections)

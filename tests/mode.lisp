@@ -459,11 +459,7 @@ looks like."
   (multiple-value-bind (asts okp choices) (try-match-operand-mode (%tokens-for text) mode)
     (declare (ignore asts))
     (fiveam:is-true okp)
-    (mapcar (lambda (entry)
-              (if (consp entry)
-                  (mapcar #'mode-descriptor-name entry)
-                  (mode-descriptor-name entry)))
-            choices)))
+    (mapcar (lambda (entry) (and entry (%choice-entry-key entry))) choices)))
 
 (fiveam:test nested-varying-alternative-is-accepted-and-varying
   (fiveam:is-true (mode-descriptor-varyingp (find-mode-descriptor 'nv-outer)))
@@ -475,7 +471,7 @@ looks like."
   (fiveam:is (equal '(1 2 1)
                     (mapcar #'cdr (%one-of-element-options
                                    (first (mode-descriptor-pattern (find-mode-descriptor 'nv-outer)))))))
-  (fiveam:is (equal '((nv-deep oo-reg) (nv-deep nv-deep-mid oo-reg) (nv-deep nv-deep-mid oo-two-hole) nv-plain)
+  (fiveam:is (equal '((nv-deep oo-reg) (nv-deep (nv-deep-mid oo-reg)) (nv-deep (nv-deep-mid oo-two-hole)) nv-plain)
                     (nv-keys (find-mode-descriptor 'nv-deep-outer)))))
 
 (fiveam:test nested-varying-named-slot-tuples
@@ -509,12 +505,12 @@ looks like."
 
 (fiveam:test nested-varying-three-levels
   (fiveam:is (equal '((nv-deep oo-reg)) (nv-choices "5" 'nv-deep-outer)))
-  (fiveam:is (equal '((nv-deep nv-deep-mid oo-reg) (nv-deep nv-deep-mid oo-reg))
+  (fiveam:is (equal '((nv-deep (nv-deep-mid oo-reg)) (nv-deep (nv-deep-mid oo-reg)))
                     (nv-choices "<1, 2>" 'nv-deep-outer)))
-  (fiveam:is (equal '((nv-deep nv-deep-mid oo-two-hole) (nv-deep nv-deep-mid oo-two-hole)
-                      (nv-deep nv-deep-mid oo-two-hole))
+  (fiveam:is (equal '((nv-deep (nv-deep-mid oo-two-hole)) (nv-deep (nv-deep-mid oo-two-hole))
+                      (nv-deep (nv-deep-mid oo-two-hole)))
                     (nv-choices "<1, 2, 3>" 'nv-deep-outer)))
-  (fiveam:is (= 3 (%option-hole-count '(nv-deep nv-deep-mid oo-two-hole)))))
+  (fiveam:is (= 3 (%option-hole-count '(nv-deep (nv-deep-mid oo-two-hole))))))
 
 (fiveam:test nested-varying-hole-attributes-follow-the-path
   (let ((mode (find-mode-descriptor 'nv-signed-outer)))
@@ -536,8 +532,7 @@ looks like."
     (error (c) (princ-to-string c))))
 
 (fiveam:test nested-varying-rejections-do-not-cite-tickets
-  (dolist (form '((defmode nv-bad-two (one-of nv-two-varying nv-plain))
-                  (defmode nv-bad-zero (one-of nv-zero-hole nv-plain))
+  (dolist (form '((defmode nv-bad-zero (one-of nv-zero-hole nv-plain))
                   (defmode nv-bad-width (one-of nv-wide nv-plain))
                   (defmode nv-bad-signed (one-of nv-signed-wrap nv-plain))
                   (defmode nv-bad-relative (one-of nv-relative-wrap nv-plain))
@@ -837,3 +832,44 @@ looks like."
     (eval '(defmode nv-attr-mixed-outer (one-of nv-attr-mixed nv-plain))))
   (fiveam:signals mode-definition-error
     (eval '(defmode nv-attr-flat-outer (one-of nv-attr-flat nv-plain)))))
+
+;;; #220 -- a nested varying alternative may have several varying ONE-OFs; its
+;;; options are trees with one subkey per ONE-OF.
+
+(fiveam:test nested-several-varying-elements-are-accepted
+  (fiveam:finishes (eval '(defmode nv-two-outer (one-of nv-two-varying nv-plain)))))
+
+(fiveam:test nested-several-varying-elements-have-tree-options
+  (let ((element (first (mode-descriptor-pattern (find-mode-descriptor 'nv-two-outer)))))
+    (fiveam:is (equal '((nv-two-varying oo-reg oo-reg) (nv-two-varying oo-reg oo-three-hole)
+                        (nv-two-varying oo-two-hole oo-reg) (nv-two-varying oo-two-hole oo-three-hole)
+                        nv-plain)
+                      (mapcar #'car (%one-of-element-options element))))
+    (fiveam:is (equal '(2 4 3 5 1) (mapcar #'cdr (%one-of-element-options element))))))
+
+(defmode nv-tree-pair (one-of oo-reg oo-two-hole) "TO" (one-of oo-reg oo-three-hole))
+(defmode nv-tree-outer (one-of nv-tree-pair nv-plain))
+
+(fiveam:test nested-several-varying-elements-report-the-tree
+  (fiveam:is (equal '((nv-tree-pair oo-two-hole oo-reg) (nv-tree-pair oo-two-hole oo-reg)
+                      (nv-tree-pair oo-two-hole oo-reg))
+                    (nv-choices "1, 2 TO 3" 'nv-tree-outer)))
+  (fiveam:is (equal '((nv-tree-pair oo-reg oo-three-hole) (nv-tree-pair oo-reg oo-three-hole)
+                      (nv-tree-pair oo-reg oo-three-hole) (nv-tree-pair oo-reg oo-three-hole))
+                    (nv-choices "1 TO 2, 3, 4" 'nv-tree-outer))))
+
+(fiveam:test nested-several-varying-elements-count-holes-per-subkey
+  (fiveam:is (= 5 (%option-hole-count '(nv-two-varying oo-two-hole oo-three-hole))))
+  (fiveam:is (= 2 (%option-hole-count '(nv-two-varying oo-reg oo-reg))))
+  (fiveam:is (equal '(nil nil nil nil nil)
+                    (%option-hole-attributes '(nv-two-varying oo-two-hole oo-three-hole) :signed))))
+
+(fiveam:test nested-several-varying-elements-name-slots-through-keys
+  (eval '(defmode nv-slotted-pair (one-of (lhs oo-reg oo-two-hole)) "|" (one-of (rhs oo-reg oo-three-hole))))
+  (let ((varying (%pattern-varying-one-of-elements
+                  (mode-descriptor-pattern (find-mode-descriptor 'nv-slotted-pair)))))
+    (fiveam:is (equal '(lhs rhs) (mapcar #'%one-of-slot varying))))
+  (fiveam:is (eq 'oo-three-hole
+                 (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair rhs))))
+  (fiveam:is (eq 'oo-reg (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair lhs))))
+  (fiveam:is (null (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair)))))

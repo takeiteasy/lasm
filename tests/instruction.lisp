@@ -5815,11 +5815,11 @@ present, so an error comes from the ENCODING under test."
     (opcode 11)
     (operand src :width 1
       (variant (choice (nb-deep nb-abs)) (sub 0))
-      (variant (choice (nb-deep nb-far nb-abs)) (sub 1))
-      (variant (choice (nb-deep nb-far nb-idx)) (sub 2))
+      (variant (choice (nb-deep (nb-far nb-abs))) (sub 1))
+      (variant (choice (nb-deep (nb-far nb-idx))) (sub 2))
       (variant (choice nb-lit) (sub 3)))
-    (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
-    (for-choice (src nb-deep nb-far nb-idx) (operand x1 :width 1) (operand x2 :width 1)))
+    (for-choice (src nb-deep (nb-far nb-abs)) (operand x1 :width 1))
+    (for-choice (src nb-deep (nb-far nb-idx)) (operand x1 :width 1) (operand x2 :width 1)))
   (semantics
     (choice-case src
       (nb-lit (set! a src))
@@ -5831,8 +5831,8 @@ present, so an error comes from the ENCODING under test."
 
 (fiveam:test nested-varying-byte-three-levels-round-trip
   (dolist (case '(("nbd 7" #(11 0 7) (nb-deep nb-abs))
-                  ("nbd <1, 2>" #(11 1 1 2) (nb-deep nb-far nb-abs))
-                  ("nbd <1, [2, 3]>" #(11 2 1 2 3) (nb-deep nb-far nb-idx))
+                  ("nbd <1, 2>" #(11 1 1 2) (nb-deep (nb-far nb-abs)))
+                  ("nbd <1, [2, 3]>" #(11 2 1 2 3) (nb-deep (nb-far nb-idx)))
                   ("nbd #4" #(11 3 4) nb-lit)))
     (destructuring-bind (source cells key) case
       (let ((assembled (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine))))
@@ -5868,8 +5868,8 @@ present, so an error comes from the ENCODING under test."
                             (operand src :width 1
                               (variant (choice nb-deep) (sub 0))
                               (variant (choice nb-lit) (sub 1)))
-                            (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
-                            (for-choice (src nb-deep nb-far nb-idx) (operand x1 :width 1) (operand x2 :width 1)))
+                            (for-choice (src nb-deep (nb-far nb-abs)) (operand x1 :width 1))
+                            (for-choice (src nb-deep (nb-far nb-idx)) (operand x1 :width 1) (operand x2 :width 1)))
                           (semantics nil)))))))
     (fiveam:is (search "varies in hole count" text))))
 
@@ -6203,3 +6203,235 @@ present, so an error comes from the ENCODING under test."
 
 (fiveam:test nested-inner-signed-is-accepted-on-word-machines
   (fiveam:finishes (eval (%naw-form 'nawsd 14 'naws-mode 'naws-near 'naws-ind))))
+
+;;; A nested varying alternative with several varying ONE-OFs: NM-PAIR has two,
+;;; each named by a slot. An option is a tree, one subkey per ONE-OF, and each
+;;; ONE-OF declares its own extra operands with FOR-CHOICE.
+
+(defmachine nested-multi-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(defmode nm-abs expr)
+(defmode nm-idx "[" expr "," expr "]")
+(defmode nm-pair (one-of (lhs nm-abs nm-idx)) "," (one-of (rhs nm-abs nm-idx)))
+(defmode nm-lit "#" expr "," expr)
+(defmode nm-mode (one-of nm-pair nm-lit))
+
+(definstruction nested-multi-machine nml
+  (modes nm-mode)
+  (encoding
+    (opcode 1)
+    (operand src :width 1
+      (variant (choice (nm-pair nm-abs nm-abs)) (sub 0))
+      (variant (choice (nm-pair nm-abs nm-idx)) (sub 1))
+      (variant (choice (nm-pair nm-idx nm-abs)) (sub 2))
+      (variant (choice (nm-pair nm-idx nm-idx)) (sub 3))
+      (variant (choice nm-lit) (sub 4)))
+    (operand dst :width 1)
+    (for-choice (src nm-pair lhs nm-idx) (operand loff :width 1))
+    (for-choice (src nm-pair rhs nm-idx) (operand roff :width 1)))
+  (semantics
+    (choice-case src
+      (nm-lit (set! a (+ src (* 100 dst))))
+      (nm-pair (choice-case (src nm-pair lhs)
+                 (nm-abs (choice-case (src nm-pair rhs)
+                           (nm-abs (set! a (+ src (* 100 dst))))
+                           (nm-idx (set! a (+ src (* 100 dst) (* 1000 roff))))))
+                 (nm-idx (choice-case (src nm-pair rhs)
+                           (nm-abs (set! a (+ src (* 10 loff) (* 100 dst))))
+                           (nm-idx (set! a (+ src (* 10 loff) (* 100 dst) (* 1000 roff)))))))))))
+
+(defun %nm-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'nested-multi-machine)) 'list))
+
+(fiveam:test nested-multi-options-are-trees
+  (let ((element (first (mode-descriptor-pattern (find-mode-descriptor 'nm-mode)))))
+    (fiveam:is (equal '((nm-pair nm-abs nm-abs) (nm-pair nm-abs nm-idx)
+                        (nm-pair nm-idx nm-abs) (nm-pair nm-idx nm-idx) nm-lit)
+                      (mapcar #'car (%one-of-element-options element))))
+    (fiveam:is (equal '(2 3 3 4 2) (mapcar #'cdr (%one-of-element-options element))))))
+
+(fiveam:test nested-multi-extras-land-at-their-own-position
+  (fiveam:is (equal '(1 0 1 3) (%nm-cells "nml 1, 3")))
+  (fiveam:is (equal '(1 2 1 2 3) (%nm-cells "nml [1, 2], 3")))
+  (fiveam:is (equal '(1 1 1 3 4) (%nm-cells "nml 1, [3, 4]")))
+  (fiveam:is (equal '(1 3 1 2 3 4) (%nm-cells "nml [1, 2], [3, 4]")))
+  (fiveam:is (equal '(1 4 1 3) (%nm-cells "nml #1, 3"))))
+
+(fiveam:test nested-multi-decode-carries-the-tree
+  (multiple-value-bind (descriptor values size choices)
+      (decode-instruction-at (vector-cell-reader #(1 3 1 2 3 4)) 0 'nested-multi-machine)
+    (fiveam:is (string= "NML" (instruction-descriptor-name descriptor)))
+    (fiveam:is (equal '(1 2 3 4) values))
+    (fiveam:is (= 6 size))
+    (fiveam:is (every (lambda (c) (equal '(nm-pair nm-idx nm-idx) c)) choices))
+    (fiveam:is (equal '(src loff dst roff) (instruction-descriptor-operand-names descriptor)))))
+
+(fiveam:test nested-multi-semantics-dispatch-on-each-slot
+  (dolist (case '(("nml 1, 3" 301) ("nml [1, 2], 3" 321) ("nml 1, [3, 4]" 4301)
+                  ("nml [1, 2], [3, 4]" 4321) ("nml #1, 3" 301)))
+    (let ((m (make-machine 'nested-multi-machine)))
+      (load-program m (assembly-cells (assemble (first case) :machine 'nested-multi-machine)))
+      (step-machine m)
+      (fiveam:is (= (second case) (sref m 'a))))))
+
+(fiveam:test nested-multi-disassembles-each-combination
+  (dolist (case '(("nml 1, 3" "nml $1,$3") ("nml [1, 2], 3" "nml [$1,$2],$3")
+                  ("nml 1, [3, 4]" "nml $1,[$3,$4]") ("nml [1, 2], [3, 4]" "nml [$1,$2],[$3,$4]")
+                  ("nml #1, 3" "nml #$1,$3")))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'nested-multi-machine))
+                                    :machine 'nested-multi-machine)))
+      (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
+
+(defun %nm-error (form)
+  (%error-text (lambda () (eval form))))
+
+(defmacro %nm-instruction (opcode name &rest clauses)
+  `(definstruction nested-multi-machine ,name
+     (modes nm-mode)
+     (encoding
+       (opcode ,opcode)
+       (operand src :width 1
+         (variant (choice (nm-pair nm-abs nm-abs)) (sub 0))
+         (variant (choice (nm-pair nm-abs nm-idx)) (sub 1))
+         (variant (choice (nm-pair nm-idx nm-abs)) (sub 2))
+         (variant (choice (nm-pair nm-idx nm-idx)) (sub 3))
+         (variant (choice nm-lit) (sub 4)))
+       (operand dst :width 1)
+       ,@clauses)
+     (semantics nil)))
+
+(fiveam:test nested-multi-for-choice-needs-one-clause-per-slot
+  (fiveam:is (search "missing FOR-CHOICE"
+                     (%nm-error '(%nm-instruction 2 nmbad1
+                                  (for-choice (src nm-pair lhs nm-idx) (operand loff :width 1))))))
+  (fiveam:is (search "has several varying ONE-OFs"
+                     (%nm-error '(%nm-instruction 3 nmbad2
+                                  (for-choice (src nm-pair nm-idx nm-idx) (operand a :width 1))
+                                  (for-choice (src nm-pair lhs nm-idx) (operand loff :width 1))
+                                  (for-choice (src nm-pair rhs nm-idx) (operand roff :width 1)))))))
+
+(fiveam:test nested-multi-choice-case-needs-a-slot
+  (fiveam:is (search "name one of several varying ONE-OFs by its slot"
+                     (%nm-error '(definstruction nested-multi-machine nmbad3
+                                  (modes nm-mode)
+                                  (encoding
+                                    (opcode 4)
+                                    (operand src :width 1
+                                      (variant (choice (nm-pair nm-abs nm-abs)) (sub 0))
+                                      (variant (choice (nm-pair nm-abs nm-idx)) (sub 1))
+                                      (variant (choice (nm-pair nm-idx nm-abs)) (sub 2))
+                                      (variant (choice (nm-pair nm-idx nm-idx)) (sub 3))
+                                      (variant (choice nm-lit) (sub 4)))
+                                    (operand dst :width 1)
+                                    (for-choice (src nm-pair lhs nm-idx) (operand loff :width 1))
+                                    (for-choice (src nm-pair rhs nm-idx) (operand roff :width 1)))
+                                  (semantics (choice-case (src nm-pair) (nm-abs nil) (nm-idx nil))))))))
+
+(fiveam:test flat-three-level-choice-suggests-the-tree-form
+  (fiveam:is (search "nested alternatives form a tree"
+                     (%nm-error '(definstruction nested-multi-machine nmbad4
+                                  (modes nm-mode)
+                                  (encoding
+                                    (opcode 5)
+                                    (operand src :width 1
+                                      (variant (choice (nm-pair nm-abs nm-abs nm-abs)) (sub 0))
+                                      (variant (choice nm-lit) (sub 1)))
+                                    (operand dst :width 1))
+                                  (semantics nil))))))
+
+;;; Holes after a nested varying ONE-OF: the extra operand sits at the ONE-OF's
+;;; own position, so a trailing operand keeps its own width and binding (#274).
+
+(defmode nt-abs expr)
+(defmode nt-idx "[" expr "," expr "]")
+(defmode nt-ind (one-of nt-abs nt-idx) "," expr)
+(defmode nt-imm "#" expr "," expr)
+(defmode nt-mode (one-of nt-ind nt-imm))
+
+(definstruction nested-multi-machine ntl
+  (modes nt-mode)
+  (encoding
+    (opcode 6)
+    (operand src :width 1
+      (variant (choice (nt-ind nt-abs)) (sub 0))
+      (variant (choice (nt-ind nt-idx)) (sub 1))
+      (variant (choice nt-imm) (sub 2)))
+    (operand post :width 2)
+    (for-choice (src nt-ind nt-idx) (operand off :width 1)))
+  (semantics (set! a (+ (* 100 post) (or off 0)))))
+
+(fiveam:test trailing-hole-after-a-nested-varying-one-of-keeps-its-binding
+  (fiveam:is (equal '(6 1 1 2 3 0) (%nm-cells "ntl [1, 2], 3")))
+  (fiveam:is (equal '(6 0 1 3 0) (%nm-cells "ntl 1, 3")))
+  (multiple-value-bind (descriptor values size)
+      (decode-instruction-at (vector-cell-reader #(6 1 1 2 3 0)) 0 'nested-multi-machine)
+    (fiveam:is (equal '(src off post) (instruction-descriptor-operand-names descriptor)))
+    (fiveam:is (equal '(1 2 3) values))
+    (fiveam:is (equal '(1 1 2) (instruction-descriptor-operand-widths descriptor)))
+    (fiveam:is (= 6 size))))
+
+(fiveam:test trailing-hole-after-a-nested-varying-one-of-binds-in-semantics
+  (let ((m (make-machine 'nested-multi-machine)))
+    (load-program m (assembly-cells (assemble "ntl [1, 2], 3" :machine 'nested-multi-machine)))
+    (step-machine m)
+    (fiveam:is (= 302 (sref m 'a)))))
+
+(defmachine nested-multi-word-machine
+  (register pc :width 16)
+  (register a :width 16 :count 8)
+  (memory ram :width 16 :addr-width 16)
+  (instruction-word :width 16 (field src 6) (field dst 5) (field opcode 5)))
+
+(defmode nmw-reg expr)
+(defmode nmw-idx "[" expr "," expr "]")
+(defmode nmw-pair (one-of (lhs nmw-reg nmw-idx)) "," (one-of (rhs nmw-reg nmw-idx)))
+(defmode nmw-lit "#" expr "," expr)
+(defmode nmw-mode (one-of nmw-pair nmw-lit))
+
+(definstruction nested-multi-word-machine nmwl
+  (modes nmw-mode)
+  (encoding
+    (opcode 3)
+    (operand src :field src
+      (variant (choice (nmw-pair nmw-reg nmw-reg)) inline :range (0 3) :bias 0)
+      (variant (choice (nmw-pair nmw-reg nmw-idx)) inline :range (0 3) :bias 4)
+      (variant (choice (nmw-pair nmw-idx nmw-reg)) inline :range (0 3) :bias 8)
+      (variant (choice (nmw-pair nmw-idx nmw-idx)) inline :range (0 3) :bias 12)
+      (variant (choice nmw-lit) inline :range (0 3) :bias 16))
+    (operand dst :field dst
+      (variant (choice (nmw-pair nmw-reg nmw-reg)) inline :range (0 3) :bias 0)
+      (variant (choice (nmw-pair nmw-reg nmw-idx)) inline :range (0 3) :bias 4)
+      (variant (choice (nmw-pair nmw-idx nmw-reg)) inline :range (0 3) :bias 8)
+      (variant (choice (nmw-pair nmw-idx nmw-idx)) inline :range (0 3) :bias 12)
+      (variant (choice nmw-lit) inline :range (0 3) :bias 16))
+    (for-choice (src nmw-pair lhs nmw-idx) (operand loff :trailing-word))
+    (for-choice (src nmw-pair rhs nmw-idx) (operand roff :trailing-word)))
+  (semantics
+    (choice-case src
+      (nmw-lit (set! (a 0) (+ src (* 100 dst))))
+      (nmw-pair (choice-case (src nmw-pair lhs)
+                  (nmw-reg (choice-case (src nmw-pair rhs)
+                             (nmw-reg (set! (a 0) (+ src (* 100 dst))))
+                             (nmw-idx (set! (a 0) (+ src (* 100 dst) (* 1000 roff))))))
+                  (nmw-idx (choice-case (src nmw-pair rhs)
+                             (nmw-reg (set! (a 0) (+ src (* 10 loff) (* 100 dst))))
+                             (nmw-idx (set! (a 0) (+ src (* 10 loff) (* 100 dst) (* 1000 roff)))))))))))
+
+(fiveam:test nested-multi-word-round-trips-in-pattern-order
+  (dolist (case '(("nmwl 1, 3" 301 (1123) "nmwl $1,$3")
+                  ("nmwl [1, 2], 3" 321 (9571 2) "nmwl [$1,$2],$3")
+                  ("nmwl 1, [3, 4]" 4301 (5347 4) "nmwl $1,[$3,$4]")
+                  ("nmwl [1, 2], [3, 4]" 4321 (13795 2 4) "nmwl [$1,$2],[$3,$4]")
+                  ("nmwl #1, 3" 301 (18019) "nmwl #$1,$3")))
+    (destructuring-bind (source result cells text) case
+      (let ((assembled (assembly-cells (assemble source :machine 'nested-multi-word-machine)))
+            (m (make-machine 'nested-multi-word-machine)))
+        (fiveam:is (equal cells (coerce assembled 'list)))
+        (load-program m assembled)
+        (step-machine m)
+        (fiveam:is (= result (regref m 'a 0)))
+        (fiveam:is (string= text (disassembly-line-text
+                                   (first (disassemble-cells assembled :machine 'nested-multi-word-machine)))))))))

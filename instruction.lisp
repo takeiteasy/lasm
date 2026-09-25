@@ -1009,23 +1009,34 @@ which would corrupt a register index" machine name mode-name i register))
 and :REGISTER ~S -- a signed hole may decode negative, which is not a valid register index"
                           machine name mode-name i register))))))
 
+(defun %choice-key-form-p (form)
+  "T if FORM is a mode name, or (NAME KEY...) with at least one subkey."
+  (or (and (symbolp form) form)
+      (and (consp form) (rest form) (symbolp (first form)) (first form)
+           (every #'%choice-key-form-p (rest form)))))
+
 (defun %parse-choice-key (form context)
-  "Parse a (choice ...) name: a mode-name symbol, or a path (NAME INNER...) of
-at least two symbols selecting an alternative inside a varying nested ONE-OF."
-  (cond ((and (symbolp form) form) form)
-        ((and (consp form) (rest form) (every #'symbolp form)) form)
-        (t (%definstruction-error "DEFINSTRUCTION: ~A: a choice must be a mode name or a path of at least two ~
-mode names such as (outer inner), got ~S" context form))))
+  "Parse a (choice ...) name: a mode-name symbol, or a tree (NAME SUBKEY...) with
+one subkey per varying ONE-OF of a varying nested alternative NAME."
+  (if (%choice-key-form-p form)
+      form
+      (%definstruction-error "DEFINSTRUCTION: ~A: a choice must be a mode name or a tree of at least two ~
+mode names such as (outer inner), got ~S" context form)))
 
 (defun %choice-hint (key)
-  "Extra diagnostic text when KEY names a nested varying mode without its inner alternative."
+  "Extra diagnostic text for a KEY that does not select a shape: a varying mode
+without its inner alternatives, or a flat path where a tree is needed."
   (let ((mode (and (symbolp key) (gethash key *modes*))))
-    (if (and mode (mode-descriptor-varyingp mode))
-        (format nil " -- ~S varies in hole count; name its inner alternative with a path such as (~S ~S)"
-                key key (first (mapcar #'car (%one-of-element-options
-                                              (%pattern-varying-one-of-element
-                                               (mode-descriptor-pattern mode))))))
-        "")))
+    (cond ((and mode (mode-descriptor-varyingp mode))
+           (format nil " -- ~S varies in hole count; name its inner alternative with a tree such as ~S"
+                   key (cons key (mapcar (lambda (element)
+                                           (car (first (%one-of-element-options element))))
+                                         (%pattern-varying-one-of-elements
+                                          (mode-descriptor-pattern mode))))))
+          ((and (consp key) (rest (rest key)) (every #'symbolp key))
+           (format nil " -- nested alternatives form a tree, one subkey per varying ONE-OF, e.g. (~S (~S~{ ~S~}))"
+                   (first key) (second key) (cddr key)))
+          (t ""))))
 
 (defun %parse-byte-sub-variant-form (form hole-name)
   "Parse one (variant (choice m) (sub s)) form (#126) -- the byte-encoded
@@ -1502,15 +1513,13 @@ ONE-OF alternatives ~S" name key hole-alternatives))))))
 
 (defun %choice-case-components (name prefix hole-alternatives)
   "The mode names a qualified (CHOICE-CASE (NAME . PREFIX) ...) can select
-between: the path component after PREFIX in each of HOLE-ALTERNATIVES' keys."
-  (let ((components (loop for key in hole-alternatives
-                          for path = (%key-list key)
-                          when (and (> (length path) (length prefix))
-                                    (equal prefix (subseq path 0 (length prefix))))
-                            collect (nth (length prefix) path))))
+between: the subkey head after PREFIX in each of HOLE-ALTERNATIVES' keys."
+  (let ((components (remove nil (mapcar (lambda (key) (%key-component key prefix))
+                                        hole-alternatives))))
     (unless components
       (%definstruction-error "DEFINSTRUCTION: CHOICE-CASE (~S~{ ~S~}): ~S~{ ~S~} does not name a nested varying ~
-ONE-OF alternative of this operand" name prefix name prefix))
+ONE-OF alternative of this operand (name one of several varying ONE-OFs by its slot)"
+                             name prefix name prefix))
     (remove-duplicates components)))
 
 (defun %choice-case-form (name clauses machine-name instruction-name operand-names hole-alternatives-list
@@ -2208,7 +2217,11 @@ unchanged, for a caller that already extracted a key itself."
     (etypecase entry
       (null nil)
       (symbol entry)
-      (cons (%collapse-key (mapcar (lambda (e) (if (symbolp e) e (mode-descriptor-name e))) entry)))
+      (cons (labels ((name (e)
+                       (cond ((symbolp e) e)
+                             ((consp e) (cons (name (first e)) (mapcar #'name (rest e))))
+                             (t (mode-descriptor-name e)))))
+              (name entry)))
       (word-field-choice (word-field-choice-choice entry))
       (mode-descriptor (mode-descriptor-name entry)))))
 
@@ -2217,14 +2230,25 @@ unchanged, for a caller that already extracted a key itself."
   (%key-head (%matched-choice-key choices index mapping)))
 
 (defun %key-component (key prefix)
-  "The path component of option KEY just after PREFIX (a list of mode names),
-or NIL when KEY does not start with PREFIX."
-  (let ((path (%key-list key))
-        (n (length prefix)))
-    (and key
-         (> (length path) n)
-         (equal prefix (subseq path 0 n))
-         (nth n path))))
+  "The head name of the subkey option KEY selects just after PREFIX, a list of
+mode names starting with KEY's head, or NIL. A head with several varying ONE-OFs
+needs the next item of PREFIX to name one by its slot."
+  (when (and (consp key) (eq (first key) (first prefix)))
+    (let ((subs (rest key))
+          (more (rest prefix)))
+      (if (rest subs)
+          (let ((i (and (first more)
+                        (position (first more)
+                             (%pattern-varying-one-of-elements
+                              (mode-descriptor-pattern (find-mode-descriptor (first key))))
+                             :key #'%one-of-slot))))
+            (when i
+              (if (rest more)
+                  (%key-component (nth i subs) (rest more))
+                  (%key-head (nth i subs)))))
+          (if more
+              (%key-component (first subs) more)
+              (%key-head (first subs)))))))
 
 (defun %matched-choice-component (choices index prefix &optional mapping)
   "The path component INDEX's hole matched just after PREFIX, or NIL."
@@ -2638,7 +2662,7 @@ so the variant could never be forced."
     (let ((suffix (word-variant-suffix v)))
       (when suffix
         (dolist (alt hole-alternatives)
-          (dolist (name (%key-list alt))
+          (dolist (name (%key-names alt))
             (let ((alt-suffix (mode-descriptor-suffix (find-mode-descriptor name))))
               (when (and alt-suffix (string-equal alt-suffix suffix))
                 (%definstruction-error "DEFINSTRUCTION: field ~S: variant :suffix ~S is shadowed by ONE-OF ~
@@ -2807,7 +2831,7 @@ than left to silently skew encode and decode apart."
   (dolist (v variants)
     (let ((choice (word-variant-choice v)))
       (when choice
-        (mapc #'find-mode-descriptor (%key-list choice))
+        (mapc #'find-mode-descriptor (%key-names choice))
         (unless hole-alternatives
           (%definstruction-error "DEFINSTRUCTION: field ~S: (choice ~S) given for an operand hole that is ~
 not a ONE-OF pattern element -- CHOICE only selects between ONE-OF alternatives"
@@ -3175,22 +3199,91 @@ narrower extra word before one needing a wider one."
     ',semantics-operand-map ,alternatives-form ',hole-sources ',layout-name
     ,constants-form ',choice-selections ,cycles ,semantics-fn-form))
 
+(defun %extra-placements (key min offset)
+  "((INDEX . COUNT)...) in ascending order: where the holes KEY adds beyond MIN
+fall among the base holes that start at OFFSET. An alternative whose varying
+ONE-OFs sit inside its own pattern spreads its extras to those positions;
+otherwise they follow the base holes."
+  (let ((extra (- (%option-hole-count key) min)))
+    (cond ((<= extra 0) nil)
+          ((or (atom key) (/= (%mode-hole-count (%choice-key-descriptor key)) min))
+           (list (cons (+ offset min) extra)))
+          (t (let* ((alt (%choice-key-descriptor key))
+                    (varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
+                    (cursor offset)
+                    placements)
+               (dolist (element (mode-descriptor-pattern alt) (nreverse placements))
+                 (ecase (first element)
+                   (:literal)
+                   (:expr (incf cursor))
+                   (:one-of
+                    (let ((element-min (%element-min-hole-count element))
+                          (i (position element varying :test #'eq)))
+                      (when i
+                        (dolist (placement (%extra-placements (nth i (rest key)) element-min cursor))
+                          (cl:push placement placements)))
+                      (incf cursor element-min))))))))))
+
+(defun %extra-hole-indices (key base-count)
+  "Hole indices within KEY's own hole list of its extras, in extras order."
+  (let ((earlier 0) result)
+    (loop for (index . count) in (%extra-placements key base-count 0)
+          do (dotimes (i count)
+               (cl:push (+ index earlier i) result))
+             (incf earlier count))
+    (nreverse result)))
+
+(defun %group-extra-indices (group)
+  "Tuple hole indices of GROUP's extra holes."
+  (and (mode-hole-group-alt-name group)
+       (mapcar (lambda (i) (+ (mode-hole-group-start group) i))
+               (%extra-hole-indices (mode-hole-group-alt-name group) (mode-hole-group-base-count group)))))
+
+(defun %group-base-indices (group)
+  "Tuple hole indices of GROUP's base holes."
+  (let ((extras (%group-extra-indices group)))
+    (loop for i from (mode-hole-group-start group)
+            below (+ (mode-hole-group-start group) (mode-hole-group-count group))
+          unless (member i extras) collect i)))
+
+(defun %for-choice-element-selector (alt parts)
+  "For a selector (OPERAND ALT SLOT SUBKEY) naming one varying ONE-OF of ALT by its
+slot, (VALUES element-index element subkey), else NIL."
+  (let* ((varying (%pattern-varying-one-of-elements (mode-descriptor-pattern alt)))
+         (i (and (rest varying) (= (length parts) 3) (symbolp (second parts))
+                 (position (second parts) varying :key #'%one-of-slot))))
+    (when i
+      (values i (nth i varying) (third parts)))))
+
 (defun %parse-for-choice-subclauses (mode subclauses operand-subclauses)
   "Resolve each group to (slot base-hole-index option-key), validating its extras.
-Qualified selectors are (operand-or-slot alternative...), the path naming a
-nested varying alternative; short selectors must be unique."
+Qualified selectors are (operand-or-slot . key), a tree naming a nested varying
+alternative; short selectors must be unique. An alternative with several varying
+ONE-OFs takes one clause per ONE-OF and pick, (operand alt slot subkey), whose
+extras join in pattern order."
   (let ((groups (mode-hole-tuple-groups (first (%mode-hole-tuples mode))))
         (names (mapcar #'%parse-operand-subclause operand-subclauses))
-        entries)
+        entries partials)
     (dolist (subclause subclauses)
       (%definition-bind (head selector &rest extras) subclause
         (declare (ignore head))
         (let* ((qualified (consp selector))
-               (alt (if qualified (%collapse-key (rest selector)) selector))
+               (parts (and qualified (rest selector)))
+               (element-info (and qualified (symbolp (first parts)) (gethash (first parts) *modes*)
+                                  (multiple-value-list
+                                   (%for-choice-element-selector (gethash (first parts) *modes*) parts))))
+               (element-p (first element-info))
+               (alt (cond (element-p (first parts))
+                          (qualified (if (rest parts) parts (first parts)))
+                          (t selector)))
                (position (and qualified (position (first selector) names)))
                (matches (remove-if-not
                          (lambda (g)
-                           (and (member alt (mode-hole-group-options g) :test #'equal)
+                           (and (if element-p
+                                    (some (lambda (option)
+                                            (and (consp option) (eq (first option) alt)))
+                                          (mode-hole-group-options g))
+                                    (member alt (mode-hole-group-options g) :test #'equal))
                                 (or (not qualified)
                                     (eq (mode-hole-group-slot g) (first selector))
                                     (and position
@@ -3201,45 +3294,102 @@ nested varying alternative; short selectors must be unique."
           (when (and qualified
                      (or (< (length selector) 2) (null (first selector))))
             (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE selector must be (operand alternative...), got ~S" selector))
+          (when (and (consp alt) (not element-p)
+                     (rest (%pattern-varying-one-of-elements
+                            (mode-descriptor-pattern (find-mode-descriptor (first alt))))))
+            (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S has several varying ONE-OFs -- name each by its ~
+slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
           (unless (= (length matches) 1)
             (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate~A"
                    selector (if qualified "" (%choice-hint selector))))
           (let* ((group (first matches))
-                 (key (list (mode-hole-group-slot group)
-                            (mode-hole-group-base-start group) alt))
-                 (needed (- (%option-hole-count alt)
-                            (mode-hole-group-base-count group))))
-            (when (assoc key entries :test #'equal)
+                 (key (if element-p
+                          (list (mode-hole-group-slot group) (mode-hole-group-base-start group)
+                                alt (second parts) (third parts))
+                          (list (mode-hole-group-slot group) (mode-hole-group-base-start group) alt)))
+                 (needed (if element-p
+                             (- (%option-hole-count (third element-info))
+                                (%element-min-hole-count (second element-info)))
+                             (- (%option-hole-count alt) (mode-hole-group-base-count group)))))
+            (when (and element-p
+                       (not (member (third element-info)
+                                    (mapcar #'car (%one-of-element-options (second element-info)))
+                                    :test #'equal)))
+              (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S is not an alternative of ONE-OF ~S in ~S"
+                                     selector (third element-info) (second parts) alt))
+            (when (or (assoc key entries :test #'equal) (assoc key partials :test #'equal))
               (%definstruction-error "DEFINSTRUCTION: duplicate FOR-CHOICE ~S" selector))
-             (unless (if (plusp needed)
-                         (and (= (length extras) needed)
-                              (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
-                         (every (lambda (s) (and (consp s) (eq (first s) 'field-value))) extras))
-               (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
-                      selector needed))
-            (cl:push (cons key extras) entries)))))
+            (unless (if (plusp needed)
+                        (and (= (length extras) needed)
+                             (every (lambda (s) (and (consp s) (eq (first s) 'operand))) extras))
+                        (every (lambda (s) (and (consp s) (eq (first s) 'field-value))) extras))
+              (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S requires ~:[FIELD-VALUE~;~:*~D extra OPERAND~] subclauses"
+                     selector needed))
+            (if element-p
+                (cl:push (cons key extras) partials)
+                (cl:push (cons key extras) entries))))))
     (dolist (group groups)
       (dolist (alt (mode-hole-group-options group))
-        (when (> (%option-hole-count alt) (mode-hole-group-base-count group))
-          (unless (assoc (list (mode-hole-group-slot group)
-                               (mode-hole-group-base-start group) alt)
-                         entries :test #'equal)
-            (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D"
-                   alt (mode-hole-group-base-start group))))))
+        (let ((varying (and (consp alt)
+                            (%pattern-varying-one-of-elements
+                             (mode-descriptor-pattern (find-mode-descriptor (first alt)))))))
+          (cond
+            ((rest varying)
+             (unless (= (%mode-hole-count (find-mode-descriptor (first alt)))
+                        (mode-hole-group-base-count group))
+               (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S has several varying ONE-OFs, so its minimum ~
+shape must have the operand's ~D base hole~:P" alt (first alt) (mode-hole-group-base-count group)))
+             (let ((composed
+                     (loop for element in varying
+                           for subkey in (rest alt)
+                           append (cdr (assoc (list (mode-hole-group-slot group)
+                                                    (mode-hole-group-base-start group)
+                                                    (first alt) (%one-of-slot element) subkey)
+                                              partials :test #'equal))
+                           into extras
+                           when (and (plusp (- (%option-hole-count subkey) (%element-min-hole-count element)))
+                                     (null (assoc (list (mode-hole-group-slot group)
+                                                        (mode-hole-group-base-start group)
+                                                        (first alt) (%one-of-slot element) subkey)
+                                                  partials :test #'equal)))
+                             do (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S ~S ~S at operand hole ~D"
+                                                       (first alt) (%one-of-slot element) subkey
+                                                       (mode-hole-group-base-start group))
+                           finally (return extras))))
+               (when (or composed (> (%option-hole-count alt) (mode-hole-group-base-count group)))
+                 (cl:push (cons (list (mode-hole-group-slot group) (mode-hole-group-base-start group) alt)
+                                composed)
+                          entries))))
+            ((> (%option-hole-count alt) (mode-hole-group-base-count group))
+             (unless (assoc (list (mode-hole-group-slot group)
+                                  (mode-hole-group-base-start group) alt)
+                            entries :test #'equal)
+               (%definstruction-error "DEFINSTRUCTION: missing FOR-CHOICE for ~S at operand hole ~D~A"
+                      alt (mode-hole-group-base-start group) (%choice-hint alt))))))))
     entries))
 
 (defun %tuple-operand-subclauses (operand-subclauses tuple for-choice-alist)
-  "Splice each element's extra operands after its own base operands."
+  "Splice each element's extra operands into its base operands at the positions
+the extra holes fall (%EXTRA-PLACEMENTS)."
   (let ((cursor 0) result)
     (dolist (group (mode-hole-tuple-groups tuple))
-      (let ((end (+ (mode-hole-group-base-start group) (mode-hole-group-base-count group))))
-        (setf result (append result (subseq operand-subclauses cursor end)
-                              (remove-if-not (lambda (s) (eq (first s) 'operand))
-                                             (cdr (assoc (list (mode-hole-group-slot group)
-                                                               (mode-hole-group-base-start group)
-                                                               (mode-hole-group-alt-name group))
-                                                         for-choice-alist :test #'equal))))
-              cursor end)))
+      (let* ((start (mode-hole-group-base-start group))
+             (base-count (mode-hole-group-base-count group))
+             (base (subseq operand-subclauses start (+ start base-count)))
+             (extras (remove-if-not (lambda (s) (eq (first s) 'operand))
+                                    (cdr (assoc (list (mode-hole-group-slot group) start
+                                                      (mode-hole-group-alt-name group))
+                                                for-choice-alist :test #'equal))))
+             (placements (and extras (%extra-placements (mode-hole-group-alt-name group) base-count 0))))
+        (setf result (append result (subseq operand-subclauses cursor start)))
+        (loop for i from 0 to base-count
+              do (loop for (index . count) in placements
+                       when (= index i)
+                         do (setf result (append result (subseq extras 0 count))
+                                  extras (nthcdr count extras)))
+                 (when (< i base-count)
+                   (setf result (append result (list (nth i base))))))
+        (setf cursor (+ start base-count))))
     (append result (subseq operand-subclauses cursor))))
 
 (defun %filter-spec-variants-for-tuple (spec own-alt-names)
@@ -3263,13 +3413,12 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
 (defun %filter-tuple-governing-specs (specs tuple machine name)
   "Restrict each varying element's fields to its selected shape."
   (dolist (group (mode-hole-tuple-groups tuple))
-    (let* ((start (mode-hole-group-start group))
-           (base-count (mode-hole-group-base-count group))
+    (let* ((base-count (mode-hole-group-base-count group))
            (alt (mode-hole-group-alt-name group))
            (own-alts (if alt (list alt)
                          (remove-if-not (lambda (n) (= (%option-hole-count n) base-count))
                                         (mode-hole-group-options group)))))
-      (loop for i from start below (+ start base-count)
+      (loop for i in (%group-base-indices group)
             for spec = (nth i specs)
             when (word-operand-spec-field spec)
               do (let ((filtered (%filter-spec-variants-for-tuple spec own-alts)))
@@ -3285,8 +3434,9 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
              (let* ((subclauses (cdr (assoc (list (mode-hole-group-slot group)
                                                   (mode-hole-group-base-start group) alt)
                                             for-choice-alist :test #'equal)))
-                    (extras (nthcdr (mode-hole-group-base-count group)
-                                    (%option-hole-attributes alt :signed))))
+                    (attributes (%option-hole-attributes alt :signed))
+                    (extras (mapcar (lambda (i) (nth i attributes))
+                                    (%extra-hole-indices alt (mode-hole-group-base-count group)))))
                (loop for subclause in subclauses
                      for i from 0
                      collect (let ((spec (%parse-word-operand-subclause
@@ -3301,8 +3451,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
                                                      (word-variant-extra-cells v)))
                                              (word-operand-spec-variants spec))))))))
     (dolist (group (mode-hole-tuple-groups tuple))
-      (loop for i from (mode-hole-group-start group)
-            below (+ (mode-hole-group-start group) (mode-hole-group-base-count group))
+      (loop for i in (%group-base-indices group)
             for variants = (word-operand-spec-variants (nth i specs))
             do (dolist (alias variants)
                  (when (word-variant-alias alias)
@@ -3324,8 +3473,7 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
   "Associate each extra hole with its selected alternative."
   (dolist (group (mode-hole-tuple-groups tuple))
     (when (mode-hole-group-alt-name group)
-      (loop for i from (+ (mode-hole-group-start group) (mode-hole-group-base-count group))
-            below (+ (mode-hole-group-start group) (mode-hole-group-count group))
+      (loop for i in (%group-extra-indices group)
             for spec = (nth i specs)
             do (dolist (variant (word-operand-spec-variants spec))
                  (when (and (word-variant-choice variant)

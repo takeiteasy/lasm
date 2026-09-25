@@ -172,8 +172,9 @@ carry a selector. Name its slot in `(holes ...)` instead:
 Without `(holes ...)`, every `one-of` hole and every such slot
 participates. A slot and a hole index can share one table:
 `(holes kind 0)`. A `one-of` with no slot and no hole is rejected; name it.
-Nested alternatives use paths: `(choice (stk pop))`. See
-[`slotvarying.lisp`](../examples/slotvarying.lisp).
+Nested alternatives use tree keys: `(choice (stk pop))`. See
+[`slotvarying.lisp`](../examples/slotvarying.lisp) and
+[`nesttree.lisp`](../examples/nesttree.lisp).
 
 ### `operand-signedness`
 
