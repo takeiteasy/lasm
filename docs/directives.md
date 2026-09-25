@@ -136,7 +136,9 @@ a label absent from the completed program. See [Diagnostics](diagnostics.md).
 ## Limitations
 
 - Undecodable data renders as `.byte` even on word-addressed machines;
-  disassembly does not select `.cell` or `.dat` for those lines.
+  disassembly does not select `.cell` or `.dat` for those lines, and does
+  not render printable runs as `.ascii`
+  ([#263](https://todo.sr.ht/~takeiteasy/lasm/263)).
 
 See the [issue tracker](https://todo.sr.ht/~takeiteasy/lasm) for planned
 work on these limits.
