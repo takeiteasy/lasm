@@ -4162,11 +4162,10 @@ A primitive hidden behind a user macro is not seen (docs/listing.md)."
                            (if *definstruction-variable-cycles*
                                `(%mark-variable-cycles ,form)
                                form)))))
-    `(eval-when (:compile-toplevel :load-toplevel :execute)
-       ,(if (%word-machine-p machine)
-            `(%evaluate-instruction-registration ',registration)
-            registration)
-       ',name)))
+    (%definition-toplevel-form (if (%word-machine-p machine)
+                                   `(%evaluate-instruction-registration ',registration)
+                                   registration)
+                               `',name)))
 
 (defun %extract-fallback (machine name encoding-clause)
   "Return (VALUES ENCODING-CLAUSE FALLBACKP), ENCODING-CLAUSE without its

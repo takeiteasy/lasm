@@ -154,7 +154,7 @@ cell of a banked register, `print ds[1]` a live stack slot (bottom first), and
 `print ds.depth` a stack's depth. All three also work inside expressions
 (`print v[3] + 1`); an out-of-range index or dead slot is an error message. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC with its nearest label (`pc = 0103 <count.loop+1>`),
-nearby decoded instructions, and an attached source line. With an attached assembly,
+nearby decoded instructions, and an attached source line (`file:line:text` inside an included file). With an attached assembly,
 declared data renders as `.byte` and labels come from the main image and
 the mapped bank.
 

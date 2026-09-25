@@ -1308,7 +1308,8 @@ NIL."
                                                       :assembly session-assembly))
                           (source-line (and line (listing-line-source-text line session-assembly))))
                      (when source-line
-                       (format s "~D:~A~%" (listing-line-line line) source-line))))
+                       (format s "~@[~A:~]~D:~A~%" (listing-line-file line)
+                               (listing-line-line line) source-line))))
                  (dolist (l lines)
                    (format s "~V,'0X:  ~A~%" (debug-session-addr-digits session)
                            (disassembly-line-address l) (disassembly-line-text l))))))

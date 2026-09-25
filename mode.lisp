@@ -753,9 +753,8 @@ Hole options override mode-wide :SIGNED and :RELATIVE defaults. A relative
 hole is signed, and any number of holes may be relative. :WIDTH supplies
 the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
 checks ordinary operand ranges. See docs/modes.md."
-  `(eval-when (:compile-toplevel :load-toplevel :execute)
-     (%register-mode ',name ',pattern)
-     ',(if (consp name) (first name) name)))
+  (%definition-toplevel-form `(%register-mode ',name ',pattern)
+                             `',(if (consp name) (first name) name)))
 
 ;;; Pattern matching
 

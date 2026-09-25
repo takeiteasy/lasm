@@ -132,9 +132,9 @@ first execution of the instruction.[^definition]
 
 ### Under `compile-file`
 
-SBCL reports a definer's error during `compile-file` as a compile-time error,
-and the loaded fasl signals `compiled-program-error`. Wrap the build in
-`with-definition-errors` to get the typed condition:
+`compile-file` reports a definer's error as a compile-time error or warning
+and carries on. Wrap the build in `with-definition-errors` to get the typed
+condition:
 
 ```lisp
 (handler-case (with-definition-errors (compile-file "machine.lisp"))
@@ -144,6 +144,11 @@ and the loaded fasl signals `compiled-program-error`. Wrap the build in
 It signals the first `definition-error` a definer raised, either when the body
 returns or in place of any other error escaping it, such as ASDF's
 `compile-file-error`.[^handled]
+
+Without the wrapper, `compile-file` reports the failure as a warning, and
+loading the fasl signals the typed condition again for `defmode`,
+`defmachine` and a `definstruction` whose registration fails (including
+`opcode-conflict`). See [Limitations](#limitations).
 
 ## Usage errors
 
@@ -173,9 +178,10 @@ declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
 
 ## Limitations
 
-- Loading a fasl compiled outside `with-definition-errors` signals
-  `compiled-program-error`; the definer never runs at load time. See
-  [ticket 294](https://todo.sr.ht/~takeiteasy/lasm/294).
+- An error raised while `definstruction` or `defdirective` expands, such as
+  a bad clause head or a multi-form `defdirective` body, still loads from a
+  fasl as `compiled-program-error`; see
+  [ticket 296](https://todo.sr.ht/~takeiteasy/lasm/296).
 
 [^definition]: Word-encoded semantics compile lazily on first use. The
   compile step re-signals the typed condition, so the caller sees the same

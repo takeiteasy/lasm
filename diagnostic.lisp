@@ -132,6 +132,31 @@ error that escapes BODY. An error BODY handles itself is still re-signalled on
 return."
   `(%call-with-definition-errors (lambda () ,@body)))
 
+;;; Under COMPILE-FILE SBCL turns a definer's error into a compile-time error,
+;;; and the fasl then signals COMPILED-PROGRAM-ERROR on load. These helpers
+;;; keep the failure a typed DEFINITION-ERROR, signalled again when the fasl
+;;; loads.
+
+(defun %warn-when-compiling-file (condition)
+  (when *compile-file-truename*
+    (warn "~A" condition)))
+
+(defun %tolerate-definition-error (thunk)
+  "Call THUNK at compile time; a DEFINITION-ERROR becomes a warning, leaving
+the load-time form to signal it."
+  (handler-case (funcall thunk)
+    (definition-error (c) (%warn-when-compiling-file c))))
+
+(defun %definition-toplevel-form (registration result)
+  "Toplevel forms that run REGISTRATION at compile time, tolerating a
+DEFINITION-ERROR, and again at load and eval time, then yield RESULT."
+  `(macrolet ((register () ',registration))
+     (eval-when (:compile-toplevel)
+       (%tolerate-definition-error (lambda () (register))))
+     (eval-when (:load-toplevel :execute)
+       (register)
+       ,result)))
+
 ;;; Usage errors: a caller misusing the library API or a tool's input, as
 ;;; opposed to a malformed definition (DEFINITION-ERROR) or program source.
 

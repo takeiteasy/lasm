@@ -105,3 +105,35 @@
               (uiop:delete-file-if-exists output))))
     (fiveam:is (typep c 'mode-definition-error))
     (fiveam:is (eq 'compile-file-bad-mode (definition-error-name c)))))
+
+(defun %compile-and-load-fixture (name)
+  "Compile fixture NAME without WITH-DEFINITION-ERRORS, then load the fasl,
+returning the condition the load signals."
+  (let* ((source (asdf:system-relative-pathname
+                  :lasm (format nil "tests/fixtures/definition/~A.lisp" name)))
+         (output (uiop:tmpize-pathname (merge-pathnames (format nil "~A.fasl" name)
+                                                        (uiop:temporary-directory)))))
+    (unwind-protect
+         (let ((*error-output* (make-broadcast-stream))
+               (*standard-output* (make-broadcast-stream)))
+           (compile-file source :output-file output)
+           (handler-case (progn (load output) nil)
+             (error (c) c)))
+      (uiop:delete-file-if-exists output))))
+
+(fiveam:test fasl-load-signals-the-typed-error-for-a-compile-time-registration
+  (let ((c (%compile-and-load-fixture "bad-mode")))
+    (fiveam:is (typep c 'mode-definition-error))
+    (fiveam:is (eq 'compile-file-bad-mode (definition-error-name c)))))
+
+(fiveam:test compile-file-of-a-bad-definition-reports-failure
+  (let ((source (asdf:system-relative-pathname :lasm "tests/fixtures/definition/bad-mode.lisp"))
+        (output (uiop:tmpize-pathname (merge-pathnames "failure.fasl" (uiop:temporary-directory)))))
+    (unwind-protect
+         (let ((*error-output* (make-broadcast-stream))
+               (*standard-output* (make-broadcast-stream)))
+           (multiple-value-bind (file warnings-p failure-p)
+               (compile-file source :output-file output)
+             (declare (ignore file warnings-p))
+             (fiveam:is (eq t failure-p))))
+      (uiop:delete-file-if-exists output))))

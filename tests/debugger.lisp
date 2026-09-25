@@ -1311,7 +1311,7 @@ count: ldx #3
     (let ((session (make-debug-session m :assembly a)))
       (setf (sref m 'pc) 1)
       (let ((text (debug-where-text session)))
-        (fiveam:is (search "2:nop" text))
+        (fiveam:is (search "where-lib.asm:2:nop" text))
         (fiveam:is (not (search ".include" text)))))))
 
 (fiveam:test session-defaults-to-the-machines-retained-program
