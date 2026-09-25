@@ -208,6 +208,10 @@ prefixes select the alternative first and then the variant. See
 - An alternative with one varying `one-of` and further keyed ones repeats its
   extras in a `for-choice` for each keyed pick
   ([#279](https://todo.sr.ht/~takeiteasy/lasm/279)).
+- A `one-of` spanning several holes whose alternatives differ in `:signed`,
+  `:relative` or `:width` at a hole after the first needs a selector on that
+  hole too, through a sub-opcode table listing the key once per hole
+  ([#280](https://todo.sr.ht/~takeiteasy/lasm/280)).
 
 [^nested]: A tree lists the selected alternative at each keyed level:
   `(a (b c))` picks `b` inside `a`, then `c` inside `b`. A bare outer name
