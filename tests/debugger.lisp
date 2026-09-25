@@ -1607,15 +1607,99 @@ HIT-P holds the first time, ending at step 0."
       (fiveam:is (eq :until (debug-reverse-continue-to session #x100)))
       (fiveam:is (< replayed 8)))))
 
-(fiveam:test debug-reverse-continue-replays-when-a-watchpoint-is-set
+(defparameter +dbg-phase-source+
+  "        ldx #40
+loop:   sta $10
+        dex
+        bne loop
+        sta $2a0
+        hlt")
+
+(defun %dbg-phase-session ()
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (assemble +dbg-phase-source+ :machine 'emu-test-machine :origin #x100))
+    (make-debug-session m :assembly (machine-program m) :history 1000)))
+
+(fiveam:test debug-reverse-continue-skips-segments-that-never-wrote-a-watched-page
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-phase-session)))
+    (%dbg-run-to-trap session)
+    (debug-watch session #x2a0)
+    (%counting-replayed-steps (replayed)
+      (multiple-value-bind (reason undone) (debug-reverse-continue session)
+        (fiveam:is (eq :watchpoint reason))
+        (fiveam:is (= 1 undone)))
+      (fiveam:is (< replayed 20)))
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :history-start (debug-reverse-continue session)))
+      (fiveam:is (< replayed 20)))))
+
+(fiveam:test debug-reverse-continue-to-skips-segments-unless-they-wrote-a-watched-page
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-phase-session)))
+    (%dbg-run-to-trap session)
+    (debug-watch session #x10)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :watchpoint (debug-reverse-continue-to session #x300)))
+      (fiveam:is (< replayed 20)))))
+
+(fiveam:test debug-reverse-continue-finds-a-write-after-a-step-back
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-phase-session)))
+    (debug-step session 60)
+    (debug-step-back session 2)
+    (%dbg-run-to-trap session)
+    (debug-watch session #x2a0)
+    (multiple-value-bind (reason undone) (debug-reverse-continue session)
+      (fiveam:is (eq :watchpoint reason))
+      (fiveam:is (= 1 undone)))))
+
+(fiveam:test debug-reverse-continue-with-a-later-watchpoint-matches-an-earlier-one
+  (let ((*debug-checkpoint-interval* 8)
+        (trails '()))
+    (dolist (target (list #x150 #x2a0 #x300 "x"))
+      (let ((results '()))
+        (dolist (when-set '(:before :after))
+          (let ((session (%dbg-loop-session)))
+            (when (eq when-set :before) (debug-watch session target))
+            (%dbg-run-to-trap session)
+            (debug-step-back session 60)
+            (when (eq when-set :after) (debug-watch session target))
+            (cl:push (%dbg-reverse-trail session #'debug-reverse-continue) results)))
+        (cl:push (equal (first results) (second results)) trails)))
+    (fiveam:is (every #'identity trails))))
+
+(fiveam:test debug-reverse-continue-replays-every-segment-for-a-register-watchpoint
   (let ((*debug-checkpoint-interval* 8)
         (session (%dbg-loop-session)))
     (%dbg-run-to-trap session)
-    (debug-break session #x100)
-    (debug-watch session #x2a0)
-    (%counting-replayed-steps (replayed)
-      (fiveam:is (eq :watchpoint (debug-reverse-continue session)))
-      (fiveam:is (< replayed 20)))))
+    (debug-watch session "x")
+    (fiveam:is (eq :watchpoint (debug-reverse-continue session)))))
+
+(defun %dbg-count-condition-evaluations (history)
+  (let ((session (%dbg-loop-session :history history))
+        (evaluations 0))
+    (debug-break session "loop" :condition "x == 3")
+    (sb-int:encapsulate '%breakpoint-triggered-p 'count-evaluations
+                        (lambda (function &rest args)
+                          (incf evaluations)
+                          (apply function args)))
+    (unwind-protect (debug-continue session)
+      (sb-int:unencapsulate '%breakpoint-triggered-p 'count-evaluations))
+    evaluations))
+
+(fiveam:test debug-continue-evaluates-a-breakpoint-condition-once-per-step
+  (let ((plain (%dbg-count-condition-evaluations nil)))
+    (fiveam:is (plusp plain))
+    (fiveam:is (= plain (%dbg-count-condition-evaluations 1000)))))
+
+(fiveam:test debug-continue-reports-a-failing-condition-with-history
+  (let ((session (%dbg-loop-session)))
+    (debug-break session "loop" :condition "1 / (x - 39) == 5")
+    (multiple-value-bind (reason steps condition) (debug-continue session)
+      (declare (ignore steps))
+      (fiveam:is (eq :breakpoint reason))
+      (fiveam:is (typep condition 'error)))))
 
 (fiveam:test debug-recorded-hits-follow-breakpoint-and-timeline-changes
   (let ((*debug-checkpoint-interval* 8)

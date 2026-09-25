@@ -252,8 +252,9 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-- Reverse continue and `reverse-until` replay the whole history while a
-  watchpoint is set. See [#265](https://todo.sr.ht/~takeiteasy/lasm/265).
+- Reverse continue and `reverse-until` replay the whole history while a read,
+  register, flag, stack, ROM or device watchpoint is set. See
+  [#267](https://todo.sr.ht/~takeiteasy/lasm/267).
 
 [^checkpoints]: Step back restores the nearest earlier checkpoint and replays
     forward. A checkpoint is a full [snapshot](snapshots.md) (an anchor,
@@ -266,6 +267,7 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
     Reverse continue first jumps to the latest breakpoint or watchpoint hit
     recorded while the session ran forward. Otherwise it replays one
     checkpoint segment at a time, newest first, skipping segments whose steps
-    never reached a breakpoint address. Changing breakpoints or watchpoints
+    never reached a breakpoint address or wrote a page a memory write
+    watchpoint covers. Changing breakpoints or watchpoints
     drops the recorded hits, as does `debug-set`, `debug-write` or
     `debug-set-bank`.
