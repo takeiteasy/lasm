@@ -73,8 +73,9 @@ the table. See [Word-encoded instructions](word-instructions.md) and
 
 ### Device ticking
 
-Each completed instruction ticks live devices with its declared cycle cost.
-`extra-cycles` ticks them again after semantics returns. A trapping
+Each completed instruction ticks live devices with its declared cycle cost
+before semantics run. `elapse` ticks them inline; `extra-cycles` ticks them
+again after semantics returns. A trapping
 instruction still ticks for its declared cost; a decode failure does not
 tick. See [Devices](devices.md#ticking).
 

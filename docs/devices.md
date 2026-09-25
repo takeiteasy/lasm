@@ -103,10 +103,17 @@ the region open bus. `reset` drops runtime bindings with runtime devices;
 
 ## Ticking
 
-`step-machine` ticks devices for the instruction's declared cycles,
-including a trapping instruction. `extra-cycles` causes a second tick
-after semantics returns; a trap skips that second tick. Decode failure
-does not tick. See [Emulator](emulator.md#device-ticking).
+`step-machine` ticks devices for the instruction's declared cycles before
+semantics run, including a trapping instruction.
+
+| Source | Tick |
+| --- | --- |
+| Declared `(cycles n)` | Before the semantics body. |
+| `(elapse n)` | At the call, mid-body. |
+| `(extra-cycles n)` | After the body returns; a trap skips it. |
+| Interrupt delivery, idle | Once, whole. |
+
+Decode failure does not tick. See [Emulator](emulator.md#device-ticking).
 
 ## Semantics vocabulary
 
@@ -128,5 +135,5 @@ or drops the signal when none is installed. Machines with an `(interrupts
 
 ## Limitations
 
-- A device ticks once for a whole instruction cost; intra-instruction
-  timing is unavailable.
+- Interrupt delivery and idle steps tick devices once for their whole cost;
+  they have no body to subdivide.

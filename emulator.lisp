@@ -234,7 +234,13 @@ penalty, say. They are added to MACHINE-CYCLES even if the instruction
 traps, ticked to devices in a second TICK-DEVICES call once the semantics
 return (never during a trap's unwind, where a signalling device would
 replace the LASM-TRAP), and included in the returned COST. A machine that
-never calls EXTRA-CYCLES sees exactly one tick per step, as before.
+never calls EXTRA-CYCLES sees exactly one tick per step.
+
+#159: (elapse n) (semantics.lisp) ticks devices for N cycles immediately,
+mid-body, so a device observes the time before the semantics' later side
+effects. Elapsed cycles are counted in MACHINE-CYCLES and the returned COST
+(which is MACHINE-CYCLES' delta over the step) and stay counted if the
+instruction then traps. Delivery and idle steps have no body and tick whole.
 
 PC is advanced past the whole instruction *before* executing its
 semantics, not after -- so a branch instruction's own (set! pc operand)
@@ -296,14 +302,10 @@ decoded, not just the values."
                                            machine-name layout cell-width endian)
         (if (eq descriptor :decode-failure)
             (%undefined-opcode-step machine pc address memory machine-name layout)
-            (let ((cost (%descriptor-cycle-cost descriptor)))
+            (let ((cost (%descriptor-cycle-cost descriptor))
+                  (start-cycles (machine-cycles machine)))
               (setf (%sref machine pc) (+ address size))
               (incf (machine-cycles machine) cost)
-              ;; TODO: devices tick once per instruction with its declared
-              ;; cost, plus a second tick for any EXTRA-CYCLES (#90) -- a
-              ;; device needing intra-instruction resolution can't express
-              ;; either; sub-instruction tick granularity is a follow-up
-              ;; (#108, #159).
               (tick-devices machine cost)
               (setf (machine-extra-cycles machine) 0)
               (unwind-protect (execute-instruction descriptor machine values choices)
@@ -311,7 +313,7 @@ decoded, not just the values."
               (let ((extra (machine-extra-cycles machine)))
                 (when (plusp extra)
                   (tick-devices machine extra))
-                (values descriptor (+ cost extra)))))))))
+                (values descriptor (- (machine-cycles machine) start-cycles)))))))))
 
 (defun step-machine (machine &key pc memory)
   "Execute one instruction, returning its descriptor and cycle cost, or

@@ -28,7 +28,8 @@ access functions; see [Machine model](machine-model.md) and
 | `(set-flags! (flag form)...)` | Set named flags. |
 | `(trap tag [data])` | Signal `lasm-trap`. |
 | `(idle)` | Mark the machine idle after semantics finishes. |
-| `(extra-cycles n)` | Add runtime-dependent cost to this instruction. |
+| `(elapse n)` | Add `n` cycles and tick devices immediately, mid-body. |
+| `(extra-cycles n)` | Add runtime-dependent cost; devices tick after the body. |
 | `(interrupt-return)` | Restore the state saved at interrupt delivery. |
 | `(zero? value)`, `(bit-set? value bit)` | Predicates for flag expressions. |
 | `(page-crossed? from to [page-size])` | Test whether two addresses cross a page boundary. |
@@ -41,8 +42,10 @@ operate on a register-backed stack pointer.[^stack]
 
 `idle` does not stop the current semantics body. `trap` signals a condition.
 `extra-cycles` accumulates and contributes to cycle budgets; see
-[Emulator](emulator.md#dynamic-cycle-costs). Device operations and
-`signal-interrupt` take the machine explicitly.
+[Emulator](emulator.md#dynamic-cycle-costs). `elapse` ticks devices at its
+call site; see [Devices](devices.md#ticking). Device operations and
+`signal-interrupt` take the machine explicitly, like `mref`; inside
+`with-machine`, pass the variable you named.
 
 ## `choice-case`
 

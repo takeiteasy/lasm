@@ -21,15 +21,14 @@
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
 operators SET!, MREF, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
-SET-BANK!, SET-FLAGS!, TRAP, EXTRA-CYCLES, and
+SET-BANK!, SET-FLAGS!, TRAP, ELAPSE, EXTRA-CYCLES, and
 INTERRUPT-RETURN.
 
-#108: the device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND,
-device.lisp) is deliberately *not* bound here -- an HWN/HWQ/HWI-style instruction's semantics
-call them directly as e.g. (device-info machine index), MACHINE-VAR passed
-explicitly, rather than through a macrolet. #109's SIGNAL-INTERRUPT
-(interrupt.lisp) follows the same convention -- an INT-style instruction's
-semantics call (signal-interrupt machine data) directly. INTERRUPT-RETURN
+The device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND, device.lisp)
+and SIGNAL-INTERRUPT (interrupt.lisp) are plain functions, not bound here:
+semantics call them with the machine passed explicitly, e.g.
+(device-info machine index), the way MREF takes its machine argument.
+Callers of WITH-MACHINE pass whatever variable they named. INTERRUPT-RETURN
 below *is* bound as a macrolet, unlike SIGNAL-INTERRUPT, purely so an
 RFI-style instruction's semantics reads as one primitive (like TRAP) rather
 than a hand-written reverse-order pop sequence -- everything it needs (the
@@ -217,6 +216,9 @@ clause declared" machine-name)))
                         `(setf (machine-idle ,',machine-var) t))
                       ;; #90: like IDLE, records state STEP-MACHINE reads once
                       ;; the semantics body returns.
+                      ;; #159: unlike EXTRA-CYCLES, ticks devices now.
+                      (elapse (n)
+                        `(%elapse ,',machine-var ,n))
                       (extra-cycles (n)
                         `(incf (machine-extra-cycles ,',machine-var) ,n))
                       (interrupt-return ()

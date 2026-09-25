@@ -320,6 +320,53 @@ at the start of each test that reads it.")
     (fiveam:is (= 1 (car (device-state (device-at m 0)))))
     (fiveam:is (= 5 (machine-cycles m)))))
 
+;;; #159: (elapse n) ticks devices mid-body
+
+(defun %log-tick-with-a (machine device cycles)
+  (declare (ignore device))
+  (cl:push (list cycles (sref machine 'a)) *tick-log*))
+
+(defmachine elapse-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (device probe :id 3 :version 0 :manufacturer 0 :tick %log-tick-with-a))
+
+(definstruction elapse-machine split
+  (encoding (opcode #x01))
+  (semantics (set! a 1) (elapse 3) (set! a 2) (extra-cycles 4))
+  (cycles 2))
+
+(definstruction elapse-machine splittrap
+  (encoding (opcode #x02))
+  (semantics (elapse 3) (trap :halt))
+  (cycles 2))
+
+(fiveam:test elapse-ticks-devices-between-the-bodys-side-effects
+  (let ((m (make-machine 'elapse-machine))
+        (*tick-log* nil))
+    (load-program m (list #x01))
+    (multiple-value-bind (descriptor cost) (step-machine m)
+      (declare (ignore descriptor))
+      (fiveam:is (equal '((2 0) (3 1) (4 2)) (reverse *tick-log*)))
+      (fiveam:is (= 9 cost))
+      (fiveam:is (= 9 (machine-cycles m))))))
+
+(fiveam:test elapse-cycles-stay-counted-when-the-instruction-traps
+  (let ((m (make-machine 'elapse-machine))
+        (*tick-log* nil))
+    (load-program m (list #x02))
+    (fiveam:signals lasm-trap (step-machine m))
+    (fiveam:is (equal '((2 0) (3 0)) (reverse *tick-log*)))
+    (fiveam:is (= 5 (machine-cycles m)))))
+
+(fiveam:test run-for-cycles-budget-includes-elapsed-cycles
+  (let ((m (make-machine 'elapse-machine))
+        (*tick-log* nil))
+    (load-program m (list #x01 #x01 #x01))
+    (run-for-cycles m 9)
+    (fiveam:is (= 9 (machine-cycles m)))))
+
 ;;; Memory-mapped devices (#158)
 
 ;; A latch device: INIT seeds STATE with a fresh (value . writes) cons;

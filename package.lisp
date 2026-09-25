@@ -244,6 +244,7 @@
    #:bit-set?
    #:page-crossed?
    #:extra-cycles
+   #:elapse
 
    ;; Lexer
    #:deflexer
