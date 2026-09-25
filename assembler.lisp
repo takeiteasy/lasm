@@ -1488,12 +1488,18 @@ field" (instruction-descriptor-name descriptor) offset)))
                               (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))))
     offset))
 
+(defun %entry-strict-p (entry)
+  "T if any alternative in the matcher CHOICES ENTRY declares :STRICT."
+  (if (consp entry)
+      (some #'%entry-strict-p entry)
+      (and entry (mode-descriptor-strictp entry))))
+
 (defun %hole-choice-strict-p (choices i)
   "T if the alternative CHOICES records for hole I declares :STRICT for it.
 Every hole of a matched alternative carries the same entry, so a run of equal
 entries splits into whole alternatives of %OPTION-HOLE-COUNT holes each."
   (let ((entry (nth i choices)))
-    (when entry
+    (when (and entry (%entry-strict-p entry))
       (let* ((key (%choice-entry-key entry))
              (start (loop with j = i
                           while (and (plusp j) (equal (nth (1- j) choices) entry))

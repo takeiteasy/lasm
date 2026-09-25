@@ -1025,7 +1025,7 @@ mode names such as (outer inner), got ~S" context form)))
 
 (defun %choice-hint (key)
   "Extra diagnostic text for a KEY that does not select a shape: a varying mode
-without its inner alternatives, or a flat path where a tree is needed."
+without its inner alternatives, or a flat list where a tree is needed."
   (let ((mode (and (symbolp key) (gethash key *modes*))))
     (cond ((and mode (mode-descriptor-varyingp mode))
            (format nil " -- ~S varies in hole count; name its inner alternative with a tree such as ~S"
@@ -1033,7 +1033,11 @@ without its inner alternatives, or a flat path where a tree is needed."
                                            (car (first (%one-of-element-options element))))
                                          (%pattern-varying-one-of-elements
                                           (mode-descriptor-pattern mode))))))
-          ((and (consp key) (rest (rest key)) (every #'symbolp key))
+          ((and (consp key) (rest (rest key)) (every #'symbolp key)
+                (gethash (first key) *modes*)
+                (/= (length (rest key))
+                    (length (%pattern-varying-one-of-elements
+                             (mode-descriptor-pattern (gethash (first key) *modes*))))))
            (format nil " -- nested alternatives form a tree, one subkey per varying ONE-OF, e.g. (~S (~S~{ ~S~}))"
                    (first key) (second key) (cddr key)))
           (t ""))))
@@ -1559,9 +1563,9 @@ be qualified" name))
           (prefix (and (consp name) (rest name))))
       `(let ((,choice-var ,(cond ((not foundp) nil)
                                  ((and (eq index :selection) prefix)
-                                  `(%key-component (cdr (assoc ',name selections)) ',prefix))
+                                  `(%key-component-at (cdr (assoc ',name selections)) ',(%prefix-steps prefix)))
                                  ((eq index :selection) `(%key-head (cdr (assoc ',name selections))))
-                                 (prefix `(%matched-choice-component choices ,index ',prefix
+                                 (prefix `(%matched-choice-component choices ,index ',(%prefix-steps prefix)
                                                                      ,operand-map-form))
                                  (t `(%matched-choice-name choices ,index ,operand-map-form)))))
          (case ,choice-var
@@ -1769,8 +1773,8 @@ SUB-CHOICES or field-variant combo."
 
 (defun %hole-width (mode source key)
   "The :WIDTH the alternative KEY declares for the hole SOURCE names, or NIL.
-Follows KEY's path to the alternative owning the hole; a hole of a ONE-OF
-nested where no path is recorded takes its outer alternative's own width."
+Follows KEY's tree to the alternative owning the hole; a hole of a ONE-OF
+nested where no pick is recorded takes its outer alternative's own width."
   (and (eq (first source) :one-of)
        (or (%hole-source-attribute mode source :width key)
            (mode-descriptor-width (%choice-key-descriptor key)))))
@@ -2205,11 +2209,11 @@ reinterpreted before comparison; extra-word escapes remain unsigned."
 
 (defun %matched-choice-key (choices index &optional mapping)
   "The option key INDEX's hole actually matched, from CHOICES (a positional,
-hole-aligned list) -- a mode-name symbol, a path list for a varying nested
-ONE-OF alternative, or NIL if CHOICES is too short, INDEX's entry is NIL, or
+hole-aligned list) -- a mode-name symbol, a tree (NAME SUBKEY...) for a varying
+nested ONE-OF alternative, or NIL if CHOICES is too short, INDEX's entry is NIL, or
 it names a value-selected field (no CHOICE of its own). Normalizes the shapes
 CHOICES arrives in: a WORD-FIELD-CHOICE (DECODE-INSTRUCTION-AT/EXECUTE-
-INSTRUCTION, decoder.lisp) or a MODE-DESCRIPTOR or path of them (MATCH-
+INSTRUCTION, decoder.lisp) or a MODE-DESCRIPTOR or tree of them (MATCH-
 OPERAND-MODE, mode.lisp -- the same shape %CHOICES-ELIGIBLE-P already reads
 at assemble time, assembler.lisp); a bare symbol or NIL passes through
 unchanged, for a caller that already extracted a key itself."
@@ -2250,9 +2254,31 @@ needs the next item of PREFIX to name one by its slot."
               (%key-component (first subs) more)
               (%key-head (first subs)))))))
 
-(defun %matched-choice-component (choices index prefix &optional mapping)
-  "The path component INDEX's hole matched just after PREFIX, or NIL."
-  (%key-component (%matched-choice-key choices index mapping) prefix))
+(defun %prefix-steps (prefix)
+  "((HEAD . INDEX)...) for a qualified CHOICE-CASE PREFIX: each mode name in it
+with the position, among that alternative's varying ONE-OFs, of the subkey the
+next step continues in. A slot in PREFIX names one of several."
+  (let ((items prefix) steps)
+    (loop while items
+          do (let* ((head (cl:pop items))
+                    (varying (%pattern-varying-one-of-elements
+                              (mode-descriptor-pattern (find-mode-descriptor head)))))
+               (cl:push (cons head (if (rest varying)
+                                       (or (position (cl:pop items) varying :key #'%one-of-slot) 0)
+                                       0))
+                        steps)))
+    (nreverse steps)))
+
+(defun %key-component-at (key steps)
+  "The head name of the subkey option KEY selects by STEPS (%PREFIX-STEPS), or NIL."
+  (dolist (step steps (%key-head key))
+    (unless (and (consp key) (eq (first key) (car step)))
+      (return nil))
+    (setf key (nth (cdr step) (rest key)))))
+
+(defun %matched-choice-component (choices index steps &optional mapping)
+  "The head name of the subkey INDEX's hole matched at STEPS, or NIL."
+  (%key-component-at (%matched-choice-key choices index mapping) steps))
 
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
@@ -3301,7 +3327,7 @@ extras join in pattern order."
 slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
           (unless (= (length matches) 1)
             (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S must identify exactly one varying ONE-OF; use (operand alternative) to disambiguate~A"
-                   selector (if qualified "" (%choice-hint selector))))
+                   selector (%choice-hint alt)))
           (let* ((group (first matches))
                  (key (if element-p
                           (list (mode-hole-group-slot group) (mode-hole-group-base-start group)
@@ -3335,6 +3361,9 @@ slot, (operand ~S slot subkey)" selector (first alt) (first alt)))
                              (mode-descriptor-pattern (find-mode-descriptor (first alt)))))))
           (cond
             ((rest varying)
+             ;; TODO: several varying ONE-OFs need the alternative's minimum shape to equal the
+             ;; operand's base holes; an alternative with more fixed holes than its siblings
+             ;; would need its own-excess extras declared as well (#276).
              (unless (= (%mode-hole-count (find-mode-descriptor (first alt)))
                         (mode-hole-group-base-count group))
                (%definstruction-error "DEFINSTRUCTION: FOR-CHOICE ~S: ~S has several varying ONE-OFs, so its minimum ~
@@ -3508,7 +3537,7 @@ over-count tuple records its selected alternative directly."
 
 (defun %tuple-choice-selections (tuple)
   "Return TUPLE's named ONE-OF selections, (SLOT . OPTION-KEY): a bare mode name, or
-a path for a varying nested alternative."
+a tree for a varying nested alternative."
   (%tuple-choice-keys tuple))
 
 (defun %same-semantics-operand-subclause-p (a b)

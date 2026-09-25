@@ -183,7 +183,8 @@ prefixes select the alternative first and then the variant. See
   `:signed`, `:relative`, `:width`, or `:strict`
   ([#275](https://todo.sr.ht/~takeiteasy/lasm/275)).[^nested]
 - An alternative with several varying `one-of`s must have the same
-  minimum shape as the operand's base holes.
+  minimum shape as the operand's base holes
+  ([#276](https://todo.sr.ht/~takeiteasy/lasm/276)).
 
 [^nested]: A tree lists the selected alternative at each varying level:
   `(a (b c))` picks `b` inside `a`, then `c` inside `b`. A bare outer name

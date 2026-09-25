@@ -6435,3 +6435,29 @@ present, so an error comes from the ENCODING under test."
         (fiveam:is (= result (regref m 'a 0)))
         (fiveam:is (string= text (disassembly-line-text
                                    (first (disassemble-cells assembled :machine 'nested-multi-word-machine)))))))))
+
+(fiveam:test choice-case-steps-resolve-slots-at-expansion-time
+  (fiveam:is (equal '((nm-pair . 0)) (%prefix-steps '(nm-pair lhs))))
+  (fiveam:is (equal '((nm-pair . 1)) (%prefix-steps '(nm-pair rhs))))
+  (fiveam:is (eq 'nm-abs (%key-component-at '(nm-pair nm-idx nm-abs) '((nm-pair . 1)))))
+  (fiveam:is (eq 'nm-idx (%key-component-at '(nm-pair nm-idx nm-abs) '((nm-pair . 0)))))
+  (fiveam:is (null (%key-component-at 'nm-lit '((nm-pair . 0))))))
+
+(fiveam:test tree-hint-only-for-flat-paths-not-typos
+  (fiveam:is (string= "" (%choice-hint '(nm-pair nm-abs nm-bogus))))
+  (fiveam:is (search "form a tree" (%choice-hint '(nb-deep nb-far nb-abs))))
+  (fiveam:is (search "form a tree"
+                     (%error-text
+                      (lambda ()
+                        (eval '(definstruction varying-hole-byte-test-machine flatfor
+                                 (modes nb-mode)
+                                 (encoding
+                                   (opcode 13)
+                                   (operand src :width 1
+                                     (variant (choice (nb-deep (nb-far nb-abs))) (sub 0))
+                                     (variant (choice (nb-deep (nb-far nb-idx))) (sub 1))
+                                     (variant (choice (nb-deep nb-abs)) (sub 2))
+                                     (variant (choice nb-lit) (sub 3)))
+                                   (for-choice (src nb-deep nb-far nb-abs) (operand x1 :width 1))
+                                   (for-choice (src nb-deep (nb-far nb-idx)) (operand x1 :width 1) (operand x2 :width 1)))
+                                 (semantics nil))))))))

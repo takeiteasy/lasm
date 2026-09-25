@@ -272,7 +272,7 @@ varying elements, one subkey for each, in pattern order."
     (find-mode-descriptor (%key-head key)))
 
   (defun %key-declares-signed-p (key)
-    "T if KEY's alternative, or any alternative along its path, makes a hole signed."
+    "T if KEY's alternative, or any alternative in its tree, makes a hole signed."
     (or (mode-descriptor-signedp (%choice-key-descriptor key))
         (some #'identity (%option-hole-attributes key :signed))))
 
@@ -392,7 +392,7 @@ records, has an alternative declaring ATTRIBUTE -- nothing at decode or
 assembly time could recover it. RECORDEDP says PATTERN's varying ONE-OF
 elements are recorded: they are when PATTERN belongs to a varying alternative
 whose own ONE-OF is recorded in turn (%NESTED-CHOICE-ENTRY), and their
-alternatives are then reached through the path. SEEN guards the same
+alternatives are then reached through the key tree. SEEN guards the same
 hand-written-redefinition-cycle case %MODE-HOLE-COUNT does."
     (let ((varying (and recordedp (%pattern-varying-one-of-elements pattern))))
       (loop for element in pattern
@@ -619,8 +619,8 @@ to always wins its CHOICES entry, preserving \"CHOICES[i] is one of the
 alternatives named by the pattern element that produced hole i\" as an
 invariant callers can validate against (mirrored by mode.lisp's
 %MODE-HOLE-ALTERNATIVES, the pattern-only version of this same walk). A
-varying nested alternative is the exception: its entry is a path, the list
-of descriptors from the outer alternative down to the inner one picked
+varying nested alternative is the exception: its entry is a tree, the
+descriptor followed by one entry for each of its varying ONE-OFs
 (%NESTED-CHOICE-ENTRY), matching an option key of %ONE-OF-ELEMENT-OPTIONS.
 
 A hand-written DEFMODE cycle -- redefining a mode that some :ONE-OF already
