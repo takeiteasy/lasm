@@ -61,24 +61,30 @@ memory ~S on machine ~S"
                      (memory-write-protected-address c)
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #111: signalled when the current privilege level is below a region's or an
-;; instruction's :PRIVILEGE. NAME is the memory element for a region access,
-;; or the mnemonic for an instruction, whose ADDRESS is NIL. REQUIRED and
-;; CURRENT are level names; CURRENT is NIL when the level register holds a
-;; value no declared level maps to.
+;; #111: signalled when the current privilege level is below a region's,
+;; instruction's or (#300) register's, flag's or stack's :PRIVILEGE. KIND is
+;; :MEMORY, :INSTRUCTION, :REGISTER, :FLAG or :STACK; NAME is the element, or
+;; the mnemonic for an instruction. ADDRESS is set only for :MEMORY.
+;; REQUIRED and CURRENT are level names; CURRENT is NIL when the level
+;; register holds a value no level maps to.
 (define-condition privilege-violation (storage-error)
-  ((address :initarg :address :initform nil :reader privilege-violation-address)
+  ((kind :initarg :kind :initform :memory :reader privilege-violation-kind)
+   (address :initarg :address :initform nil :reader privilege-violation-address)
    (required :initarg :required :reader privilege-violation-required)
    (current :initarg :current :initform nil :reader privilege-violation-current))
   (:report (lambda (c s) (%with-location-suffix (c s)
-             (if (privilege-violation-address c)
-                 (format s "Access to address ~S on memory ~S requires privilege ~S, current is ~S (machine ~S)"
-                         (privilege-violation-address c) (storage-error-name c)
-                         (privilege-violation-required c) (privilege-violation-current c)
-                         (storage-error-machine c))
-                 (format s "Instruction ~A requires privilege ~S, current is ~S (machine ~S)"
-                         (storage-error-name c) (privilege-violation-required c)
-                         (privilege-violation-current c) (storage-error-machine c)))))))
+             (let ((name (storage-error-name c))
+                   (required (privilege-violation-required c))
+                   (current (privilege-violation-current c))
+                   (machine (storage-error-machine c)))
+               (ecase (privilege-violation-kind c)
+                 (:memory (format s "Access to address ~S on memory ~S requires privilege ~S, current is ~S (machine ~S)"
+                                  (privilege-violation-address c) name required current machine))
+                 (:instruction (format s "Instruction ~A requires privilege ~S, current is ~S (machine ~S)"
+                                       name required current machine))
+                 ((:register :flag :stack)
+                  (format s "Access to ~(~A~) ~S requires privilege ~S, current is ~S (machine ~S)"
+                          (privilege-violation-kind c) name required current machine))))))))
 
 (define-condition stack-overflow (storage-error) ()
   (:report (lambda (c s) (%with-location-suffix (c s)
@@ -198,7 +204,10 @@ memory ~S on machine ~S"
   ;; order for MACHINE-MODEL.MD's rendering; %REGION-AT searches REGION-INDEX.
   (regions nil :type list)
   ;; #156: REGIONS sorted by start address, binary-searched by %REGION-AT.
-  (region-index nil :type (or null simple-vector)))
+  (region-index nil :type (or null simple-vector))
+  ;; #300: minimum privilege level for semantics access to a register, flag
+  ;; or stack, or NIL.
+  (privilege nil :type (or null symbol)))
 
 ;; #107: one declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
@@ -258,7 +267,17 @@ memory ~S on machine ~S"
   (level nil :type symbol)
   (levels nil :type list)
   (values nil :type list)
-  (on-violation :fault :type (member :fault :trap)))
+  (on-violation :fault :type (member :fault :trap :interrupt))
+  ;; #302: the :INTERRUPT policy's signal data and priority.
+  (violation-data nil :type (or null (integer 0)))
+  (violation-priority 0 :type integer))
+
+;; #302: true while a step runs on a machine whose :ON-VIOLATION is
+;; :INTERRUPT. Outside a step, a violation faults, since nothing would catch
+;; the exception and restart the instruction.
+(defvar *privilege-interrupt-step* nil)
+
+(define-condition %privilege-exception (condition) ())
 
 (defvar *privilege-checks* t
   "When NIL, region and instruction privilege gates are not enforced. Bound
@@ -360,7 +379,9 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   ;; higher-priority signal; MAX-DEPTH caps nested handlers. Either one makes
   ;; delivery track handler depth in MACHINE-INTERRUPT-ACTIVE.
   (nesting :allow :type (member :allow :priority))
-  (max-depth nil :type (or null (integer 1))))
+  (max-depth nil :type (or null (integer 1)))
+  ;; #301: privilege level delivery switches to before pushing, or NIL.
+  (deliver-level nil :type (or null symbol)))
 
 ;; #166: a (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
 ;; binds an existing scalar :register element as an address pointer into a
@@ -660,6 +681,9 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; Only maintained on a machine whose (interrupts ...) declares :NESTING
   ;; :PRIORITY or :MAX-DEPTH; popped by INTERRUPT-RETURN. RESET clears it.
   (interrupt-active nil :type list)
+  ;; #302: details of the last violation raised as an interrupt, or NIL.
+  ;; RESET clears it.
+  (privilege-violation nil :type list)
   ;; #110: set by the IDLE semantics primitive (semantics.lisp) -- STEP-
   ;; MACHINE (emulator.lisp) skips fetch/decode/execute while this is true,
   ;; but still ticks devices and accounts cycles. Cleared by DELIVER-
@@ -760,7 +784,8 @@ when MACHINE is tracking dirty pages."
 ;; reference this split avoids.
 (defun %enqueue-interrupt (machine entry)
   "Queue ENTRY, a (DEVICE DATA PRIORITY) list, behind every pending signal of
-equal or higher priority."
+equal or higher priority. Returns true when ENTRY was queued, NIL when it
+was dropped."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
     (unless interrupts
       (%emulator-usage-error "signal-interrupt on machine ~S: no (interrupts ...) clause declared"
@@ -791,7 +816,7 @@ equal or higher priority."
       (let ((split (or (position priority queue :key #'third :test #'>) (length queue))))
         (setf (machine-interrupt-queue machine)
               (append (subseq queue 0 split) (list entry) (nthcdr split queue))))))
-  (values))
+  t)
 
 ;; #109: the hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
 ;; HOOK when the descriptor declares (interrupts ...) -- DEVICE-SIGNAL
@@ -963,7 +988,8 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
        devices)))
   (clrhash (machine-region-bindings machine))
   (setf (machine-interrupt-queue machine) nil
-        (machine-interrupt-active machine) nil)
+        (machine-interrupt-active machine) nil
+        (machine-privilege-violation machine) nil)
   (setf (machine-idle machine) nil)
   machine)
 
@@ -1137,24 +1163,72 @@ declares no NAMES or INDEX is outside them."
       (let ((rank (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
         (and (>= rank 0) (nth rank (privilege-descriptor-levels privilege)))))))
 
-(defun %check-privilege (machine required name address)
+(defun %check-privilege (machine required name address &optional kind)
   "Signal, per the machine's :ON-VIOLATION policy, unless the current level
 ranks at least as high as REQUIRED. NAME is the memory element accessed at
-ADDRESS, or an instruction's mnemonic with ADDRESS NIL. Checked before any
-access-hook notification, so a rejected access is not reported as one."
+ADDRESS, an instruction's mnemonic with ADDRESS NIL, or a register, flag or
+stack (#300) named by KIND. KIND defaults to :MEMORY with an ADDRESS and
+:INSTRUCTION without. Checked before any access-hook notification, so a
+rejected access is not reported as one."
   (let* ((descriptor (machine-descriptor machine))
-         (privilege (machine-descriptor-privilege descriptor)))
+         (privilege (machine-descriptor-privilege descriptor))
+         (kind (or kind (if address :memory :instruction))))
     (when (and privilege *privilege-checks*)
       (let ((current (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
         (when (< current (position required (privilege-descriptor-levels privilege)))
-          (ecase (privilege-descriptor-on-violation privilege)
-            (:fault (error 'privilege-violation
-                           :machine (machine-descriptor-name descriptor) :name name
-                           :address address :required required
-                           :current (privilege-level machine)))
+          (flet ((fault ()
+                   (error 'privilege-violation
+                          :machine (machine-descriptor-name descriptor) :name name
+                          :kind kind :address address :required required
+                          :current (privilege-level machine))))
+           (ecase (privilege-descriptor-on-violation privilege)
+            (:fault (fault))
+            (:interrupt
+             (if (and *privilege-interrupt-step*
+                      (%enqueue-interrupt
+                       machine (list nil (privilege-descriptor-violation-data privilege)
+                                     (privilege-descriptor-violation-priority privilege))))
+                 (progn
+                   (setf (machine-privilege-violation machine)
+                         (list :kind kind :name name :address address :required required
+                               :current (privilege-level machine)))
+                   (signal '%privilege-exception))
+                 (fault)))
             (:trap (error 'lasm-trap :tag :privilege-violation
-                                     :data (list :name name :address address
-                                                 :required required)))))))))
+                                     :data (list :kind kind :name name :address address
+                                                 :required required))))))))))
+
+(defun privilege-violation-info (machine)
+  "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT) of MACHINE's last
+privilege violation raised as an interrupt (#302), or NIL."
+  (machine-privilege-violation machine))
+
+;; #300: what a gated register, flag or stack name expands to inside
+;; instruction semantics (WITH-MACHINE-BINDINGS). Host calls to SREF, REGREF,
+;; FLAG and the stack functions are never gated.
+(defun %gated-sref (machine name required)
+  (%check-privilege machine required name nil :register)
+  (sref machine name))
+
+(defun (setf %gated-sref) (value machine name required)
+  (%check-privilege machine required name nil :register)
+  (setf (sref machine name) value))
+
+(defun %gated-regref (machine name index required)
+  (%check-privilege machine required name nil :register)
+  (regref machine name index))
+
+(defun (setf %gated-regref) (value machine name index required)
+  (%check-privilege machine required name nil :register)
+  (setf (regref machine name index) value))
+
+(defun %gated-flag (machine name required)
+  (%check-privilege machine required name nil :flag)
+  (flag machine name))
+
+(defun (setf %gated-flag) (value machine name required)
+  (%check-privilege machine required name nil :flag)
+  (setf (flag machine name) value))
 
 (defun %mref (machine name address)
   "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling

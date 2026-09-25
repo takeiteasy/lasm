@@ -6,6 +6,10 @@
 ;;;; A user-level program's stores into the kernel region and its SUPER
 ;;;; instruction both fault; the same program succeeds at supervisor level.
 ;;;;
+;;;; #300-#302: a register, flag or stack may be gated too, interrupt delivery
+;;;; can switch level (:deliver-level), and a violation can raise an interrupt
+;;;; (:on-violation (:interrupt DATA)) instead of faulting.
+;;;;
 ;;;; Run with:  sbcl --script examples/privilege.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -61,3 +65,32 @@ hlt")
 (run-at-level 1 *store*)
 (run-at-level 0 *privileged*)
 (run-at-level 1 *privileged*)
+
+;;; A gated control register whose violation vectors to a supervisor handler.
+
+(defmachine privirq
+  (register pc :width 8) (register ia :width 8) (register a :width 8)
+  (register sp :width 8)
+  (register cr :width 8 :privilege supervisor)
+  (memory ram :width 8 :addr-width 8
+    (region kernel #x00 #x3f :privilege supervisor))
+  (stack-pointer sp :memory ram)
+  (flags s)
+  (privilege :level s :levels (user supervisor) :on-violation (:interrupt 1))
+  (interrupts :vector ia :message a :save (pc s) :stack sp :deliver-level supervisor))
+
+(definstruction privirq rdcr
+  (encoding (opcode #x10))
+  (semantics (set! a cr)))
+
+(definstruction privirq hlt
+  (encoding (opcode #x00))
+  (semantics (trap :halt)))
+
+(let ((m (make-machine 'privirq)))
+  (load-program m (list #x00) :origin #x10)            ; handler: hlt
+  (load-program m (list #x10) :origin #x80)            ; user code: rdcr
+  (setf (sref m 'pc) #x80 (sref m 'ia) #x10 (sref m 'sp) #x40)
+  (multiple-value-bind (reason steps) (run m)
+    (format t "~&privirq: ~(~A~) after ~D step~:P, level ~A, a = ~D~%  ~S~%"
+            reason steps (privilege-level m) (sref m 'a) (privilege-violation-info m))))

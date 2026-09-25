@@ -24,6 +24,8 @@
    #:memory-write-protected-address
    #:privilege-violation
    #:privilege-violation-address
+   #:privilege-violation-kind
+   #:privilege-violation-info
    #:privilege-violation-required
    #:privilege-violation-current
    #:privilege-level

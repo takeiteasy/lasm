@@ -287,36 +287,59 @@ DECODE-INSTRUCTION-AT's fourth value, CHOICES (#73) -- the matched ONE-OF
 alternative per operand hole -- is forwarded straight to EXECUTE-INSTRUCTION,
 so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
 decoded, not just the values."
-  (deliver-pending-interrupt machine pc)
+  (deliver-pending-interrupt machine pc memory)
   (when (machine-idle machine)
     (let ((cost (machine-descriptor-idle-cycles (machine-descriptor machine))))
       (incf (machine-cycles machine) cost)
       (tick-devices machine cost)
       (return-from %step-machine-resolved (values :idle cost))))
   (let ((address (%sref machine pc)))
-    (handler-bind ((runtime-location
-                    (lambda (c) (%locate-runtime-condition c machine address memory))))
-      (multiple-value-bind (descriptor values size choices)
-          (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
-                                           machine-name layout cell-width endian)
-        (if (eq descriptor :decode-failure)
-            (%undefined-opcode-step machine pc address memory machine-name layout)
-            (let ((cost (%descriptor-cycle-cost descriptor))
-                  (start-cycles (machine-cycles machine))
-                  (required (instruction-descriptor-privilege descriptor)))
-              (when required
-                (%check-privilege machine required (instruction-descriptor-name descriptor) nil))
-              (setf (%sref machine pc) (+ address size))
-              (incf (machine-cycles machine) cost)
-              (tick-devices machine cost)
-              (execute-instruction descriptor machine values choices)
-              (values descriptor (- (machine-cycles machine) start-cycles))))))))
+    (flet ((execute ()
+             (handler-bind ((runtime-location
+                              (lambda (c) (%locate-runtime-condition c machine address memory))))
+               (multiple-value-bind (descriptor values size choices)
+                   (%decode-instruction-at-resolved (machine-cell-reader machine memory) address
+                                                    machine-name layout cell-width endian)
+                 (if (eq descriptor :decode-failure)
+                     (%undefined-opcode-step machine pc address memory machine-name layout)
+                     (let ((cost (%descriptor-cycle-cost descriptor))
+                           (start-cycles (machine-cycles machine))
+                           (required (instruction-descriptor-privilege descriptor)))
+                       (when required
+                         (%check-privilege machine required (instruction-descriptor-name descriptor) nil))
+                       (setf (%sref machine pc) (+ address size))
+                       (incf (machine-cycles machine) cost)
+                       (tick-devices machine cost)
+                       (execute-instruction descriptor machine values choices)
+                       (values descriptor (- (machine-cycles machine) start-cycles))))))))
+      (declare (dynamic-extent #'execute))
+      (if (%privilege-interrupt-policy-p machine)
+          (%execute-restartable machine pc address #'execute)
+          (execute)))))
+
+(defun %privilege-interrupt-policy-p (machine)
+  (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
+    (and privilege (eq (privilege-descriptor-on-violation privilege) :interrupt))))
+
+(defun %execute-restartable (machine pc address execute)
+  "Run EXECUTE; when it raises a privilege exception (#302), point PC back at
+the violating instruction at ADDRESS and return (VALUES :PRIVILEGE-VIOLATION
+COST), the cycles the attempt cost. The interrupt is already queued."
+  (let ((start-cycles (machine-cycles machine)))
+    (handler-case (let ((*privilege-interrupt-step* t))
+                    (funcall execute))
+      (%privilege-exception ()
+        (setf (%sref machine pc) address)
+        (setf (machine-privilege-violation machine)
+              (list* :pc address (machine-privilege-violation machine)))
+        (values :privilege-violation (- (machine-cycles machine) start-cycles))))))
 
 (defun step-machine (machine &key pc memory)
   "Execute one instruction, returning its descriptor and cycle cost, or
 :DECODE-FAILURE and zero cost. A machine whose undefined-opcode policy is :NOP
-returns :NOP and the skipped cost instead. MEMORY and PC select the fetch
-location."
+returns :NOP and the skipped cost instead. A privilege violation raised as an
+interrupt (#302) returns :PRIVILEGE-VIOLATION. MEMORY and PC select the
+fetch location."
   (let* ((descriptor (machine-descriptor machine))
          (machine-name (machine-descriptor-name descriptor))
          (pc (%resolve-pc machine-name pc))

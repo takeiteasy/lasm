@@ -71,7 +71,18 @@ since a child machine can add nesting to a parent's compiled RFI."
 
 ;;; Delivery
 
-(defun deliver-pending-interrupt (machine pc)
+(defun %enter-delivery-level (machine interrupts)
+  "Switch MACHINE to INTERRUPTS' :DELIVER-LEVEL (#301), if it declares one.
+The caller has already read the :SAVE places, so a saved level register keeps
+the interrupted level."
+  (let ((level (interrupt-descriptor-deliver-level interrupts)))
+    (when level
+      (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
+        (setf (%sref machine (privilege-descriptor-level privilege))
+              (nth (position level (privilege-descriptor-levels privilege))
+                   (privilege-descriptor-values privilege)))))))
+
+(defun deliver-pending-interrupt (machine pc &optional memory)
   "Pop and deliver MACHINE's oldest pending interrupt, if any and if
 unmasked -- called at the top of STEP-MACHINE (emulator.lisp), before that
 step's own fetch, so both single-stepping (DEBUG-STEP) and every RUN
@@ -85,6 +96,9 @@ only when it's non-zero, so the default :CYCLES 0 doesn't add a second,
 redundant TICK-DEVICES call to every delivering step. Does nothing when
 the machine declares no (interrupts ...) clause, the queue is empty, or
 the queue's head is currently masked.
+
+#301: a violation while delivering is located at the interrupted instruction
+(MEMORY selects where to look up its source line and label).
 
 #161: the head is the highest-priority pending signal, and is also held back
 while :NESTING/:MAX-DEPTH forbid another handler (%INTERRUPT-NESTING-BLOCKED-P).
@@ -100,20 +114,26 @@ stays idle until unmasked, same as delivery itself."
                      machine interrupts (third (first (machine-interrupt-queue machine))))))
       (let* ((entry (cl:pop (machine-interrupt-queue machine)))
              (data (second entry))
-             (stack (interrupt-descriptor-stack-name interrupts)))
-        ;; #166: a :POINTER stack pushes through SP-PUSH instead of
-        ;; STACK-PUSH -- STACK names the bound register, and its
-        ;; STACK-POINTER-DESCRIPTOR (resolved at DEFMACHINE time) carries
-        ;; which memory and which growth direction to use.
-        (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
-            (let ((sp (gethash stack (machine-descriptor-stack-pointers (machine-descriptor machine)))))
-              (dolist (place (interrupt-descriptor-save interrupts))
-                (sp-push machine stack (stack-pointer-descriptor-memory sp)
-                         (stack-pointer-descriptor-grows sp) (%interrupt-place machine place))))
-            (dolist (place (interrupt-descriptor-save interrupts))
-              (stack-push machine stack (%interrupt-place machine place))))
-        (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data)
-        (setf (sref machine pc) (%interrupt-place machine (interrupt-descriptor-vector interrupts)))
+             (stack (interrupt-descriptor-stack-name interrupts))
+             (interrupted (%sref machine pc))
+             (saved (mapcar (lambda (place) (%interrupt-place machine place))
+                            (interrupt-descriptor-save interrupts))))
+        (handler-bind ((runtime-location
+                         (lambda (c) (%locate-runtime-condition c machine interrupted memory))))
+          (%enter-delivery-level machine interrupts)
+          ;; #166: a :POINTER stack pushes through SP-PUSH instead of
+          ;; STACK-PUSH -- STACK names the bound register, and its
+          ;; STACK-POINTER-DESCRIPTOR (resolved at DEFMACHINE time) carries
+          ;; which memory and which growth direction to use.
+          (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
+              (let ((sp (gethash stack (machine-descriptor-stack-pointers (machine-descriptor machine)))))
+                (dolist (value saved)
+                  (sp-push machine stack (stack-pointer-descriptor-memory sp)
+                           (stack-pointer-descriptor-grows sp) value)))
+              (dolist (value saved)
+                (stack-push machine stack value)))
+          (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data)
+          (setf (sref machine pc) (%interrupt-place machine (interrupt-descriptor-vector interrupts))))
         (when (interrupt-descriptor-mask-on-deliver interrupts)
           (setf (flag machine (interrupt-descriptor-mask-flag interrupts)) t))
         (when (%interrupt-tracks-depth-p interrupts)

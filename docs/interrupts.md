@@ -20,7 +20,8 @@ a machine. Devices and software instructions can signal the same queue.
             [:stack name] [:queue n] [:on-overflow policy]
             [:mask-when fn] [:mask-flag name] [:cycles n]
             [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil]
-            [:nesting :allow/:priority] [:max-depth n])
+            [:nesting :allow/:priority] [:max-depth n]
+            [:deliver-level level])
 ```
 
 | Key | Effect |
@@ -37,6 +38,7 @@ a machine. Devices and software instructions can signal the same queue.
 | `:mask-on-deliver` | Set the mask flag before handler execution. |
 | `:nesting` | `:allow` (default) or `:priority`; see [Nesting](#nesting). |
 | `:max-depth` | Cap on running handlers; default unlimited. |
+| `:deliver-level` | [Privilege level](privilege.md#interrupt-delivery) the handler runs at. |
 
 Registers can be scalar names or indexed bank cells such as `(reg 0)`.
 `:save` order determines push order; `interrupt-return` reverses it.
@@ -107,10 +109,13 @@ A pending unmasked signal is delivered before `step-machine` fetches:
 
 1. Unless masked or held by [nesting](#nesting), remove the queue's head, the
    highest-priority pending signal.
-2. Push `:save` places in declared order.
-3. Write data to `:message` and handler address to `pc`.
-4. Add `:cycles` and tick devices when the cost is nonzero.
-5. Fetch and execute the handler's first instruction in the same step.
+2. Read the `:save` places, then switch to `:deliver-level` if declared.
+3. Push the values read, in declared order.
+4. Write data to `:message` and handler address to `pc`.
+5. Add `:cycles` and tick devices when the cost is nonzero.
+6. Fetch and execute the handler's first instruction in the same step.
+
+A violation while pushing reports the interrupted instruction's location.
 
 A signal raised by a device during a step is available on the **next**
 step, after that step's delivery check. See [Emulator](emulator.md#interrupt-delivery).
@@ -125,7 +130,8 @@ underflow condition. Each saved place must fit one memory cell. See
 
 ## `interrupt-return`
 
-`(interrupt-return)` restores saved places in reverse order. It requires
+`(interrupt-return)` restores saved places in reverse order, the
+[privilege level](privilege.md#interrupt-delivery) last. It requires
 an interrupt clause and signals during macroexpansion without one. See
 [Semantics vocabulary](semantics.md#operators).
 
@@ -158,4 +164,3 @@ hook in place as host wiring.
 - The debugger does not display pending priorities or handler depth; see
   [ticket 306](https://todo.sr.ht/~takeiteasy/lasm/306).
 - A unified trap/interrupt model is outside this subsystem.
-- Delivery does not change the [privilege level](privilege.md#limitations).

@@ -57,6 +57,7 @@ instruction. Decode uses the same logic as
 | `:decode-failure` | `0` | Leaves PC unchanged. |
 | `:nop` | Skipped cells | Skips an undefined opcode under `:nop` policy. |
 | `:idle` | `(idle :cycles n)`, default `1` | Ticks devices without fetching or advancing PC. |
+| `:privilege-violation` | Cycles spent | Returns PC to the violating instruction after [queuing an interrupt](privilege.md#violations-as-interrupts). |
 
 The selected instruction's cost is added to `machine-cycles`. A storage
 fault signals during a direct step; `run` catches it. See
@@ -192,7 +193,8 @@ marks such instructions with `+` in its cycles column.
 ## Limitations
 
 - A unified trap/interrupt model is outside this execution model.
-  [Privilege levels](privilege.md) gate regions and instructions only.
+  [Privilege violations](privilege.md#violations-as-interrupts) can queue an
+  interrupt, but traps stay separate.
 - `machine-program` holds one assembly, so a machine that loads several
   images names source lines only for the last; see
   [ticket 261](https://todo.sr.ht/~takeiteasy/lasm/261).

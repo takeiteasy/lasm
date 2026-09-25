@@ -7,7 +7,7 @@
 - [Conditions](conditions.md) — every condition type and its readers
 - [Devices](devices.md) — the device bus, `(device ...)`, attach/detach, ticking
 - [Interrupts](interrupts.md) — `(interrupts ...)`, delivery, masking, overflow policy
-- [Privilege levels](privilege.md) — `(privilege ...)`, level-gated regions and instructions
+- [Privilege levels](privilege.md) — `(privilege ...)`, level-gated regions, instructions, registers, flags and stacks, delivery levels
 - [Semantics vocabulary](semantics.md) — `with-machine` and the DSL operators
 - [Lexer](lexer.md) — `deflexer` and `tokenize`
 - [Statement grammar & expression parser](parser.md) — `parse` and `parse-expression`

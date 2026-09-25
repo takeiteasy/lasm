@@ -32,7 +32,7 @@ one namespace.
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
 | `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
-| `(privilege :level NAME :levels (...))` | Privilege levels for gated regions and instructions. | [Privilege levels](privilege.md) |
+| `(privilege :level NAME :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
 | `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |
 | `(properties :key value ...)` | Literal machine properties. | [Machine families](machine-families.md#properties) |
 
@@ -82,7 +82,8 @@ Regions cover inclusive address ranges and cannot overlap:
     :read io-read :write io-write))
 ```
 
-`:privilege LEVEL` on a region requires that level for CPU access; see
+`:privilege LEVEL` on a region, register, flag or stack requires that level for
+CPU access; see
 [Privilege levels](privilege.md).
 
 | Kind | Reads | Writes |
@@ -157,7 +158,7 @@ instruction fetch, and PC advancement do not call it. The
 | --- | --- |
 | `unknown-storage` | Missing element or scalar access to a banked register. |
 | `address-out-of-range`, `memory-write-protected` | Invalid address or protected ROM write. |
-| `privilege-violation` | Access or instruction below its required [privilege level](privilege.md). |
+| `privilege-violation` | Access, register, flag, stack or instruction below its required [privilege level](privilege.md). |
 | `stack-overflow`, `stack-underflow`, `stack-index-out-of-range`, `stack-pointer-out-of-range` | Invalid fixed-stack operation. |
 | `register-index-out-of-range` | Invalid bank index. |
 | `no-such-device`, `interrupt-queue-full` | Device or interrupt error. |
