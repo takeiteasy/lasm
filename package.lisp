@@ -146,6 +146,8 @@
    #:device-descriptor-save
    #:device-descriptor-load
    #:device-descriptor-read
+   #:bind-region
+   #:unbind-region
    #:device-descriptor-write
    #:device
    #:device-p

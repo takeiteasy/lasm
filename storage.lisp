@@ -596,6 +596,11 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; Banked region name -> the bank LOAD-PROGRAM's unbanked image was written
   ;; into (whichever was mapped then). Cleared by RESET; not snapshotted.
   (loaded-banks (make-hash-table :test 'eq))
+  ;; #264: :DEVICE region name -> bus index of the device BIND-REGION
+  ;; (device.lisp) bound to it at runtime, overriding a declared :DEVICE
+  ;; binding. Cleared by RESET, like every runtime-attached device; saved by
+  ;; snapshots.
+  (region-bindings (make-hash-table :test 'eq))
   ;; The ASSEMBLY LOAD-PROGRAM last loaded, for naming source lines in
   ;; runtime errors, with the memory element it went into and its load
   ;; origin minus the assembly's own. Cleared by RESET; not snapshotted.
@@ -808,7 +813,8 @@ The retained MACHINE-PROGRAM survives too when it was loaded wholly into ROM,
 so runtime errors in ROM code keep naming source lines.
 
 #108: also restores the device bus to its *declared* shape -- any runtime-
-attached device (ATTACH-DEVICE, device.lisp) is dropped, every hole is
+attached device (ATTACH-DEVICE, device.lisp) is dropped along with any
+BIND-REGION binding (#264), every hole is
 refilled, and every declared device's INIT hook runs again, exactly as if a
 fresh MAKE-MACHINE had built the bus. MACHINE-INTERRUPT-HOOK is untouched --
 it's host wiring (who the bus signals), not machine state, so it survives a
@@ -847,6 +853,7 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
       (vector-push-extend
        (%instantiate-device machine device-descriptor (fill-pointer devices))
        devices)))
+  (clrhash (machine-region-bindings machine))
   (setf (machine-interrupt-queue machine) nil)
   (setf (machine-idle machine) nil)
   machine)
@@ -978,28 +985,36 @@ declares no NAMES or INDEX is outside them."
   (let ((entry (gethash (memory-region-name region) (machine-banks machine))))
     (svref (cdr entry) (car entry))))
 
-;; #158: the live device a bound :DEVICE REGION's hooks belong to, or NIL when
-;; that bus slot is detached (open bus). A direct AREF, not DEVICE-AT
-;; (device.lisp loads after this file).
-(defun %region-device (machine region)
-  (aref (machine-devices machine) (memory-region-device-index region)))
+;; #158/#264: the bus index a :DEVICE REGION is bound to -- a runtime
+;; BIND-REGION first, else the declared :DEVICE -- or NIL for a region with its
+;; own hooks (or none).
+(defun %region-device-index (machine region)
+  (or (gethash (memory-region-name region) (machine-region-bindings machine))
+      (memory-region-device-index region)))
+
+;; The live device at INDEX, or NIL when that bus slot is detached (open
+;; bus). A direct AREF, not DEVICE-AT (device.lisp loads after this file).
+(defun %bound-device (machine index)
+  (aref (machine-devices machine) index))
 
 (defun %device-region-read (machine region address)
   "The value a :DEVICE REGION yields for ADDRESS, before cell-width masking."
-  (if (memory-region-device-index region)
-      (let* ((device (%region-device machine region))
-             (read (and device (device-descriptor-read (device-descriptor device)))))
-        (if read (funcall read machine device address) 0))
-      (let ((read (memory-region-read region)))
-        (if read (funcall read machine address) 0))))
+  (let ((index (%region-device-index machine region)))
+    (if index
+        (let* ((device (%bound-device machine index))
+               (read (and device (device-descriptor-read (device-descriptor device)))))
+          (if read (funcall read machine device address) 0))
+        (let ((read (memory-region-read region)))
+          (if read (funcall read machine address) 0)))))
 
 (defun %device-region-write (machine region address value)
-  (if (memory-region-device-index region)
-      (let* ((device (%region-device machine region))
-             (write (and device (device-descriptor-write (device-descriptor device)))))
-        (when write (funcall write machine device address value)))
-      (let ((write (memory-region-write region)))
-        (when write (funcall write machine address value)))))
+  (let ((index (%region-device-index machine region)))
+    (if index
+        (let* ((device (%bound-device machine index))
+               (write (and device (device-descriptor-write (device-descriptor device)))))
+          (when write (funcall write machine device address value)))
+        (let ((write (memory-region-write region)))
+          (when write (funcall write machine address value))))))
 
 (defun %mref (machine name address)
   "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling

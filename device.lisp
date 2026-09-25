@@ -37,7 +37,7 @@ table (machine.lisp) would have rejected at DEFMACHINE time."
 
 ;;; Attach / detach
 
-(defun attach-device (machine name &key id version manufacturer init tick receive detach save load)
+(defun attach-device (machine name &key id version manufacturer init tick receive detach save load read write)
   "Attach a device to MACHINE's bus and return its (fixed) index.
 
 NAME either names a DEVICE-DESCRIPTOR already declared on MACHINE's own
@@ -45,7 +45,8 @@ machine (a (device ...) clause, machine.lisp) -- attaching a second, freshly
 INIT'd instance of it, every :ID/:VERSION/... keyword here then ignored --
 or is a fresh symbol, checked against MACHINE's whole namespace exactly as a
 declared device's name is (%DEVICE-NAME-TAKEN-P), with the identity/hooks
-given inline the same way a (device ...) clause's keywords are.
+given inline the same way a (device ...) clause's keywords are. Inline
+:READ/:WRITE are the hooks BIND-REGION routes a memory region through.
 
 Appended after every existing bus entry, declared or attached -- indices are
 never reused (DETACH-DEVICE leaves a hole rather than shrinking the bus), so
@@ -61,7 +62,7 @@ an index returned here stays valid until this device itself is detached."
                  (make-device-descriptor :name name :id (or id 0) :version (or version 0)
                                           :manufacturer (or manufacturer 0)
                                           :init init :tick tick :receive receive :detach detach
-                                          :save save :load load)))))
+                                          :save save :load load :read read :write write)))))
     (let ((devices (machine-devices machine)))
       (vector-push-extend (%instantiate-device machine device-descriptor (fill-pointer devices))
                            devices))))
@@ -76,6 +77,42 @@ Signals NO-SUCH-DEVICE on an already-vacant or out-of-range INDEX."
     (let ((detach (device-descriptor-detach (device-descriptor device))))
       (when detach (funcall detach machine device)))
     (setf (aref (machine-devices machine) index) nil))
+  (values))
+
+;;; Region binding (#264)
+
+(defun %bindable-region (machine region-name)
+  "The :DEVICE memory region named REGION-NAME on MACHINE that has no :READ/
+:WRITE of its own, or a usage error."
+  (let ((region (some (lambda (element)
+                        (find region-name (storage-element-regions element) :key #'memory-region-name))
+                      (machine-descriptor-elements (machine-descriptor machine)))))
+    (unless (and region (eq (memory-region-kind region) :device)
+                 (null (memory-region-read region)) (null (memory-region-write region)))
+      (%emulator-usage-error "~S on machine ~S: not a :device region without :read/:write"
+             region-name (machine-descriptor-name (machine-descriptor machine))))
+    region))
+
+(defun bind-region (machine region-name device-name)
+  "Route :DEVICE memory region REGION-NAME on MACHINE through the live device
+named DEVICE-NAME (declared or attached), overriding any declared :DEVICE
+binding. The binding follows that bus index: if the device is detached the
+region is open bus. Dropped by RESET. Signals a usage error unless REGION-NAME
+is a :DEVICE region with no :READ/:WRITE of its own and DEVICE-NAME is on the
+bus."
+  (%bindable-region machine region-name)
+  (let ((device (find-device machine device-name)))
+    (unless device
+      (%emulator-usage-error "bind-region ~S on machine ~S: no device named ~S on the bus"
+             region-name (machine-descriptor-name (machine-descriptor machine)) device-name))
+    (setf (gethash region-name (machine-region-bindings machine)) (device-index device)))
+  (values))
+
+(defun unbind-region (machine region-name)
+  "Remove REGION-NAME's runtime binding on MACHINE, restoring its declared
+:DEVICE binding, if any, otherwise open bus."
+  (%bindable-region machine region-name)
+  (remhash region-name (machine-region-bindings machine))
   (values))
 
 ;;; Enumeration

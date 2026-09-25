@@ -426,3 +426,60 @@ at the start of each test that reads it.")
   (fiveam:signals machine-definition-error
     (eval '(defmachine device-bad-read-hook-test
             (device d :read 3)))))
+
+;;; Runtime region binding (#264)
+
+(defmachine bindable-test-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region slot #x40 #x4F :kind :device)
+    (region hooked #x50 #x5F :kind :device :read %region-test-hook)
+    (region fixed #x60 #x6F :kind :device :device latch2))
+  (device latch2 :init %latch-init :read %latch-read :write %latch-write))
+
+(defun %region-test-hook (machine address)
+  (declare (ignore machine address))
+  1)
+
+(defun %attach-latch (m)
+  (attach-device m 'host-latch :init '%latch-init :read '%latch-read :write '%latch-write))
+
+(fiveam:test bind-region-maps-a-runtime-attached-device
+  (let ((m (make-machine 'bindable-test-machine)))
+    (fiveam:is (= 0 (mref m 'ram #x40)))
+    (%attach-latch m)
+    (bind-region m 'slot 'host-latch)
+    (fiveam:is (= 5 (mref m 'ram #x40)))
+    (setf (mref m 'ram #x41) 9)
+    (fiveam:is (= 9 (mref m 'ram #x40)))))
+
+(fiveam:test bind-region-overrides-and-unbind-restores-the-declared-binding
+  (let ((m (make-machine 'bindable-test-machine)))
+    (%attach-latch m)
+    (setf (mref m 'ram #x60) 7)
+    (bind-region m 'fixed 'host-latch)
+    (fiveam:is (= 5 (mref m 'ram #x60)))
+    (unbind-region m 'fixed)
+    (fiveam:is (= 7 (mref m 'ram #x60)))))
+
+(fiveam:test bound-runtime-device-is-open-bus-once-detached
+  (let ((m (make-machine 'bindable-test-machine)))
+    (detach-device m (%attach-latch m))
+    (bind-region m 'slot 'latch2)
+    (detach-device m 0)
+    (fiveam:is (= 0 (mref m 'ram #x40)))))
+
+(fiveam:test reset-drops-runtime-region-bindings
+  (let ((m (make-machine 'bindable-test-machine)))
+    (%attach-latch m)
+    (bind-region m 'slot 'host-latch)
+    (reset m)
+    (fiveam:is (= 0 (mref m 'ram #x40)))))
+
+(fiveam:test bind-region-rejects-bad-targets
+  (let ((m (make-machine 'bindable-test-machine)))
+    (fiveam:signals emulator-usage-error (bind-region m 'slot 'nonesuch))
+    (fiveam:signals emulator-usage-error (bind-region m 'hooked 'latch2))
+    (fiveam:signals emulator-usage-error (bind-region m 'ram 'latch2))
+    (fiveam:signals emulator-usage-error (bind-region m 'nonesuch 'latch2))
+    (fiveam:signals emulator-usage-error (unbind-region m 'ram))))

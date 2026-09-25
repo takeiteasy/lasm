@@ -39,7 +39,8 @@ still enumerable.
 ## The bus
 
 Declared devices receive fixed indices in declaration order.
-`attach-device` appends another instance or a new host device.
+`attach-device` appends another instance or a new host device; it takes the
+same keywords as the clause, including `:read`/`:write`.
 `detach-device` leaves a hole so other indices stay stable.
 
 ```lisp
@@ -83,6 +84,23 @@ receives the cell-width-wrapped value.
 `:device` cannot be combined with the region's own `:read`/`:write`, and
 applies only to `:device` regions. The name must be a declared device.
 
+### Binding at runtime
+
+`bind-region` routes a `:device` region that has no `:read`/`:write` of its
+own through any live device by name, declared or attached. It overrides a
+declared `:device` binding; `unbind-region` restores it. Give
+`attach-device` the `:read`/`:write` hooks inline.
+
+```lisp
+(attach-device m 'sensor :read 'sensor-read :write 'sensor-write)
+(bind-region m 'io 'sensor)
+(unbind-region m 'io)
+```
+
+The binding follows the device's bus index, so detaching the device leaves
+the region open bus. `reset` drops runtime bindings with runtime devices;
+[snapshots](snapshots.md) save them.
+
 ## Ticking
 
 `step-machine` ticks devices for the instruction's declared cycles,
@@ -112,6 +130,3 @@ or drops the signal when none is installed. Machines with an `(interrupts
 
 - A device ticks once for a whole instruction cost; intra-instruction
   timing is unavailable.
-- A region binds to a declared device's fixed bus index. A device added with
-  `attach-device` cannot be memory-mapped, and a re-attached copy of a
-  declared device is not bound. ([#264](https://todo.sr.ht/~takeiteasy/lasm/264))

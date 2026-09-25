@@ -150,6 +150,37 @@
     (fiveam:signals snapshot-device-unknown
       (restore-snapshot target (machine-snapshot source)))))
 
+;;; Runtime region bindings (#264)
+
+(defmachine snapshot-binding-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region slot #x40 #x4F :kind :device))
+  (device kept :id 1 :init %saved-init :save %saved-save :load %saved-load))
+
+(defun %binding-machine ()
+  (let ((m (make-machine 'snapshot-binding-machine)))
+    (attach-device m 'extra :id 9 :init '%saved-init :save '%saved-save :load '%saved-load)
+    m))
+
+(fiveam:test snapshot-round-trips-runtime-region-bindings
+  (let ((source (%binding-machine)) (target (%binding-machine)))
+    (bind-region source 'slot 'extra)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (equal '((slot . 1)) (getf (cdr (machine-snapshot target)) :region-bindings)))))
+
+(fiveam:test snapshot-restore-clears-bindings-the-snapshot-lacks
+  (let ((source (%binding-machine)) (target (%binding-machine)))
+    (bind-region target 'slot 'extra)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (null (getf (cdr (machine-snapshot target)) :region-bindings)))))
+
+(fiveam:test snapshot-rejects-a-bad-region-binding
+  (let ((snapshot (machine-snapshot (%binding-machine))))
+    (dolist (bad '(((slot . 7)) ((ram . 0)) ((nonesuch . 0)) (slot)))
+      (fiveam:signals snapshot-malformed
+        (restore-snapshot (%binding-machine) (%with-field snapshot :region-bindings bad))))))
+
 ;;; Rejection leaves the machine untouched
 
 (defmacro %rejected-untouched (snapshot condition)
@@ -219,7 +250,7 @@
 ;;; Coverage guard
 
 (fiveam:test snapshot-covers-every-machine-slot
-  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks loaded-banks))
+  (let ((covered '(cycles extra-cycles idle devices interrupt-queue banks loaded-banks region-bindings))
         (host-only '(descriptor slots interrupt-hook access-hook program program-memory program-offset)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))

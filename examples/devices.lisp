@@ -118,10 +118,14 @@
   (assert (= 0 (car (device-state (device-at m 0)))))
 
   ;; A host-attached device, appended after every declared one.
-  (let ((index (attach-device m 'host-sensor :id #x0003 :version 1)))
+  (let ((index (attach-device m 'host-sensor :id #x0003 :version 1 :write 'port-write)))
     (format t "~%Attached host-sensor at index ~D; device-count now ~D~%" index (device-count m))
     (assert (= 2 index))
     (assert (= 3 (device-count m)))
+    ;; #264: memory-map it by rebinding the port region to it.
+    (bind-region m 'port-io 'host-sensor)
+    (format t "Rebound the port region to host-sensor (its :write hook prints)~%")
+    (setf (mref m 'ram #xFF00) 1)
     (detach-device m index)
     (format t "Detached it -- device-count stays ~D (a hole, not a shrink)~%" (device-count m))
     (assert (= 3 (device-count m)))

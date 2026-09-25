@@ -28,6 +28,7 @@ Snapshots hold:
 - banked regions: the mapped bank, every bank's contents, and the bank
   `load-program` wrote the main image into
 - the device bus, holes and bus order included
+- runtime [`bind-region`](devices.md#binding-at-runtime) bindings
 
 `machine-interrupt-hook` and `machine-access-hook` are host wiring and are neither saved nor changed by a
 restore.
@@ -52,7 +53,8 @@ leaves the machine untouched.
 All four are `snapshot-error`s; `snapshot-error-detail` gives the message.
 
 `read-snapshot` treats the file as untrusted: reader evaluation is off, and
-anything unreadable signals `snapshot-malformed`.
+anything unreadable signals `snapshot-malformed`. A binding to a missing
+device or an unbindable region is malformed too.
 
 ## Devices
 

@@ -6,7 +6,7 @@
 
 (in-package #:lasm)
 
-(defconstant +snapshot-version+ 3)
+(defconstant +snapshot-version+ 4)
 
 (define-condition snapshot-error (lasm-error)
   ((detail :initarg :detail :reader snapshot-error-detail))
@@ -89,12 +89,15 @@ Such a partial snapshot only restores through %RESTORE-SNAPSHOT with CELLS NIL."
                                    (machine-interrupt-queue machine))
           :banks (%snapshot-banks machine cells)
           :devices (map 'list (lambda (device) (%snapshot-device machine device))
-                        (machine-devices machine)))))
+                        (machine-devices machine))
+          :region-bindings (loop for name being the hash-keys of (machine-region-bindings machine)
+                                   using (hash-value index)
+                                 collect (cons name index)))))
 
 (defun machine-snapshot (machine)
   "MACHINE's runtime state as a plain-data list tree: storage, cycle
-counters, idle flag, pending interrupts, banked regions and the device bus (holes and bus
-order included). A device contributes state only when it declares a :SAVE
+counters, idle flag, pending interrupts, banked regions, the device bus (holes and bus
+order included) and runtime BIND-REGION bindings. A device contributes state only when it declares a :SAVE
 hook, which must return data readable by READ. Interrupt signal data is
 stored as-is and must be readable too."
   (%machine-snapshot machine t))
@@ -240,6 +243,11 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
                                 (nth (car entry) plan))))
             (%snapshot-fail 'snapshot-malformed "interrupt queue names missing device ~S"
                             (and (consp entry) (car entry))))))
+      (dolist (entry (%snapshot-field snapshot :region-bindings))
+        (unless (and (consp entry) (symbolp (car entry)) (integerp (cdr entry))
+                     (< -1 (cdr entry) (length plan)) (nth (cdr entry) plan)
+                     (ignore-errors (%bindable-region machine (car entry))))
+          (%snapshot-fail 'snapshot-malformed "bad region binding ~S" entry)))
       (dolist (key '(:cycles :extra-cycles))
         (unless (typep (%snapshot-field snapshot key) 'unsigned-byte)
           (%snapshot-fail 'snapshot-malformed "bad ~S" key)))
@@ -286,6 +294,9 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
                (funcall load machine device (second entry)))
              device))
          devices)))
+    (clrhash (machine-region-bindings machine))
+    (loop for (name . index) in (%snapshot-field snapshot :region-bindings)
+          do (setf (gethash name (machine-region-bindings machine)) index))
     (setf (machine-interrupt-queue machine)
           (mapcar (lambda (entry)
                     (cons (and (car entry) (aref (machine-devices machine) (car entry)))

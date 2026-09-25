@@ -113,8 +113,8 @@ and [Emulator](emulator.md#load-program) for loading a bank.
 ## Runtime state
 
 `(make-machine 'NAME)` creates a machine. `(reset machine)` clears non-ROM storage,
-cycles, pending interrupts, and idle state, and rebuilds the declared device
-bus. Host-installed access and interrupt hooks remain attached.
+cycles, pending interrupts, and idle state, drops runtime region bindings, and
+rebuilds the declared device bus. Host-installed access and interrupt hooks remain attached.
 
 ## Width and signedness
 
