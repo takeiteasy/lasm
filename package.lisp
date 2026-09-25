@@ -435,7 +435,9 @@
    #:symbol-info-localp
    #:symbol-info-value
    #:symbol-info-line
+   #:symbol-info-file
    #:symbol-info-definition-line
+   #:symbol-info-definition-file
    #:symbol-info-region
    #:symbol-info-bank
    #:lasm-syntax-error-definition-line

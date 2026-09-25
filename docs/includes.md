@@ -66,3 +66,4 @@ Diagnostics use the file and source line that contain the error. A macro
 invocation reports its call location and names its body location separately.
 Listings show each included file inline at its `.include` line, including
 blank and non-emitting lines; repeated includes appear at each occurrence.
+Symbols record their defining file and line (`symbol-info-file`).

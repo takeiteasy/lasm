@@ -169,8 +169,9 @@ ever non-NIL for :INSTRUCTION."
 (defstruct symbol-info
   "Metadata for a bound symbol. QUALIFIED-NAME is readable; local hash keys
 use a reserved separator instead. SCOPE distinguishes equal readable names.
-VALUE is the symbol's final value, LINE its invocation line, and
-DEFINITION-LINE its macro body line when applicable."
+VALUE is the symbol's final value, LINE and FILE its invocation site (FILE
+is NIL for string input), and DEFINITION-LINE and DEFINITION-FILE its macro
+body site when applicable. ORDER is the binding sequence across all files."
   (name "" :type string)
   (qualified-name "" :type string)
   (scope nil :type (or null string))
@@ -178,7 +179,9 @@ DEFINITION-LINE its macro body line when applicable."
   (localp nil :type boolean)
   (value 0 :type integer)
   (line 0 :type (integer 0))
+  (file nil :type (or null string))
   (definition-line nil :type (or null (integer 0)))
+  (definition-file nil :type (or null string))
   (order 0 :type (integer 0))
   (region nil :type (or null symbol))   ; banked region and bank a label is
   (bank nil :type (or null (integer 0)))) ; placed in; NIL for the main image
@@ -187,6 +190,8 @@ DEFINITION-LINE its macro body line when applicable."
 (defvar *current-invocation-line* nil)
 (defvar *current-source-unit* nil)
 (defvar *current-definition-unit* nil)
+(defvar *symbol-order* 0
+  "Next SYMBOL-INFO-ORDER; bound per layout pass.")
 
 ;; The output a .BANK section places in one bank of a banked region: CELLS
 ;; spans the whole region window, starting at address ORIGIN.
@@ -944,8 +949,11 @@ cached operand AST, #39) is a no-op: the first scope wins."
                                                qualified-name)
                            :scope scope
                            :kind kind :localp localp :value value :line line
+                           :file (and *current-source-unit* (source-unit-file *current-source-unit*))
                            :definition-line *current-definition-line*
-                           :order (hash-table-count info)
+                           :definition-file (and *current-definition-line* *current-definition-unit*
+                                                 (source-unit-file *current-definition-unit*))
+                           :order (prog1 *symbol-order* (incf *symbol-order*))
                            :region (and (eq kind :label) (%bank-region-name value))
                            :bank (and (eq kind :label) (%bank-region-name value) *layout-bank*))))
 
@@ -1242,6 +1250,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
         (address origin)
         (asm-origin origin)
         (main-end origin)
+        (*symbol-order* 0)
         (*layout-bank* nil)
         (*label-banks* (make-hash-table :test 'equal))
         (emitted-p nil)

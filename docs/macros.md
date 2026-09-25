@@ -82,4 +82,5 @@ statements report the invocation and the body line.[^source]
     label uses the scope at the call site, even if the body starts with a global
     label.
 [^source]: Listings and symbols use the outermost invocation's source line.
-    The body definition location is retained separately for diagnostics.
+    The body definition location (`symbol-info-definition-file` and
+    `-definition-line`) is retained separately for diagnostics and symbols.

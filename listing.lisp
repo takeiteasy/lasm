@@ -309,8 +309,10 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; result) when ASSEMBLY-SYMBOL-INFO is itself NIL -- callers assembling by
 ;;; hand or from an older code path never crash on a missing table.
 ;;;
-;;; Symbols sort by invocation line and binding order. The definition line
-;;; remains available for macro provenance.
+;;; Symbols sort by binding order (SYMBOL-INFO-ORDER), which follows include
+;;; and macro expansion order, so equal line numbers in different files never
+;;; interleave. FILE/LINE give the invocation site and DEFINITION-FILE/
+;;; DEFINITION-LINE the macro body site.
 ;;;
 ;;; PERFORMANCE -- ASSEMBLY-SYMBOLS-LIST is a full MAPHASH-and-sort per call,
 ;;; and ASSEMBLY-SYMBOL-GROUPS additionally calls ASSEMBLY-SYMBOL (itself a
@@ -326,8 +328,8 @@ without it, NAME identifies a global or top-level assignment."
     (and info (gethash (if scope (%qualify-local scope name 0) name) info))))
 
 (defun assembly-symbols-list (assembly &key kind (scope :any scope-given-p))
-  "Every SYMBOL-INFO in ASSEMBLY, in SYMBOL-INFO-LINE order (see this file's
-header comment on why line order, not address order). KIND, when given
+  "Every SYMBOL-INFO in ASSEMBLY, in SYMBOL-INFO-ORDER (binding order; see this
+file's header comment). KIND, when given
   (:LABEL, :EQU, or :SET), restricts to that kind. SCOPE, when given, restricts to
 symbols whose SYMBOL-INFO-SCOPE is SCOPE -- pass SCOPE NIL for top-level
 symbols (globals and top-level .EQUs); omitting SCOPE entirely means no
@@ -343,10 +345,7 @@ NIL or nothing matches."
                                 (equal (symbol-info-scope v) scope)))
                    (cl:push v result)))
                info))
-    (sort result (lambda (a b)
-                   (if (= (symbol-info-line a) (symbol-info-line b))
-                       (< (symbol-info-order a) (symbol-info-order b))
-                       (< (symbol-info-line a) (symbol-info-line b)))))))
+    (sort result #'< :key #'symbol-info-order)))
 
 (defun assembly-symbol-groups (assembly)
   "ASSEMBLY's symbols (#37) grouped by enclosing scope, as an alist of
@@ -354,11 +353,11 @@ NIL or nothing matches."
 pass can group locals under their enclosing global label rather than print
 a flat, ambiguous list. One entry per global label that has at least one
 local (or itself), the global's own SYMBOL-INFO heading its list followed
-by its locals (SYMBOL-INFO-LINE order); a leading (NIL . ...) entry holds
+by its locals (binding order); a leading (NIL . ...) entry holds
 every top-level symbol (a global with no locals still appears here via its
 own binding, plus every top-level .EQU) -- present, though possibly empty,
 even when ASSEMBLY-SYMBOL-INFO is NIL. Entries after the leading NIL bucket
-are ordered by their global's own SYMBOL-INFO-LINE."
+are ordered by their global's own binding order."
   (let ((all (assembly-symbols-list assembly))
         (top nil)
         (by-scope (make-hash-table :test 'equal))
@@ -386,11 +385,11 @@ are ordered by their global's own SYMBOL-INFO-LINE."
                       (cons scope
                             (append (and global (list global))
                                     (sort (nreverse (gethash scope by-scope))
-                                          #'< :key #'symbol-info-line)))))
+                                          #'< :key #'symbol-info-order)))))
                   (sort scopes #'<
                         :key (lambda (scope)
                                (let ((g (assembly-symbol assembly scope)))
-                                 (if g (symbol-info-line g) 0))))))))
+                                 (if g (symbol-info-order g) 0))))))))
 
 (defun %symbol-value-text (info digits)
   "INFO's VALUE rendered DIGITS-wide hex for a :LABEL (an address, matching
@@ -400,11 +399,23 @@ address, so hex width has no natural meaning)."
       (format nil "~@[~2,'0X:~]~V,'0X" (symbol-info-bank info) digits (symbol-info-value info))
       (format nil "~D" (symbol-info-value info))))
 
+(defun %symbol-site-text (file line)
+  (if file (format nil "~A:~D" file line) (format nil "line ~D" line)))
+
+(defun %symbol-location-text (info)
+  "INFO's invocation site, plus its macro body site when it has one."
+  (let ((site (%symbol-site-text (symbol-info-file info) (symbol-info-line info)))
+        (body (symbol-info-definition-line info)))
+    (if body
+        (format nil "~A (body ~A)" site (%symbol-site-text (symbol-info-definition-file info) body))
+        site)))
+
 (defun symbols-text (assembly &key stream)
   "Render ASSEMBLY's symbol table (#37), grouped by scope
 (ASSEMBLY-SYMBOL-GROUPS): top-level symbols first, then each global label
 with its locals indented underneath, each row naming a symbol, its value
-(hex for a :LABEL, decimal for an assignment), and its KIND. Returns the text as a
+(hex for a :LABEL, decimal for an assignment), its KIND, and its source
+location (file:line, plus the macro body site when expanded). Returns the text as a
 string when STREAM is NIL (default); otherwise writes to STREAM and returns
 NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
@@ -414,11 +425,12 @@ NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
                    (destructuring-bind (scope . symbols) group
                      (declare (ignore scope))
                      (dolist (sym symbols)
-                       (format s "~:[  ~;~]~A~24T~A~30T~(~A~)~%"
+                       (format s "~:[  ~;~]~A~24T~A~30T~(~A~)~40T~A~%"
                                (null (symbol-info-scope sym))
                                (symbol-info-name sym)
                                (%symbol-value-text sym digits)
-                               (symbol-info-kind sym))))))))
+                               (symbol-info-kind sym)
+                               (%symbol-location-text sym))))))))
     (if stream (progn (write-string body stream) nil) body)))
 
 (defun print-symbols (assembly &key (stream *standard-output*))

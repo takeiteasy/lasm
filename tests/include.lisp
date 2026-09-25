@@ -109,3 +109,44 @@
       (fiveam:is (= 2 (lasm-syntax-error-line c)))
       (fiveam:is (= 2 (lasm-syntax-error-definition-line c)))
       (fiveam:is (search "ldx #missing" (diagnostic-text c))))))
+
+;;; Symbol provenance (#200)
+
+(fiveam:test symbols-record-their-defining-file
+  (let* ((a (%assemble-include-fixture "sym-main.asm"))
+         (first (assembly-symbol a "first"))
+         (lib (assembly-symbol a "lib")))
+    (fiveam:is (= 1 (symbol-info-line first) (symbol-info-line lib)))
+    (fiveam:is (search "sym-main.asm" (symbol-info-file first)))
+    (fiveam:is (search "sym-lib.asm" (symbol-info-file lib)))
+    (fiveam:is (null (symbol-info-definition-file lib)))))
+
+(fiveam:test symbols-list-in-binding-order-across-files
+  (let ((a (%assemble-include-fixture "sym-main.asm")))
+    (fiveam:is (equal '("first" "lib" "last")
+                      (mapcar #'symbol-info-name (assembly-symbols-list a))))))
+
+(fiveam:test macro-symbol-keeps-invocation-and-body-files-apart
+  (let ((inner (first (assembly-symbols-list (%assemble-include-fixture "sym-macro-call.asm")))))
+    (fiveam:is (search "sym-macro-call.asm" (symbol-info-file inner)))
+    (fiveam:is (= 2 (symbol-info-line inner)))
+    (fiveam:is (search "sym-macro-def.asm" (symbol-info-definition-file inner)))
+    (fiveam:is (= 2 (symbol-info-definition-line inner)))))
+
+(fiveam:test symbols-text-shows-file-and-body-locations
+  (let ((text (symbols-text (%assemble-include-fixture "sym-macro-call.asm"))))
+    (fiveam:is (search "sym-macro-call.asm:2 (body " text))
+    (fiveam:is (search "sym-macro-def.asm:2)" text))))
+
+(fiveam:test symbols-from-string-input-have-no-file
+  (let ((a (assemble (format nil "a: nop~%b: nop") :machine 'instr-test-machine)))
+    (fiveam:is (null (symbol-info-file (assembly-symbol a "a"))))
+    (fiveam:is (search "line 2" (symbols-text a)))))
+
+(fiveam:test set-rebind-keeps-binding-order-distinct
+  (let* ((a (assemble ".set n, 1
+.set n, 2
+after: nop" :machine 'instr-test-machine))
+         (n (assembly-symbol a "n"))
+         (after (assembly-symbol a "after")))
+    (fiveam:is (< (symbol-info-order n) (symbol-info-order after)))))

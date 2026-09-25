@@ -36,7 +36,7 @@ All three return an `assembly`:
 | `origin` | Address of the first cell, including a leading `.org`. |
 | `banks` | Bank images; see [Banked output](banked-output.md). |
 | `symbols` | Final name-to-value table for labels and assignments. |
-| `symbol-info` | Symbol kind and scope; see [Listing](listing.md#symbol-table). |
+| `symbol-info` | Symbol kind, scope, value, and defining file and line; see [Listing](listing.md#symbol-table). |
 | `listing`, `source` | Address mapping and source text; see [Listing](listing.md). |
 
 ### `assembly`'s cell width

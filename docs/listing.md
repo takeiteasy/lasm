@@ -97,8 +97,12 @@ machine's cell width.
 
 `assembly-symbols` maps names to final values. `assembly-symbol-info` adds
 each symbol's kind (`:label`, `:equ`, `:set`), scope, readable qualified
-name, value, and source line. A local label can share visible spelling with
-a global because its scope remains distinct.
+name, value, and source location: `symbol-info-file` and `symbol-info-line`
+(`nil` file for string input), plus `symbol-info-definition-file` and
+`symbol-info-definition-line` for symbols expanded from a macro body. Lists
+and groups follow binding order, so equal line numbers in different files
+stay distinct. A local label can share visible spelling with a global because
+its scope remains distinct.
 
 ```lisp
 (assembly-symbol assembly name &key scope)
@@ -119,7 +123,14 @@ locals. A `.set` entry holds its last value and assignment line. See
 (print-symbols assembly &key stream)
 ```
 
-The grouped rendering names each symbol, its value, and its kind.
+The grouped rendering names each symbol, its value, its kind, and its
+location; a macro-expanded symbol adds the body site.
+
+```
+first   0000  label  main.asm:1
+lib     0001  label  lib.asm:1
+inner   0002  label  main.asm:2 (body mac.asm:2)
+```
 The [disassembler](disassembler.md) uses symbol kind to distinguish labels
 from assignments with the same value.
 
