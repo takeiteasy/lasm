@@ -581,11 +581,15 @@ Literal count decides first; register-qualified hole count breaks its ties."
       (> (car a) (car b))
       (and (= (car a) (car b)) (> (cdr a) (cdr b)))))
 
+(defvar *recorded-elements* nil
+  "ONE-OF elements whose pick an enclosing varying alternative will read back
+from the matcher's selections (%NESTED-CHOICE-ENTRY).")
+
 (defun %nested-choice-entry (alt selections)
   "The entry for ALT matched at a ONE-OF: ALT itself, or for a varying ALT the
 path (ALT . inner descriptors). The inner pick comes from SELECTIONS, where
-every matched ONE-OF element records its own entry under the element itself
-(%MATCH-MODE-ELEMENTS), so an inner option with no hole is found too."
+the element records its own entry under itself (%MATCH-MODE-ELEMENTS, when
+listed in *RECORDED-ELEMENTS*), so an inner option with no hole is found too."
   (if (mode-descriptor-varyingp alt)
       (let ((inner (cdr (assoc (%pattern-varying-one-of-element (mode-descriptor-pattern alt))
                                selections :test #'eq))))
@@ -736,9 +740,14 @@ element on the winning path whose pick was decided by declaration order."
                            (and (mode-descriptor-suffix alt)
                                 (string-equal (mode-descriptor-suffix alt) alt-prefix)))
                   (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties)
-                      (%match-mode-elements tokens
-                                            (append (mode-descriptor-pattern alt) rest-elements)
-                                            start end require-end)
+                      (let ((*recorded-elements*
+                              (if (mode-descriptor-varyingp alt)
+                                  (cons (%pattern-varying-one-of-element (mode-descriptor-pattern alt))
+                                        *recorded-elements*)
+                                  *recorded-elements*)))
+                        (%match-mode-elements tokens
+                                              (append (mode-descriptor-pattern alt) rest-elements)
+                                              start end require-end))
                     (cond
                       ((not okp) (setf last-failure-token failure-token last-message message))
                       ((equal score best-score) (cl:push alt tied))
@@ -749,11 +758,12 @@ element on the winning path whose pick was decided by declaration order."
                                 (count (%option-hole-count key))
                                 (inner (and (mode-descriptor-varyingp alt)
                                             (%pattern-varying-one-of-element (mode-descriptor-pattern alt))))
-                                ;; TODO: recorded for every ONE-OF; only elements nested in a varying alternative need it (#273)
-                                (selections (cons (cons element entry)
-                                                  (if inner
-                                                      (remove inner selections :key #'car :test #'eq :count 1)
-                                                      selections))))
+                                (selections (let ((rest (if inner
+                                                            (remove inner selections :key #'car :test #'eq :count 1)
+                                                            selections)))
+                                              (if (member element *recorded-elements* :test #'eq)
+                                                  (cons (cons element entry) rest)
+                                                  rest))))
                          (setf best-score score
                                tied (list alt)
                                best
@@ -800,7 +810,7 @@ that only bind the first four are unaffected by."
          ;; The sixth value is intentionally new. Existing callers only bind
          ;; the hole-aligned CHOICES value; named ONE-OF slots use this
          ;; additional selection metadata, including zero-hole alternatives.
-          (t (values asts t nil nil choices (remove-if-not #'symbolp selections :key #'car) suffixes
+          (t (values asts t nil nil choices selections suffixes
                      (loop for (holes-from-end . rest) in ties
                            collect (cons (- (length asts) holes-from-end) rest))
                      score))))))

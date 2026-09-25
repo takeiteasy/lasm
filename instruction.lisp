@@ -1381,6 +1381,20 @@ selector and a (sub-opcode ...) table may not both be given -- they would write 
             mode-specified
             registers)))
 
+(defun %check-unnamed-hole-less-one-of! (mode machine name)
+  "Signal a DEFINSTRUCTION-time error for an unnamed ONE-OF element with several
+hole-less shortest alternatives: nothing records which one matched, so they
+would encode, decode, and disassemble identically."
+  (dolist (element (mode-descriptor-pattern mode))
+    (when (and (eq (first element) :one-of) (null (%one-of-slot element)))
+      (let* ((counts (mapcar #'cdr (%one-of-element-options element)))
+             (shortest (reduce #'min counts)))
+        (when (and (zerop shortest) (> (count shortest counts) 1))
+          (%definstruction-error "DEFINSTRUCTION ~S ~S: addressing mode ~S has an unnamed ONE-OF with several ~
+alternatives that have no operand hole -- name it, (one-of (slot alternative...)), and select it in the ~
+encoding so they can be told apart"
+                 machine name (mode-descriptor-name mode)))))))
+
 (defun %check-mode-hole-attributes (mode machine name)
   "Keep mode-wide attributes off ONE-OF elements; their alternatives own them."
   (when (and (mode-descriptor-relativep mode)
@@ -3859,6 +3873,7 @@ its absolute-mode sibling."
            (semantics-subclause (find 'semantics body :key #'first))
            (cycles-subclause (find 'cycles body :key #'first)))
       (%check-mode-hole-attributes mode machine name)
+      (%check-unnamed-hole-less-one-of! mode machine name)
       (unless opcode-subclause
         (%definstruction-error "DEFINSTRUCTION ~S ~S: mode ~S requires an (opcode n) subclause"
                machine name mode-sym))
@@ -4220,6 +4235,7 @@ symbol in (modes ...) requires the multi-mode list form, e.g. (modes (~A ~
                   (sub-opcode-subclause (find 'sub-opcode (rest encoding-clause) :key #'first))
                   (layout-subclause (find 'layout (rest encoding-clause) :key #'first)))
              (%check-mode-hole-attributes mode machine name)
+             (%check-unnamed-hole-less-one-of! mode machine name)
              (unless opcode-subclause
                (%definstruction-error "DEFINSTRUCTION ~S ~S: (encoding ...) requires an (opcode n) subclause"
                       machine name))

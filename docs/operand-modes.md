@@ -141,7 +141,7 @@ prefixes select the alternative first and then the variant. See
 
 ## Limitations
 
-- A hole-less `one-of` alternative needs a slot on its element. A
+- A `one-of` with hole-less alternatives needs a slot on it. A
   cell-encoded one must be selected by a
   [sub-opcode table](instructions.md#slot-participants).
 - A nested varying alternative has one varying `one-of` of its own. Set

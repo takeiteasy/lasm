@@ -6078,3 +6078,14 @@ present, so an error comes from the ENCODING under test."
                                      (variant (choice ss-sp) (sub 0))
                                      (variant (choice ss-pc) (sub 1))))
                (semantics nil))))))
+
+(defmode ss-unnamed-fixed (one-of ss-sp ss-pc))
+
+(fiveam:test unnamed-hole-less-one-of-requires-a-slot
+  (fiveam:is-true
+   (search "unnamed ONE-OF"
+           (%slot-sub-definition-error
+            '(definstruction slot-sub-machine bad5
+               (modes ss-unnamed-fixed)
+               (encoding (opcode #x24))
+               (semantics nil))))))
