@@ -17,6 +17,9 @@ from a file. Each `defmachine` provides these operations. Stateful devices can a
   (restore-snapshot m (read-snapshot "save.snap")))
 ```
 
+The [command line](cli.md#snapshots) saves and restores snapshots with
+`run --save-snapshot` and `--load-snapshot`.
+
 ## What is saved
 
 Snapshots hold:

@@ -19,6 +19,7 @@ commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
                     [--bank N] [--region NAME] [--packing pad|bits]
   run FILE          assemble and run          [--max-steps N] [--cycles N]
+                    [--load-snapshot PATH] [--save-snapshot PATH]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
                     [--cells N] [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
@@ -33,6 +34,8 @@ options:
   --region NAME          banked region for --bank when there are several
   --packing pad|bits     cells that are not whole bytes: pad each to bytes (default)
                          or pack them as a bitstream
+  --load-snapshot PATH   restore machine state from a snapshot after loading (run)
+  --save-snapshot PATH   write machine state to a snapshot when the run stops (run)
   --cells N              number of cells in the file (disassemble), to drop bit padding
   -h, --help             show this help
 ")
@@ -43,7 +46,8 @@ options:
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
-    ("--max-steps" . :max-steps) ("--cycles" . :cycles)))
+    ("--max-steps" . :max-steps) ("--cycles" . :cycles)
+    ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)))
 
 (defparameter *cli-repeatable-options*
   '(("--data-region" . :data-regions)))
@@ -196,17 +200,32 @@ the calling image."
                                              :bank bank :region region :packing packing)))
     0))
 
+(defun %cli-loaded-machine (assembly machine options)
+  "A MACHINE instance with ASSEMBLY loaded, then restored from
+--load-snapshot when given."
+  (let ((m (make-machine machine))
+        (snapshot (getf options :load-snapshot)))
+    (load-program m assembly :memory (%cli-memory options))
+    (when snapshot
+      (restore-snapshot m (read-snapshot snapshot)))
+    m))
+
+(defun %cli-save-snapshot (m options)
+  (let ((path (getf options :save-snapshot)))
+    (when path
+      (write-snapshot (machine-snapshot m) path))))
+
 (defun %cli-command-run (file machine lexer options out)
   (let* ((assembly (%cli-assemble file machine lexer options))
          (memory (%cli-memory options))
-         (m (make-machine machine))
+         (m (%cli-loaded-machine assembly machine options))
          (max-steps (or (%cli-option-integer options :max-steps "--max-steps") 10000))
          (cycles (%cli-option-integer options :cycles "--cycles")))
-    (load-program m assembly :memory memory)
     (multiple-value-bind (reason steps condition)
         (if cycles
             (run-for-cycles m cycles :max-steps max-steps :memory memory)
             (run m :max-steps max-steps :memory memory))
+      (%cli-save-snapshot m options)
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
       (when (or (eq reason :fault)
                 (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))

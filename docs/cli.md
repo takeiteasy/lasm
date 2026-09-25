@@ -26,7 +26,7 @@ defined, the default lexer is used.
 | Command | Does | Options |
 | --- | --- | --- |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
-| `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N` |
+| `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH` |
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
@@ -52,6 +52,21 @@ the source line at `pc`.
 cell width and endianness. `--data-region` (repeatable; `$hex`, `0xhex` or
 decimal bounds, `END` exclusive) renders that address range as `.byte` lines
 instead of decoding it; see [Disassembler](disassembler.md#data-regions).
+
+## Snapshots
+
+`--save-snapshot PATH` writes the machine's state to `PATH` when `run` stops.
+`--load-snapshot PATH` loads the program, then restores that state before
+running, so `--max-steps` and `--cycles` count from the snapshot.
+
+```sh
+lasm run counter.asm -m sixtyfoo.lasm --max-steps 5 --save-snapshot s.snap
+lasm run counter.asm -m sixtyfoo.lasm --load-snapshot s.snap
+```
+
+`FILE` is still assembled, which supplies source lines for faults. A
+snapshot that is unreadable or belongs to another machine exits 1; see
+[Snapshots](snapshots.md#versioning-and-validation).
 
 ## Exit status
 
