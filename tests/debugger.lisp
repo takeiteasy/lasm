@@ -1657,24 +1657,41 @@ loop:   sta $10
 (fiveam:test debug-reverse-continue-with-a-later-watchpoint-matches-an-earlier-one
   (let ((*debug-checkpoint-interval* 8)
         (trails '()))
-    (dolist (target (list #x150 #x2a0 #x300 "x"))
+    (dolist (watch '((#x150 :write) (#x150 :read) (#x2a0 :write) (#x300 :write) ("x" :write) ("x" :read) ("z" :read-write)))
       (let ((results '()))
         (dolist (when-set '(:before :after))
           (let ((session (%dbg-loop-session)))
-            (when (eq when-set :before) (debug-watch session target))
+            (when (eq when-set :before) (apply #'debug-watch session (first watch) (list :access (second watch))))
             (%dbg-run-to-trap session)
             (debug-step-back session 60)
-            (when (eq when-set :after) (debug-watch session target))
+            (when (eq when-set :after) (apply #'debug-watch session (first watch) (list :access (second watch))))
             (cl:push (%dbg-reverse-trail session #'debug-reverse-continue) results)))
         (cl:push (equal (first results) (second results)) trails)))
     (fiveam:is (every #'identity trails))))
 
-(fiveam:test debug-reverse-continue-replays-every-segment-for-a-register-watchpoint
+(fiveam:test debug-reverse-continue-skips-segments-that-never-touched-a-watched-register
   (let ((*debug-checkpoint-interval* 8)
-        (session (%dbg-loop-session)))
+        (m (make-machine 'emu-test-machine)))
+    (load-program m (assemble "        ldx #1
+loop:   sta $10
+        bne loop" :machine 'emu-test-machine :origin #x100))
+    (let ((session (make-debug-session m :assembly (machine-program m) :history 1000)))
+      (debug-step session 100)
+      (debug-watch session "x" :access :write)
+      (%counting-replayed-steps (replayed)
+        (multiple-value-bind (reason undone) (debug-reverse-continue session)
+          (fiveam:is (eq :watchpoint reason))
+          (fiveam:is (= 99 undone)))
+        (fiveam:is (< replayed 20))))))
+
+(fiveam:test debug-reverse-continue-skips-segments-that-never-read-a-watched-page
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-phase-session)))
     (%dbg-run-to-trap session)
-    (debug-watch session "x")
-    (fiveam:is (eq :watchpoint (debug-reverse-continue session)))))
+    (debug-watch session #x2a0 :access :read)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :history-start (debug-reverse-continue session)))
+      (fiveam:is (< replayed 20)))))
 
 (defun %dbg-count-condition-evaluations (history)
   (let ((session (%dbg-loop-session :history history))

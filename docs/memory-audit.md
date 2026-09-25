@@ -40,6 +40,19 @@ These fully active synthetic CPUs exceed a 16.7 ms frame budget at 100
 instances on this host. Sleeping CPUs, instruction mix, scheduling, and
 other work change the budget.
 
+## Debugger history
+
+`bench/debugger-history.lisp` steps a two-instruction loop 200,000 times
+through `debug-continue`, then reverses over a watchpoint.
+
+| Workload | Time |
+| --- | ---: |
+| Plain `run` | 0.09 s |
+| `debug-continue`, no history | 0.10 s |
+| `debug-continue`, `:history` | 0.17 s |
+| `:history`, conditional breakpoint every other step | 0.19 s |
+| `debug-reverse-continue`, watch on an untouched page or register write | under 1 ms |
+
 ## Build memory
 
 A forced STAR build allocates about 1,308 MiB cumulatively. Under a
@@ -54,6 +67,7 @@ With Quicklisp dependencies installed and STAR checked out at `../star`:
 ```sh
 /usr/bin/time -l sbcl --script bench/memory-audit.lisp ../star/star.asd
 sbcl --script bench/cpu-scaling.lisp ../star/star.asd 100 60
+sbcl --script bench/debugger-history.lisp 200000
 /usr/bin/time -l sbcl --dynamic-space-size 256 --script bench/build-memory-audit.lisp ../star/star.asd --star-tests
 ```
 

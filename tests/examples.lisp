@@ -89,6 +89,9 @@
     (fiveam:is (plusp (length scripts)))
     (%check-scripts (mapcar #'list scripts))))
 
+(fiveam:test debugger-history-bench-exits-cleanly
+  (%check-scripts `((,(%lasm-path "bench/debugger-history.lisp") "1000"))))
+
 (fiveam:test bench-scripts-exit-cleanly
   (if (uiop:getenv "LASM_BENCH")
       (let ((star (namestring (%lasm-path "../star/star.asd"))))
