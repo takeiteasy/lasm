@@ -79,8 +79,8 @@ Each character is one element: one cell for `.ascii`, `.asciz`, `.byte`,
 and `.cell`, so a 16-bit-cell machine holds code points up to `$FFFF`.
 A character too wide for its element signals `assembly-error`. A string is
 valid only as a top-level data operand; anywhere else (`.org "a"`,
-`lda #"a"`, `"a" + 1`) it signals `assembly-error`. The escapes are `\n`
-and `\t`; see [Limitations](#limitations).
+`lda #"a"`, `"a" + 1`) it signals `assembly-error`. Escapes are listed in
+[Lexer](lexer.md#string-escapes).
 
 ## `.res`
 
@@ -135,9 +135,6 @@ a label absent from the completed program. See [Diagnostics](diagnostics.md).
 
 ## Limitations
 
-- String literals understand only the `\n` and `\t` escapes; any other
-  escaped character stands for itself, so `"\0"` is `0x30`
-  ([#262](https://todo.sr.ht/~takeiteasy/lasm/262)).
 - Undecodable data renders as `.byte` even on word-addressed machines;
   disassembly does not select `.cell` or `.dat` for those lines.
 

@@ -1527,6 +1527,9 @@ next: wnop" :machine 'word-relative-test-machine)))
 (fiveam:test string-honours-escapes
   (fiveam:is (equal '(10 9) (%string-cells ".ascii \"\\n\\t\""))))
 
+(fiveam:test string-escapes-emit-their-code-points
+  (fiveam:is (equal '(0 13 #x41 #x5c #x22) (%string-cells ".ascii \"\\0\\r\\x41\\\\\\\"\""))))
+
 (fiveam:test word-directive-widens-each-string-character
   (fiveam:is (equal '(#x41 0) (%string-cells ".word \"A\""))))  ; little-endian
 

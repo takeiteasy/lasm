@@ -346,6 +346,28 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
       (%advance state)
       tok)))
 
+(defun %read-escape (state delim)
+  "Consume the character after a backslash and return what it stands for:
+\\n \\t \\r \\0, \\xNN (two hex digits), a backslash, or DELIM's first character."
+  (let ((esc (%peek state)))
+    (unless esc (%lex-error state "Unterminated string literal"))
+    (%advance state)
+    (case esc
+      (#\n #\Newline)
+      (#\t #\Tab)
+      (#\r #\Return)
+      (#\0 (code-char 0))
+      (#\x (let ((digits (loop repeat 2
+                               for c = (%peek state)
+                               while (and c (digit-char-p c 16))
+                               collect c do (%advance state))))
+             (unless (= 2 (length digits))
+               (%lex-error state "Invalid \\x escape: expected two hex digits"))
+             (code-char (parse-integer (coerce digits 'string) :radix 16))))
+      (t (if (or (char= esc #\\) (char= esc (char delim 0)))
+             esc
+             (%lex-error state "Unknown escape \\~C in string literal" esc))))))
+
 (defun %match-string (state descriptor)
   (let ((delim (lexer-descriptor-string-delim descriptor)))
     (when (and delim (%looking-at state delim))
@@ -359,10 +381,7 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
               ((%looking-at state delim) (%advance state (length delim)) (return))
               ((char= c #\\)
                (%advance state)
-               (let ((esc (%peek state)))
-                 (unless esc (%lex-error state "Unterminated string literal"))
-                 (vector-push-extend (case esc (#\n #\Newline) (#\t #\Tab) (t esc)) chars)
-                 (%advance state)))
+               (vector-push-extend (%read-escape state delim) chars))
               (t (vector-push-extend c chars) (%advance state)))))
         (let ((text (coerce chars 'simple-string)))
           (make-token :type :string :value text :text text :line line :column col))))))

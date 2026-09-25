@@ -60,15 +60,21 @@ a binary literal only when immediately followed by `0` or `1`; write
 `13 % 5` for modulo. Punctuation includes brackets and `#` so addressing
 mode patterns can match them.
 
+## String escapes
+
+| Escape | Character |
+| --- | --- |
+| `\n` `\t` `\r` | Newline, tab, carriage return |
+| `\0` | NUL (code 0) |
+| `\xNN` | Code `NN`, exactly two hex digits |
+| `\\` | Backslash |
+| `\` + first delimiter character | That character, e.g. `\"` |
+
+Any other escape, or a malformed `\x`, signals `lex-error`.
+
 ## Conditions
 
 A malformed `deflexer` clause signals `lexer-definition-error`.
 Malformed strings, comments, character literals, numeric prefixes, or
 unknown characters signal `lex-error` with position and source context.
 See [Diagnostics](diagnostics.md).
-
-## Limitations
-
-- A string literal understands only the `\n` and `\t` escapes; any other
-  escaped character stands for itself
-  ([#262](https://todo.sr.ht/~takeiteasy/lasm/262)).

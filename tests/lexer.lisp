@@ -107,6 +107,15 @@ this */ b" :lexer 'block-comment-syntax))))
     (fiveam:is (= 1 (length toks)))
     (fiveam:is (string= (format nil "hi~%there") (token-value (first toks))))))
 
+(fiveam:test string-escapes-cover-nul-cr-hex-backslash-and-quote
+  (let ((toks (%non-eof (tokenize "\"\\0\\r\\x41\\x7f\\\\\\\"\""))))
+    (fiveam:is (string= (coerce (list (code-char 0) #\Return #\A (code-char #x7f) #\\ #\") 'string)
+                        (token-value (first toks))))))
+
+(fiveam:test unknown-or-malformed-string-escape-signals-lex-error
+  (dolist (source '("\"\\q\"" "\"\\x4\"" "\"\\xzz\"" "\"\\x\""))
+    (fiveam:signals lex-error (tokenize source))))
+
 (fiveam:test unterminated-string-signals-lex-error
   (fiveam:signals lex-error (tokenize "\"never closed")))
 

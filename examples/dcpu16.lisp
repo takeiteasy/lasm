@@ -181,6 +181,14 @@ result: .byte 0  ; one 16-bit cell -- .word would reserve two (#53)")
       (assert (= 1005 (mref m 'ram (gethash "result" (assembly-symbols assembly)))))
       (format t "~%All assertions passed.~%"))))
 
+;; Strings (#34): every character is one 16-bit cell, so a code point above
+;; 255 fits, and .asciz still appends a single 0 cell.
+(let ((cells (assembly-cells
+              (assemble (format nil ".dat \"hi\", 0~%.asciz \"~C\"" (code-char #x263A))
+                        :machine 'dcpu16foo))))
+  (format t "~%String cells: ~{$~4,'0X~^ ~}~%" (coerce cells 'list))
+  (assert (equalp #(#x68 #x69 0 #x263A 0) cells)))
+
 ;; lowcell()/highcell() split a 32-bit value into two 16-bit cells.
 (let ((cells (assembly-cells
               (assemble ".byte lowcell($12345678), highcell($12345678)" :machine 'dcpu16foo))))
