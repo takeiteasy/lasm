@@ -26,9 +26,8 @@
 ;;;; for every entry, a trailing .RES run included. The hex field width is
 ;;;; sized from ASSEMBLY-CELL-WIDTH -- (CEILING CELL-WIDTH 4) digits per
 ;;;; cell -- rather than hardcoded to 2, so a 16-bit-cell machine (e.g.
-;;;; dcpu16) renders full-width cells instead of truncating them (see
-;;;; PRINT-DISASSEMBLY in disassembler.lisp, which does hardcode 2 digits --
-;;;; a pre-existing bug tracked separately, not fixed here). A long cell run
+;;;; dcpu16) renders full-width cells instead of truncating them, as
+;;;; PRINT-DISASSEMBLY (disassembler.lisp) does per line. A long cell run
 ;;;; (a sizeable .RES) is elided to keep one entry to one line.
 
 (in-package #:lasm)
@@ -161,16 +160,35 @@ of its own."
                                               collect digits collect c))
         (format nil "~{~V,'0X~^ ~}" (loop for c in cells collect digits collect c)))))
 
-(defun %listing-row (stream addr-text cells-text source-text)
+(defvar *listing-cycles* nil
+  "True while LISTING-TEXT renders its cycles column (#180).")
+
+(defparameter *listing-cycles-width* 5
+  "Width of the cycles column, its trailing gap included.")
+
+(defun %listing-cycles-text (entry)
+  "ENTRY's cycles column: its declared cost, followed by + when semantics may
+add more at run time. Blank for anything but an instruction."
+  (let ((descriptor (and entry (listing-line-descriptor entry))))
+    (if descriptor
+        (format nil "~D~:[~;+~]" (%descriptor-cycle-cost descriptor)
+                (instruction-descriptor-variable-cycles descriptor))
+        "")))
+
+(defun %listing-row (stream addr-text cells-text source-text &optional entry)
   "Write one ADDR/CELLS/SOURCE row to STREAM. ~24T (not nested inside a
 FORMAT NIL for the source column alone) tabs from STREAM's own current
 column, so a CELLS-TEXT run past column 24 (a wide cell run) still pushes
 SOURCE-TEXT out rather than the reverse -- computing ~24T inside a separate
 FORMAT NIL call would tab from that substring's own column 0 instead,
 misaligning every row after the first with a longer cells column."
-  (if source-text
-      (format stream "~8A  ~A~24T~A~%" addr-text cells-text source-text)
-      (format stream "~8A  ~A~%" addr-text cells-text)))
+  (let ((cycles (if *listing-cycles*
+                    (format nil "~VA" *listing-cycles-width* (%listing-cycles-text entry))
+                    "")))
+    (if source-text
+        (format stream "~8A  ~A~A~VT~A~%" addr-text cycles cells-text
+                (+ 24 (length cycles)) source-text)
+        (format stream "~8A  ~A~A~%" addr-text cycles cells-text))))
 
 (defun %split-source-lines (source)
   "SOURCE split on newlines into a list of lines, 1-based index == line
@@ -203,7 +221,7 @@ data-only line's own text with blank columns when a line has no entry."
           do (if entries
                  (dolist (entry entries)
                    (%listing-row stream (%listing-address-text entry)
-                                 (%listing-cells-text assembly entry digits) text))
+                                 (%listing-cells-text assembly entry digits) text entry))
                  (%listing-row stream "" "" text)))))
 
 (defun %listing-text-entries-only (assembly stream digits)
@@ -212,7 +230,7 @@ text to index into, so this just walks ASSEMBLY-LISTING in address order
 with the source column omitted entirely."
   (dolist (l (assembly-listing assembly))
     (%listing-row stream (%listing-address-text l)
-                  (%listing-cells-text assembly l digits) nil)))
+                  (%listing-cells-text assembly l digits) nil l)))
 
 (defun %listing-entry-index (assembly)
   (let ((index (make-hash-table :test 'eq)))
@@ -239,12 +257,12 @@ with the source column omitted entirely."
           do (if entries
                  (dolist (entry entries)
                    (%listing-row stream (%listing-address-text entry)
-                                 (%listing-cells-text assembly entry digits) marked))
+                                 (%listing-cells-text assembly entry digits) marked entry))
                  (%listing-row stream "" "" marked))
              (dolist (child (gethash line (source-unit-children unit)))
                (%listing-text-from-unit assembly stream digits child index t)))))
 
-(defun listing-text (assembly &key stream)
+(defun listing-text (assembly &key stream cycles)
   "Render ASSEMBLY's LISTING (assembler.lisp, #25) as a conventional
 assembler listing: address, encoded cells, and (when ASSEMBLY-SOURCE is
 present) the original source line, one row per source line. See this file's
@@ -253,8 +271,14 @@ header comment for how a line with no LISTING-LINE entry (a comment, .ORG,
 how a macro invocation's line repeats once per expanded statement, and how
 this degrades to an entry-ordered listing with no source column when
 ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
-(default); otherwise writes to STREAM and returns NIL."
+(default); otherwise writes to STREAM and returns NIL.
+
+CYCLES (#180), when true, adds a column after the address holding each
+instruction's declared cycle cost (%DESCRIPTOR-CYCLE-COST), marked with a +
+when its semantics call EXTRA-CYCLES or ELAPSE, so the real cost is only
+known at run time. Data and non-emitting rows leave it blank."
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
+         (*listing-cycles* cycles)
          (body (with-output-to-string (s)
                  (if (assembly-source assembly)
                      (if (assembly-source-unit assembly)
@@ -269,10 +293,10 @@ ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
                      (%listing-text-entries-only assembly s digits)))))
     (if stream (progn (write-string body stream) nil) body)))
 
-(defun print-listing (assembly &key (stream *standard-output*))
+(defun print-listing (assembly &key (stream *standard-output*) cycles)
   "LISTING-TEXT written to STREAM (default *STANDARD-OUTPUT*) -- parallel to
 PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
-  (listing-text assembly :stream stream)
+  (listing-text assembly :stream stream :cycles cycles)
   assembly)
 
 ;;; Symbol table (#37) -- scope- and kind-aware lookup and listing over

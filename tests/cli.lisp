@@ -196,3 +196,12 @@
                       "-m" (%cli-path "tests/fixtures/cli/undefined-opcode.lasm")))
     (fiveam:is (= 1 status))
     (fiveam:is (search "(line 2: .byte 2)" out))))
+
+(fiveam:test cli-listing-cycle-costs
+  (multiple-value-bind (status out)
+      (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--cycle-costs")))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "1    A2 0A" out)))
+  (multiple-value-bind (status out) (%run-cli (%cli-args "listing" "examples/cli/counter.asm"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (not (search "1    A2 0A" out)))))

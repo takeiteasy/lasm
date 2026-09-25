@@ -21,7 +21,7 @@ commands:
   run FILE          assemble and run          [--max-steps N] [--cycles N]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate]
                     [--data-region START:END]...
-  listing FILE      print an assembly listing [--symbols]
+  listing FILE      print an assembly listing [--symbols] [--cycle-costs]
 
 options:
   -m, --machine FILE     machine definition (.lasm), required
@@ -45,7 +45,7 @@ options:
   '(("--data-region" . :data-regions)))
 
 (defparameter *cli-flag-options*
-  '(("--symbols" . :symbols) ("--annotate" . :annotate)
+  '(("--symbols" . :symbols) ("--cycle-costs" . :cycle-costs) ("--annotate" . :annotate)
     ("-h" . :help) ("--help" . :help)))
 
 (defun %cli-parse (args)
@@ -223,7 +223,7 @@ the calling image."
 
 (defun %cli-command-listing (file machine lexer options out)
   (let ((assembly (%cli-assemble file machine lexer options)))
-    (print-listing assembly :stream out)
+    (print-listing assembly :stream out :cycles (getf options :cycle-costs))
     (when (getf options :symbols)
       (terpri out)
       (print-symbols assembly :stream out))

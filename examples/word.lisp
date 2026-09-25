@@ -135,6 +135,13 @@ SETB/SETC's extra-word forms, 3 for SETD's own 1-byte extra word, 4 for the forc
           (length (assembly-cells assembly)))
   (assert (= 23 (length (assembly-cells assembly))))
 
+  ;; A declared data region renders as .word lines: two 8-bit cells per word.
+  (let* ((data (assemble (format nil "hlt~%.word $1234, $BEEF") :machine 'wordfoo))
+         (texts (mapcar #'disassembly-line-text
+                        (disassemble-assembly data :machine 'wordfoo :labels nil))))
+    (format t "~%Data region disassembly: ~{~A~^ | ~}~%" texts)
+    (assert (equal '("hlt" ".word $1234" ".word $BEEF") texts)))
+
   (format t "~%Running:~%")
   (let ((m (make-machine 'wordfoo)))
     (load-program m assembly)

@@ -937,3 +937,59 @@ hlt" :machine 'disasm-test-machine))
       (fiveam:is (equal '(".byte $A2" ".byte $A" ".byte $A2" ".byte $A" "hlt")
                         (texts :assembly a :data-regions '((0 . 4)))))
       (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (texts))))))
+
+;;; .word data regions (#179)
+
+(defmachine disasm-pair-le
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (instruction-word :width 16 (field opcode 16)))
+
+(defmachine disasm-pair-be
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16 :endian :big)
+  (instruction-word :width 16 (field opcode 16)))
+
+(definstruction disasm-pair-le nop (encoding (opcode #x0001)) (semantics (trap :nop)))
+(definstruction disasm-pair-be nop (encoding (opcode #x0001)) (semantics (trap :nop)))
+
+(fiveam:test data-region-renders-word-lines-on-a-two-cell-word-machine
+  (let ((lines (disassemble-cells (list #x34 #x12 #x78 #x56) :machine 'disasm-pair-le
+                                                             :labels nil :data-regions '((0 . 4)))))
+    (fiveam:is (equal '(".word $1234" ".word $5678") (mapcar #'disassembly-line-text lines)))
+    (fiveam:is (equal '(0 2) (mapcar #'disassembly-line-address lines)))
+    (fiveam:is (equal '(2 2) (mapcar #'disassembly-line-size lines)))))
+
+(fiveam:test data-region-word-line-follows-the-memory-endian
+  (let ((lines (disassemble-cells (list #x12 #x34) :machine 'disasm-pair-be
+                                                   :labels nil :data-regions '((0 . 2)))))
+    (fiveam:is (equal '(".word $1234") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-of-odd-length-stays-byte-lines
+  (let ((lines (disassemble-cells (list 1 2 3) :machine 'disasm-pair-le
+                                               :labels nil :data-regions '((0 . 3)))))
+    (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-is-clipped-to-the-disassembled-range-before-pairing
+  ;; The declared 0..4 region is 4 cells, but only 3 are disassembled.
+  (let ((lines (disassemble-cells (list 1 2 3) :machine 'disasm-pair-le
+                                               :labels nil :data-regions '((0 . 4)))))
+    (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3") (mapcar #'disassembly-line-text lines))))
+  ;; A region running past :END pairs only when the clipped length is even.
+  (let ((lines (disassemble-cells (list 1 2 3 4 5) :machine 'disasm-pair-le :origin 0 :end 4
+                                                   :labels nil :data-regions '((0 . 9)))))
+    (fiveam:is (equal '(".word $201" ".word $403") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-word-line-does-not-affect-a-one-cell-word-machine
+  (let ((lines (disassemble-cells (list #x3E8 #x3E9) :machine 'disasm-word-machine
+                                                     :labels nil :data-regions '((0 . 2)))))
+    (fiveam:is (equal '(".byte $3E8" ".byte $3E9") (mapcar #'disassembly-line-text lines)))))
+
+(fiveam:test data-region-word-lines-round-trip
+  (dolist (machine '(disasm-pair-le disasm-pair-be))
+    (let* ((source (format nil "nop~%.word $1234, $BEEF~%nop"))
+           (a (assemble source :machine machine))
+           (text (disassembly-text (disassemble-assembly a :machine machine :labels nil)))
+           (b (assemble text :machine machine)))
+      (fiveam:is (search ".word" text))
+      (fiveam:is (equalp (assembly-cells a) (assembly-cells b))))))

@@ -384,3 +384,46 @@ nop" :machine 'instr-test-machine)))
     (load-program m a)
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
     (fiveam:is (null (machine-listing-line m 9)))))
+
+;;; Cycles column (#180)
+
+(defmachine cyc-list-machine
+  (register pc :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction cyc-list-machine nop (encoding (opcode #x01)) (semantics (set! a a)))
+(definstruction cyc-list-machine slow (encoding (opcode #x02)) (semantics (set! a a)) (cycles 3))
+(definstruction cyc-list-machine jmpx (encoding (opcode #x03)) (semantics (extra-cycles 1)) (cycles 2))
+(definstruction cyc-list-machine wait (encoding (opcode #x04)) (semantics (elapse 5)) (cycles 4))
+
+(defmachine (cyc-list-child (:extends cyc-list-machine)))
+
+(defparameter *cycles-source* (format nil "nop~%slow~%jmpx~%wait~%.byte 1,2"))
+
+(defun %cycles-rows (machine &key (source *cycles-source*))
+  (let ((text (listing-text (assemble source :machine machine) :cycles t)))
+    (mapcar (lambda (line) (string-trim " " (subseq line 10 15)))
+            (%split-source-lines text))))
+
+(fiveam:test cycles-column-shows-declared-cost-and-marks-variable-cost
+  (fiveam:is (equal '("1" "3" "2+" "4+" "") (%cycles-rows 'cyc-list-machine))))
+
+(fiveam:test cycles-column-survives-inheritance
+  (fiveam:is (equal '("1" "3" "2+" "4+" "") (%cycles-rows 'cyc-list-child))))
+
+(fiveam:test cycles-column-is-off-by-default
+  (let ((a (assemble *cycles-source* :machine 'cyc-list-machine)))
+    (fiveam:is (not (search "2+" (listing-text a))))
+    (fiveam:is (string= (listing-text a) (listing-text a :cycles nil)))))
+
+(fiveam:test cycles-column-keeps-the-source-column-aligned
+  (let* ((a (assemble *cycles-source* :machine 'cyc-list-machine))
+         (columns (mapcar (lambda (line) (position #\s line))
+                          (remove-if-not (lambda (line) (search "slow" line))
+                                         (%split-source-lines (listing-text a :cycles t))))))
+    (fiveam:is (equal (list 29) columns))))
+
+(fiveam:test cycles-column-works-on-a-word-encoded-machine
+  (let ((text (listing-text (assemble "set 1,1000" :machine 'disasm-word-machine) :cycles t)))
+    (fiveam:is (search "1  " text))))

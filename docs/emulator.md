@@ -162,7 +162,8 @@ individual mode; see [Instructions](instructions.md#cycles-n).
 Call `(extra-cycles n)` inside semantics for a runtime-dependent cost, such
 as a taken branch. The extra cost contributes to cycle budgets and elapsed
 time. Devices receive it in a second tick when semantics returns; a trap
-skips that second tick.
+skips that second tick. The [listing](listing.md#rendering-listing-text--print-listing)
+marks such instructions with `+` in its cycles column.
 
 ## Limitations
 

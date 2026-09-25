@@ -30,22 +30,23 @@
 ;;;; can produce -- an unregistered opcode/unmatched word field
 ;;;; (:DECODE-FAILURE) and a condition signalled by READ-CELL itself off the
 ;;;; end of the buffer (ADDRESS-OUT-OF-RANGE, from a truncated trailing
-;;;; instruction). A word-encoded machine could instead consolidate an
-;;;; unmatched-field failure into one WIDTH-CELLS-wide ".word" line (the
-;;;; whole word was already read successfully to reach that failure) -- left
-;;;; as one-cell-at-a-time for both failure shapes uniformly, since a
-;;;; genuinely truncated buffer cannot safely assume WIDTH-CELLS more cells
-;;;; are readable, and a single fallback path is less to get wrong than two.
-;;;; The resulting cells are still exactly re-assemblable, just as several
-;;;; ".byte" lines rather than one ".word" line.
+;;;; instruction). A truncated buffer cannot safely assume more cells are
+;;;; readable, so these never consolidate. The resulting cells are still
+;;;; exactly re-assemblable.
 ;;;;
 ;;;; DATA REGIONS (#82): a caller may declare (START . END) cell ranges, END
-;;;; exclusive, as data. Every cell inside one renders as a ".byte" line with
-;;;; no decode attempted. A decode that succeeds but would run into a region
-;;;; is discarded for a ".byte" line as well, so an instruction never spans
-;;;; the boundary. DISASSEMBLE-ASSEMBLY derives its regions from the
-;;;; assembly's own .byte/.word/.res statements, so this straddle case only
-;;;; arises for hand-declared regions.
+;;;; exclusive, as data. Every cell inside one renders as data with no decode
+;;;; attempted. A decode that succeeds but would run into a region is
+;;;; discarded for a ".byte" line as well, so an instruction never spans the
+;;;; boundary. DISASSEMBLE-ASSEMBLY derives its regions from the assembly's
+;;;; own .byte/.word/.res statements, so this straddle case only arises for
+;;;; hand-declared regions.
+;;;;
+;;;; #179: on a word-encoded machine whose instruction word is two cells (.WORD's
+;;;; width), a region renders as ".word" lines, cells paired from the region's
+;;;; start in the memory's own endian order. The region is clipped to the
+;;;; disassembled range first, and stays ".byte" lines unless the clipped,
+;;;; merged length is even.
 ;;;;
 ;;;; ROUND-TRIP FIDELITY -- the honest scope (see docs/disassembler.md):
 ;;;; ASSEMBLE -> DISASSEMBLE-* -> ASSEMBLE reproduces identical cells when
@@ -74,6 +75,7 @@
   (size 1 :type (integer 1))
   (cells nil :type list)                                   ; raw cells consumed, in address order
   (cell-width 8 :type (integer 1))
+  (word nil :type (or null (integer 0)))                    ; a .word data line's value, else NIL
   (descriptor nil :type (or null instruction-descriptor))   ; NIL = undecodable data
   (values nil :type list)                                  ; decoded operand values, hole order
   ;; DECODE-INSTRUCTION-AT's matched per-hole record, hole order -- a
@@ -111,6 +113,15 @@ returned sorted by START with overlapping or adjacent ranges merged."
           (cl:push r merged)))
     (nreverse merged)))
 
+(defun %data-word-endian (machine-name memory)
+  "MEMORY's cell endianness when a data region on MACHINE-NAME renders as
+.word lines: the machine is word-encoded with a two-cell instruction word,
+.word's own width. NIL otherwise."
+  (let ((layout (machine-descriptor-instruction-word (find-machine-descriptor machine-name))))
+    (and layout
+         (= 2 (instruction-word-layout-width-cells layout))
+         (%machine-endian machine-name memory))))
+
 (defun %disassemble-raw-lines (read-cell origin end machine-name memory cell-width &optional data-regions)
   "Walk READ-CELL from ORIGIN to END (exclusive), decoding one instruction
 at a time via DECODE-INSTRUCTION-AT (decoder.lisp) and collecting one
@@ -119,23 +130,39 @@ header comment for the mid-stream decode-failure and data-region policies.
 TEXT and LABEL are left NIL; %RENDER-LINES! fills them in once every line's
 address is known."
   (let ((regions (%normalize-data-regions data-regions))
+        (word-endian (%data-word-endian machine-name memory))
         lines)
-    (flet ((data-line (address)
-             "Emit a one-cell data line at ADDRESS; NIL when it is unreadable."
-             (multiple-value-bind (cell okp)
-                 (handler-case (values (funcall read-cell address) t)
-                   (address-out-of-range () (values nil nil)))
-               (when okp
-                 (cl:push (make-disassembly-line :address address :size 1 :cells (list cell)
-                                                 :cell-width cell-width) lines))
-               okp)))
+    (labels ((read-cells (address count)
+               "COUNT cells from ADDRESS, or NIL when any is unreadable."
+               (handler-case (loop for i below count collect (funcall read-cell (+ address i)))
+                 (address-out-of-range () nil)))
+             (data-line (address size)
+               "Emit a SIZE-cell data line at ADDRESS; NIL when it is unreadable."
+               (let ((cells (read-cells address size)))
+                 (when cells
+                   (cl:push (make-disassembly-line
+                             :address address :size size :cells cells :cell-width cell-width
+                             :word (and (= size 2)
+                                        (%fetch-cells (lambda (a) (nth (- a address) cells))
+                                                      address 2 cell-width word-endian)))
+                            lines))
+                 (and cells t)))
+             (region-data-line (address)
+               "Emit ADDRESS's data line: a .word pair when the region, clipped
+to the disassembled range, holds a whole number of pairs; else one cell."
+               (let* ((start (max (car (first regions)) origin))
+                      (stop (min (cdr (first regions)) end)))
+                 (if (and word-endian (evenp (- stop start)) (data-line address 2))
+                     2
+                     (and (data-line address 1) 1)))))
       (loop with address = origin
             while (< address end)
             do (loop while (and regions (<= (cdr (first regions)) address))
                      do (cl:pop regions))
                (let ((region-start (and regions (car (first regions)))))
                  (if (and region-start (<= region-start address))
-                     (if (data-line address) (incf address) (setf address end))
+                     (let ((size (region-data-line address)))
+                       (if size (incf address size) (setf address end)))
                          (multiple-value-bind (descriptor values size choices choice-selections)
                          (handler-case (decode-instruction-at read-cell address machine-name :memory memory)
                            (address-out-of-range () (values :decode-failure nil nil nil)))
@@ -145,7 +172,7 @@ address is known."
                           ;; ADDRESS itself unreadable (not merely a later cell
                           ;; of a truncated multi-cell instruction): nothing
                           ;; more to disassemble.
-                          (if (data-line address) (incf address) (setf address end)))
+                          (if (data-line address 1) (incf address) (setf address end)))
                          (t
                           (let ((cells (loop for i below size collect (funcall read-cell (+ address i)))))
                             (cl:push (make-disassembly-line :address address :size size :cells cells
@@ -455,8 +482,10 @@ selects it. Each line declaring a prefix is re-parsed and re-selected."
                                                                    choice-selections separator))))
         mnemonic)))
 
-(defun %data-line-text (cell lexer)
-  (format nil ".byte ~A" (%render-value cell lexer)))
+(defun %data-line-text (line lexer)
+  (if (disassembly-line-word line)
+      (format nil ".word ~A" (%render-value (disassembly-line-word line) lexer))
+      (format nil ".byte ~A" (%render-value (first (disassembly-line-cells line)) lexer))))
 
 (defun %render-lines! (lines lexer labels suffixes symbols &optional symbol-info)
   "Destructively fill in each of LINES' TEXT (always) and LABEL (only when
@@ -478,7 +507,7 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
                                 lexer suffixes reverse-symbols (disassembly-line-choices l)
                                 (disassembly-line-choice-selections l)
                                 (disassembly-line-cell-width l))
-                (%data-line-text (first (disassembly-line-cells l)) lexer))))
+                (%data-line-text l lexer))))
     lines))
 
 ;;; Entry points

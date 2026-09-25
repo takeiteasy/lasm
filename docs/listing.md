@@ -60,8 +60,8 @@ by default; see [Disassembler](disassembler.md#data-regions).
 ## Rendering: `listing-text` / `print-listing`
 
 ```lisp
-(listing-text assembly &key stream)
-(print-listing assembly &key stream)
+(listing-text assembly &key stream cycles)
+(print-listing assembly &key stream cycles)
 ```
 
 A listing shows address, encoded cells, and source:
@@ -71,6 +71,21 @@ A listing shows address, encoded cells, and source:
 0001      A2 0A         ldx #10
 0003      01 02 03      .byte 1,2,3
 ```
+
+Pass `:cycles t` for a cycles column after the address:
+
+```text
+0000      1    EA            start: nop
+0001      3    A5 10         lda $10
+0003      2+   D0 FB         bne start
+0005           01 02 03      .byte 1,2,3
+```
+
+Each value is the instruction's declared `(cycles n)`, or `1` when
+undeclared. A `+` marks an instruction whose semantics call `extra-cycles`
+or `elapse`, so its real cost is only known at run time.[^variable] The
+column is blank for data and non-emitting lines. `lasm listing --cycle-costs`
+prints it from the [command line](cli.md#commands).
 
 Non-emitting source lines stay visible with empty address and cell columns.
 Included files appear after their `.include` line; macro invocations show
@@ -110,5 +125,10 @@ from assignments with the same value.
 
 ## Limitations
 
+- The `+` marker is decided per instruction, not per mode, and misses
+  `extra-cycles` or `elapse` produced by a user macro
+  ([ticket 270](https://todo.sr.ht/~takeiteasy/lasm/270)).
 - Address lookup scans the listing linearly. An indexed lookup may help
   larger programs.
+
+[^variable]: See [Dynamic cycle costs](emulator.md#dynamic-cycle-costs).

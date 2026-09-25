@@ -75,9 +75,25 @@ reassembly without guessing the width of invalid data.
 ### Data regions
 
 `:data-regions` contains `(start . end)` ranges with exclusive ends.
-Cells inside them render as `.byte`, even if their bits match an
+Cells inside them render as data, even if their bits match an
 instruction. Overlapping and adjacent ranges merge. An instruction cannot
 cross a data boundary.
+
+| Machine | Region renders as |
+| --- | --- |
+| Byte-encoded | `.byte` per cell |
+| Word-encoded, two-cell instruction word | `.word` per cell pair, else `.byte` |
+| Word-encoded, other word width | `.byte` per cell[^wide] |
+
+Pairs start at the region's first cell and read in the memory's endian
+order, so the text reassembles to the same cells. The region is first
+clipped to the disassembled range. An odd length after merging and clipping
+stays `.byte`; `.byte 1,2,3` followed by `.word 4` is one five-cell region.
+
+```text
+.word $1234
+.word $BEEF
+```
 
 `disassemble-assembly` uses [assembly data regions](listing.md#assembly-data-regions)
 by default. `disassemble-memory` does the same when given `:assembly`, and
@@ -145,3 +161,6 @@ without an ambiguous local substitution.
   global label have the same visible spelling, the local reference renders
   as a number to keep the text unambiguous. An alias for an encoded choice
   decodes using the canonical alternative.
+
+[^wide]: A word wider than two cells has no single directive to render as
+    ([ticket 269](https://todo.sr.ht/~takeiteasy/lasm/269)).

@@ -180,8 +180,8 @@ loaded at ORIGIN overlap."
 
 (defun %descriptor-cycle-cost (descriptor)
   "DESCRIPTOR's cycle cost (#75): its own (cycles n), or 1 when undeclared.
-The one place this default lives, so STEP-MACHINE's accumulation and any
-future listing annotation (a follow-up ticket) can't disagree on it."
+The one place this default lives, so STEP-MACHINE's accumulation and the
+listing's cycles column (#180) can't disagree on it."
   (or (instruction-descriptor-cycles descriptor) 1))
 
 ;;; Step

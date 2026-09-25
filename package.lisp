@@ -374,6 +374,7 @@
    #:instruction-descriptor-total-operand-width
    #:instruction-descriptor-semantics-fn
    #:instruction-descriptor-cycles
+   #:instruction-descriptor-variable-cycles
    #:instruction-descriptor-word-fields
    #:instruction-descriptor-word-alternatives
    #:instruction-descriptor-extra-cells

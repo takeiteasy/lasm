@@ -262,6 +262,10 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; T when the definstruction declared (fallback): a general encoding that
   ;; may overlap strictly more specific co-tenants, which decode ahead of it.
   (fallback nil :type boolean)
+  ;; True when the instruction's (semantics ...) call (extra-cycles n) or
+  ;; (elapse n) (#90, #159), so its declared cost is only a lower bound.
+  ;; Decided per DEFINSTRUCTION, not per mode: see %USES-DYNAMIC-CYCLES-P.
+  (variable-cycles nil :type boolean)
   ;; Named ONE-OF selections that do not have an operand hole, such as a
   ;; literal-only alternative.  This is separate from the hole-aligned
   ;; CHOICES value so existing callers keep their shape.
@@ -3783,12 +3787,28 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
   (dolist (descriptor descriptors descriptors)
     (setf (instruction-descriptor-fallback descriptor) t)))
 
+(defvar *definstruction-variable-cycles* nil
+  "True while DEFINSTRUCTION expands an instruction whose semantics may add cycles.")
+
+(defun %uses-dynamic-cycles-p (form)
+  "True when FORM mentions the EXTRA-CYCLES or ELAPSE semantics primitive.
+A primitive hidden behind a user macro is not seen (docs/listing.md)."
+  (cond ((consp form) (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))
+        (t (member form '(extra-cycles elapse)))))
+
+(defun %mark-variable-cycles (descriptors)
+  (dolist (descriptor descriptors descriptors)
+    (setf (instruction-descriptor-variable-cycles descriptor) t)))
+
 (defun %instruction-registration-form (machine name descriptors-form)
   (let ((registration `(register-instruction-variants!
                         ',machine
-                        ,(if *definstruction-fallback*
-                             `(%mark-fallback ,descriptors-form)
-                             descriptors-form))))
+                        ,(let ((form (if *definstruction-fallback*
+                                         `(%mark-fallback ,descriptors-form)
+                                         descriptors-form)))
+                           (if *definstruction-variable-cycles*
+                               `(%mark-variable-cycles ,form)
+                               form)))))
     `(eval-when (:compile-toplevel :load-toplevel :execute)
        ,(if (%word-machine-p machine)
             `(%evaluate-instruction-registration ',registration)
@@ -3983,6 +4003,7 @@ NO-MATCHING-CHOICE rather than silently falling through."
       (multiple-value-setq (encoding-clause fallbackp)
         (%extract-fallback machine name encoding-clause))
       (let* ((*definstruction-fallback* fallbackp)
+             (*definstruction-variable-cycles* (and (%uses-dynamic-cycles-p clauses) t))
              (mode-forms (rest modes-clause))
              (cycles-form (and cycles-clause (second cycles-clause))))
         (cond
