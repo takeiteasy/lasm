@@ -589,7 +589,22 @@ far:    .byte 1
       (setf (current-bank m 'romx) 0)
       (fiveam:is (search ".byte" (first-text)))
       (reset m)
-      (fiveam:is (not (search ".byte" (first-text)))))))
+      (fiveam:is (search ".byte" (first-text))))))
+
+(fiveam:test reset-keeps-rom-banks-and-the-program-loaded-into-them
+  (let* ((a (%bank-assembly "        .org $4000
+        .byte 1
+        .bank 1
+        .org $4000
+        hlt"))
+         (m (make-machine 'bank-asm-machine)))
+    (load-program m a)
+    (setf (current-bank m 'romx) 1)
+    (reset m)
+    (fiveam:is (= 0 (current-bank m 'romx)))
+    (fiveam:is (= 1 (mref m 'ram #x4000)))
+    (fiveam:is (= 1 (bank-peek m 'romx 1 #x4000)))
+    (fiveam:is (eq a (machine-program m)))))
 
 (fiveam:test debug-step-back-keeps-the-loaded-bank
   (let* ((a (%bank-assembly "        .org $4000

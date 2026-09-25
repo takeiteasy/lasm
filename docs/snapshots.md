@@ -19,7 +19,7 @@ from a file. Each `defmachine` provides these operations. Stateful devices can a
 
 ## What is saved
 
-The same state `reset` clears:
+Snapshots hold:
 
 - every register (banked ones cell by cell), flag, stack (whole backing
   vector and stack pointer) and memory element

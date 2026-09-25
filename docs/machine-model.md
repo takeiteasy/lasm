@@ -90,7 +90,7 @@ Hooks are bare function names. Device hooks receive the **absolute**
 address: `(read machine address)` and `(write machine address value)`.
 `mref` and instruction fetch honor region behavior; `mpeek` reads backing
 storage for inspection without device side effects. `load-program` can fill
-ROM. `reset` clears backing storage, including ROM images.[^regions]
+ROM. `reset` keeps ROM images and clears everything else.[^regions]
 
 ### Bank switching
 
@@ -105,12 +105,13 @@ creation and reset. It is unavailable for device regions.
 
 `bank-peek` addresses any bank without changing the mapping; its setter
 bypasses ROM protection. Normal memory access uses the mapped bank.
-`reset` clears every bank. See [Banked output](banked-output.md) for `.bank`
+`reset` maps bank 0 again, keeps ROM banks and clears RAM banks. See
+[Banked output](banked-output.md) for `.bank`
 and [Emulator](emulator.md#load-program) for loading a bank.
 
 ## Runtime state
 
-`(make-machine 'NAME)` creates a machine. `(reset machine)` clears storage,
+`(make-machine 'NAME)` creates a machine. `(reset machine)` clears non-ROM storage,
 cycles, pending interrupts, and idle state, and rebuilds the declared device
 bus. Host-installed access and interrupt hooks remain attached.
 

@@ -29,8 +29,9 @@ the origin comes from `assembly-origin` and its cell width must match the
 target memory. A plain sequence starts at `0` unless `:origin` is supplied.
 
 An assembly loaded without `:bank` is kept as `machine-program`, with the
-memory it went into and its load offset. Loading raw cells clears it, and
-`reset` clears it too; snapshots do not save it.
+memory it went into and its load offset. Loading raw cells clears it;
+snapshots do not save it. `reset` clears it unless the whole image (including
+bank images) lies in `:rom` regions, which `reset` keeps.
 
 An assembly's [bank images](banked-output.md) load without changing the
 current mapping. `:bank n` loads a selected bank without changing the

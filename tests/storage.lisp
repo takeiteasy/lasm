@@ -398,11 +398,56 @@ reset at the start of each test that reads it.")
     (fiveam:is (= 2 (mref m 'ram #x21)))
     (fiveam:is (= 3 (mref m 'ram #x22)))))
 
-(fiveam:test reset-zeroes-regioned-memory
+(fiveam:test reset-preserves-rom
   (let ((m (make-machine 'region-test-machine)))
     (%poke m 'ram #x20 42)
+    (%poke m 'ram #x3F 7)
     (reset m)
-    (fiveam:is (= 0 (mref m 'ram #x20)))))
+    (fiveam:is (= 42 (mref m 'ram #x20)))
+    (fiveam:is (= 7 (mpeek m 'ram #x3F)))))
+
+(fiveam:test reset-zeroes-ram-around-rom
+  (let ((m (make-machine 'region-test-machine)))
+    (setf (mref m 'ram #x1F) 1)
+    (setf (mref m 'ram #x90) 2)
+    (%poke m 'ram #x20 42)
+    (reset m)
+    (fiveam:is (= 0 (mref m 'ram #x1F)))
+    (fiveam:is (= 0 (mref m 'ram #x90)))
+    (fiveam:is (= 42 (mref m 'ram #x20)))))
+
+(defmachine rom-program-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region boot #x0000 #x00FF :kind :rom)))
+
+(definstruction rom-program-test-machine nop
+  (encoding (opcode #xEA))
+  (semantics))
+
+(fiveam:test reset-keeps-program-loaded-into-rom
+  (let ((m (make-machine 'rom-program-test-machine))
+        (a (assemble "nop" :machine 'rom-program-test-machine)))
+    (load-program m a)
+    (reset m)
+    (fiveam:is (eq a (machine-program m)))
+    (fiveam:is (= #xEA (mref m 'ram 0)))))
+
+(fiveam:test reset-drops-program-loaded-into-ram
+  (let ((m (make-machine 'rom-program-test-machine))
+        (a (assemble "nop" :machine 'rom-program-test-machine)))
+    (load-program m a :origin #x100)
+    (reset m)
+    (fiveam:is (null (machine-program m)))
+    (fiveam:is (= 0 (mref m 'ram #x100)))))
+
+(fiveam:test reset-drops-program-straddling-rom-end
+  (let ((m (make-machine 'rom-program-test-machine))
+        (a (assemble "nop
+nop" :machine 'rom-program-test-machine)))
+    (load-program m a :origin #xFF)
+    (reset m)
+    (fiveam:is (null (machine-program m)))))
 
 (fiveam:test defmachine-rejects-overlapping-regions
   (fiveam:signals machine-definition-error
@@ -547,10 +592,14 @@ reset at the start of each test that reads it.")
 (fiveam:test reset-clears-banks-and-selection
   (let ((m (make-machine 'bank-test-machine)))
     (setf (bank-peek m 'bram 2 20) 5)
+    (setf (bank-peek m 'brom 1 40) 9)
     (setf (current-bank m 'bram) 2)
+    (setf (current-bank m 'brom) 1)
     (reset m)
     (fiveam:is (= 0 (current-bank m 'bram)))
-    (fiveam:is (= 0 (bank-peek m 'bram 2 20)))))
+    (fiveam:is (= 0 (current-bank m 'brom)))
+    (fiveam:is (= 0 (bank-peek m 'bram 2 20)))
+    (fiveam:is (= 9 (bank-peek m 'brom 1 40)))))
 
 (fiveam:test defmachine-rejects-bad-banks
   (fiveam:signals machine-definition-error

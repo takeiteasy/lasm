@@ -90,4 +90,11 @@ hlt")
             before (mref m 'ram #x0000))
     (assert (= before (mref m 'ram #x0000))))
 
+  ;; RESET zeroes RAM but leaves the burned ROM image alone (#157).
+  (reset m)
+  (format t "~%After RESET: ROM[$0000]=~D (kept), RAM[$1000]=~D (cleared)~%"
+          (mref m 'ram #x0000) (mref m 'ram #x1000))
+  (assert (= (aref (assembly-cells assembly) 0) (mref m 'ram #x0000)))
+  (assert (= 0 (mref m 'ram #x1000)))
+
   (format t "~%All assertions passed.~%"))

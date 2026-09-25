@@ -92,7 +92,8 @@ Signals if ORIGIN is not in a banked region or CELLS run past its end.
 
 An ASSEMBLY loaded without BANK is retained as MACHINE-PROGRAM, with its
 memory and load offset, so runtime conditions can name the source line; a
-load of raw cells clears it, and RESET does too.
+load of raw cells clears it, and RESET does too unless the assembly was
+loaded wholly into :ROM regions (#157).
 
 An ASSEMBLY that placed output in banks with .BANK also has each of those
 banks filled, without changing the mapping, when BANK is not given. Signals

@@ -189,7 +189,7 @@ memory ~S on machine ~S"
 ;;              :IGNORE, the default) or signal MEMORY-WRITE-PROTECTED
 ;;              (:ON-WRITE :ERROR). LOAD-PROGRAM/the debugger burn a ROM
 ;;              image in via %POKE, which bypasses this -- a ROM image is
-;;              burned, not stored by the CPU.
+;;              burned, not stored by the CPU. RESET leaves it intact (#157).
 ;;   :DEVICE -- reads and writes are forwarded to READ/WRITE instead of
 ;;              touching backing storage at all; a device region with no
 ;;              READ reads as 0, one with no WRITE discards the store. READ
@@ -746,11 +746,53 @@ machine descriptor or a machine name -- or DEFAULT."
         (setf (machine-interrupt-hook m) #'%default-interrupt-hook))
       m)))
 
+(defun %fill-outside-rom (element slot)
+  "Zero SLOT, the backing array of memory ELEMENT, except the cells of its
+:ROM regions."
+  (let ((start 0))
+    (dolist (region (sort (remove :rom (storage-element-regions element)
+                                  :key #'memory-region-kind :test-not #'eq)
+                          #'< :key #'memory-region-start))
+      (fill slot 0 :start start :end (memory-region-start region))
+      (setf start (1+ (memory-region-end region))))
+    (fill slot 0 :start start)))
+
+(defun %rom-covered-p (element start end)
+  "True when every address in the non-empty range START..END of memory
+ELEMENT lies in a :ROM region."
+  (and (<= start end)
+       (loop with address = start
+             while (<= address end)
+             do (let ((region (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
+                                       (storage-element-regions element))))
+                  (unless (and region (eq (memory-region-kind region) :rom))
+                    (return nil))
+                  (setf address (1+ (memory-region-end region))))
+             finally (return t))))
+
+(defun %program-in-rom-p (machine)
+  "True when MACHINE's retained assembly (MACHINE-PROGRAM) was loaded wholly
+into :ROM regions -- its main image and every .BANK image."
+  (let ((assembly (machine-program machine)))
+    (and assembly
+         (let* ((element (descriptor-element (machine-descriptor machine) (machine-program-memory machine)))
+                (origin (+ (assembly-origin assembly) (machine-program-offset machine))))
+           (and (%rom-covered-p element origin (+ origin (length (assembly-cells assembly)) -1))
+                (every (lambda (image)
+                         (%rom-covered-p element (bank-image-origin image)
+                                         (+ (bank-image-origin image) (length (bank-image-cells image)) -1)))
+                       (assembly-banks assembly)))))))
+
 (defun reset (machine)
   "Zero all storage on MACHINE, including the #75 cycle counter -- which
 lives on the MACHINE struct itself rather than as a storage element, so the
 loop below (driven off MACHINE-DESCRIPTOR-ELEMENTS) never sees it and must
 be told separately.
+
+#157: the cells of every :ROM region -- every bank of a banked one -- survive,
+as a burned-in image does on hardware; bank selection still returns to 0.
+The retained MACHINE-PROGRAM survives too when it was loaded wholly into ROM,
+so runtime errors in ROM code keep naming source lines.
 
 #108: also restores the device bus to its *declared* shape -- any runtime-
 attached device (ATTACH-DEVICE, device.lisp) is dropped, every hole is
@@ -768,14 +810,22 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
       (ecase (storage-element-kind element)
         ((:register :flag) (fill slot 0))
         (:stack (fill (car slot) 0) (setf (cdr slot) 0))
-        (:memory (fill slot 0)))))
-  (clrhash (machine-loaded-banks machine))
-  (setf (machine-program machine) nil
-        (machine-program-memory machine) nil
-        (machine-program-offset machine) 0)
-  (loop for entry being the hash-values of (machine-banks machine)
-        do (setf (car entry) 0)
-           (map nil (lambda (bank) (fill bank 0)) (cdr entry)))
+        (:memory (%fill-outside-rom element slot)))))
+  (let ((rom-banks (loop for (nil . region) in (%banked-regions (machine-descriptor machine))
+                         when (eq (memory-region-kind region) :rom)
+                           collect (memory-region-name region))))
+    (unless (%program-in-rom-p machine)
+      (setf (machine-program machine) nil
+            (machine-program-memory machine) nil
+            (machine-program-offset machine) 0))
+    (loop for name being the hash-keys of (machine-loaded-banks machine)
+          unless (member name rom-banks)
+            do (remhash name (machine-loaded-banks machine)))
+    (loop for name being the hash-keys of (machine-banks machine)
+            using (hash-value entry)
+          do (setf (car entry) 0)
+             (unless (member name rom-banks)
+               (map nil (lambda (bank) (fill bank 0)) (cdr entry)))))
   (setf (machine-cycles machine) 0)
   (setf (machine-extra-cycles machine) 0)
   (let ((devices (machine-devices machine)))
