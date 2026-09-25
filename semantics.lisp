@@ -36,53 +36,57 @@
 (defun %plain-sp-push (machine reg memory grows value) (sp-push machine reg memory grows value))
 (defun %plain-sp-pop (machine reg memory grows) (sp-pop machine reg memory grows))
 
-(defun %check-element-gate (machine name &optional kind)
-  "Enforce NAME's :PRIVILEGE, if it has one, with KIND defaulting to the element's own."
-  (let* ((element (descriptor-element (machine-descriptor machine) name))
-         (required (storage-element-privilege element)))
-    (when required
-      (%check-privilege machine required name nil (or kind (storage-element-kind element))))))
+(defun %check-element-gate (machine name accesses &optional kind)
+  "Enforce NAME's read and write :PRIVILEGE for each of ACCESSES (:READ, :WRITE),
+with KIND defaulting to the element's own."
+  (let ((element (descriptor-element (machine-descriptor machine) name)))
+    (dolist (access accesses)
+      (let ((required (if (eq access :read)
+                          (storage-element-read-privilege element)
+                          (storage-element-write-privilege element))))
+        (when required
+          (%check-privilege machine required name nil (or kind (storage-element-kind element)) access))))))
 
 ;; TODO: the element is looked up on every call; a quoted, gated name could
 ;; resolve its level at macroexpansion time (#307 follow-up if it ever shows in a profile).
 (defun %checked-sref (machine name)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:read))
   (sref machine name))
 
 (defun (setf %checked-sref) (value machine name)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:write))
   (setf (sref machine name) value))
 
 (defun %checked-regref (machine name index)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:read))
   (regref machine name index))
 
 (defun (setf %checked-regref) (value machine name index)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:write))
   (setf (regref machine name index) value))
 
 (defun %checked-flag (machine name)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:read))
   (flag machine name))
 
 (defun (setf %checked-flag) (value machine name)
-  (%check-element-gate machine name)
+  (%check-element-gate machine name '(:write))
   (setf (flag machine name) value))
 
 (defun %checked-stack-push (machine name value)
-  (%check-element-gate machine name :stack)
+  (%check-element-gate machine name '(:write) :stack)
   (stack-push machine name value))
 
 (defun %checked-stack-pop (machine name)
-  (%check-element-gate machine name :stack)
+  (%check-element-gate machine name '(:read :write) :stack)
   (stack-pop machine name))
 
 (defun %checked-sp-push (machine reg memory grows value)
-  (%check-element-gate machine reg :stack)
+  (%check-element-gate machine reg '(:write) :stack)
   (sp-push machine reg memory grows value))
 
 (defun %checked-sp-pop (machine reg memory grows)
-  (%check-element-gate machine reg :stack)
+  (%check-element-gate machine reg '(:read :write) :stack)
   (sp-pop machine reg memory grows))
 
 (defun %accessor-form (plain checked gates machine name args)
@@ -91,13 +95,17 @@ with no gate, otherwise CHECKED, which looks the gate up at run time."
   (let ((quoted (and (consp name) (eq (first name) 'quote) (symbolp (second name)) (second name))))
     `(,(if (and quoted (not (assoc quoted gates))) plain checked) ,machine ,name ,@args)))
 
-(defun %gate-stack-form (machine-var gates target form)
-  "FORM, preceded by a privilege check when TARGET (a stack or a stack-pointer
-register) is gated (#300)."
-  (let ((required (cdr (assoc target gates))))
-    (if required
-        `(progn (%check-privilege ,machine-var ',required ',target nil :stack) ,form)
-        form)))
+(defun %gate-stack-form (machine-var gates target accesses form)
+  "FORM, preceded by a privilege check per access in ACCESSES (:READ, :WRITE)
+when TARGET (a stack or a stack-pointer register) is gated (#300)."
+  (destructuring-bind (&optional read write) (cdr (assoc target gates))
+    (let ((checks (loop for access in accesses
+                        for required = (if (eq access :read) read write)
+                        when required
+                          collect `(%check-privilege ,machine-var ',required ',target nil :stack ,access))))
+      (if checks
+          `(progn ,@checks ,form)
+          form))))
 
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
@@ -157,10 +165,13 @@ these for a run-time-computed index."
         (case (storage-element-kind element)
           (:register
            (let ((name (storage-element-name element))
-                 (required (storage-element-privilege element)))
+                 (required (or (storage-element-read-privilege element)
+                               (storage-element-write-privilege element)))
+                 (read (storage-element-read-privilege element))
+                 (write (storage-element-write-privilege element)))
              (if (= (storage-element-count element) 1)
                  (cl:push (if required
-                              `(,name (%gated-sref ,machine-var ',name ',required))
+                              `(,name (%gated-sref ,machine-var ',name ',read ',write))
                               `(,name (%plain-sref ,machine-var ',name)))
                           symbol-macros)
                  (progn
@@ -168,14 +179,15 @@ these for a run-time-computed index."
                    (loop for alias in (storage-element-names element)
                          for index from 0
                          do (cl:push (if required
-                                         `(,alias (%gated-regref ,machine-var ',name ,index ',required))
+                                         `(,alias (%gated-regref ,machine-var ',name ,index ',read ',write))
                                          `(,alias (%plain-regref ,machine-var ',name ,index)))
                                      symbol-macros))))))
           (:flag
            (let ((name (storage-element-name element))
-                 (required (storage-element-privilege element)))
-             (cl:push (if required
-                          `(,name (%gated-flag ,machine-var ',name ',required))
+                 (read (storage-element-read-privilege element))
+                 (write (storage-element-write-privilege element)))
+             (cl:push (if (or read write)
+                          `(,name (%gated-flag ,machine-var ',name ',read ',write))
                           `(,name (%plain-flag ,machine-var ',name)))
                       symbol-macros)))
           (:stack (cl:push (storage-element-name element) stack-names))
@@ -196,9 +208,11 @@ these for a run-time-computed index."
                                (format nil "MREF on machine ~S: no memory element declared"
                                        machine-name)))
              (gates (loop for element in (machine-descriptor-elements descriptor)
-                          when (storage-element-privilege element)
-                            collect (cons (storage-element-name element)
-                                          (storage-element-privilege element))))
+                          when (or (storage-element-read-privilege element)
+                                   (storage-element-write-privilege element))
+                            collect (list (storage-element-name element)
+                                          (storage-element-read-privilege element)
+                                          (storage-element-write-privilege element))))
              (pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
                                    collect (list (stack-pointer-descriptor-register sp)
                                                  (stack-pointer-descriptor-memory sp)
@@ -270,7 +284,8 @@ clause declared" machine-name)))
                                    (let ((required (cdr (assoc name gates))))
                                      (if required
                                          `(,name (index)
-                                                 `(%gated-regref ,',machine-var ',',name ,index ',',required))
+                                                 `(%gated-regref ,',machine-var ',',name ,index
+                                                                 ',',(first required) ',',(second required)))
                                          `(,name (index) `(%plain-regref ,',machine-var ',',name ,index)))))
                                  (nreverse banked-names))
                       ,@(mapcar (lambda (entry)
@@ -297,7 +312,7 @@ clause declared" machine-name)))
                                (entry (assoc target ',pointer-alist)))
                           (unless target (%definstruction-error ',stack-error))
                           (%gate-stack-form
-                           ',machine-var ',gates target
+                           ',machine-var ',gates target '(:write)
                            (if entry
                                `(%plain-sp-push ,',machine-var ',target ',(second entry) ',(third entry) ,value)
                                `(%plain-stack-push ,',machine-var ',target ,value)))))
@@ -306,24 +321,24 @@ clause declared" machine-name)))
                                (entry (assoc target ',pointer-alist)))
                           (unless target (%definstruction-error ',stack-error))
                           (%gate-stack-form
-                           ',machine-var ',gates target
+                           ',machine-var ',gates target '(:read :write)
                            (if entry
                                `(%plain-sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
                                `(%plain-stack-pop ,',machine-var ',target)))))
                       (stack-pointer (&optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (%definstruction-error ',fixed-stack-error))
-                          (%gate-stack-form ',machine-var ',gates target
+                          (%gate-stack-form ',machine-var ',gates target '(:read)
                                             `(%stack-pointer ,',machine-var ',target))))
                       (stack-depth (&optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (%definstruction-error ',fixed-stack-error))
-                          (%gate-stack-form ',machine-var ',gates target
+                          (%gate-stack-form ',machine-var ',gates target '(:read)
                                             `(%stack-pointer ,',machine-var ',target))))
                       (stack-ref (offset &optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (%definstruction-error ',fixed-stack-error))
-                          (%gate-stack-form ',machine-var ',gates target
+                          (%gate-stack-form ',machine-var ',gates target '(:read)
                                             `(%stack-ref ,',machine-var ',target ,offset))))
                       (set-bank! (region bank)
                         (unless (member region ',bank-names)
@@ -334,7 +349,8 @@ clause declared" machine-name)))
                         `(progn ,@(mapcar (lambda (a)
                                              (let ((required (cdr (assoc (first a) ',gates))))
                                                (if required
-                                                   `(setf (%gated-flag ,',machine-var ',(first a) ',required)
+                                                   `(setf (%gated-flag ,',machine-var ',(first a)
+                                                                       ',(first required) ',(second required))
                                                           ,(second a))
                                                    `(setf (%plain-flag ,',machine-var ',(first a)) ,(second a)))))
                                            assignments)))

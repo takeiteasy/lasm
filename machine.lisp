@@ -27,12 +27,32 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
   "The :LITTLE or :BIG order of the bytes inside one cell under ENDIAN."
   (if (consp endian) (second endian) endian))
 
-;; #300: the :privilege key of a register, stack or flag; the level itself is
-;; checked against the machine's (privilege ...) clause in %FINISH-PRIVILEGE-MODEL.
-(defun %check-privilege-name (level kind name)
-  (when (and level (or (not (symbolp level)) (keywordp level)))
-    (%defmachine-error "~(~A~) ~S: :privilege must be a level name, got ~S" kind name level))
-  level)
+;; #300, #303: the :privilege key of a register, stack, flag or region. SPEC is a
+;; level name gating every access in ACCESSES, or a plist (:read L :write L
+;; :execute L) gating only the listed ones. Returns one level (or NIL) per
+;; access in ACCESSES; the levels themselves are checked against the machine's
+;; (privilege ...) clause in %FINISH-PRIVILEGE-MODEL.
+(defun %parse-privilege-spec (spec kind name accesses)
+  (flet ((level-p (level) (and (symbolp level) level (not (keywordp level)))))
+    (cond
+      ((null spec) (mapcar (constantly nil) accesses))
+      ((level-p spec) (mapcar (constantly spec) accesses))
+      ((and (consp spec) (listp (cdr (last spec))) (evenp (length spec)))
+       (let ((keys (loop for (key) on spec by #'cddr collect key)))
+         (dolist (key keys)
+           (unless (member key accesses)
+             (%defmachine-error "~(~A~) ~S: :privilege key must be one of ~{~S~^, ~}, got ~S"
+                    kind name accesses key)))
+         (unless (= (length keys) (length (remove-duplicates keys)))
+           (%defmachine-error "~(~A~) ~S: :privilege lists a key more than once: ~S" kind name spec))
+         (loop for access in accesses
+               collect (let ((level (getf spec access)))
+                         (unless (or (null level) (level-p level))
+                           (%defmachine-error "~(~A~) ~S: :privilege ~S must be a level name, got ~S"
+                                  kind name access level))
+                         level))))
+      (t (%defmachine-error "~(~A~) ~S: :privilege must be a level name or a plist of ~{~S~^, ~} levels, got ~S"
+                kind name accesses spec)))))
 
 (defun parse-register-clause (name-form)
   ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
@@ -56,21 +76,27 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                    name count (length names)))
           (setf count (length names))))
     (setf count (or count 1))
-    (make-storage-element :name name :kind :register
-                           :width (%check-positive width ":width" name)
-                           :count (%check-positive count ":count" name)
-                           :names names
-                           :privilege (%check-privilege-name privilege 'register name))))
+    (destructuring-bind (read-privilege write-privilege)
+        (%parse-privilege-spec privilege 'register name '(:read :write))
+      (make-storage-element :name name :kind :register
+                             :width (%check-positive width ":width" name)
+                             :count (%check-positive count ":count" name)
+                             :names names
+                             :read-privilege read-privilege
+                             :write-privilege write-privilege))))
 
 (defun parse-stack-clause (form)
   ;; (stack NAME :width n :depth n)
   (%definition-bind (name &key width depth privilege) form
     (unless width (%defmachine-error "stack ~S requires :width" name))
     (unless depth (%defmachine-error "stack ~S requires :depth" name))
-    (make-storage-element :name name :kind :stack
-                           :width (%check-positive width ":width" name)
-                           :depth (%check-positive depth ":depth" name)
-                           :privilege (%check-privilege-name privilege 'stack name))))
+    (destructuring-bind (read-privilege write-privilege)
+        (%parse-privilege-spec privilege 'stack name '(:read :write))
+      (make-storage-element :name name :kind :stack
+                             :width (%check-positive width ":width" name)
+                             :depth (%check-positive depth ":depth" name)
+                             :read-privilege read-privilege
+                             :write-privilege write-privilege))))
 
 ;; #166: (stack-pointer REGISTER [:memory NAME] [:grows :down/:up]) -- binds
 ;; an existing scalar :register element as an address pointer into a :memory
@@ -172,11 +198,12 @@ function), got ~S" context name (car fn) (cdr fn))))
         (%defmachine-error "~A region ~S: :device only applies to a :DEVICE region" context name))
       (when (or read write)
         (%defmachine-error "~A region ~S: :device cannot be combined with :read/:write" context name)))
-    (when (and privilege (not (symbolp privilege)))
-      (%defmachine-error "~A region ~S: :privilege must be a level name, got ~S" context name privilege))
-    (make-memory-region :name name :start start :end end :kind kind :banks banks
-                         :on-write on-write :read read :write write :device device
-                         :privilege privilege)))
+    (destructuring-bind (read-privilege write-privilege execute-privilege)
+        (%parse-privilege-spec privilege (format nil "~A region" context) name '(:read :write :execute))
+      (make-memory-region :name name :start start :end end :kind kind :banks banks
+                           :on-write on-write :read read :write write :device device
+                           :read-privilege read-privilege :write-privilege write-privilege
+                           :execute-privilege execute-privilege))))
 
 ;; Cross-region checks (#107): unique names and non-overlapping ranges,
 ;; applied once every (region ...) form in the clause is parsed -- mirrors
@@ -233,8 +260,11 @@ function), got ~S" context name (car fn) (cdr fn))))
   (loop for entry in form
         collect (if (consp entry)
                     (%definition-bind (name &key privilege) entry
-                      (make-storage-element :name name :kind :flag :width 1
-                                            :privilege (%check-privilege-name privilege 'flag name)))
+                      (destructuring-bind (read-privilege write-privilege)
+                          (%parse-privilege-spec privilege 'flag name '(:read :write))
+                        (make-storage-element :name name :kind :flag :width 1
+                                              :read-privilege read-privilege
+                                              :write-privilege write-privilege)))
                     (make-storage-element :name entry :kind :flag :width 1))))
 
 ;; #75: (clock-speed n) -- the machine's nominal rate in Hz, n a positive
@@ -786,16 +816,20 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (%defmachine-error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
     policy))
 
-;; #111: (privilege :level NAME :levels (LEVEL...)
+;; #111: (privilege :level NAME [:shift N] [:width N] :levels (LEVEL...)
 ;;   [:on-violation :fault/:trap/(:interrupt DATA [:priority N] [:non-maskable t/nil])]).
 ;; Each LEVEL is NAME or (NAME VALUE); VALUE defaults to the entry's index.
 ;; :LEVEL itself is resolved against the machine's elements later, in
 ;; %FINISH-PRIVILEGE-MODEL.
 (defun parse-privilege-clause (form)
-  (%definition-bind (&key level levels (on-violation :fault)) form
+  (%definition-bind (&key level (shift 0) width levels (on-violation :fault)) form
     (let (violation-data (violation-priority 0) violation-non-maskable)
       (unless (and level (symbolp level))
         (%defmachine-error "privilege requires :level naming a flag or register, got ~S" level))
+      (unless (typep shift '(integer 0))
+        (%defmachine-error "privilege :shift must be a non-negative integer, got ~S" shift))
+      (unless (typep width '(or null (integer 1)))
+        (%defmachine-error "privilege :width must be a positive integer, got ~S" width))
       (unless (and (consp levels) (listp (cdr (last levels))))
         (%defmachine-error "privilege requires :levels, a non-empty list ordered least to most privileged, got ~S"
                levels))
@@ -835,7 +869,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
                             name value))
                    (cl:push name names)
                    (cl:push value values)))
-        (make-privilege-descriptor :level level :levels (nreverse names) :values (nreverse values)
+        (make-privilege-descriptor :level level :shift shift :width width :levels (nreverse names) :values (nreverse values)
                                    :on-violation on-violation :violation-data violation-data
                                    :violation-priority violation-priority
                                    :violation-non-maskable violation-non-maskable)))))
@@ -861,6 +895,14 @@ DESCRIPTOR's finished elements."
                             (= (storage-element-count element) 1))))
         (%defmachine-error "privilege on machine ~S: :level ~S must be a declared flag or scalar register"
                name (privilege-descriptor-level privilege)))
+      (let* ((flagp (eq (storage-element-kind element) :flag))
+             (element-width (if flagp 1 (storage-element-width element)))
+             (shift (privilege-descriptor-shift privilege))
+             (width (or (privilege-descriptor-width privilege) (- element-width shift))))
+        (unless (and (plusp width) (<= (+ shift width) element-width))
+          (%defmachine-error "privilege on machine ~S: :shift ~D and :width ~D do not fit ~S, ~D bit~:P wide"
+                 name shift width (privilege-descriptor-level privilege) element-width))
+        (setf (privilege-descriptor-width privilege) width))
       (when (eq (privilege-descriptor-on-violation privilege) :interrupt)
         (let ((interrupts (machine-descriptor-interrupts descriptor)))
           (unless interrupts
@@ -874,13 +916,12 @@ DESCRIPTOR's finished elements."
               (%defmachine-error "privilege on machine ~S: violation data ~D does not fit the interrupt :message ~S"
                      name (privilege-descriptor-violation-data privilege) message)))))
       (dolist (value (privilege-descriptor-values privilege))
-        (unless (< value (ash 1 (if (eq (storage-element-kind element) :flag)
-                                    1
-                                    (storage-element-width element))))
-          (%defmachine-error "privilege on machine ~S: level value ~D does not fit ~S"
-                 name value (privilege-descriptor-level privilege)))))
+        (unless (< value (ash 1 (privilege-descriptor-width privilege)))
+          (%defmachine-error "privilege on machine ~S: level value ~D does not fit the ~D-bit field of ~S"
+                 name value (privilege-descriptor-width privilege) (privilege-descriptor-level privilege)))))
     (dolist (element (machine-descriptor-elements descriptor))
-      (let ((required (storage-element-privilege element)))
+      (dolist (required (list (storage-element-read-privilege element)
+                              (storage-element-write-privilege element)))
         (when required
           (unless privilege
             (%defmachine-error "~(~A~) ~S on machine ~S: :privilege requires a (privilege ...) clause"
@@ -889,7 +930,9 @@ DESCRIPTOR's finished elements."
             (%defmachine-error "~(~A~) ~S on machine ~S: unknown privilege level ~S"
                    (storage-element-kind element) (storage-element-name element) name required))))
       (dolist (region (storage-element-regions element))
-        (let ((required (memory-region-privilege region)))
+        (dolist (required (list (memory-region-read-privilege region)
+                                (memory-region-write-privilege region)
+                                (memory-region-execute-privilege region)))
           (when required
             (unless privilege
               (%defmachine-error "region ~S on machine ~S: :privilege requires a (privilege ...) clause"
@@ -1162,15 +1205,19 @@ instructions are compiled against the parent's" head))
         (when pp
           (unless (and cp
                        (eq (privilege-descriptor-level pp) (privilege-descriptor-level cp))
+                       (eql (privilege-descriptor-shift pp) (privilege-descriptor-shift cp))
+                       (eql (privilege-descriptor-width pp) (privilege-descriptor-width cp))
                        (equal (privilege-descriptor-levels pp) (privilege-descriptor-levels cp))
                        (equal (privilege-descriptor-values pp) (privilege-descriptor-values cp)))
-            (fail "the privilege level, levels or values differ")))
+            (fail "the privilege level, field, levels or values differ")))
         (dolist (parent-element (machine-descriptor-elements parent))
           (let ((child-element (gethash (storage-element-name parent-element)
                                         (machine-descriptor-table child))))
             (when (and child-element
-                       (not (eq (storage-element-privilege parent-element)
-                                (storage-element-privilege child-element))))
+                       (not (and (eq (storage-element-read-privilege parent-element)
+                                     (storage-element-read-privilege child-element))
+                                 (eq (storage-element-write-privilege parent-element)
+                                     (storage-element-write-privilege child-element)))))
               (fail "~S changes the inherited :privilege of ~S"
                     (machine-descriptor-name child) (storage-element-name parent-element))))))
       (let ((pi* (machine-descriptor-interrupts parent))

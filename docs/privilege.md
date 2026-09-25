@@ -23,13 +23,14 @@ minimum level, and interrupt delivery can switch level.
 ## `defmachine`'s `privilege` clause
 
 ```lisp
-(privilege :level NAME :levels (LEVEL...)
+(privilege :level NAME [:shift N] [:width N] :levels (LEVEL...)
            [:on-violation :fault/:trap/(:interrupt DATA [:priority N] [:non-maskable t/nil])])
 ```
 
 | Key | Effect |
 | --- | --- |
 | `:level` | A flag or scalar register holding the current level's value. |
+| `:shift`, `:width` | The [bit field](#level-in-a-bit-field) of `:level` that holds the level. Default `0` and the rest of the register. |
 | `:levels` | Levels ordered least to most privileged. |
 | `:on-violation` | `:fault` (default), `:trap` or `(:interrupt DATA ...)`; see [Violations](#violations). |
 
@@ -42,6 +43,20 @@ unique and fit `:level`'s width.
 | `(user supervisor)` | `0` for `user`, `1` for `supervisor`. |
 | `((ring3 3) (ring2 2) (ring1 1) (ring0 0))` | `0` for `ring0`, the most privileged. |
 
+### Level in a bit field
+
+`:shift` and `:width` select the bits of a wider register, so a status
+register can hold the level next to other flags. Levels' values fit `:width`.
+
+```lisp
+(register sr :width 16)
+(privilege :level sr :shift 13 :width 1 :levels (user supervisor))   ; 68000 S bit
+(privilege :level cs :width 2 :levels ((ring3 3) (ring0 0)))         ; x86 CPL
+```
+
+Delivery and `(privilege-level machine)` touch only those bits. A flag is one
+bit, so `:shift` and `:width` must select it.
+
 A level is allowed when it ranks at least as high as the required one. A
 value no level maps to ranks below every level, so every gated access
 violates. `(privilege-level machine)` returns the current level's name, or
@@ -51,7 +66,8 @@ violates. `(privilege-level machine)` returns the current level's name, or
 
 `:privilege LEVEL` on a `(region ...)` gates CPU reads, writes and
 instruction fetches. It combines with any kind, including `:rom` and
-`:device`.
+`:device`. A [plist](#separate-read-write-and-execute-levels) gates the
+accesses apart.
 
 ```lisp
 (mref machine 'ram #x10)            ; user level => privilege-violation
@@ -61,6 +77,29 @@ instruction fetches. It combines with any kind, including `:rom` and
 
 `mpeek`, `bank-peek`, `load-program`, `reset`, snapshots and the
 debugger's `write` reach gated memory at any level.[^bypass]
+
+## Separate read, write and execute levels
+
+`:privilege` takes a plist to gate accesses apart. An access the plist omits
+is open to every level.
+
+```lisp
+(region kernel #x00 #xff :privilege (:read user :write supervisor :execute supervisor))
+(region code   #x100 #x1ff :privilege (:read supervisor))   ; user code runs but cannot read it
+(register cr :width 8 :privilege (:write supervisor))
+(flags s (ie :privilege (:write supervisor)))
+```
+
+| Key | Gates | Valid on |
+| --- | --- | --- |
+| `:read` | `mref`, and semantics reads of the element | Regions, registers, flags, stacks |
+| `:write` | `(setf mref)`, and semantics writes of the element | Regions, registers, flags, stacks |
+| `:execute` | Instruction fetches | Regions |
+
+An instruction fetch checks only `:execute`, and `mref` never does. `incf` on
+a register checks a read and a write. A stack needs `:write` to `push` and
+both to `pop`; `stack-ref`, `stack-depth` and `stack-pointer` need `:read`.
+`privilege-violation-access` is the access that failed.
 
 ## Gating registers, flags and stacks
 
@@ -77,7 +116,7 @@ semantics that use the element by name, for reads and writes.
 | --- | --- |
 | `cr`, an alias, `(bank 1)`, a flag name | The element's level. |
 | `(sref machine 'cr)`, `(regref ...)`, `(flag ...)`, `(stack-push ...)`, `(stack-pop ...)`, `(sp-push ...)`, `(sp-pop ...)` | The named element's level.[^explicit] |
-| `(set-flags! (ie 1))` | The flag's level. |
+| `(set-flags! (ie 1))` | The flag's write level. |
 | `push`, `pop`, `stack-ref`, `stack-pointer`, `stack-depth` | The stack's level, or the stack-pointer register's. |
 
 The level register itself can be gated, for example to keep user code from
@@ -116,9 +155,10 @@ violation leaves the PC on the instruction and charges no cycles.[^inherit]
 
 `privilege-violation-kind` and the trap's `:kind` are `:memory`,
 `:instruction`, `:register`, `:flag` or `:stack`. The trap's data is
-`(:kind KIND :name NAME :address ADDRESS :required LEVEL)`. `NAME` is the
-element, or the mnemonic for an instruction. `ADDRESS` is set only for
-`:memory`. `lasm run` prints either outcome and exits `1`. See
+`(:kind KIND :name NAME :address ADDRESS :required LEVEL :access ACCESS)`.
+`NAME` is the element, or the mnemonic for an instruction. `ADDRESS` is set
+only for `:memory`. `ACCESS` is `:read`, `:write` or `:execute`, and `nil` for
+an instruction. `lasm run` prints either outcome and exits `1`. See
 [Conditions](conditions.md).
 
 ### Violations as interrupts
@@ -143,18 +183,16 @@ machine still delivers it instead of repeating the violation each step.
 
 Cycles spent before the violation stay counted. `(privilege-violation-info
 machine)` returns `(:pc PC :kind KIND :name NAME :address ADDRESS :required
-LEVEL :current LEVEL)` for the last such violation. `reset` clears it and
+LEVEL :current LEVEL :access ACCESS)` for the last such violation. `reset` clears it and
 snapshots do not save it. With `:deliver-level` and a saved level register,
 `interrupt-return` resumes the violating instruction at the original level.
 See `examples/privilege.lisp`.
 
 ## Limitations
 
-- The level is a whole flag or register; a level held in bits of a status
-  register needs a dedicated register. See
-  [ticket 299](https://todo.sr.ht/~takeiteasy/lasm/299).
-- A region, register, flag or stack has one level for reads and writes. See
-  [ticket 303](https://todo.sr.ht/~takeiteasy/lasm/303).
+- A register's `:privilege` gates the whole register, so it cannot protect
+  only the level bits of a status register. See
+  [ticket 314](https://todo.sr.ht/~takeiteasy/lasm/314).
 - A helper function called from semantics, or `(funcall 'sref ...)`, is not
   gated. See [ticket 310](https://todo.sr.ht/~takeiteasy/lasm/310).
 - A violation interrupt does not undo effects an instruction had before it
@@ -174,5 +212,5 @@ See `examples/privilege.lisp`.
 [^explicit]: A quoted element name is resolved when the instruction compiles;
     any other name expression looks the element up on every call. A register
     gates as `:register`, a flag as `:flag`, and stack calls as `:stack`.
-[^inherit]: A machine extending another keeps its `:level`, `:levels` and
-    values; it can change `:on-violation`.
+[^inherit]: A machine extending another keeps its `:level`, `:shift`,
+    `:width`, `:levels` and values; it can change `:on-violation`.

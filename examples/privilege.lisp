@@ -10,6 +10,9 @@
 ;;;; can switch level (:deliver-level), and a violation can raise an interrupt
 ;;;; (:on-violation (:interrupt DATA)) instead of faulting.
 ;;;;
+;;;; #299, #303: the level can be a bit field of a status register, and a
+;;;; region, register, flag or stack can gate reads, writes and fetches apart.
+;;;;
 ;;;; Run with:  sbcl --script examples/privilege.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -94,3 +97,27 @@ hlt")
   (multiple-value-bind (reason steps) (run m)
     (format t "~&privirq: ~(~A~) after ~D step~:P, level ~A, a = ~D~%  ~S~%"
             reason steps (privilege-level m) (sref m 'a) (privilege-violation-info m))))
+
+;;; The level is bit 13 of a status register; the kernel region is
+;;; execute-only for user code (readable and writable only from supervisor).
+
+(defmachine privsr
+  (register pc :width 8) (register a :width 8)
+  (register sr :width 16)
+  (memory ram :width 8 :addr-width 8
+    (region kernel #x00 #x0f :privilege (:read supervisor :write supervisor)))
+  (privilege :level sr :shift 13 :width 1 :levels (user supervisor)))
+
+(definstruction privsr nop
+  (encoding (opcode #x00))
+  (semantics nil))
+
+(dolist (sr '(#x00ff #x20ff))
+  (let ((m (make-machine 'privsr)))
+    (setf (sref m 'sr) sr)
+    (load-program m (list #x00))
+    (step-machine m)
+    (format t "~&privsr: sr = #x~4,'0X, level ~A, kernel fetch ok, read ~A~%"
+            sr (privilege-level m)
+            (handler-case (progn (mref m 'ram 1) "ok")
+              (privilege-violation (c) (format nil "violates (~(~A~))" (privilege-violation-access c)))))))

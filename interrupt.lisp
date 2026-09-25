@@ -97,7 +97,7 @@ the interrupted level."
   (let ((level (interrupt-descriptor-deliver-level interrupts)))
     (when level
       (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
-        (setf (%sref machine (privilege-descriptor-level privilege))
+        (setf (%level-value machine privilege)
               (nth (position level (privilege-descriptor-levels privilege))
                    (privilege-descriptor-values privilege)))))))
 

@@ -32,7 +32,7 @@ one namespace.
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
 | `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
-| `(privilege :level NAME :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
+| `(privilege :level NAME [:shift N] [:width N] :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
 | `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |
 | `(properties :key value ...)` | Literal machine properties. | [Machine families](machine-families.md#properties) |
 
@@ -83,7 +83,8 @@ Regions cover inclusive address ranges and cannot overlap:
 ```
 
 `:privilege LEVEL` on a region, register, flag or stack requires that level for
-CPU access; see
+CPU access, or `:privilege (:read L :write L :execute L)` gates each access
+apart; see
 [Privilege levels](privilege.md).
 
 | Kind | Reads | Writes |

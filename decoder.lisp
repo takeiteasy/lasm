@@ -25,9 +25,9 @@
 
 (defun machine-cell-reader (machine memory)
   "A READ-CELL closure (DECODE-INSTRUCTION-AT's ADDRESS -> cell contract)
-reading MACHINE's MEMORY element via MREF (storage.lisp) -- the source used
-by STEP-MACHINE (emulator.lisp)."
-  (lambda (address) (%mref machine memory address)))
+reading MACHINE's MEMORY element via MREF (storage.lisp) as instruction
+fetches (#303) -- the source used by STEP-MACHINE (emulator.lisp)."
+  (lambda (address) (%mref machine memory address :execute)))
 
 (defun machine-peek-reader (machine memory)
   "A READ-CELL closure reading MACHINE's MEMORY element via MPEEK

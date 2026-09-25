@@ -23,6 +23,7 @@
    #:memory-write-protected
    #:memory-write-protected-address
    #:privilege-violation
+   #:privilege-violation-access
    #:privilege-violation-address
    #:privilege-violation-kind
    #:privilege-violation-info

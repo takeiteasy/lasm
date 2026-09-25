@@ -211,7 +211,7 @@ rte")))
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 1 steps))
       (fiveam:is (eq :privilege-violation (lasm-trap-tag condition)))
-      (fiveam:is (equal '(:kind :instruction :name "RTE" :address nil :required supervisor)
+      (fiveam:is (equal '(:kind :instruction :name "RTE" :address nil :required supervisor :access nil)
                         (lasm-trap-data condition)))
       (fiveam:is (= #x200 (sref m 'pc))))))
 
@@ -433,7 +433,7 @@ rte")))
     (multiple-value-bind (result steps condition) (run m :max-steps 1)
       (declare (ignore steps))
       (fiveam:is (eq :trap result))
-      (fiveam:is (equal '(:kind :register :name cr :address nil :required supervisor)
+      (fiveam:is (equal '(:kind :register :name cr :address nil :required supervisor :access :read)
                         (lasm-trap-data condition))))))
 
 (fiveam:test debugger-write-bypasses-element-gates
@@ -528,7 +528,7 @@ rte")))
   (let ((m (%priv-irq-machine (list #x00 #x02))))
     (step-machine m)
     (step-machine m)
-    (fiveam:is (equal '(:pc 1 :kind :register :name cr :address nil :required supervisor :current user)
+    (fiveam:is (equal '(:pc 1 :kind :register :name cr :address nil :required supervisor :current user :access :read)
                       (privilege-violation-info m)))))
 
 (fiveam:test violation-interrupt-covers-instruction-gates-without-cost
@@ -558,7 +558,7 @@ rte")))
 
 (fiveam:test violation-interrupt-outside-a-step-faults
   (let ((m (%priv-irq-machine (list #x00))))
-    (fiveam:signals privilege-violation (%gated-sref m 'cr 'supervisor))
+    (fiveam:signals privilege-violation (%gated-sref m 'cr 'supervisor 'supervisor))
     (fiveam:is (null (%pending m)))))
 
 (fiveam:test violation-interrupt-run-keeps-going
@@ -629,3 +629,249 @@ rte")))
     (step-machine m)
     (fiveam:is (= 7 (sref m 'a)))
     (fiveam:is (eq 'supervisor (privilege-level m)))))
+
+;;; #299: a level held in bits of a wider register
+
+(defmachine priv-sr-machine
+  (register pc :width 8) (register ia :width 8) (register a :width 8)
+  (register sr :width 16)
+  (stack st :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 8
+    (region kernel #x00 #x0f :privilege supervisor))
+  (privilege :level sr :shift 13 :width 1 :levels (user supervisor))
+  (interrupts :vector ia :message a :save (pc sr) :deliver-level supervisor))
+
+(definstruction priv-sr-machine nop (encoding (opcode #x00)) (semantics nil))
+(definstruction priv-sr-machine rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(defmachine priv-cpl-machine
+  (register pc :width 8)
+  (register cs :width 16)
+  (memory ram :width 8 :addr-width 8
+    (region kernel #x00 #x0f :privilege ring0))
+  (privilege :level cs :width 2 :levels ((ring3 3) (ring0 0))))
+
+(fiveam:test level-field-follows-its-bit-and-ignores-the-rest
+  (let ((m (make-machine 'priv-sr-machine)))
+    (setf (sref m 'sr) #x00ff)
+    (fiveam:is (eq 'user (privilege-level m)))
+    (fiveam:signals privilege-violation (mref m 'ram 1))
+    (setf (sref m 'sr) #x20ff)
+    (fiveam:is (eq 'supervisor (privilege-level m)))
+    (fiveam:is (= 0 (mref m 'ram 1)))
+    (setf (sref m 'sr) #xdfff)
+    (fiveam:is (eq 'user (privilege-level m)))))
+
+(fiveam:test level-field-at-the-bottom-of-a-wider-register
+  (let ((m (make-machine 'priv-cpl-machine)))
+    (setf (sref m 'cs) #x0ab0)
+    (fiveam:is (eq 'ring0 (privilege-level m)))
+    (fiveam:is (= 0 (mref m 'ram 1)))
+    (setf (sref m 'cs) #x0ab3)
+    (fiveam:is (eq 'ring3 (privilege-level m)))
+    (fiveam:signals privilege-violation (mref m 'ram 1))
+    (setf (sref m 'cs) #x0ab1)
+    (fiveam:is (null (privilege-level m)))
+    (fiveam:signals privilege-violation (mref m 'ram 1))))
+
+(fiveam:test delivery-sets-only-the-level-bits-and-return-restores-them
+  (let ((m (make-machine 'priv-sr-machine)))
+    (load-program m (append (make-list 17 :initial-element 0) (list 1)))
+    (setf (sref m 'pc) 0 (sref m 'ia) 16 (sref m 'sr) #x00ff)
+    (signal-interrupt m 1)
+    (step-machine m)
+    (fiveam:is (= #x20ff (sref m 'sr)))
+    (step-machine m)
+    (fiveam:is (= #x00ff (sref m 'sr)))
+    (fiveam:is (eq 'user (privilege-level m)))))
+
+(fiveam:test level-field-must-fit-its-register-and-values
+  (flet ((rejects (&rest keys)
+           (fiveam:signals machine-definition-error
+             (eval `(defmachine priv-bad-machine
+                      (register pc :width 8) (register sr :width 16) (flags s)
+                      (memory ram :width 8 :addr-width 8)
+                      (privilege ,@keys))))))
+    (rejects :level 'sr :shift 15 :width 2 :levels '(user supervisor))
+    (rejects :level 'sr :shift 16 :levels '(user supervisor))
+    (rejects :level 'sr :width 1 :levels '(user (supervisor 2)))
+    (rejects :level 's :shift 1 :levels '(user supervisor))
+    (rejects :level 's :width 2 :levels '(user supervisor))
+    (rejects :level 'sr :width 0 :levels '(user supervisor))
+    (rejects :level 'sr :shift -1 :levels '(user supervisor))))
+
+(fiveam:test level-field-width-defaults-to-the-rest-of-the-register
+  (fiveam:finishes
+    (eval '(defmachine priv-default-width-machine
+            (register pc :width 8) (register sr :width 16)
+            (memory ram :width 8 :addr-width 8)
+            (privilege :level sr :shift 13 :levels (user supervisor (kernel 7)))))))
+
+;;; #303: separate read, write and execute levels
+
+(defmacro %def-priv-split-machine (name)
+  `(progn
+     (defmachine ,name
+       (register pc :width 8) (register ia :width 8) (register a :width 8)
+       (register cr :width 8 :privilege (:write supervisor))
+       (register rr :width 8 :privilege (:read supervisor))
+       (stack sw :width 8 :depth 4 :privilege (:write supervisor))
+       (stack sr :width 8 :depth 4 :privilege (:read supervisor))
+       (memory ram :width 8 :addr-width 8
+         (region no-read #x00 #x0f :privilege (:read supervisor))
+         (region no-exec #x10 #x1f :privilege (:execute supervisor))
+         (region no-write #x20 #x2f :privilege (:write supervisor))
+         (region mixed #x30 #x3f :privilege (:read user :write supervisor :execute supervisor)))
+       (flags s (ie :privilege (:write supervisor)) (ro :privilege (:read supervisor)))
+       (privilege :level s :levels (user supervisor))
+       (interrupts :vector ia :message a :save (pc) :stack sw))
+     (definstruction ,name nop (encoding (opcode #x00)) (semantics nil))
+     (definstruction ,name rd-cr (encoding (opcode #x01)) (semantics (set! a cr)))
+     (definstruction ,name wr-cr (encoding (opcode #x02)) (semantics (set! cr 9)))
+     (definstruction ,name inc-cr (encoding (opcode #x03)) (semantics (incf cr)))
+     (definstruction ,name rd-rr (encoding (opcode #x04)) (semantics (set! a rr)))
+     (definstruction ,name wr-rr (encoding (opcode #x05)) (semantics (set! rr 9)))
+     (definstruction ,name wr-ie (encoding (opcode #x06)) (semantics (set-flags! (ie 1))))
+     (definstruction ,name rd-ie (encoding (opcode #x07)) (semantics (set! a ie)))
+     (definstruction ,name rd-ro (encoding (opcode #x08)) (semantics (set! a ro)))
+     (definstruction ,name push-sw (encoding (opcode #x09)) (semantics (push 3 sw)))
+     (definstruction ,name pop-sw (encoding (opcode #x0a)) (semantics (set! a (pop sw))))
+     (definstruction ,name depth-sw (encoding (opcode #x0b)) (semantics (set! a (stack-depth sw))))
+     (definstruction ,name push-sr (encoding (opcode #x0c)) (semantics (push 3 sr)))
+     (definstruction ,name pop-sr (encoding (opcode #x0d)) (semantics (set! a (pop sr))))
+     (definstruction ,name depth-sr (encoding (opcode #x0e)) (semantics (set! a (stack-depth sr))))
+     (definstruction ,name x-wr-cr (encoding (opcode #x0f)) (semantics (setf (sref machine 'cr) 9)))
+     (definstruction ,name x-rd-cr (encoding (opcode #x10)) (semantics (set! a (sref machine 'cr))))))
+
+(%def-priv-split-machine priv-split-machine)
+
+(defun %priv-split (level &key (pc 0) program)
+  (let ((m (make-machine 'priv-split-machine)))
+    (setf (sref m 's) level (sref m 'pc) pc)
+    (when program (load-program m program :origin pc))
+    m))
+
+(defun %priv-split-step (opcode level)
+  (let ((m (%priv-split level :program (list opcode))))
+    (values m (handler-case (progn (step-machine m) nil)
+                (privilege-violation (c) c)))))
+
+(defun %priv-split-access (opcode level)
+  (let ((c (nth-value 1 (%priv-split-step opcode level))))
+    (and c (privilege-violation-access c))))
+
+(fiveam:test read-gated-region-still-fetches-at-user-level
+  (let ((m (%priv-split 0 :program (list #x00))))
+    (fiveam:finishes (step-machine m))
+    (fiveam:is (= 1 (sref m 'pc)))
+    (handler-case (progn (mref m 'ram 0) (fiveam:fail "read did not fault"))
+      (privilege-violation (c)
+        (fiveam:is (eq :read (privilege-violation-access c)))
+        (fiveam:is (= 0 (privilege-violation-address c)))))
+    (fiveam:signals privilege-violation (mref m 'ram 1))
+    (fiveam:finishes (setf (mref m 'ram 1) 5))))
+
+(fiveam:test execute-gated-region-reads-and-writes-but-does-not-fetch
+  (let ((m (%priv-split 0 :pc #x10 :program (list #x00))))
+    (fiveam:finishes (setf (mref m 'ram #x11) 4))
+    (fiveam:is (= 4 (mref m 'ram #x11)))
+    (handler-case (progn (step-machine m) (fiveam:fail "fetch did not fault"))
+      (privilege-violation (c)
+        (fiveam:is (eq :execute (privilege-violation-access c)))
+        (fiveam:is (eq :memory (privilege-violation-kind c)))
+        (fiveam:is (= #x10 (privilege-violation-address c)))
+        (fiveam:is (search "Fetch from" (princ-to-string c)))))
+    (fiveam:is (= #x10 (sref m 'pc)))
+    (setf (sref m 's) 1)
+    (fiveam:finishes (step-machine m))))
+
+(fiveam:test write-gated-region-reads-and-fetches
+  (let ((m (%priv-split 0 :pc #x20 :program (list #x00))))
+    (fiveam:is (= 0 (mref m 'ram #x21)))
+    (handler-case (progn (setf (mref m 'ram #x21) 1) (fiveam:fail "write did not fault"))
+      (privilege-violation (c) (fiveam:is (eq :write (privilege-violation-access c)))))
+    (fiveam:finishes (step-machine m))))
+
+(fiveam:test mixed-region-levels-gate-each-access
+  (let ((m (%priv-split 0 :pc #x30 :program (list #x00))))
+    (fiveam:is (= 0 (mref m 'ram #x31)))
+    (fiveam:signals privilege-violation (setf (mref m 'ram #x31) 1))
+    (fiveam:signals privilege-violation (step-machine m))
+    (setf (sref m 's) 1)
+    (fiveam:finishes (setf (mref m 'ram #x31) 1))
+    (fiveam:finishes (step-machine m))))
+
+(fiveam:test interrupt-handler-fetches-from-a-read-gated-region-at-user-level
+  (let ((m (%priv-split 0 :program (list #x00 #x00))))
+    (setf (sref m 'ia) 2)
+    (signal-interrupt m 1)
+    (fiveam:finishes (step-machine m))
+    (fiveam:is (eq 'user (privilege-level m)))))
+
+(fiveam:test write-only-element-gates-read-nothing
+  (fiveam:is (null (%priv-split-access #x01 0)))
+  (fiveam:is (eq :write (%priv-split-access #x02 0)))
+  (fiveam:is (eq :write (%priv-split-access #x03 0)))
+  (fiveam:is (eq :write (%priv-split-access #x0f 0)))
+  (fiveam:is (null (%priv-split-access #x10 0))))
+
+(fiveam:test read-only-gated-element-gates-reads-only
+  (fiveam:is (eq :read (%priv-split-access #x04 0)))
+  (fiveam:is (null (%priv-split-access #x05 0))))
+
+(fiveam:test split-flag-levels
+  (fiveam:is (eq :write (%priv-split-access #x06 0)))
+  (fiveam:is (null (%priv-split-access #x07 0)))
+  (fiveam:is (eq :read (%priv-split-access #x08 0))))
+
+(fiveam:test split-stack-levels
+  (fiveam:is (eq :write (%priv-split-access #x09 0)))
+  (fiveam:is (eq :write (%priv-split-access #x0a 0)))
+  (fiveam:is (null (%priv-split-access #x0b 0)))
+  (fiveam:is (null (%priv-split-access #x0c 0)))
+  (fiveam:is (eq :read (%priv-split-access #x0d 0)))
+  (fiveam:is (eq :read (%priv-split-access #x0e 0))))
+
+(fiveam:test split-gates-pass-at-the-required-level
+  (dolist (opcode '(#x02 #x03 #x04 #x06 #x08 #x09 #x0c #x0e))
+    (fiveam:is (null (nth-value 1 (%priv-split-step opcode 1))))))
+
+(fiveam:test split-violation-reports-the-access
+  (let ((m (%priv-split 0 :program (list #x02))))
+    (handler-case (step-machine m)
+      (privilege-violation (c)
+        (fiveam:is (eq :register (privilege-violation-kind c)))
+        (fiveam:is (eq :write (privilege-violation-access c)))))))
+
+(fiveam:test privilege-plist-rejects-bad-specs
+  (flet ((rejects (element)
+           (fiveam:signals machine-definition-error
+             (eval `(defmachine priv-bad-machine
+                      (register pc :width 8) ,element (flags s)
+                      (memory ram :width 8 :addr-width 8)
+                      (privilege :level s :levels (user supervisor)))))))
+    (rejects '(register r :width 8 :privilege (:execute supervisor)))
+    (rejects '(register r :width 8 :privilege (:frob supervisor)))
+    (rejects '(register r :width 8 :privilege (:read supervisor :read user)))
+    (rejects '(register r :width 8 :privilege (:read)))
+    (rejects '(register r :width 8 :privilege (:read nosuch)))
+    (rejects '(register r :width 8 :privilege (:read "x")))
+    (rejects '(stack k :width 8 :depth 2 :privilege (:execute supervisor)))
+    (rejects '(memory m2 :width 8 :addr-width 8 (region k 0 3 :privilege (:frob supervisor))))))
+
+(fiveam:test region-plist-of-only-the-listed-access
+  (fiveam:finishes
+    (eval '(defmachine priv-plist-ok-machine
+            (register pc :width 8)
+            (memory ram :width 8 :addr-width 8
+              (region k 0 3 :privilege (:execute supervisor)))
+            (flags s)
+            (privilege :level s :levels (user supervisor))))))
+
+(fiveam:test inheriting-machine-keeps-split-levels
+  (fiveam:finishes
+    (eval '(defmachine (priv-split-child (:extends priv-split-machine))
+            (properties :child t))))
+  (let ((m (make-machine 'priv-split-child)))
+    (setf (sref m 's) 0)
+    (fiveam:signals privilege-violation (mref m 'ram 0))))

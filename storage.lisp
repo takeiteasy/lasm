@@ -64,11 +64,13 @@ memory ~S on machine ~S"
 ;; #111: signalled when the current privilege level is below a region's,
 ;; instruction's or (#300) register's, flag's or stack's :PRIVILEGE. KIND is
 ;; :MEMORY, :INSTRUCTION, :REGISTER, :FLAG or :STACK; NAME is the element, or
-;; the mnemonic for an instruction. ADDRESS is set only for :MEMORY.
+;; the mnemonic for an instruction. ADDRESS is set only for :MEMORY. ACCESS
+;; (#303) is :READ, :WRITE or :EXECUTE, or NIL for an instruction.
 ;; REQUIRED and CURRENT are level names; CURRENT is NIL when the level
 ;; register holds a value no level maps to.
 (define-condition privilege-violation (storage-error)
   ((kind :initarg :kind :initform :memory :reader privilege-violation-kind)
+   (access :initarg :access :initform nil :reader privilege-violation-access)
    (address :initarg :address :initform nil :reader privilege-violation-address)
    (required :initarg :required :reader privilege-violation-required)
    (current :initarg :current :initform nil :reader privilege-violation-current))
@@ -78,7 +80,9 @@ memory ~S on machine ~S"
                    (current (privilege-violation-current c))
                    (machine (storage-error-machine c)))
                (ecase (privilege-violation-kind c)
-                 (:memory (format s "Access to address ~S on memory ~S requires privilege ~S, current is ~S (machine ~S)"
+                 (:memory (format s "~A address ~S on memory ~S requires privilege ~S, current is ~S (machine ~S)"
+                                  (case (privilege-violation-access c)
+                                    (:read "Read of") (:write "Write to") (:execute "Fetch from") (t "Access to"))
                                   (privilege-violation-address c) name required current machine))
                  (:instruction (format s "Instruction ~A requires privilege ~S, current is ~S (machine ~S)"
                                        name required current machine))
@@ -205,9 +209,10 @@ memory ~S on machine ~S"
   (regions nil :type list)
   ;; #156: REGIONS sorted by start address, binary-searched by %REGION-AT.
   (region-index nil :type (or null simple-vector))
-  ;; #300: minimum privilege level for semantics access to a register, flag
-  ;; or stack, or NIL.
-  (privilege nil :type (or null symbol)))
+  ;; #300, #303: minimum privilege level for semantics reads and writes of a
+  ;; register, flag or stack, or NIL for an ungated access.
+  (read-privilege nil :type (or null symbol))
+  (write-privilege nil :type (or null symbol)))
 
 ;; #107: one declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
@@ -257,7 +262,10 @@ memory ~S on machine ~S"
   (write nil :type (or null symbol function))          ; :device only
   (device nil :type (or null symbol))                  ; :device only, exclusive with read/write
   (device-index nil :type (or null (integer 0)))       ; bus index DEVICE resolves to
-  (privilege nil :type (or null symbol)))              ; #111: minimum level for CPU access
+  ;; #111, #303: minimum level for CPU reads, writes and instruction fetches, or NIL.
+  (read-privilege nil :type (or null symbol))
+  (write-privilege nil :type (or null symbol))
+  (execute-privilege nil :type (or null symbol)))
 
 ;; #111: a machine's (privilege ...) clause. LEVEL names the flag or scalar
 ;; register holding the current level's value. LEVELS and VALUES are
@@ -265,6 +273,10 @@ memory ~S on machine ~S"
 ;; and VALUES[i] is what LEVEL holds while at rank i.
 (defstruct privilege-descriptor
   (level nil :type symbol)
+  ;; #299: the level occupies WIDTH bits of LEVEL's register from bit SHIFT.
+  ;; WIDTH is NIL until %FINISH-PRIVILEGE-MODEL resolves it.
+  (shift 0 :type (integer 0))
+  (width nil :type (or null (integer 1)))
   (levels nil :type list)
   (values nil :type list)
   (on-violation :fault :type (member :fault :trap :interrupt))
@@ -1271,6 +1283,18 @@ declares no NAMES or INDEX is outside them."
         (let ((write (memory-region-write region)))
           (when write (funcall write machine address value))))))
 
+;; #299: the level's value, read from and written to its bit field.
+(defun %level-value (machine privilege)
+  (ldb (byte (privilege-descriptor-width privilege) (privilege-descriptor-shift privilege))
+       (%sref machine (privilege-descriptor-level privilege))))
+
+(defun (setf %level-value) (value machine privilege)
+  (let ((name (privilege-descriptor-level privilege)))
+    (setf (%sref machine name)
+          (dpb value (byte (privilege-descriptor-width privilege) (privilege-descriptor-shift privilege))
+               (%sref machine name)))
+    value))
+
 ;; #111: rank of the level VALUE names, or -1 for a value no level maps to.
 (defun %privilege-rank (privilege value)
   (or (position value (privilege-descriptor-values privilege)) -1))
@@ -1280,27 +1304,27 @@ declares no NAMES or INDEX is outside them."
 (privilege ...) clause or its level register holds a value no level maps to."
   (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
     (when privilege
-      (let ((rank (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
+      (let ((rank (%privilege-rank privilege (%level-value machine privilege))))
         (and (>= rank 0) (nth rank (privilege-descriptor-levels privilege)))))))
 
-(defun %check-privilege (machine required name address &optional kind)
+(defun %check-privilege (machine required name address &optional kind access)
   "Signal, per the machine's :ON-VIOLATION policy, unless the current level
 ranks at least as high as REQUIRED. NAME is the memory element accessed at
 ADDRESS, an instruction's mnemonic with ADDRESS NIL, or a register, flag or
 stack (#300) named by KIND. KIND defaults to :MEMORY with an ADDRESS and
-:INSTRUCTION without. Checked before any access-hook notification, so a
-rejected access is not reported as one."
+:INSTRUCTION without. ACCESS (#303) is :READ, :WRITE or :EXECUTE. Checked
+before any access-hook notification, so a rejected access is not reported as one."
   (let* ((descriptor (machine-descriptor machine))
          (privilege (machine-descriptor-privilege descriptor))
          (kind (or kind (if address :memory :instruction))))
     (when (and privilege *privilege-checks*)
-      (let ((current (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
+      (let ((current (%privilege-rank privilege (%level-value machine privilege))))
         (when (< current (position required (privilege-descriptor-levels privilege)))
           (flet ((fault ()
                    (error 'privilege-violation
                           :machine (machine-descriptor-name descriptor) :name name
                           :kind kind :address address :required required
-                          :current (privilege-level machine))))
+                          :current (privilege-level machine) :access access)))
            (ecase (privilege-descriptor-on-violation privilege)
             (:fault (fault))
             (:interrupt
@@ -1312,55 +1336,69 @@ rejected access is not reported as one."
                  (progn
                    (setf (machine-privilege-violation machine)
                          (list :kind kind :name name :address address :required required
-                               :current (privilege-level machine)))
+                               :current (privilege-level machine) :access access))
                    (signal '%privilege-exception))
                  (fault)))
             (:trap (error 'lasm-trap :tag :privilege-violation
                                      :data (list :kind kind :name name :address address
-                                                 :required required))))))))))
+                                                 :required required :access access))))))))))
 
 (defun privilege-violation-info (machine)
-  "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT) of MACHINE's last
+  "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT :ACCESS) of MACHINE's last
 privilege violation raised as an interrupt (#302), or NIL."
   (machine-privilege-violation machine))
 
 ;; #300: what a gated register, flag or stack name expands to inside
 ;; instruction semantics (WITH-MACHINE-BINDINGS). Explicit SREF, REGREF, FLAG
 ;; and stack calls in semantics are gated there too (#307); host calls are not.
-(defun %gated-sref (machine name required)
-  (%check-privilege machine required name nil :register)
+(defmacro %check-gate (machine required name kind access)
+  `(when ,required (%check-privilege ,machine ,required ,name nil ,kind ,access)))
+
+(defun %gated-sref (machine name read write)
+  (declare (ignore write))
+  (%check-gate machine read name :register :read)
   (sref machine name))
 
-(defun (setf %gated-sref) (value machine name required)
-  (%check-privilege machine required name nil :register)
+(defun (setf %gated-sref) (value machine name read write)
+  (declare (ignore read))
+  (%check-gate machine write name :register :write)
   (setf (sref machine name) value))
 
-(defun %gated-regref (machine name index required)
-  (%check-privilege machine required name nil :register)
+(defun %gated-regref (machine name index read write)
+  (declare (ignore write))
+  (%check-gate machine read name :register :read)
   (regref machine name index))
 
-(defun (setf %gated-regref) (value machine name index required)
-  (%check-privilege machine required name nil :register)
+(defun (setf %gated-regref) (value machine name index read write)
+  (declare (ignore read))
+  (%check-gate machine write name :register :write)
   (setf (regref machine name index) value))
 
-(defun %gated-flag (machine name required)
-  (%check-privilege machine required name nil :flag)
+(defun %gated-flag (machine name read write)
+  (declare (ignore write))
+  (%check-gate machine read name :flag :read)
   (flag machine name))
 
-(defun (setf %gated-flag) (value machine name required)
-  (%check-privilege machine required name nil :flag)
+(defun (setf %gated-flag) (value machine name read write)
+  (declare (ignore read))
+  (%check-gate machine write name :flag :write)
   (setf (flag machine name) value))
 
-(defun %mref (machine name address)
-  "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
+(defun %mref (machine name address &optional (access :read))
+  "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS.
+ACCESS is :READ, or :EXECUTE (#303) for an instruction fetch. #107: an address falling
 in a :DEVICE region calls that region's READ (or its bound device's, #158)
 instead of touching backing storage (0 when there is none); an address in a banked region
 reads the live bank; every other address -- including one in an unbanked
 :RAM or :ROM region -- reads backing storage directly. A device read is
 masked to the cell width, as writes are."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
-    (when (and region (memory-region-privilege region))
-      (%check-privilege machine (memory-region-privilege region) name address))
+    (when region
+      (let ((required (if (eq access :execute)
+                          (memory-region-execute-privilege region)
+                          (memory-region-read-privilege region))))
+        (when required
+          (%check-privilege machine required name address nil access))))
     (cond
       ((null region) (aref slot address))
       ((eq (memory-region-kind region) :device)
@@ -1390,8 +1428,8 @@ wrapped value in every case, matching plain (SETF MREF)'s existing return
 contract."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (let ((wrapped (wrap-value value (storage-element-cell-width element))))
-      (when (and region (memory-region-privilege region))
-        (%check-privilege machine (memory-region-privilege region) name address))
+      (when (and region (memory-region-write-privilege region))
+        (%check-privilege machine (memory-region-write-privilege region) name address nil :write))
       (%notify-access machine name address :write wrapped)
       (cond
         ((and region (eq (memory-region-kind region) :rom))
