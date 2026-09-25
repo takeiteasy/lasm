@@ -36,7 +36,8 @@
   action      ; :set-origin | :select-bank | :emit | :reserve | :assign | :reassign
   width       ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
               ; NIL for :set-origin / :select-bank / :reserve / :assign / :reassign
-  endian)     ; :emit only: overrides the machine's endian order, or NIL
+  endian      ; :emit only: overrides the machine's endian order, or NIL
+  terminator) ; :emit only: integer appended after each string operand, or NIL
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
 ;; *LEXERS* (lexer.lisp), a plain runtime hash table with no EVAL-WHEN (see
@@ -95,15 +96,27 @@ SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
 (defun %parse-emit-action (action-form param-names)
   "EMIT is one of the two actions taking two arguments (a literal width,
 then the variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's
-one-argument shape -- handled separately. An optional trailing :ENDIAN spec
-overrides the machine's endian order. Returns (VALUES :emit width endian)."
+one-argument shape -- handled separately. Optional trailing :ENDIAN and
+:TERMINATOR specs (each at most once) override the machine's endian order and
+name the cell appended after each string operand. Returns
+(VALUES :emit width endian terminator)."
   (%definition-bind (head width-form values-sym &rest options) action-form
     (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names)
-                 (or (null options) (and (eq (first options) :endian) (= (length options) 2))))
-      (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S [:endian ORDER])"
+                 (evenp (length options))
+                 (loop for (key) on options by #'cddr
+                       always (member key '(:endian :terminator)))
+                 (= (length options)
+                    (* 2 (length (remove-duplicates (loop for (key) on options by #'cddr
+                                                          collect key)))))
+                 (let ((terminator (getf options :terminator 0)))
+                   (and (integerp terminator) (>= terminator 0))))
+      (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S ~
+[:endian ORDER] [:terminator CELL])"
              action-form (first param-names)))
     (values :emit width-form
-            (and options (%check-endian (second options) (first param-names))))))
+            (and (getf options :endian)
+                 (%check-endian (getf options :endian) (first param-names)))
+            (getf options :terminator))))
 
 (defun %parse-assign-action (action-form param-names)
   "Validate ASSIGN or REASSIGN with the directive's two parameters, in order."
@@ -116,7 +129,7 @@ overrides the machine's endian order. Returns (VALUES :emit width endian)."
 (defun build-directive-descriptor (name params action-form)
   (%with-definition (name directive-definition-error)
     (multiple-value-bind (arity param-names) (%parse-directive-params params)
-      (multiple-value-bind (action width endian)
+      (multiple-value-bind (action width endian terminator)
           (cond
             ((and (consp action-form) (eq (first action-form) 'emit))
              (%parse-emit-action action-form param-names))
@@ -124,7 +137,8 @@ overrides the machine's endian order. Returns (VALUES :emit width endian)."
              (values (%parse-assign-action action-form param-names) nil))
             (t (%parse-directive-action action-form param-names)))
         (make-directive-descriptor :name (string-upcase name) :arity arity
-                                    :action action :width width :endian endian)))))
+                                    :action action :width width :endian endian
+                                    :terminator terminator)))))
 
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
@@ -144,7 +158,7 @@ referencing PARAMS' own parameter name(s), in order:
                               (#53 -- a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
                               also fold label-free.
-  (emit width values [:endian order])
+  (emit width values [:endian order] [:terminator cell])
                            -- lay down (length VALUES) WIDTH-cell fields,
                               one per value in VALUES, in the machine's own
                               endian order (#66), or in ORDER (:little, :big
@@ -152,7 +166,9 @@ referencing PARAMS' own parameter name(s), in order:
                               layout size is WIDTH *
                               (length VALUES); each value may reference a
                               label (resolved in pass 2, like an ordinary
-                              instruction operand).
+                              instruction operand). A quoted string value
+                              expands to one field per character, followed
+                              by CELL when :terminator is given.
   (assign name value)      -- bind NAME (an identifier operand, not an
                               expression) to VALUE in the symbol table,
                               without occupying any address -- .EQU.
@@ -212,4 +228,8 @@ anything -- see this file's header comment."
 ;; machines, and -- like every other directive -- take the mnemonic
 ;; namespace, so no machine may define an instruction named .CELL or .DAT.
 (defdirective ".cell" (&rest values) (emit 1 values))
+;; .ASCII/.ASCIZ (#34): strings are accepted by every :EMIT directive, so these
+;; differ from .BYTE only in the terminator .ASCIZ appends to each string.
+(defdirective ".ascii" (&rest values) (emit 1 values))
+(defdirective ".asciz" (&rest values) (emit 1 values :terminator 0))
 (defdirective ".dat"  (&rest values) (emit 1 values))

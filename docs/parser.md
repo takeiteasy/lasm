@@ -91,6 +91,7 @@ token. The assembler supplies the address when evaluating the AST; see
 | Node | Represents |
 | --- | --- |
 | `expr-number` | Numeric literal. |
+| `expr-string` | Quoted string literal. Only a data directive operand evaluates it; `eval-expr` rejects it elsewhere. |
 | `expr-label` | Label reference, including a local-label flag. |
 | `expr-location` | Location counter. |
 | `expr-index` | `NAME[expr]`, a banked register cell or stack slot. Parsed only in debugger expressions.[^index] |

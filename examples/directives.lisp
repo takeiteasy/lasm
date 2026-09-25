@@ -4,7 +4,8 @@
 ;;;; program at a fixed address, .BYTE lays down a small data table (whose
 ;;;; values are read back through LDA/ADC's ABSOLUTE mode, same as
 ;;;; examples/modes.lisp), .RES reserves a zero-filled scratch buffer between
-;;;; the code and the table, sized by an address-derived .EQU.
+;;;; the code and the table, sized by an address-derived .EQU, and .ASCIZ
+;;;; (#34) appends null-terminated strings.
 ;;;;
 ;;;; Run with:  sbcl --script examples/directives.lisp
 
@@ -56,7 +57,8 @@ scratch: .byte 0
 padding: .res padsize  ; two zero-filled scratch bytes, unread by this program
 table:   .byte sample
          .set sample, 10
-         .byte sample, 15")
+         .byte sample, 15
+message: .asciz \"hi\", \"!\" ; strings emit one byte per character, 0 after each")
 
 (format t "~&Source:~%~A~2%" *source*)
 

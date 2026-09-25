@@ -84,6 +84,8 @@
               ; this and calls PARSE-EXPRESSION on the pattern's `expr` hole(s)
 
 (defstruct expr-number value)
+(defstruct expr-string value line column)  ; a quoted string literal -- only a data
+                                             ; directive operand evaluates it (assembler.lisp)
 (defstruct expr-label name localp line column) ; NAME unresolved; LOCALP set from
                                              ; the lexer's LOCAL-LABEL-PREFIX
                                              ; (lexer.lisp's TOKEN-LOCALP) --
@@ -143,6 +145,10 @@
       ((null tok) (%parse-error tok "Unexpected end of expression"))
       ((eq (token-type tok) :number)
        (values (make-expr-number :value (token-value tok)) (1+ i)))
+      ((eq (token-type tok) :string)
+       (values (make-expr-string :value (token-value tok)
+                                 :line (token-line tok) :column (token-column tok))
+               (1+ i)))
       ((and *indexed-names* (eq (token-type tok) :identifier)
             (eq (%punct-value (%tok tokens (1+ i) end)) :lbracket))
        (multiple-value-bind (inner next-i) (%parse-binary tokens (+ i 2) end 0)

@@ -99,3 +99,30 @@
 (fiveam:test defdirective-registers-a-new-directive
   (defdirective ".test-marker" (n) (reserve n))
   (fiveam:is (eq :reserve (directive-descriptor-action (find-directive-descriptor ".test-marker")))))
+
+;; #34 -- .ASCII/.ASCIZ are :EMIT directives; only .ASCIZ appends a terminator.
+(fiveam:test ascii-and-asciz-are-variadic-width-one-emits
+  (dolist (name '(".ascii" ".asciz"))
+    (let ((d (find-directive-descriptor name)))
+      (fiveam:is (eq :emit (directive-descriptor-action d)))
+      (fiveam:is (eq :variadic (directive-descriptor-arity d)))
+      (fiveam:is (= 1 (directive-descriptor-width d))))))
+
+(fiveam:test only-asciz-has-a-terminator
+  (fiveam:is (null (directive-descriptor-terminator (find-directive-descriptor ".ascii"))))
+  (fiveam:is (null (directive-descriptor-terminator (find-directive-descriptor ".byte"))))
+  (fiveam:is (= 0 (directive-descriptor-terminator (find-directive-descriptor ".asciz")))))
+
+(fiveam:test defdirective-accepts-terminator-with-endian
+  (defdirective ".test-term" (&rest v) (emit 2 v :endian :big :terminator 10))
+  (let ((d (find-directive-descriptor ".test-term")))
+    (fiveam:is (eq :big (directive-descriptor-endian d)))
+    (fiveam:is (= 10 (directive-descriptor-terminator d)))))
+
+(fiveam:test defdirective-rejects-malformed-emit-options
+  (dolist (form '((defdirective ".bad" (&rest v) (emit 1 v :terminator :x))
+                  (defdirective ".bad" (&rest v) (emit 1 v :terminator -1))
+                  (defdirective ".bad" (&rest v) (emit 1 v :terminator 0 :terminator 1))
+                  (defdirective ".bad" (&rest v) (emit 1 v :nope 1))
+                  (defdirective ".bad" (&rest v) (emit 1 v :terminator))))
+    (fiveam:signals directive-definition-error (eval form))))

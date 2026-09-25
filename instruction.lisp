@@ -390,6 +390,11 @@ operators -- they split off the low/high byte of a value regardless of the
 target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
   (etypecase ast
     (expr-number (expr-number-value ast))
+    (expr-string
+     (error 'assembly-error
+            :message (format nil "String literal ~S is only valid as a data directive operand"
+                             (expr-string-value ast))
+            :line (expr-string-line ast) :column (expr-string-column ast)))
     (expr-label
      (multiple-value-bind (value foundp)
          (and symbols (gethash (expr-label-name ast) symbols))

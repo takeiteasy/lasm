@@ -23,7 +23,7 @@ unbalanced .if/.elseif/.else/.endif, or a condition that is not a constant."))
 
 (defun %ast-layout-dependent-p (ast)
   (etypecase ast
-    (expr-number nil)
+    ((or expr-number expr-string) nil)
     (expr-label nil)
     (expr-location t)
     (expr-unary (or (eq (expr-unary-op ast) :bank)

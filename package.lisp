@@ -271,6 +271,9 @@
    #:expr-number
    #:expr-number-p
    #:expr-number-value
+   #:expr-string
+   #:expr-string-p
+   #:expr-string-value
    #:expr-label
    #:expr-label-p
    #:expr-label-name

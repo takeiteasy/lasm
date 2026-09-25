@@ -26,7 +26,7 @@ one of these actions:
 | `(set-origin! address)` | Move the address counter. |
 | `(select-bank! n)` | Select a bank for later banked output. |
 | `(reserve count)` | Advance by zero-filled cells. |
-| `(emit width values [:endian order])` | Write values, each `width` cells wide. |
+| `(emit width values [:endian order] [:terminator cell])` | Write values, each `width` cells wide; `:terminator` follows each string operand.[^emit] |
 | `(assign name value)` | Bind a constant without using an address. |
 | `(reassign name value)` | Create or update an assignment. |
 
@@ -53,8 +53,8 @@ dependencies are acyclic. See [Assembler](assembler.md#convergence).
 | `.byte` | One memory cell | `.byte 1, 2, 3` |
 | `.word` | Two memory cells | `.word $1234` |
 
-Both accept zero or more expressions. Values are resolved during encoding,
-so forward labels work. Fields follow the machine's byte order unless a
+Both accept zero or more expressions, or [string operands](#ascii--asciz).
+Values are resolved during encoding, so forward labels work. Fields follow the machine's byte order unless a
 custom `emit` action sets `:endian`; out-of-range values wrap.
 On a machine with 16-bit cells, `.byte` means one 16-bit cell and `.word`
 means two. See [Machine model](machine-model.md#cell-width-and-the-assembler).
@@ -63,6 +63,24 @@ means two. See [Machine model](machine-model.md#cell-width-and-the-assembler).
 
 These are one-cell aliases for `.byte`, useful when cells are wider than
 8 bits. They use the same range and byte-order rules.
+
+## `.ascii` / `.asciz`
+
+A string operand emits one element per character. `.asciz` adds a `0`
+after each string; numbers get no terminator:
+
+```asm
+.ascii "hi", 13, 10   ; 68 69 0D 0A
+.asciz "a", "b"       ; 61 00 62 00
+```
+
+Every `emit` directive takes strings, so `.byte "A", 0` works too.
+Each character is one element: one cell for `.ascii`, `.asciz`, `.byte`,
+and `.cell`, so a 16-bit-cell machine holds code points up to `$FFFF`.
+A character too wide for its element signals `assembly-error`. A string is
+valid only as a top-level data operand; anywhere else (`.org "a"`,
+`lda #"a"`, `"a" + 1`) it signals `assembly-error`. The escapes are `\n`
+and `\t`; see [Limitations](#limitations).
 
 ## `.res`
 
@@ -117,10 +135,14 @@ a label absent from the completed program. See [Diagnostics](diagnostics.md).
 
 ## Limitations
 
-- `.ascii` and `.asciz` are unavailable because the expression parser has
-  no string node.
+- String literals understand only the `\n` and `\t` escapes; any other
+  escaped character stands for itself, so `"\0"` is `0x30`
+  ([#262](https://todo.sr.ht/~takeiteasy/lasm/262)).
 - Undecodable data renders as `.byte` even on word-addressed machines;
   disassembly does not select `.cell` or `.dat` for those lines.
 
 See the [issue tracker](https://todo.sr.ht/~takeiteasy/lasm) for planned
 work on these limits.
+
+[^emit]: `:terminator` takes a non-negative integer. `:endian` and
+    `:terminator` may each appear once, in either order.

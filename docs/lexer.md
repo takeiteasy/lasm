@@ -66,3 +66,9 @@ A malformed `deflexer` clause signals `lexer-definition-error`.
 Malformed strings, comments, character literals, numeric prefixes, or
 unknown characters signal `lex-error` with position and source context.
 See [Diagnostics](diagnostics.md).
+
+## Limitations
+
+- A string literal understands only the `\n` and `\t` escapes; any other
+  escaped character stands for itself
+  ([#262](https://todo.sr.ht/~takeiteasy/lasm/262)).

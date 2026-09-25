@@ -1503,3 +1503,59 @@ next: wnop" :machine 'word-relative-test-machine)))
 
 (fiveam:test assembler-rejects-mem
   (fiveam:signals assembly-error (assemble ".byte mem(1)" :machine 'emu-test-machine)))
+
+;;; String operands, .ascii/.asciz (#34)
+
+(defun %string-cells (source &optional (machine 'instr-test-machine))
+  (coerce (assembly-cells (assemble source :machine machine)) 'list))
+
+(fiveam:test ascii-emits-one-cell-per-character
+  (fiveam:is (equal '(#x68 #x69) (%string-cells ".ascii \"hi\""))))
+
+(fiveam:test asciz-terminates-each-string
+  (fiveam:is (equal '(#x61 0 #x62 0) (%string-cells ".asciz \"a\", \"b\""))))
+
+(fiveam:test string-operands-mix-with-numbers
+  (fiveam:is (equal '(#x68 #x69 13 10) (%string-cells ".ascii \"hi\", 13, 10")))
+  (fiveam:is (equal '(#x41 0) (%string-cells ".byte \"A\", 0")))
+  (fiveam:is (equal '(#x41 0 5) (%string-cells ".asciz \"A\", 5"))))
+
+(fiveam:test empty-string-emits-only-its-terminator
+  (fiveam:is (null (%string-cells ".ascii \"\"")))
+  (fiveam:is (equal '(0) (%string-cells ".asciz \"\""))))
+
+(fiveam:test string-honours-escapes
+  (fiveam:is (equal '(10 9) (%string-cells ".ascii \"\\n\\t\""))))
+
+(fiveam:test word-directive-widens-each-string-character
+  (fiveam:is (equal '(#x41 0) (%string-cells ".word \"A\""))))  ; little-endian
+
+(fiveam:test label-after-string-follows-its-terminator
+  (let ((a (assemble "msg: .asciz \"hi\"
+end: nop" :machine 'instr-test-machine)))
+    (fiveam:is (= 0 (gethash "msg" (assembly-symbols a))))
+    (fiveam:is (= 3 (gethash "end" (assembly-symbols a))))
+    (fiveam:is (= 3 (listing-line-size (first (assembly-listing a)))))))
+
+(fiveam:test string-characters-are-one-cell-on-word-addressed-machine
+  (fiveam:is (equal '(#x68 #x69 0) (%string-cells ".asciz \"hi\"" 'wordaddr-test-machine)))
+  (fiveam:is (equal '(#x263A) (%string-cells (format nil ".ascii \"~C\"" (code-char #x263A))
+                                      'wordaddr-test-machine))))
+
+(fiveam:test string-character-too-wide-for-element-signals-assembly-error
+  (fiveam:signals assembly-error
+    (assemble (format nil ".ascii \"~C\"" (code-char #x263A)) :machine 'instr-test-machine)))
+
+(fiveam:test string-outside-a-data-directive-signals-assembly-error
+  (dolist (source '(".org \"a\"" ".equ x, \"a\"" ".byte \"a\" + 1" "ldx #\"a\"" ".res \"a\""
+                    ".if \"a\"
+nop
+.endif"))
+    (fiveam:signals assembly-error (assemble source :machine 'instr-test-machine))))
+
+(fiveam:test macro-argument-can-be-a-string
+  (fiveam:is (equal '(#x68 #x69 0)
+                    (%string-cells ".macro msg s
+    .asciz s
+.endm
+    msg \"hi\""))))

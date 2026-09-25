@@ -808,6 +808,21 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
                               (statement-mnemonic statement) n (length operands))))))
     (mapcar #'%directive-operand-ast operands)))
 
+(defun %expand-string-operands (asts terminator element-bits line mnemonic)
+  "Replace each top-level EXPR-STRING in ASTS with one EXPR-NUMBER per
+character, followed by TERMINATOR when non-NIL. Other ASTs pass through."
+  (loop for ast in asts
+        if (expr-string-p ast)
+          append (append
+                  (loop for char across (expr-string-value ast)
+                        for code = (char-code char)
+                        do (unless (< code (ash 1 element-bits))
+                             (%assembly-error line "~A: character ~S does not fit a ~D-bit element"
+                                              mnemonic char element-bits))
+                        collect (make-expr-number :value code))
+                  (and terminator (list (make-expr-number :value terminator))))
+        else collect ast))
+
 (defun %directive-constant-arg (statement directive address scope directive-symbols labels previous)
   "Fold .ORG/.RES's operand against current symbols and previous-pass forward
 labels. Return NIL when a known forward label has no provisional value yet."
@@ -874,7 +889,7 @@ pass instead of reusing one pass's ASTs on the next -- a follow-up ticket
 tracks caching them across passes, which would need this cleared or the
 call made idempotent some other way."
   (etypecase ast
-    ((or expr-number expr-location))
+    ((or expr-number expr-string expr-location))
     (expr-label
      (when (expr-label-localp ast)
        (setf (expr-label-name ast) (%qualify-local scope (expr-label-name ast) line))))
@@ -967,7 +982,7 @@ symbol ~S is not yet defined"
 (defun %capture-set-values (ast symbols set-names line)
   "Replace references to reassignable names with their value at this statement."
   (etypecase ast
-    ((or expr-number expr-location) ast)
+    ((or expr-number expr-string expr-location) ast)
     (expr-label
      (if (gethash (expr-label-name ast) set-names)
          (multiple-value-bind (value presentp) (gethash (expr-label-name ast) symbols)
@@ -1034,7 +1049,7 @@ symbol ~S is not yet defined"
 
 (defun %first-expr-label (ast)
   (etypecase ast
-    ((or expr-number expr-location) nil)
+    ((or expr-number expr-string expr-location) nil)
     (expr-label (expr-label-name ast))
     (expr-unary (%first-expr-label (expr-unary-operand ast)))
     (expr-binary (or (%first-expr-label (expr-binary-left ast))
@@ -1052,7 +1067,7 @@ symbol ~S is not yet defined"
              (add (from to) (cl:pushnew to (aref edges from)))
              (walk-expr (ast from i)
                (etypecase ast
-                 (expr-number nil)
+                 ((or expr-number expr-string) nil)
                  (expr-location (add from (before i)))
                  (expr-label
                   (let* ((name (expr-label-name ast))
@@ -1296,11 +1311,15 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                               (incf address count)
                               (unless region (setf emitted-p t main-end address)))))
                          (:emit
-                          (let* ((asts (mapcar (lambda (ast)
+                          (let* ((width (directive-descriptor-width directive))
+                                 (asts (mapcar (lambda (ast)
                                                  (%capture-set-values ast symbols set-names line))
                                                (%qualify-locals-in-asts!
-                                                (%directive-args statement directive) scope line)))
-                                 (width (directive-descriptor-width directive)))
+                                                (%expand-string-operands
+                                                 (%directive-args statement directive)
+                                                 (directive-descriptor-terminator directive)
+                                                 (* width cell-width) line mnemonic)
+                                                scope line))))
                             (cl:push (list :emit address width (directive-descriptor-endian directive)
                                            asts line *current-definition-line*
                                            *current-source-unit* *current-definition-unit*) sized)

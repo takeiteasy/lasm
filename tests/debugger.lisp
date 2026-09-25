@@ -1327,3 +1327,7 @@ count: ldx #3
     (let ((session (make-debug-session m)))
       (setf (sref m 'pc) #x302)
       (fiveam:is (search "2:.loop:  dex" (debug-where-text session))))))
+
+(fiveam:test debug-break-condition-rejects-a-string-literal
+  (let ((session (%dbg-session)))
+    (fiveam:signals usage-error (debug-break session #x102 :condition "x == \"a\""))))

@@ -345,3 +345,16 @@ jmp start")))
   (let ((ast (%expr "mem(0x10)")))
     (fiveam:is (eq :mem (expr-unary-op ast)))
     (fiveam:is (= #x10 (expr-number-value (expr-unary-operand ast))))))
+
+;;; String literals (#34)
+
+(fiveam:test string-token-parses-to-expr-string
+  (let ((ast (%expr "\"hi\"")))
+    (fiveam:is (expr-string-p ast))
+    (fiveam:is (string= "hi" (expr-string-value ast)))
+    (fiveam:is (= 1 (expr-string-line ast)))))
+
+(fiveam:test string-is-a-leaf-of-a-larger-expression
+  (let ((ast (%expr "\"a\" + 1")))
+    (fiveam:is (expr-binary-p ast))
+    (fiveam:is (expr-string-p (expr-binary-left ast)))))

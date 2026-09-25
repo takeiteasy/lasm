@@ -236,6 +236,7 @@ lowcell, highcell)."
     (labels ((walk (node)
                (etypecase node
                  ((or expr-number expr-location) nil)
+                 (expr-string (%debugger-usage-error "A string literal is not available in a condition"))
                  (expr-label (pushnew (expr-label-name node) names :test #'string=))
                  (expr-index (cl:push node indexed)
                              (walk (expr-index-operand node)))
