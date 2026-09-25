@@ -1743,3 +1743,44 @@ loop:   sta $10
     (debug-step session 51)
     (fiveam:is (null (debug-session-condition-error session)))
     (fiveam:is (some (lambda (hit) (typep (third hit) 'error)) (debug-session-hits session)))))
+
+;;; save / load commands
+
+(fiveam:test debug-command-save-and-load-round-trip-state
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((session (%dbg-session))
+          (file (namestring path)))
+      (debug-step session 2)
+      (let ((pc (%pc session)))
+        (fiveam:is (search "saved" (debug-command session (format nil "save ~A" file))))
+        (debug-continue session)
+        (fiveam:is (/= pc (%pc session)))
+        (fiveam:is (search "loaded" (debug-command session (format nil "load ~A" file))))
+        (fiveam:is (= pc (%pc session)))
+        (fiveam:is (eq :trap (debug-continue session)))))))
+
+(fiveam:test debug-command-load-reports-bad-files-as-text
+  (let ((session (%dbg-session)))
+    (fiveam:is (search "Error:" (debug-command session "load /nonexistent/lasm.snap")))
+    (uiop:with-temporary-file (:pathname path :type "snap")
+      (with-open-file (out path :direction :output :if-exists :supersede)
+        (write-string "garbage (" out))
+      (fiveam:is (search "Error:" (debug-command session (format nil "load ~A" (namestring path))))))
+    (fiveam:is (search "missing path" (debug-command session "save")))
+    (fiveam:is (search "missing path" (debug-command session "load")))))
+
+(fiveam:test debug-load-keeps-step-back-working
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let* ((a (%dbg-assembly))
+           (m (make-machine 'emu-test-machine))
+           (file (namestring path)))
+      (load-program m a)
+      (let ((session (make-debug-session m :assembly a :history 100)))
+        (debug-step session 3)
+        (debug-command session (format nil "save ~A" file))
+        (debug-step session 2)
+        (debug-command session (format nil "load ~A" file))
+        (let ((pc (%pc session)))
+          (debug-step session 2)
+          (debug-step-back session 2)
+          (fiveam:is (= pc (%pc session))))))))

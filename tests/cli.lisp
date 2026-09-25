@@ -13,11 +13,11 @@
 (defun %cli-args (command file &rest more)
   (list* command (%cli-path file) "-m" (%cli-path "examples/cli/sixtyfoo.lasm") more))
 
-(defun %run-cli (args)
-  "Returns (VALUES EXIT-STATUS STDOUT STDERR)."
+(defun %run-cli (args &optional (input ""))
+  "Returns (VALUES EXIT-STATUS STDOUT STDERR). INPUT feeds the debugger."
   (let* ((err (make-string-output-stream))
          (out (make-string-output-stream))
-         (status (run-cli args :out out :err err)))
+         (status (run-cli args :in (make-string-input-stream input) :out out :err err)))
     (values status (get-output-stream-string out) (get-output-stream-string err))))
 
 (fiveam:test cli-assemble-writes-binary-by-default
@@ -331,3 +331,63 @@
       (fiveam:is (= 1 status))
       (fiveam:is (string= "" out))
       (fiveam:is (search "lasm:" err)))))
+
+(defun %debug-lines (&rest lines)
+  (format nil "~{~A~%~}" lines))
+
+(fiveam:test cli-debug-runs-a-session-from-stdin
+  (multiple-value-bind (status out err)
+      (%run-cli (%cli-args "debug" "examples/cli/counter.asm")
+                (%debug-lines "break count.loop" "continue" "print x" "quit"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (string= "" err))
+    (fiveam:is (search "Breakpoint 1" out))
+    (fiveam:is (search "breakpoint" out))
+    (fiveam:is (search "Bye." out))))
+
+(fiveam:test cli-debug-ends-at-end-of-input
+  (multiple-value-bind (status out) (%run-cli (%cli-args "debug" "examples/cli/counter.asm") "step")
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "(lasm-dbg) " out))))
+
+(fiveam:test cli-debug-break-presets-stop-before-the-prompt
+  (multiple-value-bind (status out)
+      (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--break" ".loop in count"))
+                (%debug-lines "continue"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (< (search "Breakpoint 1" out) (search "(lasm-dbg)" out)))
+    (fiveam:is (search "stopped" (string-downcase out)))))
+
+(fiveam:test cli-debug-commands-file-runs-before-input
+  (uiop:with-temporary-file (:pathname path :type "txt")
+    (with-open-file (out path :direction :output :if-exists :supersede)
+      (format out "step 2~%print x~%"))
+    (multiple-value-bind (status out)
+        (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--commands" (namestring path)))
+                  (%debug-lines "quit"))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "(lasm-dbg) step 2" out))
+      (fiveam:is (search "Bye." out)))
+    (fiveam:is (not (search "(lasm-dbg) quit"
+                            (nth-value 1 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm")
+                                                           (list "--commands" (namestring path)))
+                                                   "quit\nprint x\n")))))))
+
+(fiveam:test cli-debug-history-enables-step-back
+  (let ((script (%debug-lines "step 2" "back")))
+    (fiveam:is (search "Error" (nth-value 1 (%run-cli (%cli-args "debug" "examples/cli/counter.asm") script))))
+    (let ((out (nth-value 1 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--history" "10"))
+                                      script))))
+      (fiveam:is (not (search "Error" out))))
+    (fiveam:is (= 2 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--history" "0")))))))
+
+(fiveam:test cli-debug-loads-and-saves-snapshots
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((snapshot (namestring path)))
+      (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--save-snapshot" snapshot))
+                (%debug-lines "step 3"))
+      (multiple-value-bind (status out)
+          (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--load-snapshot" snapshot))
+                    (%debug-lines "continue"))
+        (fiveam:is (= 0 status))
+        (fiveam:is (search "PC=0009" (string-upcase out)))))))

@@ -18,7 +18,9 @@ from a file. Each `defmachine` provides these operations. Stateful devices can a
 ```
 
 The [command line](cli.md#snapshots) saves and restores snapshots with
-`run --save-snapshot` and `--load-snapshot`.
+`run` and `debug` `--save-snapshot` and `--load-snapshot`; the
+[debugger](debugger.md#command-dispatcher-and-repl) has `save` and `load`
+commands.
 
 ## What is saved
 

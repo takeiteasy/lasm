@@ -224,7 +224,8 @@ switching it. Banked breakpoints and `until` wait for the requested bank.
 
 `debug-command` returns response text and a `quit-p` value. Invalid
 commands return an error message as text. `debugger-repl` reads, dispatches,
-and prints until `quit` or end of input.
+and prints until `quit` or end of input. `lasm debug` runs it from the
+[command line](cli.md#debugging).
 
 | Command | Effect |
 | --- | --- |
@@ -242,6 +243,7 @@ and prints until `quit` or end of input.
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |
 | `bank REGION N` | Map a bank. |
+| `save PATH`, `load PATH` | Write the machine's [snapshot](snapshots.md) to a file, or restore it. `load` rebuilds device objects and drops recorded hits; step-back history continues from the restored state. A bad or missing file is an error message. |
 | `help`, `quit` | Show commands or end the session. |
 
 `set` evaluates `EXPR` like a breakpoint condition, so `set x = x + 1` and

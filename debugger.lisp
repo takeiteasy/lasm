@@ -1512,6 +1512,8 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
+  save PATH          write the machine's state to a snapshot file
+  load PATH          restore the machine's state from a snapshot file
   where              show pc, current instruction, and source context
   help               this text
   quit               end the session
@@ -1672,8 +1674,21 @@ this call."
                                   (format nil "~(~A~) bank ~D~%" region bank))
                            "bank: usage: bank REGION N"))))
                   ((string-equal cmd "where") (debug-where-text session))
+                  ((string-equal cmd "save")
+                   (if (zerop (length rest))
+                       "save: missing path"
+                       (progn (write-snapshot (machine-snapshot (debug-session-machine session)) rest)
+                              (format nil "saved ~A~%" rest))))
+                  ((string-equal cmd "load")
+                   (if (zerop (length rest))
+                       "load: missing path"
+                       (progn (restore-snapshot (debug-session-machine session) (read-snapshot rest))
+                              (%forget-hits session)
+                              (setf (debug-session-shadow session) nil)
+                              (format nil "loaded ~A~%" rest))))
                   ((string-equal cmd "quit") :quit)
                   (t (format nil "Unknown command ~S -- try \"help\"" cmd))))
+            (file-error (c) (format nil "Error: ~A~%" c))
             (lasm-error (c) (format nil "Error: ~A~%" c)))))
     (let ((quit-p (eq body :quit))
           (text (if (eq body :quit) (format nil "Bye.~%") body)))

@@ -37,8 +37,8 @@
                (:file "listing")
                (:file "output")
                (:file "snapshot")
-               (:file "cli")
-               (:file "debugger"))
+               (:file "debugger")
+               (:file "cli"))
   :in-order-to ((test-op (test-op #:lasm/test))))
 
 ;; Tests leave variables unused on purpose; muffle the compiler's style warnings

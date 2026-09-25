@@ -1,6 +1,6 @@
 # Command line
 
-`lasm` assembles, runs, disassembles and lists programs from the shell. A
+`lasm` assembles, runs, debugs, disassembles and lists programs from the shell. A
 machine is defined in a `.lasm` file; the program is ordinary assembly source
 (`.asm` or `.s`).
 
@@ -27,6 +27,7 @@ defined, the default lexer is used.
 | --- | --- | --- |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
 | `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH` |
+| `debug FILE` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH` |
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
@@ -53,11 +54,39 @@ cell width and endianness. `--data-region` (repeatable; `$hex`, `0xhex` or
 decimal bounds, `END` exclusive) renders that address range as `.byte` lines
 instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 
+## Debugging
+
+`debug` assembles `FILE`, loads it, and reads debugger commands from standard
+input until `quit` or end of input, printing responses to standard output.
+It exits 0.
+
+```sh
+lasm debug counter.asm -m sixtyfoo.lasm --break .loop --history 100
+```
+
+```
+Breakpoint 1 at $0002
+(lasm-dbg) continue
+...
+(lasm-dbg) quit
+```
+
+| Option | Effect |
+| --- | --- |
+| `--break WHERE` | Sets a breakpoint before the first prompt. Repeatable; takes what `break` takes, such as `.loop in count` or `main if x == 1`. |
+| `--commands FILE` | Runs the commands in `FILE` first, echoing each after the prompt. A `quit` in the file ends the session. |
+| `--history N` | Keeps `N` steps for `back` and `reverse-continue`. |
+
+Commands from a pipe work the same way: `echo "continue" | lasm debug ...`.
+The [command list](debugger.md#command-dispatcher-and-repl) includes `save
+PATH` and `load PATH` for snapshots.
+
 ## Snapshots
 
-`--save-snapshot PATH` writes the machine's state to `PATH` when `run` stops.
-`--load-snapshot PATH` loads the program, then restores that state before
-running, so `--max-steps` and `--cycles` count from the snapshot.
+`--save-snapshot PATH` writes the machine's state to `PATH` when `run` stops
+or `debug` ends. `--load-snapshot PATH` loads the program, then restores that
+state before running, so `--max-steps` and `--cycles` count from the snapshot.
+Both work on `run` and `debug`.
 
 ```sh
 lasm run counter.asm -m sixtyfoo.lasm --max-steps 5 --save-snapshot s.snap
@@ -88,11 +117,11 @@ printed.
 ## Entry point
 
 ```lisp
-(run-cli ARGS &key (out *standard-output*) (err *error-output*))
+(run-cli ARGS &key (in *standard-input*) (out *standard-output*) (err *error-output*))
 ```
 
 Runs the command in `ARGS` (a list of strings, without the program name) and
-returns the exit status. `lasm.ros` is a thin wrapper around it.
+returns the exit status. `debug` reads its commands from `in`. `lasm.ros` is a thin wrapper around it.
 
 ## Building
 

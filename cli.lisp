@@ -23,6 +23,8 @@ commands:
   disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
                     [--cells N] [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
+  debug FILE        assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
+                    [--load-snapshot PATH] [--save-snapshot PATH]
 
 options:
   -m, --machine FILE     machine definition (.lasm), required
@@ -34,8 +36,11 @@ options:
   --region NAME          banked region for --bank when there are several
   --packing pad|bits     cells that are not whole bytes: pad each to bytes (default)
                          or pack them as a bitstream
-  --load-snapshot PATH   restore machine state from a snapshot after loading (run)
-  --save-snapshot PATH   write machine state to a snapshot when the run stops (run)
+  --load-snapshot PATH   restore machine state from a snapshot after loading (run, debug)
+  --save-snapshot PATH   write machine state to a snapshot at the end (run, debug)
+  --break WHERE          set a breakpoint before the prompt appears (debug)
+  --commands FILE        run debugger commands from FILE first (debug)
+  --history N            keep N steps of step-back history (debug)
   --cells N              number of cells in the file (disassemble), to drop bit padding
   -h, --help             show this help
 ")
@@ -47,10 +52,11 @@ options:
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)
-    ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)))
+    ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)
+    ("--history" . :history) ("--commands" . :commands)))
 
 (defparameter *cli-repeatable-options*
-  '(("--data-region" . :data-regions)))
+  '(("--data-region" . :data-regions) ("--break" . :breaks)))
 
 (defparameter *cli-flag-options*
   '(("--symbols" . :symbols) ("--cycle-costs" . :cycle-costs) ("--annotate" . :annotate)
@@ -266,6 +272,33 @@ the calling image."
       (print-symbols assembly :stream out))
     0))
 
+(defun %cli-command-debug (file machine lexer options out)
+  (let* ((assembly (%cli-assemble file machine lexer options))
+         (memory (%cli-memory options))
+         (history (%cli-option-integer options :history "--history"))
+         (in (or (getf options :in) *standard-input*)))
+    (when (and history (< history 1))
+      (%usage-error "--history needs a positive integer, got ~D" history))
+    (let ((session (make-debug-session (%cli-loaded-machine assembly machine options)
+                                       :assembly assembly :memory memory :history history)))
+      (dolist (where (getf options :breaks))
+        (write-string (debug-command session (format nil "break ~A" where)) out))
+      (unless (%cli-run-command-file session (getf options :commands) out)
+        (debugger-repl session :input in :output out))
+      (%cli-save-snapshot (debug-session-machine session) options)
+      0)))
+
+(defun %cli-run-command-file (session path out)
+  "Dispatch each line of the file at PATH, echoing it after the prompt. True
+if a line quit the session."
+  (when path
+    (with-open-file (in path)
+      (loop for line = (read-line in nil nil)
+            while line
+            do (format out "(lasm-dbg) ~A~%" line)
+               (when (nth-value 1 (debug-command session line :stream out))
+                 (return t))))))
+
 (defun %cli-report-warning (err quiet)
   "A HANDLER-BIND handler that prints an assembly warning to ERR as
 FILE:LINE: warning: MESSAGE, or drops it under QUIET."
@@ -276,12 +309,14 @@ FILE:LINE: warning: MESSAGE, or drops it under QUIET."
               (lasm-warning-message warning)))
     (muffle-warning warning)))
 
-(defun run-cli (args &key (out *standard-output*) (err *error-output*))
+(defun run-cli (args &key (in *standard-input*) (out *standard-output*) (err *error-output*))
   "Run the lasm command line over ARGS (a list of strings, without the program
 name) and return its exit status: 0 on success, 1 on an assembly, load or run
-failure, 2 on a usage error. Output goes to OUT, diagnostics to ERR."
+failure, 2 on a usage error. Debugger commands are read from IN, output goes
+to OUT, diagnostics to ERR."
   (handler-case
       (multiple-value-bind (command file options) (%cli-parse args)
+        (setf (getf options :in) in)
         (cond ((or (getf options :help) (null command))
                (write-string *cli-usage* (if (getf options :help) out err))
                (if (getf options :help) 0 2))
@@ -290,7 +325,8 @@ failure, 2 on a usage error. Output goes to OUT, diagnostics to ERR."
                                           '(("assemble" . %cli-command-assemble)
                                             ("run" . %cli-command-run)
                                             ("disassemble" . %cli-command-disassemble)
-                                            ("listing" . %cli-command-listing))
+                                            ("listing" . %cli-command-listing)
+                                            ("debug" . %cli-command-debug))
                                           :test #'string=))))
                  (unless handler (%usage-error "unknown command ~A" command))
                  (unless file (%usage-error "~A needs a FILE" command))
