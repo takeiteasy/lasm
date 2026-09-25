@@ -555,6 +555,7 @@ looks like."
     (fiveam:is (equal '((rv-mid rv-leaf-a) (rv-mid rv-leaf-b) rv-leaf-a)
                       (mapcar #'car (%one-of-element-options
                                      (first (mode-descriptor-pattern (find-mode-descriptor 'rv-top)))))))
+    (fiveam:is (equal '((rv-mid rv-leaf-b) (rv-mid rv-leaf-b)) (nv-choices "b 1, 2" 'rv-top)))
     (eval '(defmode rv-leaf-b "b" expr))
     (fiveam:is-false (top-varying-p))))
 

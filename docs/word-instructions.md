@@ -168,7 +168,8 @@ those holes' operand fields:
 ```
 
 `src` identifies the base operand and `a-idx` the longer alternative.
-`:trailing-word` adds an unconditional extra value; it accepts `:cells k`.
+`:trailing-word` adds an unconditional extra value; it accepts `:cells k` and
+[`:endian ORDER`](#cell-order).
 The short form `(for-choice a-idx ...)` works when the alternative uniquely
 identifies the varying element. The longer alternative's extra names are
 available inside its `choice-case` branch.[^varying]
