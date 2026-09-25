@@ -252,13 +252,20 @@ address uses `BANK:ADDR`; a local label uses `.LOCAL in GLOBAL`.
 
 ## Limitations
 
-- Conditions and `print` expressions cannot index a banked register or stack
-  (`v[3] + 1`, `break ... if ds[0] == 2`); `print v[3]` alone works. See
-  [#255](https://todo.sr.ht/~takeiteasy/lasm/255).
+- Reverse continue and `reverse-until` replay the whole history while a
+  watchpoint is set. See [#265](https://todo.sr.ht/~takeiteasy/lasm/265).
 
 [^checkpoints]: Step back restores the nearest earlier checkpoint and replays
     forward. A checkpoint is a full [snapshot](snapshots.md) (an anchor,
     every 16th) or a delta holding the registers, devices and other small
     state plus the memory and bank cells changed since the previous
-    checkpoint. History is kept back to an anchor, so it can exceed `:history`.
-    Reverse continue replays one checkpoint segment at a time, newest first.
+    checkpoint. A delta compares only the 64-cell memory pages written since
+    the previous checkpoint, so it costs time in proportion to the changes;
+    an anchor copies all memory. History is kept back to an anchor, so it can
+    exceed `:history`.
+    Reverse continue first jumps to the latest breakpoint or watchpoint hit
+    recorded while the session ran forward. Otherwise it replays one
+    checkpoint segment at a time, newest first, skipping segments whose steps
+    never reached a breakpoint address. Changing breakpoints or watchpoints
+    drops the recorded hits, as does `debug-set`, `debug-write` or
+    `debug-set-bank`.

@@ -268,6 +268,7 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
 (defun %restore-snapshot (machine snapshot cells)
   "RESTORE-SNAPSHOT; without CELLS, memory and bank cell contents stay as they are."
   (multiple-value-bind (values plan banks) (%validate-snapshot machine snapshot cells)
+    (when cells (%mark-all-dirty machine))
     (loop for element in (machine-descriptor-elements (machine-descriptor machine))
           for value in values
           do (%apply-element machine element value))

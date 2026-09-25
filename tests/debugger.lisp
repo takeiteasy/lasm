@@ -1331,3 +1331,314 @@ count: ldx #3
 (fiveam:test debug-break-condition-rejects-a-string-literal
   (let ((session (%dbg-session)))
     (fiveam:signals usage-error (debug-break session #x102 :condition "x == \"a\""))))
+
+;;; Qualified-name index
+
+(fiveam:test debug-session-indexes-qualified-names-once
+  (let ((session (%dbg-session)))
+    (fiveam:is (null (debug-session-qualified-names session)))
+    (let ((info (%session-symbol session "count.loop" nil)))
+      (fiveam:is (= #x102 (symbol-info-value info)))
+      (fiveam:is (eq (debug-session-qualified-names session) (debug-session-qualified-names session)))
+      (fiveam:is (eq info (%session-symbol session "count.loop" nil))))
+    (fiveam:is (null (%session-symbol session "count.nowhere" nil)))))
+
+;;; Dirty-page tracking
+
+(defun %dirty-pages (machine array)
+  "The sorted dirty page numbers MACHINE's tracker holds for ARRAY."
+  (sort (loop for (a . page) in (dirty-pages-queue (machine-dirty machine))
+              when (eq a array) collect page)
+        #'<))
+
+(fiveam:test dirty-pages-record-only-cell-writes
+  (let* ((m (make-machine 'bank-test-machine))
+         (ram (gethash 'ram (machine-slots m)))
+         (bank (svref (cdr (gethash 'bram (machine-banks m))) 1)))
+    (setf (machine-dirty m) (make-dirty-pages))
+    (setf (mref m 'ram 3) 1)
+    (setf (mref m 'ram 4) 1)
+    (%poke m 'ram 130 1)
+    (fiveam:is (equal '(0 2) (%dirty-pages m ram)))
+    (ignore-errors (setf (mref m 'ram 32) 1))    ; :rom bank
+    (setf (mref m 'ram 48) 1)                    ; device
+    (fiveam:is (equal '(0 2) (%dirty-pages m ram)))
+    (setf (bank-peek m 'bram 1 20) 5)
+    (fiveam:is (equal '(0) (%dirty-pages m bank)))
+    (setf (current-bank m 'bram) 1)
+    (setf (mref m 'ram 21) 6)
+    (fiveam:is (= 1 (count bank (dirty-pages-queue (machine-dirty m)) :key #'car)))
+    (fiveam:is (not (dirty-pages-all (machine-dirty m))))))
+
+(fiveam:test dirty-pages-bulk-writes-mark-everything
+  (let ((m (make-machine 'emu-test-machine)))
+    (setf (machine-dirty m) (make-dirty-pages))
+    (reset m)
+    (fiveam:is (dirty-pages-all (machine-dirty m)))
+    (setf (dirty-pages-all (machine-dirty m)) nil)
+    (restore-snapshot m (machine-snapshot m))
+    (fiveam:is (dirty-pages-all (machine-dirty m)))))
+
+(fiveam:test dirty-pages-survive-reset
+  (let ((m (make-machine 'emu-test-machine))
+        (dirty (make-dirty-pages)))
+    (setf (machine-dirty m) dirty)
+    (reset m)
+    (fiveam:is (eq dirty (machine-dirty m)))))
+
+;;; A loop that dirties three memory pages every iteration
+
+(defparameter +dbg-loop-source+
+  "        ldx #40
+loop:   sta $10
+        sta $150
+        sta $2a0
+        dex
+        bne loop
+        hlt")
+
+(defun %dbg-loop-machine ()
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (assemble +dbg-loop-source+ :machine 'emu-test-machine :origin #x100))
+    m))
+
+(defun %dbg-loop-session (&key (history 1000) machine)
+  (let ((m (or machine (%dbg-loop-machine))))
+    (make-debug-session m :assembly (machine-program m) :history history)))
+
+(defun %dbg-loop-trace ()
+  "For a plain run of the loop program to its trap, a vector of (PC X SNAPSHOT)
+after 0, 1, ... steps."
+  (let ((session (%dbg-loop-session :history nil)))
+    (flet ((state () (list (%pc session) (sref (debug-session-machine session) 'x)
+                           (%dbg-snapshot session))))
+      (let ((states '()))
+        (loop (cl:push (state) states)
+              (when (member (debug-step session 1) '(:trap :decode-failure))
+                (cl:push (state) states)
+                (return)))
+        (coerce (nreverse states) 'vector)))))
+
+(defun %dbg-run-to-trap (session)
+  (loop for reason = (debug-continue session)
+        until (member reason '(:trap :decode-failure))))
+
+(fiveam:test debug-step-back-matches-every-recorded-state
+  (let ((trace (%dbg-loop-trace)))
+    (dolist (interval '(8 5 1))
+      (let ((*debug-checkpoint-interval* interval)
+            (*debug-anchor-interval* 3)
+            (session (%dbg-loop-session)))
+        (%dbg-run-to-trap session)
+        (let ((end (debug-session-step-count session)))
+          (fiveam:is (= end (1- (length trace))))
+          (loop for target in (list (- end 1) (- end 2) (- end 9) (- end 30) (- end 31) (- end 100) 3 0)
+                do (debug-step-back session (- (debug-session-step-count session) target))
+                   (fiveam:is (equal (third (aref trace target)) (%dbg-snapshot session))
+                              "interval ~D target ~D" interval target)))))))
+
+(fiveam:test debug-step-back-catches-writes-that-skip-the-access-hook
+  (let ((*debug-checkpoint-interval* 4)
+        (*debug-anchor-interval* 50)
+        (session (%dbg-loop-session)))
+    (let ((m (debug-session-machine session)))
+      (debug-step session 6)
+      (debug-set session #x300 7)
+      (debug-write session #x310 8)
+      (%poke m 'ram #x320 9)
+      (let ((edited (%dbg-snapshot session)))
+        (debug-step session 3)
+        (debug-step session 3)
+        (debug-step-back session 6)
+        (fiveam:is (equal edited (%dbg-snapshot session)))
+        (fiveam:is (= 7 (mpeek m 'ram #x300)))))))
+
+(fiveam:test debug-step-back-copes-with-a-second-history-session
+  (let* ((m (%dbg-loop-machine))
+         (first (%dbg-loop-session :machine m))
+         (trace (%dbg-loop-trace))
+         (*debug-checkpoint-interval* 4))
+    (debug-step first 10)
+    (%dbg-loop-session :machine m)
+    (debug-step first 10)
+    (debug-step-back first 15)
+    (fiveam:is (equal (third (aref trace 5)) (%dbg-snapshot first)))
+    (debug-step first 10)
+    (debug-step-back first 3)
+    (fiveam:is (equal (third (aref trace 12)) (%dbg-snapshot first)))))
+
+;;; Reverse continue over a long history
+
+(defun %dbg-reverse-trail (session next-hit)
+  "Run reverse-continue by NEXT-HIT (a function of SESSION) until it stops
+at the history start, as a list of (REASON STEP)."
+  (loop for (reason) = (multiple-value-list (funcall next-hit session))
+        collect (list reason (debug-session-step-count session))
+        until (eq reason :history-start)))
+
+(defun %dbg-expected-trail (trace now hit-p reason)
+  "The trail a reverse run from step NOW should give, the steps below it where
+HIT-P holds the first time, ending at step 0."
+  (let ((steps (loop for k from (1- now) downto 0
+                     when (funcall hit-p (aref trace k) k) collect k)))
+    (append (loop for k in steps collect (list reason k))
+            (list (list :history-start 0)))))
+
+(defun %dbg-trail-with-states (session trace)
+  "Like %DBG-REVERSE-TRAIL over DEBUG-REVERSE-CONTINUE, also checking each stop's state."
+  (loop for (reason) = (multiple-value-list (debug-reverse-continue session))
+        collect (list reason (debug-session-step-count session))
+        do (fiveam:is (equal (third (aref trace (debug-session-step-count session)))
+                             (%dbg-snapshot session)))
+        until (eq reason :history-start)))
+
+(fiveam:test debug-reverse-continue-agrees-with-the-trace
+  (let ((trace (%dbg-loop-trace)))
+    (dolist (interval '(8 5))
+      (let ((*debug-checkpoint-interval* interval)
+            (*debug-anchor-interval* 3))
+        (dolist (when-set '(:before :after :mixed))
+          (let ((session (%dbg-loop-session)))
+            (when (member when-set '(:before :mixed)) (debug-break session #x10b))
+            (when (eq when-set :mixed) (debug-step session 60))
+            (%dbg-run-to-trap session)
+            (unless (eq when-set :before) (debug-break session "loop"))
+            (let ((addresses (if (eq when-set :before) '(#x10b) '(#x10b #x102))))
+              (when (eq when-set :after) (debug-unbreak session #x10b))
+              (when (eq when-set :after) (setf addresses '(#x102)))
+              (fiveam:is (equal (%dbg-expected-trail
+                                 trace (debug-session-step-count session)
+                                 (lambda (entry k) (declare (ignore k)) (member (first entry) addresses))
+                                 :breakpoint)
+                                (%dbg-trail-with-states session trace))
+                         "interval ~D ~S" interval when-set))))))))
+
+(fiveam:test debug-reverse-continue-agrees-with-the-trace-for-conditions
+  (let ((trace (%dbg-loop-trace))
+        (*debug-checkpoint-interval* 8)
+        (*debug-anchor-interval* 3))
+    (dolist (when-set '(:before :after))
+      (let ((session (%dbg-loop-session)))
+        (when (eq when-set :before) (debug-break session "loop" :condition "x % 3 == 0"))
+        (%dbg-run-to-trap session)
+        (when (eq when-set :after) (debug-break session "loop" :condition "x % 3 == 0"))
+        (fiveam:is (equal (%dbg-expected-trail
+                           trace (debug-session-step-count session)
+                           (lambda (entry k) (declare (ignore k))
+                             (and (= (first entry) #x102) (zerop (mod (second entry) 3))))
+                           :breakpoint)
+                          (%dbg-trail-with-states session trace))
+                   "~S" when-set)))))
+
+(fiveam:test debug-reverse-continue-agrees-with-the-trace-for-watchpoints
+  (let ((trace (%dbg-loop-trace))
+        (*debug-checkpoint-interval* 8)
+        (*debug-anchor-interval* 3))
+    (dolist (when-set '(:before :after))
+      (let ((session (%dbg-loop-session)))
+        (when (eq when-set :before) (debug-watch session #x10))
+        (%dbg-run-to-trap session)
+        (when (eq when-set :after) (debug-watch session #x10))
+        (fiveam:is (equal (%dbg-expected-trail
+                           trace (debug-session-step-count session)
+                           (lambda (entry k) (declare (ignore entry))
+                             (and (plusp k) (= (first (aref trace (1- k))) #x102)))
+                           :watchpoint)
+                          (%dbg-trail-with-states session trace))
+                   "~S" when-set)))))
+
+(fiveam:test debug-reverse-until-agrees-with-the-trace
+  (let ((trace (%dbg-loop-trace))
+        (*debug-checkpoint-interval* 8)
+        (*debug-anchor-interval* 3)
+        (session (%dbg-loop-session)))
+    (%dbg-run-to-trap session)
+    (fiveam:is (equal (%dbg-expected-trail
+                       trace (debug-session-step-count session)
+                       (lambda (entry k) (declare (ignore k)) (= (first entry) #x10b))
+                       :until)
+                      (%dbg-reverse-trail session (lambda (s) (debug-reverse-continue-to s #x10b)))))))
+
+(fiveam:test debug-reverse-continue-reports-a-failing-condition-either-way
+  (let ((*debug-checkpoint-interval* 8)
+        (results '()))
+    (dolist (when-set '(:before :after))
+      (let ((session (%dbg-loop-session)))
+        (when (eq when-set :before) (debug-break session "loop" :condition "1 / (x - 30) == 0"))
+        (%dbg-run-to-trap session)
+        (when (eq when-set :after) (debug-break session "loop" :condition "1 / (x - 30) == 0"))
+        (cl:push (loop repeat 6
+                       collect (multiple-value-bind (reason undone condition) (debug-reverse-continue session)
+                                 (list reason undone (and condition t))))
+                 results)))
+    (fiveam:is (equal (first results) (second results)))))
+
+;;; Reverse continue does not replay the whole history
+
+(defmacro %counting-replayed-steps ((var) &body body)
+  `(let ((,var 0))
+     (sb-int:encapsulate '%replay 'count-steps
+                         (lambda (function session checkpoint target &rest args)
+                           (incf ,var (- target (checkpoint-step checkpoint)))
+                           (apply function session checkpoint target args)))
+     (unwind-protect (progn ,@body)
+       (sb-int:unencapsulate '%replay 'count-steps))))
+
+(fiveam:test debug-reverse-continue-jumps-to-a-recorded-hit
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-loop-session)))
+    (debug-break session #x100)
+    (%dbg-run-to-trap session)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :breakpoint (debug-reverse-continue session)))
+      (fiveam:is (= 0 (debug-session-step-count session)))
+      (fiveam:is (< replayed 8)))))
+
+(fiveam:test debug-reverse-continue-skips-segments-that-never-reached-the-stop
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-loop-session)))
+    (%dbg-run-to-trap session)
+    (debug-break session #x100)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :breakpoint (debug-reverse-continue session)))
+      (fiveam:is (< replayed 8)))
+    (debug-step session 200)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :until (debug-reverse-continue-to session #x100)))
+      (fiveam:is (< replayed 8)))))
+
+(fiveam:test debug-reverse-continue-replays-when-a-watchpoint-is-set
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-loop-session)))
+    (%dbg-run-to-trap session)
+    (debug-break session #x100)
+    (debug-watch session #x2a0)
+    (%counting-replayed-steps (replayed)
+      (fiveam:is (eq :watchpoint (debug-reverse-continue session)))
+      (fiveam:is (< replayed 20)))))
+
+(fiveam:test debug-recorded-hits-follow-breakpoint-and-timeline-changes
+  (let ((*debug-checkpoint-interval* 8)
+        (session (%dbg-loop-session)))
+    (debug-break session #x10b)
+    (debug-step session 30)
+    (fiveam:is (debug-session-hits session))
+    (debug-break session #x100)
+    (fiveam:is (null (debug-session-hits session)))
+    (fiveam:is (null (debug-session-hits-from session)))
+    (debug-step session 10)
+    (fiveam:is (= 31 (debug-session-hits-from session)))
+    (debug-step-back session 5)
+    (fiveam:is (every (lambda (hit) (<= (car hit) 35)) (debug-session-hits session)))
+    (debug-step-back session 20)
+    (fiveam:is (= 15 (debug-session-step-count session)))
+    (fiveam:is (null (debug-session-hits-from session)))
+    (debug-set session #x300 1)
+    (fiveam:is (null (debug-session-hits session)))))
+
+(fiveam:test debug-recorded-hits-keep-a-condition-error-off-the-session
+  (let ((session (%dbg-loop-session)))
+    (debug-break session "loop" :condition "1 / (x - 30) == 0")
+    (debug-step session 51)
+    (fiveam:is (null (debug-session-condition-error session)))
+    (fiveam:is (some (lambda (hit) (typep (third hit) 'error)) (debug-session-hits session)))))

@@ -551,6 +551,17 @@ machine's default layout -- callers hold no other kind (#64)."
 
 ;;; Runtime machine state
 
+;; #252: the memory pages written since a debugger's last checkpoint. BITS maps
+;; a cell array to its page bit-vector, QUEUE lists each dirty (ARRAY . PAGE)
+;; once, and ALL means a bulk write made the queue incomplete.
+(defconstant +dirty-page-bits+ 6
+  "log2 of the cells in one dirty-tracking page.")
+
+(defstruct dirty-pages
+  (bits (make-hash-table :test 'eq))
+  (queue nil :type list)
+  (all nil :type boolean))
+
 (defstruct (machine (:constructor %make-machine (descriptor)))
   (descriptor nil :type machine-descriptor)
   (slots (make-hash-table :test 'eq))     ; name -> slot representation
@@ -586,6 +597,9 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; wrapped value about to be written, or the value just read. Host wiring like
   ;; INTERRUPT-HOOK -- RESET leaves it alone.
   (access-hook nil :type (or null function))
+  ;; NIL, or the DIRTY-PAGES a debug session's checkpoints read. Host wiring
+  ;; like ACCESS-HOOK -- RESET leaves it alone, snapshots do not save it.
+  (dirty nil :type (or null dirty-pages))
   ;; #109: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp) but
   ;; not yet delivered -- a list of (DEVICE . DATA) conses, oldest first,
   ;; DEVICE possibly NIL for a software-raised (INT-style) signal. Capped at
@@ -619,6 +633,24 @@ machine's default layout -- callers hold no other kind (#64)."
   (program-offset 0 :type integer))
 
 ;;; Access notification
+
+(defun %mark-dirty (machine array index)
+  "Note that cell INDEX of ARRAY, a memory or bank array of MACHINE, changed,
+when MACHINE is tracking dirty pages."
+  (let ((dirty (machine-dirty machine)))
+    (when dirty
+      (let* ((page (ash index (- +dirty-page-bits+)))
+             (bits (or (gethash array (dirty-pages-bits dirty))
+                       (setf (gethash array (dirty-pages-bits dirty))
+                             (make-array (1+ (ash (1- (length array)) (- +dirty-page-bits+)))
+                                         :element-type 'bit :initial-element 0)))))
+        (when (zerop (sbit bits page))
+          (setf (sbit bits page) 1)
+          (cl:push (cons array page) (dirty-pages-queue dirty)))))))
+
+(defun %mark-all-dirty (machine)
+  (let ((dirty (machine-dirty machine)))
+    (when dirty (setf (dirty-pages-all dirty) t))))
 
 (defmacro %notify-access (machine name index access value)
   `(let ((hook (machine-access-hook ,machine)))
@@ -833,6 +865,7 @@ so a host that replaced it (including with NIL, to disable delivery) keeps
 that choice across a RESET. #109's pending INTERRUPT-QUEUE, unlike the
 hook, *is* machine state and is cleared unconditionally below -- and so is
 #110's IDLE flag."
+  (%mark-all-dirty machine)
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
       (ecase (storage-element-kind element)
@@ -1071,8 +1104,12 @@ contract."
         ((and region (eq (memory-region-kind region) :device))
          (%device-region-write machine region address wrapped))
         ((and region (memory-region-banks region))
-         (setf (aref (%live-bank machine region) (- address (memory-region-start region))) wrapped))
-        (t (setf (aref slot address) wrapped)))
+         (let ((bank (%live-bank machine region))
+               (offset (- address (memory-region-start region))))
+           (%mark-dirty machine bank offset)
+           (setf (aref bank offset) wrapped)))
+        (t (%mark-dirty machine slot address)
+           (setf (aref slot address) wrapped)))
       wrapped)))
 
 (defun mpeek (machine name address)
@@ -1101,8 +1138,12 @@ is burned in, not stored by the CPU."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (let ((wrapped (wrap-value value (storage-element-cell-width element))))
       (if (and region (memory-region-banks region))
-          (setf (aref (%live-bank machine region) (- address (memory-region-start region))) wrapped)
-          (setf (aref slot address) wrapped)))))
+          (let ((bank (%live-bank machine region))
+                (offset (- address (memory-region-start region))))
+            (%mark-dirty machine bank offset)
+            (setf (aref bank offset) wrapped))
+          (progn (%mark-dirty machine slot address)
+                 (setf (aref slot address) wrapped))))))
 
 ;;; Bank switching
 
@@ -1151,6 +1192,7 @@ or not. Never touches the live mapping."
   "Store VALUE, wrapped to the cell width, at absolute ADDRESS in bank BANK
 of banked region REGION, bypassing the region's write policy."
   (multiple-value-bind (cells index) (%bank-cell-index machine region bank address)
+    (%mark-dirty machine cells index)
     (setf (aref cells index) (wrap-value value (second (array-element-type cells))))))
 
 (defun stack-push (machine name value)
