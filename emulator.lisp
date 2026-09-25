@@ -208,11 +208,14 @@ cost)."
 
 (defun %locate-runtime-condition (condition machine address memory)
   "Record on CONDITION the instruction at ADDRESS that raised it, and its
-source line when MACHINE retained its program."
+source line and nearest label when MACHINE retained its program."
   (unless (runtime-location-pc condition)
     (let* ((line (machine-listing-line machine address :memory memory))
            (assembly (machine-program machine)))
       (setf (runtime-location-pc condition) address
+            (runtime-location-label condition)
+            (multiple-value-bind (info offset) (machine-label-at machine address :memory memory)
+              (and info (label-offset-text info offset)))
             (runtime-location-listing-line condition) line
             (runtime-location-source-text condition)
             (and line (listing-line-source-text line assembly))))))

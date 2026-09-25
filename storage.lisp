@@ -8,13 +8,15 @@
 (define-condition lasm-error (error) ())
 
 ;; Where a runtime condition arose: PC is the faulting instruction's own
-;; address, LISTING-LINE its ASSEMBLY entry and SOURCE-TEXT that line's text,
-;; the last two only when the machine retained its program (MACHINE-PROGRAM).
+;; address, LISTING-LINE its ASSEMBLY entry, SOURCE-TEXT that line's text and
+;; LABEL its nearest preceding label as NAME+OFFSET, the last three only when
+;; the machine retained its program (MACHINE-PROGRAM).
 ;; %STEP-MACHINE-RESOLVED fills the unset slots.
 (define-condition runtime-location ()
   ((pc :initarg :pc :initform nil :accessor runtime-location-pc)
    (listing-line :initarg :listing-line :initform nil :accessor runtime-location-listing-line)
-   (source-text :initarg :source-text :initform nil :accessor runtime-location-source-text)))
+   (source-text :initarg :source-text :initform nil :accessor runtime-location-source-text)
+   (label :initarg :label :initform nil :accessor runtime-location-label)))
 
 (defmacro %with-location-suffix ((condition stream) &body body)
   `(progn ,@body (%write-location-suffix ,condition ,stream)))
@@ -22,9 +24,10 @@
 (defun %write-location-suffix (condition stream)
   (let ((pc (runtime-location-pc condition))
         (line (runtime-location-listing-line condition))
-        (text (runtime-location-source-text condition)))
+        (text (runtime-location-source-text condition))
+        (label (runtime-location-label condition)))
     (when pc
-      (format stream " at $~4,'0X" pc)
+      (format stream " at $~4,'0X~@[ <~A>~]" pc label)
       (when line
         (format stream " (line ~D~@[: ~A~])" (listing-line-line line)
                 (and text (string-trim '(#\Space #\Tab) text)))))))

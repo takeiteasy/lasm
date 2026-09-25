@@ -1569,6 +1569,27 @@ hlt" :machine 'bank-emu-test-machine))
       (fiveam:is (string= "  hlt" (runtime-location-source-text condition)))
       (fiveam:is (search "at $0002 (line 2: hlt)" (princ-to-string condition))))))
 
+(fiveam:test trap-names-its-nearest-label-and-offset
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (assemble "start: ldx #5
+.next: hlt" :machine 'emu-test-machine))
+    (multiple-value-bind (reason steps condition) (run m)
+      (declare (ignore steps))
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (string= "start.next" (runtime-location-label condition)))
+      (fiveam:is (search "at $0002 <start.next> (line 2: .next: hlt)" (princ-to-string condition))))))
+
+(fiveam:test relocated-trap-names-its-label-at-the-shifted-address
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m (assemble "start: ldx #5
+  ldx #6
+  hlt" :machine 'emu-test-machine) :origin #x40)
+    (multiple-value-bind (reason steps condition) (run m)
+      (declare (ignore steps))
+      (fiveam:is (eq :trap reason))
+      (fiveam:is (string= "start+4" (runtime-location-label condition)))
+      (fiveam:is (search "at $0044 <start+4>" (princ-to-string condition))))))
+
 (fiveam:test fault-names-the-faulting-instruction-not-the-advanced-pc
   (let ((m (make-machine 'stack-test-machine)))
     (load-program m (assemble "add

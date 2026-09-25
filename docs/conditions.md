@@ -11,7 +11,7 @@ For context, see [Machine model](machine-model.md#conditions),
 |---|---|---|
 | `lasm-error` | `error` | — |
 | `storage-error` | `lasm-error`, `runtime-location` | `storage-error-machine`, `storage-error-name` |
-| `runtime-location` | — | `runtime-location-pc`, `runtime-location-listing-line`, `runtime-location-source-text` |
+| `runtime-location` | — | `runtime-location-pc`, `runtime-location-listing-line`, `runtime-location-source-text`, `runtime-location-label` |
 | `unknown-storage` | `storage-error` | — |
 | `address-out-of-range` | `storage-error` | `address-out-of-range-address` |
 | `memory-write-protected` | `storage-error` | `memory-write-protected-address` |

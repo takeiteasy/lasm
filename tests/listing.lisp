@@ -427,3 +427,44 @@ nop" :machine 'instr-test-machine)))
 (fiveam:test cycles-column-works-on-a-word-encoded-machine
   (let ((text (listing-text (assemble "set 1,1000" :machine 'disasm-word-machine) :cycles t)))
     (fiveam:is (search "1  " text))))
+
+;;; Nearest label
+
+(fiveam:test assembly-label-at-finds-the-nearest-preceding-label
+  (let ((a (assemble "start: nop
+nop
+nop
+delay: nop
+.loop: nop
+nop" :machine 'instr-test-machine)))
+    (flet ((at (address)
+             (multiple-value-bind (info offset) (assembly-label-at a address)
+               (and info (cons (symbol-info-qualified-name info) offset)))))
+      (fiveam:is (equal '("start" . 0) (at 0)))
+      (fiveam:is (equal '("start" . 2) (at 2)))
+      (fiveam:is (equal '("delay.loop" . 0) (at 4)))
+      (fiveam:is (equal '("delay.loop" . 1) (at 5)))
+      (fiveam:is (equal '("delay.loop" . 100) (at 104))))))
+
+(fiveam:test assembly-label-at-is-nil-before-the-first-label-and-ignores-equ
+  (let ((a (assemble ".equ five, 5
+nop
+late: nop" :machine 'instr-test-machine)))
+    (fiveam:is (null (assembly-label-at a 0)))
+    (fiveam:is (string= "late" (symbol-info-name (assembly-label-at a 1))))))
+
+(fiveam:test label-offset-text-omits-a-zero-offset
+  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+         (info (assembly-symbol a "start")))
+    (fiveam:is (string= "start" (label-offset-text info 0)))
+    (fiveam:is (string= "start+3" (label-offset-text info 3)))))
+
+(fiveam:test machine-label-at-follows-a-relocated-program
+  (let ((m (make-machine 'instr-test-machine))
+        (a (assemble "start: nop
+nop" :machine 'instr-test-machine)))
+    (load-program m a :origin #x40)
+    (multiple-value-bind (info offset) (machine-label-at m #x41)
+      (fiveam:is (string= "start" (symbol-info-name info)))
+      (fiveam:is (= 1 offset)))
+    (fiveam:is (null (machine-label-at m 0)))))

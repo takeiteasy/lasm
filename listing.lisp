@@ -44,12 +44,32 @@ ADDRESS-of-entry + SIZE) run contains ADDRESS, or NIL if ADDRESS falls in a
 gap (e.g. a forward .ORG's pad) or past the end. REGION and BANK select an
 entry placed in that bank of a banked region; by default only main-image
 entries match. A linear scan over ASSEMBLY-LISTING -- fine at the program
-sizes LASM currently targets; a follow-up ticket tracks an address-indexed
+sizes LASM currently targets; ticket 295 tracks an address-indexed
 structure if that ever matters."
   (find-if (lambda (l) (and (%same-image-p l region bank)
                             (<= (listing-line-address l) address
                                 (1- (+ (listing-line-address l) (listing-line-size l))))))
             (assembly-listing assembly)))
+
+(defun %machine-image-address (machine address memory assembly)
+  "ADDRESS translated into ASSEMBLY's address space, and the banked region name
+and bank mapped there (NIL for the main image), as (VALUES LISTED REGION BANK).
+NIL when ASSEMBLY is not the program MEMORY holds."
+  (let* ((descriptor (machine-descriptor machine))
+         (retainedp (eq assembly (machine-program machine)))
+         (memory (or memory
+                     (and retainedp (machine-program-memory machine))
+                     (%resolve-memory (machine-descriptor-name descriptor) nil)))
+         (element (descriptor-element descriptor memory))
+         (region (find-if (lambda (r) (and (memory-region-banks r)
+                                           (<= (memory-region-start r) address
+                                               (memory-region-end r))))
+                          (storage-element-regions element))))
+    (when (or (not retainedp) (eq memory (machine-program-memory machine)))
+      (let ((name (and region (memory-region-name region))))
+        (values (if retainedp (- address (machine-program-offset machine)) address)
+                name
+                (and name (current-bank machine name)))))))
 
 (defun machine-listing-line (machine address &key memory (assembly (machine-program machine)))
   "The LISTING-LINE for ADDRESS in MACHINE's MEMORY, or NIL: the entry in the
@@ -59,23 +79,11 @@ retained. For that program only MEMORY must be the memory it was loaded
 into (the default is that one), and ADDRESS is translated by its load
 offset."
   (when assembly
-    (let* ((descriptor (machine-descriptor machine))
-           (retainedp (eq assembly (machine-program machine)))
-           (memory (or memory
-                       (and retainedp (machine-program-memory machine))
-                       (%resolve-memory (machine-descriptor-name descriptor) nil)))
-           (element (descriptor-element descriptor memory))
-           (region (find-if (lambda (r) (and (memory-region-banks r)
-                                             (<= (memory-region-start r) address
-                                                 (memory-region-end r))))
-                            (storage-element-regions element))))
-      (when (or (not retainedp) (eq memory (machine-program-memory machine)))
-        (let ((listed (if retainedp (- address (machine-program-offset machine)) address)))
-          (or (and region
-                   (let ((name (memory-region-name region)))
-                     (listing-line-at assembly listed :region name
-                                                      :bank (current-bank machine name))))
-              (listing-line-at assembly listed)))))))
+    (multiple-value-bind (listed region bank)
+        (%machine-image-address machine address memory assembly)
+      (when listed
+        (or (and region (listing-line-at assembly listed :region region :bank bank))
+            (listing-line-at assembly listed))))))
 
 (defun listing-line-source-text (line assembly)
   "The source text of LISTING-LINE LINE: from its own included source unit
@@ -318,7 +326,7 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; and ASSEMBLY-SYMBOL-GROUPS additionally calls ASSEMBLY-SYMBOL (itself a
 ;;; hash lookup) once per scope from inside a SORT key function -- fine at
 ;;; the program sizes LASM currently targets, same tradeoff LISTING-LINE-AT
-;;; already makes (#88) and no worse; a follow-up ticket tracks an
+;;; already makes (#88) and no worse; ticket 295 tracks an
 ;;; address/scope-indexed structure if either ever shows up as a hot path.
 
 (defun assembly-symbol (assembly name &key scope)
@@ -390,6 +398,40 @@ are ordered by their global's own binding order."
                         :key (lambda (scope)
                                (let ((g (assembly-symbol assembly scope)))
                                  (if g (symbol-info-order g) 0))))))))
+
+(defun assembly-label-at (assembly address &key region bank)
+  "The nearest :LABEL at or before ADDRESS in ASSEMBLY, as (VALUES SYMBOL-INFO
+OFFSET), or NIL when none precedes it. REGION and BANK select a bank of a
+banked region; by default only main-image labels match. A local label wins a
+tie with its global, then the later binding."
+  ;; TODO: full symbol sort per call, address-indexed lookup (ticket 295)
+  (let (best)
+    (dolist (info (assembly-symbols-list assembly :kind :label))
+      (when (and (<= (symbol-info-value info) address)
+                 (eq (symbol-info-region info) region)
+                 (eql (symbol-info-bank info) bank)
+                 (or (null best)
+                     (>= (symbol-info-value info) (symbol-info-value best))))
+        (setf best info)))
+    (and best (values best (- address (symbol-info-value best))))))
+
+(defun machine-label-at (machine address &key memory (assembly (machine-program machine)))
+  "The nearest label at or before ADDRESS in MACHINE's MEMORY, as
+ASSEMBLY-LABEL-AT's (VALUES SYMBOL-INFO OFFSET) -- the banked image first, then
+the main one, resolving ADDRESS as MACHINE-LISTING-LINE does."
+  (when assembly
+    (multiple-value-bind (listed region bank)
+        (%machine-image-address machine address memory assembly)
+      (when listed
+        (multiple-value-bind (info offset)
+            (and region (assembly-label-at assembly listed :region region :bank bank))
+          (if info
+              (values info offset)
+              (assembly-label-at assembly listed)))))))
+
+(defun label-offset-text (info offset)
+  "INFO's qualified name, with +OFFSET when OFFSET is not zero."
+  (format nil "~A~[~:;+~:*~D~]" (symbol-info-qualified-name info) offset))
 
 (defun %symbol-value-text (info digits)
   "INFO's VALUE rendered DIGITS-wide hex for a :LABEL (an address, matching

@@ -1294,7 +1294,14 @@ NIL."
                                              :start pc :count context
                                              :assembly session-assembly))
          (body (with-output-to-string (s)
-                 (format s "pc = ~V,'0X~%" (debug-session-addr-digits session) pc)
+                 (format s "pc = ~V,'0X" (debug-session-addr-digits session) pc)
+                 (multiple-value-bind (info offset)
+                     (and session-assembly
+                          (machine-label-at machine pc :memory (debug-session-memory session)
+                                                       :assembly session-assembly))
+                   (when info
+                     (format s " <~A>" (label-offset-text info offset))))
+                 (terpri s)
                  (when session-assembly
                    (let* ((line (machine-listing-line machine pc
                                                       :memory (debug-session-memory session)

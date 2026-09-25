@@ -264,10 +264,15 @@ there is one."
                 (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
         (format out "~A~%" condition))
       (when (eq reason :decode-failure)
-        (let ((line (machine-listing-line m (sref m 'pc) :memory memory)))
-          (when line
-            (format out "line ~D: ~A~%" (listing-line-line line)
-                    (string-trim '(#\Space #\Tab) (or (listing-line-source-text line assembly) ""))))))
+        (let ((line (machine-listing-line m (sref m 'pc) :memory memory))
+              (label (multiple-value-bind (info offset)
+                         (machine-label-at m (sref m 'pc) :memory memory)
+                       (and info (label-offset-text info offset)))))
+          (when (or line label)
+            (format out "~@[line ~D~]~@[ <~A>~]~:[~;: ~A~]~%"
+                    (and line (listing-line-line line)) label
+                    line (and line (string-trim '(#\Space #\Tab)
+                                                (or (listing-line-source-text line assembly) "")))))))
       (if (or (member reason '(:decode-failure :fault))
               (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
           1

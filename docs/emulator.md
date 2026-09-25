@@ -125,6 +125,16 @@ instruction's address in `runtime-location-pc`. With a retained
 Stack underflow on DS (machine STACK-TEST-MACHINE) at $0000 (line 1: add)
 ```
 
+With a label before the instruction, the report names it as `name+offset`
+(`runtime-location-label`), also for data and macro-expanded code:
+
+```text
+Trap: :HALT NIL at $0002 <start.next> (line 2: .next: hlt)
+```
+
+The label is the nearest earlier `:label`, a local before its global on a
+tie, in the bank mapped at `pc`. An offset of zero is omitted.
+
 `pc` is the instruction's start, not the already-advanced program counter.
 Without a retained program the report ends `at $0000`. A program loaded at
 another `:origin` names lines by that load offset, so relocated code reports

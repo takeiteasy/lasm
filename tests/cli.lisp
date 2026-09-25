@@ -197,6 +197,18 @@
     (fiveam:is (= 1 status))
     (fiveam:is (search "(line 2: .byte 2)" out))))
 
+(fiveam:test cli-run-names-the-nearest-label
+  (multiple-value-bind (status out)
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/labelled-opcode.asm")
+                      "-m" (%cli-path "tests/fixtures/cli/undefined-opcode.lasm")))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "at $0002 <start.next+1> (line 3: .byte 2)" out)))
+  (multiple-value-bind (status out)
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/labelled-opcode.asm")
+                      "-m" (%cli-path "tests/fixtures/cli/labelled-opcode.lasm")))
+    (fiveam:is (= 1 status))
+    (fiveam:is (search "line 3 <start.next+1>: .byte 2" out))))
+
 (fiveam:test cli-listing-cycle-costs
   (multiple-value-bind (status out)
       (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--cycle-costs")))

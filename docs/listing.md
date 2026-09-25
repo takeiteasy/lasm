@@ -116,6 +116,20 @@ scope. Groups place top-level symbols first, then each global with its
 locals. A `.set` entry holds its last value and assignment line. See
 [Assembler](assembler.md#local-label-scoping).
 
+### Nearest label
+
+```lisp
+(assembly-label-at assembly address &key region bank)   ; => symbol-info, offset
+(machine-label-at machine address &key memory assembly)
+(label-offset-text symbol-info offset)                   ; => "count.loop+1"
+```
+
+`assembly-label-at` returns the `:label` at or before `address` and the
+distance to it, or `nil` before the first label. A local label wins a tie with
+its global. `machine-label-at` resolves a live address like
+`machine-listing-line`, including load offset and mapped bank.
+`label-offset-text` omits a zero offset.
+
 ### Rendering: `symbols-text` / `print-symbols`
 
 ```lisp

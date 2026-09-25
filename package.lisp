@@ -63,6 +63,7 @@
    #:runtime-location-pc
    #:runtime-location-listing-line
    #:runtime-location-source-text
+   #:runtime-location-label
    #:lasm-trap-data
    #:lasm-syntax-error
    #:lasm-syntax-error-message
@@ -487,6 +488,9 @@
    #:listing-text
    #:print-listing
    #:listing-line-at
+   #:assembly-label-at
+   #:machine-label-at
+   #:label-offset-text
    #:machine-listing-line
    #:listing-line-source-text
    #:machine-program

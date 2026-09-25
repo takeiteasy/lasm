@@ -1328,6 +1328,14 @@ count: ldx #3
       (setf (sref m 'pc) #x302)
       (fiveam:is (search "2:.loop:  dex" (debug-where-text session))))))
 
+(fiveam:test where-names-the-nearest-label-and-offset
+  (let ((m (make-machine 'emu-test-machine))
+        (a (%dbg-assembly)))
+    (load-program m a)
+    (let ((session (make-debug-session m)))
+      (setf (sref m 'pc) #x103)
+      (fiveam:is (search "pc = 0103 <count.loop+1>" (debug-where-text session))))))
+
 (fiveam:test debug-break-condition-rejects-a-string-literal
   (let ((session (%dbg-session)))
     (fiveam:signals usage-error (debug-break session #x102 :condition "x == \"a\""))))
