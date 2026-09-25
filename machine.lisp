@@ -256,7 +256,7 @@ function), got ~S" context name (car fn) (cdr fn))))
 ;; machine's namespace, same as a region's or a register alias's name.
 (defun parse-device-clause (form)
   (%definition-bind (name &key (id 0) (version 0) (manufacturer 0)
-                             init tick receive detach save load read write (priority 0))
+                             init tick receive detach save load read write (priority 0) non-maskable)
       form
     (unless (symbolp name)
       (%defmachine-error "device ~S: name must be a symbol" name))
@@ -272,15 +272,19 @@ function), got ~S" context name (car fn) (cdr fn))))
       (when (and (cdr fn) (not (or (symbolp (cdr fn)) (functionp (cdr fn)))))
         (%defmachine-error "device ~S: ~A must be a function designator (a symbol or a ~
 function), got ~S" name (car fn) (cdr fn))))
+    (unless (typep non-maskable 'boolean)
+      (%defmachine-error "device ~S: :non-maskable must be T or NIL, got ~S" name non-maskable))
     (make-device-descriptor :name name :id id :version version :manufacturer manufacturer
                              :init init :tick tick :receive receive :detach detach
                              :save save :load load :read read :write write
-                             :priority priority)))
+                             :priority priority :non-maskable non-maskable)))
 
 ;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
-;;   [:mask-flag name] [:cycles n] [:drop-on-zero-vector t/nil]
-;;   [:mask-on-deliver t/nil] [:nesting :allow/:priority] [:max-depth n]) -- the
+;;   [:mask-flag name] [:mask-level place] [:mask-level-when fn]
+;;   [:mask-level-on-deliver t/nil] [:cycles n] [:drop-on-zero-vector t/nil]
+;;   [:mask-on-deliver t/nil] [:nesting :allow/:priority] [:max-depth n]
+;;   [:deliver-level level]) -- the
 ;; machine's whole interrupt-delivery model. VECTOR/MESSAGE/SAVE/STACK/
 ;; MASK-FLAG are validated as symbols here only -- whether each actually
 ;; names a real storage element of the right kind can't be checked until
@@ -299,8 +303,8 @@ register (#163)."
 
 (defun parse-interrupts-clause (form)
   (%definition-bind (&key vector message save stack (queue 256) (on-overflow :error)
-                             mask-when mask-flag (cycles 0) (drop-on-zero-vector t)
-                             mask-on-deliver (nesting :allow) max-depth deliver-level)
+                             mask-when mask-flag mask-level mask-level-when mask-level-on-deliver
+                             (cycles 0) (drop-on-zero-vector t) mask-on-deliver (nesting :allow) max-depth deliver-level)
       form
     (unless vector (%defmachine-error "interrupts requires :vector"))
     (unless (%interrupt-place-designator-p vector)
@@ -325,6 +329,15 @@ register (#163)."
 function), got ~S" mask-when))
     (when (and mask-flag (not (symbolp mask-flag)))
       (%defmachine-error "interrupts :mask-flag must be a symbol, got ~S" mask-flag))
+    (when (and mask-level (not (%interrupt-place-designator-p mask-level)))
+      (%defmachine-error "interrupts :mask-level must be a symbol or (NAME INDEX), got ~S" mask-level))
+    (when (and mask-level mask-level-when)
+      (%defmachine-error "interrupts: at most one of :mask-level/:mask-level-when may be given"))
+    (when (and mask-level-when (not (or (symbolp mask-level-when) (functionp mask-level-when))))
+      (%defmachine-error "interrupts :mask-level-when must be a function designator (a symbol or a ~
+function), got ~S" mask-level-when))
+    (when (and mask-level-on-deliver (not mask-level))
+      (%defmachine-error "interrupts :mask-level-on-deliver requires :mask-level"))
     (unless (and (integerp cycles) (>= cycles 0))
       (%defmachine-error "interrupts :cycles must be a non-negative integer, got ~S" cycles))
     (when (and mask-on-deliver (not mask-flag))
@@ -337,7 +350,10 @@ function), got ~S" mask-when))
       (%defmachine-error "interrupts :deliver-level must be a privilege level name, got ~S" deliver-level))
     (make-interrupt-descriptor :vector vector :message message :save save :stack-name stack
                                 :queue-depth queue :on-overflow on-overflow
-                                :mask-when mask-when :mask-flag mask-flag :cycles cycles
+                                :mask-when mask-when :mask-flag mask-flag
+                                :mask-level mask-level :mask-level-when mask-level-when
+                                :mask-level-on-deliver (and mask-level-on-deliver t)
+                                :cycles cycles
                                 :drop-on-zero-vector (and drop-on-zero-vector t)
                                 :mask-on-deliver (and mask-on-deliver t)
                                 :nesting nesting :max-depth max-depth
@@ -429,7 +445,9 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
       (dolist (n (interrupt-descriptor-save interrupts))
         (require-kind n '(:register :flag) ":save"))
       (when (interrupt-descriptor-mask-flag interrupts)
-        (require-kind (interrupt-descriptor-mask-flag interrupts) '(:flag) ":mask-flag")))
+        (require-kind (interrupt-descriptor-mask-flag interrupts) '(:flag) ":mask-flag"))
+      (when (interrupt-descriptor-mask-level interrupts)
+        (require-kind (interrupt-descriptor-mask-level interrupts) '(:register) ":mask-level")))
     (multiple-value-bind (stack-name stack-kind)
         (%resolve-interrupt-stack descriptor (interrupt-descriptor-stack-name interrupts))
       (setf (interrupt-descriptor-stack-name interrupts) stack-name)
@@ -765,13 +783,13 @@ rationale as CELL-WIDTH-CACHE (#63)."
     policy))
 
 ;; #111: (privilege :level NAME :levels (LEVEL...)
-;;   [:on-violation :fault/:trap/(:interrupt DATA [PRIORITY])]).
+;;   [:on-violation :fault/:trap/(:interrupt DATA [:priority N] [:non-maskable t/nil])]).
 ;; Each LEVEL is NAME or (NAME VALUE); VALUE defaults to the entry's index.
 ;; :LEVEL itself is resolved against the machine's elements later, in
 ;; %FINISH-PRIVILEGE-MODEL.
 (defun parse-privilege-clause (form)
   (%definition-bind (&key level levels (on-violation :fault)) form
-    (let (violation-data (violation-priority 0))
+    (let (violation-data (violation-priority 0) violation-non-maskable)
       (unless (and level (symbolp level))
         (%defmachine-error "privilege requires :level naming a flag or register, got ~S" level))
       (unless (and (consp levels) (listp (cdr (last levels))))
@@ -780,14 +798,20 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (let ((interruptp (and (consp on-violation) (eq (first on-violation) :interrupt))))
         (unless (or (member on-violation '(:fault :trap))
                     (and interruptp
-                         (<= 2 (length on-violation) 3)
+                         (>= (length on-violation) 2)
                          (typep (second on-violation) '(integer 0))
-                         (typep (or (third on-violation) 0) 'integer)))
-          (%defmachine-error "privilege :on-violation must be :FAULT, :TRAP or (:INTERRUPT DATA [PRIORITY]), got ~S"
-                 on-violation))
+                         (let ((options (cddr on-violation)))
+                           (and (evenp (length options))
+                                (loop for (key value) on options by #'cddr
+                                      always (case key
+                                               (:priority (integerp value))
+                                               (:non-maskable (typep value 'boolean))))))))
+          (%defmachine-error "privilege :on-violation must be :FAULT, :TRAP or (:INTERRUPT DATA [:PRIORITY n] ~
+[:NON-MASKABLE t/nil]), got ~S" on-violation))
         (when interruptp
           (setf violation-data (second on-violation)
-                violation-priority (or (third on-violation) 0)
+                violation-priority (or (getf (cddr on-violation) :priority) 0)
+                violation-non-maskable (getf (cddr on-violation) :non-maskable)
                 on-violation :interrupt)))
       (let (names values)
         (loop for entry in levels
@@ -809,7 +833,8 @@ rationale as CELL-WIDTH-CACHE (#63)."
                    (cl:push value values)))
         (make-privilege-descriptor :level level :levels (nreverse names) :values (nreverse values)
                                    :on-violation on-violation :violation-data violation-data
-                                   :violation-priority violation-priority)))))
+                                   :violation-priority violation-priority
+                                   :violation-non-maskable violation-non-maskable)))))
 
 (defun %finish-privilege-model (descriptor)
   "Resolve the privilege clause's :LEVEL and every region's :PRIVILEGE against
@@ -1224,12 +1249,15 @@ and the parent's instructions are copied in."
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
      (device NAME [:id n] [:version n] [:manufacturer n]
-             [:init fn] [:tick fn] [:receive fn] [:detach fn])
+             [:init fn] [:tick fn] [:receive fn] [:detach fn]
+             [:priority n] [:non-maskable t/nil])
      (stack-pointer REGISTER [:memory name] [:grows :down/:up])
      (interrupts :vector reg :message reg :save (name...)
                  [:stack name] [:queue n] [:on-overflow policy]
-                 [:mask-when fn] [:mask-flag name] [:cycles n]
-                 [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil])
+                 [:mask-when fn] [:mask-flag name] [:mask-level place]
+                 [:mask-level-when fn] [:mask-level-on-deliver t/nil] [:cycles n]
+                 [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil]
+                 [:nesting :allow/:priority] [:max-depth n] [:deliver-level level])
      (undefined-opcode :fault/:nop/:trap)
      (properties :key value...)
 

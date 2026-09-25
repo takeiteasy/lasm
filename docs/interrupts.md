@@ -18,7 +18,9 @@ a machine. Devices and software instructions can signal the same queue.
 ```lisp
 (interrupts :vector reg :message reg :save (name...)
             [:stack name] [:queue n] [:on-overflow policy]
-            [:mask-when fn] [:mask-flag name] [:cycles n]
+            [:mask-when fn] [:mask-flag name]
+            [:mask-level place] [:mask-level-when fn] [:mask-level-on-deliver t/nil]
+            [:cycles n]
             [:drop-on-zero-vector t/nil] [:mask-on-deliver t/nil]
             [:nesting :allow/:priority] [:max-depth n]
             [:deliver-level level])
@@ -33,6 +35,8 @@ a machine. Devices and software instructions can signal the same queue.
 | `:queue` | Pending-signal capacity, default `256`. |
 | `:on-overflow` | Error, trap, drop, or drop oldest. |
 | `:mask-when`, `:mask-flag` | Delivery gate; use at most one. |
+| `:mask-level`, `:mask-level-when` | Priority threshold: a register, or a function of the machine; use at most one. See [Level masking](#level-masking). |
+| `:mask-level-on-deliver` | Set the `:mask-level` register to the delivered signal's priority. |
 | `:cycles` | Delivery cost, default `0`. |
 | `:drop-on-zero-vector` | Drop signals while vector is zero; default `t`. |
 | `:mask-on-deliver` | Set the mask flag before handler execution. |
@@ -48,7 +52,7 @@ Registers can be scalar names or indexed bank cells such as `(reg 0)`.
 | Function | Use |
 | --- | --- |
 | `device-signal machine device [data]` | Signal through the machine's device hook. |
-| `signal-interrupt machine data [device] [priority]` | Signal directly from software semantics or a host. |
+| `signal-interrupt machine data [:device d] [:priority n] [:non-maskable t/nil]` | Signal directly from software semantics or a host. |
 
 A machine with an interrupt clause installs the queue hook when created.
 A software instruction can call `signal-interrupt` inside semantics.
@@ -60,7 +64,7 @@ A software instruction can call `signal-interrupt` inside semantics.
 | `:error` (default) | Signal `interrupt-queue-full`. |
 | `:trap` | Signal `lasm-trap` tagged `:interrupt-queue-overflow`. |
 | `:drop` | Ignore the incoming signal. |
-| `:drop-oldest` | Evict the oldest signal of the lowest [priority](#priority); the incoming signal is dropped instead when it ranks below everything queued. |
+| `:drop-oldest` | Evict the oldest signal of the lowest [priority](#priority), [maskable](#non-maskable-signals) signals first; the incoming signal is dropped instead when it ranks below every candidate. A non-maskable incoming signal always displaces a maskable one. |
 
 ## Priority
 
@@ -71,7 +75,7 @@ Both default to `0`.
 
 ```lisp
 (device disk :priority 3)
-(signal-interrupt machine data nil 5)   ; software signal, priority 5
+(signal-interrupt machine data :priority 5)   ; software signal, priority 5
 ```
 
 ## Nesting
@@ -103,12 +107,44 @@ Masking delays delivery; it does not stop enqueueing. A masked queue still
 follows its capacity and overflow policy. `:mask-on-deliver` sets the named
 mask flag before the handler runs.
 
+A maskable signal delivers only when `:mask-flag` or `:mask-when` allows it
+and it clears the [level mask](#level-masking). Delivery skips a masked
+signal and takes the highest-priority one that is not masked.
+
+### Level masking
+
+`:mask-level` names a register (or `(NAME INDEX)` cell); `:mask-level-when`
+names a function returning an integer. A signal delivers only when its
+priority is **strictly greater** than that level, so a level of `0` still
+holds back priority-`0` signals.
+
+```lisp
+(interrupts :vector ia :message a :save (pc ipl) :mask-level ipl
+            :mask-level-on-deliver t)
+```
+
+`:mask-level-on-deliver` writes the delivered priority to the register after
+the `:save` places are read, so a handler masks its own level and lower.
+Listing the register in `:save` makes `interrupt-return` restore it. It
+requires `:mask-level`.
+
+### Non-maskable signals
+
+A non-maskable signal ignores `:mask-flag`, `:mask-when` and the level mask.
+It still obeys [nesting](#nesting) and the queue's overflow policy.
+
+| Source | Marked by |
+| --- | --- |
+| Device | `(device NAME :non-maskable t)` |
+| Software or host | `(signal-interrupt machine data :non-maskable t)`; the keyword overrides a device's default. |
+| Privilege violation | `:on-violation (:interrupt DATA :non-maskable t)`; see [Violations as interrupts](privilege.md#violations-as-interrupts). |
+
 ## Delivery
 
 A pending unmasked signal is delivered before `step-machine` fetches:
 
-1. Unless masked or held by [nesting](#nesting), remove the queue's head, the
-   highest-priority pending signal.
+1. Take the highest-priority pending signal that is not [masked](#masking),
+   unless [nesting](#nesting) holds it.
 2. Read the `:save` places, then switch to `:deliver-level` if declared.
 3. Push the values read, in declared order.
 4. Write data to `:message` and handler address to `pc`.
@@ -156,9 +192,8 @@ hook in place as host wiring.
   places across cells is unavailable.
 - Handler depth unwinds only through `interrupt-return`; a handler that
   leaves another way keeps its depth raised until `reset`.
-- Priority orders and gates delivery only; per-level masking and
-  non-maskable signals are tracked in
-  [ticket 305](https://todo.sr.ht/~takeiteasy/lasm/305).
+- Non-maskable signals share the maskable vector; see
+  [ticket 311](https://todo.sr.ht/~takeiteasy/lasm/311).
 - The queue is a sorted list, O(depth) per signal; see
   [ticket 304](https://todo.sr.ht/~takeiteasy/lasm/304).
 - The debugger does not display pending priorities or handler depth; see

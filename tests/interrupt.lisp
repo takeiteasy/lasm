@@ -122,13 +122,13 @@
   (let ((m (make-machine 'interrupt-test-machine)))
     (setf (sref m 'ia) #x0100)
     (device-signal m (device-at m 0) :hello)
-    (fiveam:is (equal (list (list (device-at m 0) :hello 0)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list (device-at m 0) :hello 0 nil)) (machine-interrupt-queue m)))))
 
 (fiveam:test signal-interrupt-enqueues-with-no-device
   (let ((m (make-machine 'interrupt-test-machine)))
     (setf (sref m 'ia) #x0100)
     (signal-interrupt m 42)
-    (fiveam:is (equal (list (list nil 42 0)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 42 0 nil)) (machine-interrupt-queue m)))))
 
 (fiveam:test signal-interrupt-with-zero-vector-drops-the-signal-by-default
   (let ((m (make-machine 'interrupt-test-machine)))
@@ -180,14 +180,14 @@
     (setf (sref m 'ia) 1)
     (signal-interrupt m 1)
     (fiveam:finishes (signal-interrupt m 2))
-    (fiveam:is (equal (list (list nil 1 0)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 1 0 nil)) (machine-interrupt-queue m)))))
 
 (fiveam:test overflow-drop-oldest-policy-evicts-the-head
   (let ((m (make-machine 'interrupt-overflow-drop-oldest-test-machine)))
     (setf (sref m 'ia) 1)
     (signal-interrupt m 1)
     (fiveam:finishes (signal-interrupt m 2))
-    (fiveam:is (equal (list (list nil 2 0)) (machine-interrupt-queue m)))))
+    (fiveam:is (equal (list (list nil 2 0 nil)) (machine-interrupt-queue m)))))
 
 ;;; Delivery under STEP-MACHINE
 
@@ -790,10 +790,10 @@
 (fiveam:test higher-priority-signals-queue-ahead-fifo-within-a-level
   (let ((m (make-machine 'interrupt-test-machine)))
     (setf (sref m 'ia) #x10)
-    (signal-interrupt m 10 nil 1)
-    (signal-interrupt m 20 nil 5)
-    (signal-interrupt m 30 nil 3)
-    (signal-interrupt m 40 nil 5)
+    (signal-interrupt m 10 :priority 1)
+    (signal-interrupt m 20 :priority 5)
+    (signal-interrupt m 30 :priority 3)
+    (signal-interrupt m 40 :priority 5)
     (fiveam:is (equal '(20 40 30 10) (%queued-data m)))))
 
 (fiveam:test device-priority-is-the-default-signal-priority
@@ -807,20 +807,20 @@
 
 (fiveam:test delivery-takes-the-highest-priority-signal-first
   (let ((m (%nesting-machine 'interrupt-plain-nesting-test-machine)))
-    (signal-interrupt m 1 nil 1)
-    (signal-interrupt m 2 nil 4)
+    (signal-interrupt m 1 :priority 1)
+    (signal-interrupt m 2 :priority 4)
     (step-machine m)
     (fiveam:is (= 2 (sref m 'a)))))
 
 (fiveam:test drop-oldest-evicts-the-oldest-lowest-priority-signal
   (let ((m (%nesting-machine 'interrupt-plain-nesting-test-machine)))
-    (signal-interrupt m 1 nil 1)
-    (signal-interrupt m 2 nil 3)
-    (signal-interrupt m 3 nil 2)
+    (signal-interrupt m 1 :priority 1)
+    (signal-interrupt m 2 :priority 3)
+    (signal-interrupt m 3 :priority 2)
     (fiveam:is (equal '(2 3) (%queued-data m)))
-    (signal-interrupt m 4 nil 0)
+    (signal-interrupt m 4 :priority 0)
     (fiveam:is (equal '(2 3) (%queued-data m)) "an incoming signal below everything queued is dropped")
-    (signal-interrupt m 5 nil 2)
+    (signal-interrupt m 5 :priority 2)
     (fiveam:is (equal '(2 5) (%queued-data m)) "an equal-priority incoming signal evicts the older one")))
 
 (fiveam:test nesting-allow-does-not-track-depth
@@ -848,13 +848,13 @@
 
 (fiveam:test nesting-priority-preempts-only-a-strictly-higher-priority-signal
   (let ((m (%nesting-machine 'interrupt-priority-test-machine)))
-    (signal-interrupt m 1 nil 2)
+    (signal-interrupt m 1 :priority 2)
     (step-machine m)
-    (signal-interrupt m 2 nil 2)
+    (signal-interrupt m 2 :priority 2)
     (step-machine m)
     (fiveam:is (= 1 (machine-interrupt-depth m)) "an equal priority waits")
     (fiveam:is (equal '(2) (%queued-data m)))
-    (signal-interrupt m 3 nil 3)
+    (signal-interrupt m 3 :priority 3)
     (step-machine m)
     (fiveam:is (= 2 (machine-interrupt-depth m)))
     (fiveam:is (= 3 (sref m 'a)))
@@ -898,6 +898,174 @@
     (fiveam:signals machine-definition-error
       (eval `(defmachine interrupt-bad-option-test
                (register pc :width 8) (register ia :width 8) (register a :width 8)
+               (stack sp :width 8 :depth 4)
+               (memory ram :width 8 :addr-width 8)
+               ,form)))))
+
+;;; Level masking and non-maskable signals (#305)
+
+(defun %mask-level-of (machine) (sref machine 'lvl))
+
+(defmacro %define-mask-machine (name &rest interrupts-keys)
+  (unless (getf interrupts-keys :save)
+    (setf interrupts-keys (list* :save '(pc) interrupts-keys)))
+  `(progn
+     (defmachine ,name
+       (register pc :width 16) (register ia :width 16) (register a :width 16)
+       (register lvl :width 8)
+       (stack sp :width 16 :depth 8)
+       (memory ram :width 8 :addr-width 16)
+       (flags iaq)
+       (device nmi :non-maskable t)
+       (interrupts :vector ia :message a ,@interrupts-keys))
+     (definstruction ,name nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+     (definstruction ,name rfi (encoding (opcode #x01)) (semantics (interrupt-return)))))
+
+(%define-mask-machine interrupt-level-test-machine :mask-level lvl)
+(%define-mask-machine interrupt-level-fn-test-machine :mask-level-when %mask-level-of)
+(%define-mask-machine interrupt-level-flag-test-machine :mask-level lvl :mask-flag iaq)
+(%define-mask-machine interrupt-level-depth-test-machine :mask-level lvl :max-depth 1)
+(%define-mask-machine interrupt-level-raise-test-machine
+  :mask-level lvl :mask-level-on-deliver t :save (pc lvl))
+(%define-mask-machine interrupt-level-drop-test-machine
+  :mask-level lvl :queue 2 :on-overflow :drop-oldest)
+
+(defun %mask-machine (name &key (level 0))
+  "A NAME machine with a nop-filled handler at #x10 ending in RFI at #x12."
+  (let ((m (%nesting-machine name)))
+    (setf (sref m 'lvl) level)
+    m))
+
+(fiveam:test mask-level-holds-back-priorities-at-or-below-it
+  (let ((m (%mask-machine 'interrupt-level-test-machine :level 3)))
+    (signal-interrupt m 1 :priority 3)
+    (step-machine m)
+    (fiveam:is (equal '(1) (%queued-data m)))
+    (signal-interrupt m 2 :priority 4)
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'a)))
+    (fiveam:is (equal '(1) (%queued-data m)))
+    (setf (sref m 'lvl) 2)
+    (step-machine m)
+    (fiveam:is (= 1 (sref m 'a)))
+    (fiveam:is (null (machine-interrupt-queue m)))))
+
+(fiveam:test mask-level-when-reads-its-function
+  (let ((m (%mask-machine 'interrupt-level-fn-test-machine :level 5)))
+    (signal-interrupt m 1 :priority 5)
+    (step-machine m)
+    (fiveam:is (equal '(1) (%queued-data m)))
+    (setf (sref m 'lvl) 4)
+    (step-machine m)
+    (fiveam:is (null (machine-interrupt-queue m)))))
+
+(fiveam:test mask-level-combines-with-mask-flag
+  (let ((m (%mask-machine 'interrupt-level-flag-test-machine :level 0)))
+    (setf (flag m 'iaq) 1)
+    (signal-interrupt m 1 :priority 5)
+    (step-machine m)
+    (fiveam:is (equal '(1) (%queued-data m)))
+    (setf (flag m 'iaq) 0 (sref m 'lvl) 5)
+    (step-machine m)
+    (fiveam:is (equal '(1) (%queued-data m)))
+    (setf (sref m 'lvl) 4)
+    (step-machine m)
+    (fiveam:is (null (machine-interrupt-queue m)))))
+
+(fiveam:test non-maskable-signal-ignores-flag-and-level-masks
+  (let ((m (%mask-machine 'interrupt-level-flag-test-machine :level 9)))
+    (setf (flag m 'iaq) 1)
+    (signal-interrupt m 7 :priority 1 :non-maskable t)
+    (step-machine m)
+    (fiveam:is (= 7 (sref m 'a)))
+    (fiveam:is (null (machine-interrupt-queue m)))))
+
+(fiveam:test non-maskable-signal-delivers-past-a-masked-higher-priority-head
+  (let ((m (%mask-machine 'interrupt-level-test-machine :level 9)))
+    (signal-interrupt m 1 :priority 7)
+    (signal-interrupt m 2 :non-maskable t)
+    (fiveam:is (equal '(1 2) (%queued-data m)))
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'a)))
+    (fiveam:is (equal '(1) (%queued-data m)))))
+
+(fiveam:test non-maskable-device-signals-ignore-masks
+  (let ((m (%mask-machine 'interrupt-level-test-machine :level 9)))
+    (device-signal m (device-at m 0) 5)
+    (step-machine m)
+    (fiveam:is (= 5 (sref m 'a)))
+    (device-signal m (device-at m 0) 6)
+    (fiveam:is (fourth (first (machine-interrupt-queue m))))))
+
+(fiveam:test signal-interrupt-can-make-a-non-maskable-device-signal-maskable
+  (let ((m (%mask-machine 'interrupt-level-test-machine :level 9)))
+    (signal-interrupt m 5 :device (device-at m 0) :non-maskable nil)
+    (step-machine m)
+    (fiveam:is (equal '(5) (%queued-data m)))))
+
+(fiveam:test non-maskable-signals-still-obey-max-depth
+  (let ((m (%mask-machine 'interrupt-level-depth-test-machine)))
+    (signal-interrupt m 1 :priority 1)
+    (step-machine m)
+    (fiveam:is (= 1 (machine-interrupt-depth m)))
+    (signal-interrupt m 2 :non-maskable t)
+    (step-machine m)
+    (fiveam:is (equal '(2) (%queued-data m)))
+    (step-machine m)                    ; rfi
+    (step-machine m)
+    (fiveam:is (= 2 (sref m 'a)))))
+
+(fiveam:test mask-level-on-deliver-raises-the-level-and-rfi-restores-it
+  (let ((m (%mask-machine 'interrupt-level-raise-test-machine :level 2)))
+    (signal-interrupt m 1 :priority 5)
+    (step-machine m)
+    (fiveam:is (= 5 (sref m 'lvl)))
+    (signal-interrupt m 2 :priority 5)
+    (step-machine m)
+    (fiveam:is (equal '(2) (%queued-data m)))
+    (step-machine m)                    ; rfi
+    (fiveam:is (= 2 (sref m 'lvl)))))
+
+(fiveam:test drop-oldest-evicts-maskable-signals-first
+  (let ((m (%mask-machine 'interrupt-level-drop-test-machine :level 9)))
+    (signal-interrupt m 1 :non-maskable t)
+    (signal-interrupt m 2 :priority 5)
+    (signal-interrupt m 3 :priority 6)
+    (fiveam:is (equal '(3 1) (%queued-data m)))
+    (signal-interrupt m 4 :non-maskable t)
+    (fiveam:is (equal '(1 4) (%queued-data m)))
+    (signal-interrupt m 5 :priority 9)
+    (fiveam:is (equal '(5 4) (%queued-data m)) "all non-maskable: lowest priority goes")))
+
+(fiveam:test drop-oldest-drops-a-maskable-signal-below-every-maskable-entry
+  (let ((m (%mask-machine 'interrupt-level-drop-test-machine :level 9)))
+    (signal-interrupt m 1 :priority 5)
+    (signal-interrupt m 2 :priority 6)
+    (signal-interrupt m 3 :priority 1)
+    (fiveam:is (equal '(2 1) (%queued-data m)))))
+
+(defmachine (interrupt-level-child-test-machine (:extends interrupt-level-test-machine))
+  (interrupts :vector ia :message a :save (pc) :mask-level lvl :mask-level-on-deliver t))
+
+(fiveam:test child-machine-can-change-the-mask-level-options
+  (let ((m (%mask-machine 'interrupt-level-child-test-machine :level 1)))
+    (signal-interrupt m 1 :priority 4)
+    (step-machine m)
+    (fiveam:is (= 4 (sref m 'lvl)))))
+
+(fiveam:test defmachine-rejects-bad-mask-level-and-non-maskable-options
+  (dolist (form '((interrupts :vector ia :message a :save (pc) :mask-level lvl :mask-level-when foo)
+                  (interrupts :vector ia :message a :save (pc) :mask-level-on-deliver t)
+                  (interrupts :vector ia :message a :save (pc) :mask-level-when foo :mask-level-on-deliver t)
+                  (interrupts :vector ia :message a :save (pc) :mask-level iaq)
+                  (interrupts :vector ia :message a :save (pc) :mask-level nope)
+                  (interrupts :vector ia :message a :save (pc) :mask-level 3)
+                  (device dev :non-maskable 1)))
+    (fiveam:signals machine-definition-error
+      (eval `(defmachine interrupt-bad-mask-test
+               (register pc :width 8) (register ia :width 8) (register a :width 8)
+               (register lvl :width 8)
+               (flags iaq)
                (stack sp :width 8 :depth 4)
                (memory ram :width 8 :addr-width 8)
                ,form)))))

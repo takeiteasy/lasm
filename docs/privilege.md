@@ -24,14 +24,14 @@ minimum level, and interrupt delivery can switch level.
 
 ```lisp
 (privilege :level NAME :levels (LEVEL...)
-           [:on-violation :fault/:trap/(:interrupt DATA [PRIORITY])])
+           [:on-violation :fault/:trap/(:interrupt DATA [:priority N] [:non-maskable t/nil])])
 ```
 
 | Key | Effect |
 | --- | --- |
 | `:level` | A flag or scalar register holding the current level's value. |
 | `:levels` | Levels ordered least to most privileged. |
-| `:on-violation` | `:fault` (default), `:trap` or `(:interrupt DATA [PRIORITY])`; see [Violations](#violations). |
+| `:on-violation` | `:fault` (default), `:trap` or `(:interrupt DATA ...)`; see [Violations](#violations). |
 
 Each level is `NAME` or `(NAME VALUE)`. `VALUE` is what `:level` holds while
 at that level, and defaults to the level's position from `0`. Values are
@@ -76,6 +76,7 @@ semantics that use the element by name, for reads and writes.
 | Semantics form | Gated by |
 | --- | --- |
 | `cr`, an alias, `(bank 1)`, a flag name | The element's level. |
+| `(sref machine 'cr)`, `(regref ...)`, `(flag ...)`, `(stack-push ...)`, `(stack-pop ...)`, `(sp-push ...)`, `(sp-pop ...)` | The named element's level.[^explicit] |
 | `(set-flags! (ie 1))` | The flag's level. |
 | `push`, `pop`, `stack-ref`, `stack-pointer`, `stack-depth` | The stack's level, or the stack-pointer register's. |
 
@@ -111,7 +112,7 @@ violation leaves the PC on the instruction and charges no cycles.[^inherit]
 | --- | --- |
 | `:fault` | Signals `privilege-violation`; `run` returns `:fault`. |
 | `:trap` | Signals `lasm-trap` tagged `:privilege-violation`; `run` returns `:trap`. |
-| `(:interrupt DATA [PRIORITY])` | Queues an interrupt and returns to the violating instruction; see [below](#violations-as-interrupts). |
+| `(:interrupt DATA [:priority N] [:non-maskable t/nil])` | Queues an interrupt and returns to the violating instruction; see [below](#violations-as-interrupts). |
 
 `privilege-violation-kind` and the trap's `:kind` are `:memory`,
 `:instruction`, `:register`, `:flag` or `:stack`. The trap's data is
@@ -122,12 +123,15 @@ element, or the mnemonic for an instruction. `ADDRESS` is set only for
 
 ### Violations as interrupts
 
-`(:interrupt DATA [PRIORITY])` needs an `(interrupts ...)` clause. `DATA`
-is a non-negative integer that fits the `:message` register, and `PRIORITY`
-defaults to `0`.
+`(:interrupt DATA ...)` needs an `(interrupts ...)` clause. `DATA` is a
+non-negative integer that fits the `:message` register. `:priority` defaults
+to `0`. `:non-maskable t` makes the signal
+[ignore interrupt masks](interrupts.md#non-maskable-signals), so a masked
+machine still delivers it instead of repeating the violation each step.
 
 ```lisp
-(privilege :level s :levels (user supervisor) :on-violation (:interrupt 1))
+(privilege :level s :levels (user supervisor)
+           :on-violation (:interrupt 1 :priority 3 :non-maskable t))
 ```
 
 | When | Effect |
@@ -151,22 +155,24 @@ See `examples/privilege.lisp`.
   [ticket 299](https://todo.sr.ht/~takeiteasy/lasm/299).
 - A region, register, flag or stack has one level for reads and writes. See
   [ticket 303](https://todo.sr.ht/~takeiteasy/lasm/303).
-- Explicit `sref`, `regref`, `flag` and stack function calls in semantics are
-  not gated. See [ticket 307](https://todo.sr.ht/~takeiteasy/lasm/307).
+- A helper function called from semantics, or `(funcall 'sref ...)`, is not
+  gated. See [ticket 310](https://todo.sr.ht/~takeiteasy/lasm/310).
 - A violation interrupt does not undo effects an instruction had before it
   violated, and its details are not snapshotted. See
   [ticket 308](https://todo.sr.ht/~takeiteasy/lasm/308).
 - A violation interrupt carries a fixed `DATA`. See
   [ticket 309](https://todo.sr.ht/~takeiteasy/lasm/309).
-- A masked machine repeats a violation interrupt on the same instruction
-  each step until the queue overflows; non-maskable signals are tracked in
-  [ticket 305](https://todo.sr.ht/~takeiteasy/lasm/305).
+- A maskable violation interrupt on a masked machine repeats on the same
+  instruction each step until the queue overflows; use `:non-maskable t`.
 - A unified trap/interrupt model is outside this subsystem.
 
 [^bypass]: The gate runs before the access hook, so a rejected access is
     not reported to it. A `:rom` region with `:on-write :error` reports the
     write first.
-[^direct]: Only the names bound in semantics are gated; a host function called
+[^direct]: Only forms written in semantics are gated; a host function called
     with an element's name is not.
+[^explicit]: A quoted element name is resolved when the instruction compiles;
+    any other name expression looks the element up on every call. A register
+    gates as `:register`, a flag as `:flag`, and stack calls as `:stack`.
 [^inherit]: A machine extending another keeps its `:level`, `:levels` and
     values; it can change `:on-violation`.

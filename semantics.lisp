@@ -17,6 +17,80 @@
 (defun (setf %semantics-mref) (value machine name address)
   (setf (mref machine name address) value))
 
+;; #307: inside semantics, SREF, REGREF, FLAG and the stack functions are local
+;; macros (WITH-MACHINE-BINDINGS) that expand to the %PLAIN-* accessors, or to
+;; the %CHECKED-* ones when the named element may be gated. The macros' own
+;; expansions call %PLAIN-* so they are never captured again.
+(declaim (inline %plain-sref (setf %plain-sref) %plain-regref (setf %plain-regref)
+                 %plain-flag (setf %plain-flag) %plain-stack-push %plain-stack-pop
+                 %plain-sp-push %plain-sp-pop))
+
+(defun %plain-sref (machine name) (sref machine name))
+(defun (setf %plain-sref) (value machine name) (setf (sref machine name) value))
+(defun %plain-regref (machine name index) (regref machine name index))
+(defun (setf %plain-regref) (value machine name index) (setf (regref machine name index) value))
+(defun %plain-flag (machine name) (flag machine name))
+(defun (setf %plain-flag) (value machine name) (setf (flag machine name) value))
+(defun %plain-stack-push (machine name value) (stack-push machine name value))
+(defun %plain-stack-pop (machine name) (stack-pop machine name))
+(defun %plain-sp-push (machine reg memory grows value) (sp-push machine reg memory grows value))
+(defun %plain-sp-pop (machine reg memory grows) (sp-pop machine reg memory grows))
+
+(defun %check-element-gate (machine name &optional kind)
+  "Enforce NAME's :PRIVILEGE, if it has one, with KIND defaulting to the element's own."
+  (let* ((element (descriptor-element (machine-descriptor machine) name))
+         (required (storage-element-privilege element)))
+    (when required
+      (%check-privilege machine required name nil (or kind (storage-element-kind element))))))
+
+;; TODO: the element is looked up on every call; a quoted, gated name could
+;; resolve its level at macroexpansion time (#307 follow-up if it ever shows in a profile).
+(defun %checked-sref (machine name)
+  (%check-element-gate machine name)
+  (sref machine name))
+
+(defun (setf %checked-sref) (value machine name)
+  (%check-element-gate machine name)
+  (setf (sref machine name) value))
+
+(defun %checked-regref (machine name index)
+  (%check-element-gate machine name)
+  (regref machine name index))
+
+(defun (setf %checked-regref) (value machine name index)
+  (%check-element-gate machine name)
+  (setf (regref machine name index) value))
+
+(defun %checked-flag (machine name)
+  (%check-element-gate machine name)
+  (flag machine name))
+
+(defun (setf %checked-flag) (value machine name)
+  (%check-element-gate machine name)
+  (setf (flag machine name) value))
+
+(defun %checked-stack-push (machine name value)
+  (%check-element-gate machine name :stack)
+  (stack-push machine name value))
+
+(defun %checked-stack-pop (machine name)
+  (%check-element-gate machine name :stack)
+  (stack-pop machine name))
+
+(defun %checked-sp-push (machine reg memory grows value)
+  (%check-element-gate machine reg :stack)
+  (sp-push machine reg memory grows value))
+
+(defun %checked-sp-pop (machine reg memory grows)
+  (%check-element-gate machine reg :stack)
+  (sp-pop machine reg memory grows))
+
+(defun %accessor-form (plain checked gates machine name args)
+  "The call a semantics accessor macro expands to: PLAIN for a quoted name
+with no gate, otherwise CHECKED, which looks the gate up at run time."
+  (let ((quoted (and (consp name) (eq (first name) 'quote) (symbolp (second name)) (second name))))
+    `(,(if (and quoted (not (assoc quoted gates))) plain checked) ,machine ,name ,@args)))
+
 (defun %gate-stack-form (machine-var gates target form)
   "FORM, preceded by a privilege check when TARGET (a stack or a stack-pointer
 register) is gated (#300)."
@@ -87,7 +161,7 @@ these for a run-time-computed index."
              (if (= (storage-element-count element) 1)
                  (cl:push (if required
                               `(,name (%gated-sref ,machine-var ',name ',required))
-                              `(,name (sref ,machine-var ',name)))
+                              `(,name (%plain-sref ,machine-var ',name)))
                           symbol-macros)
                  (progn
                    (cl:push name banked-names)
@@ -95,14 +169,14 @@ these for a run-time-computed index."
                          for index from 0
                          do (cl:push (if required
                                          `(,alias (%gated-regref ,machine-var ',name ,index ',required))
-                                         `(,alias (regref ,machine-var ',name ,index)))
+                                         `(,alias (%plain-regref ,machine-var ',name ,index)))
                                      symbol-macros))))))
           (:flag
            (let ((name (storage-element-name element))
                  (required (storage-element-privilege element)))
              (cl:push (if required
                           `(,name (%gated-flag ,machine-var ',name ',required))
-                          `(,name (flag ,machine-var ',name)))
+                          `(,name (%plain-flag ,machine-var ',name)))
                       symbol-macros)))
           (:stack (cl:push (storage-element-name element) stack-names))
           (:memory (cl:push (storage-element-name element) memory-names))))
@@ -170,9 +244,9 @@ clause declared" machine-name)))
                  (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
                      (let ((sp (gethash (interrupt-descriptor-stack-name interrupts)
                                          (machine-descriptor-stack-pointers descriptor))))
-                       `(sp-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)
+                       `(%plain-sp-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)
                                 ',(stack-pointer-descriptor-memory sp) ',(stack-pointer-descriptor-grows sp)))
-                     `(stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)))))
+                     `(%plain-stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)))))
              ;; #301: the privilege level is restored last, so the other pops
              ;; still run at the handler's level, and every restore goes
              ;; through %INTERRUPT-PLACE so it bypasses register gates (#300).
@@ -197,8 +271,19 @@ clause declared" machine-name)))
                                      (if required
                                          `(,name (index)
                                                  `(%gated-regref ,',machine-var ',',name ,index ',',required))
-                                         `(,name (index) `(regref ,',machine-var ',',name ,index)))))
+                                         `(,name (index) `(%plain-regref ,',machine-var ',',name ,index)))))
                                  (nreverse banked-names))
+                      ,@(mapcar (lambda (entry)
+                                  (destructuring-bind (name plain checked) entry
+                                    `(,name (machine name &rest args)
+                                            (%accessor-form ',plain ',checked ',gates machine name args))))
+                                '((sref %plain-sref %checked-sref)
+                                  (regref %plain-regref %checked-regref)
+                                  (flag %plain-flag %checked-flag)
+                                  (stack-push %plain-stack-push %checked-stack-push)
+                                  (stack-pop %plain-stack-pop %checked-stack-pop)
+                                  (sp-push %plain-sp-push %checked-sp-push)
+                                  (sp-pop %plain-sp-pop %checked-sp-pop)))
                       (set! (place value)
                         `(setf ,place ,value))
                       (mref (machine name-or-address &optional (address nil supplied-p))
@@ -214,8 +299,8 @@ clause declared" machine-name)))
                           (%gate-stack-form
                            ',machine-var ',gates target
                            (if entry
-                               `(sp-push ,',machine-var ',target ',(second entry) ',(third entry) ,value)
-                               `(stack-push ,',machine-var ',target ,value)))))
+                               `(%plain-sp-push ,',machine-var ',target ',(second entry) ',(third entry) ,value)
+                               `(%plain-stack-push ,',machine-var ',target ,value)))))
                       (pop (&optional (stack-name nil supplied-p))
                         (let* ((target (if supplied-p stack-name ',sole-stack))
                                (entry (assoc target ',pointer-alist)))
@@ -223,8 +308,8 @@ clause declared" machine-name)))
                           (%gate-stack-form
                            ',machine-var ',gates target
                            (if entry
-                               `(sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
-                               `(stack-pop ,',machine-var ',target)))))
+                               `(%plain-sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
+                               `(%plain-stack-pop ,',machine-var ',target)))))
                       (stack-pointer (&optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (%definstruction-error ',fixed-stack-error))
@@ -251,7 +336,7 @@ clause declared" machine-name)))
                                                (if required
                                                    `(setf (%gated-flag ,',machine-var ',(first a) ',required)
                                                           ,(second a))
-                                                   `(setf (flag ,',machine-var ',(first a)) ,(second a)))))
+                                                   `(setf (%plain-flag ,',machine-var ',(first a)) ,(second a)))))
                                            assignments)))
                       (trap (tag &optional data)
                         `(error 'lasm-trap :tag ,tag :data ,data))

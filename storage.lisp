@@ -268,9 +268,10 @@ memory ~S on machine ~S"
   (levels nil :type list)
   (values nil :type list)
   (on-violation :fault :type (member :fault :trap :interrupt))
-  ;; #302: the :INTERRUPT policy's signal data and priority.
+  ;; #302, #305: the :INTERRUPT policy's signal data, priority and maskability.
   (violation-data nil :type (or null (integer 0)))
-  (violation-priority 0 :type integer))
+  (violation-priority 0 :type integer)
+  (violation-non-maskable nil :type boolean))
 
 ;; #302: true while a step runs on a machine whose :ON-VIOLATION is
 ;; :INTERRUPT. Outside a step, a violation faults, since nothing would catch
@@ -322,7 +323,9 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (read nil :type (or null symbol function))
   (write nil :type (or null symbol function))
   ;; #161: interrupt priority of this device's signals; higher delivers first.
-  (priority 0 :type integer))
+  (priority 0 :type integer)
+  ;; #305: this device's signals ignore every mask.
+  (non-maskable nil :type boolean))
 
 ;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
@@ -372,6 +375,11 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (on-overflow :error :type (member :error :trap :drop :drop-oldest))
   (mask-when nil :type (or null symbol function))
   (mask-flag nil :type (or null symbol))
+  ;; #305: MASK-LEVEL is a register place (or MASK-LEVEL-WHEN a function)
+  ;; whose value holds back signals of priority <= it.
+  (mask-level nil :type (or symbol list))
+  (mask-level-when nil :type (or null symbol function))
+  (mask-level-on-deliver nil :type boolean)
   (cycles 0 :type (integer 0))
   (drop-on-zero-vector t :type boolean)
   (mask-on-deliver nil :type boolean)
@@ -783,7 +791,7 @@ when MACHINE is tracking dirty pages."
 ;; (this calling out to interrupt.lisp) without creating the forward
 ;; reference this split avoids.
 (defun %enqueue-interrupt (machine entry)
-  "Queue ENTRY, a (DEVICE DATA PRIORITY) list, behind every pending signal of
+  "Queue ENTRY, a (DEVICE DATA PRIORITY NON-MASKABLE) list, behind every pending signal of
 equal or higher priority. Returns true when ENTRY was queued, NIL when it
 was dropped."
   (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
@@ -806,13 +814,16 @@ was dropped."
           (:trap (error 'lasm-trap :tag :interrupt-queue-overflow :data entry))
           (:drop (return-from %enqueue-interrupt (values)))
           (:drop-oldest
-           ;; Evicts the oldest of the lowest priority. The incoming signal
-           ;; counts as newest, so it is dropped itself when it ranks below
-           ;; everything queued.
-           (let ((lowest (reduce #'min queue :key #'third)))
-             (when (< priority lowest)
+           ;; Evicts the oldest of the lowest priority, maskable entries
+           ;; first (#305). The incoming signal counts as newest, so it is
+           ;; dropped itself when it ranks below every candidate -- except a
+           ;; non-maskable one, which displaces a maskable entry regardless.
+           (let* ((maskable (remove-if #'fourth queue))
+                  (lowest (reduce #'min (or maskable queue) :key #'third)))
+             (when (and (< priority lowest) (not (and (fourth entry) maskable)))
                (return-from %enqueue-interrupt (values)))
-             (setf queue (remove lowest queue :key #'third :count 1))))))
+             (setf queue (remove-if (lambda (e) (and (= (third e) lowest) (or (null maskable) (not (fourth e)))))
+                                    queue :count 1))))))
       (let ((split (or (position priority queue :key #'third :test #'>) (length queue))))
         (setf (machine-interrupt-queue machine)
               (append (subseq queue 0 split) (list entry) (nthcdr split queue))))))
@@ -832,8 +843,12 @@ was dropped."
 (defun %device-interrupt-priority (device)
   (if device (device-descriptor-priority (device-descriptor device)) 0))
 
+(defun %device-interrupt-non-maskable (device)
+  (and device (device-descriptor-non-maskable (device-descriptor device))))
+
 (defun %default-interrupt-hook (machine device data)
-  (%enqueue-interrupt machine (list device data (%device-interrupt-priority device))))
+  (%enqueue-interrupt machine (list device data (%device-interrupt-priority device)
+                                    (%device-interrupt-non-maskable device))))
 
 ;; #108: instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
 ;; its INIT hook (if any). Shared by MAKE-MACHINE/RESET below (seeding the
@@ -1187,7 +1202,8 @@ rejected access is not reported as one."
              (if (and *privilege-interrupt-step*
                       (%enqueue-interrupt
                        machine (list nil (privilege-descriptor-violation-data privilege)
-                                     (privilege-descriptor-violation-priority privilege))))
+                                     (privilege-descriptor-violation-priority privilege)
+                                     (privilege-descriptor-violation-non-maskable privilege))))
                  (progn
                    (setf (machine-privilege-violation machine)
                          (list :kind kind :name name :address address :required required
@@ -1204,8 +1220,8 @@ privilege violation raised as an interrupt (#302), or NIL."
   (machine-privilege-violation machine))
 
 ;; #300: what a gated register, flag or stack name expands to inside
-;; instruction semantics (WITH-MACHINE-BINDINGS). Host calls to SREF, REGREF,
-;; FLAG and the stack functions are never gated.
+;; instruction semantics (WITH-MACHINE-BINDINGS). Explicit SREF, REGREF, FLAG
+;; and stack calls in semantics are gated there too (#307); host calls are not.
 (defun %gated-sref (machine name required)
   (%check-privilege machine required name nil :register)
   (sref machine name))

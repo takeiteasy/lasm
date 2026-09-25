@@ -205,3 +205,31 @@
   (format t "Timer delivered after return: a=~2,'0X~%" (sref m 'a))
 
   (format t "~%All priority assertions passed.~%"))
+
+;;; #305: a priority mask (the 68k's IPL shape) and a non-maskable signal.
+;;; Only signals above the MASK register's level deliver; a non-maskable one
+;;; ignores it.
+
+(defmachine intlevel
+  (register pc :width 16)
+  (register ia :width 16)
+  (register a :width 16)
+  (register mask :width 8)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16)
+  (interrupts :vector ia :message a :save (pc) :mask-level mask))
+
+(definstruction intlevel nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+
+(let ((m (make-machine 'intlevel)))
+  (load-program m (list #x00 #x00 #x00) :origin 0)
+  (load-program m (list #x00) :origin #x0100)
+  (setf (sref m 'ia) #x0100 (sref m 'mask) 3)
+  (signal-interrupt m 1 :priority 3)
+  (step-machine m)
+  (format t "~%Level mask 3: priority 3 held, queue depth ~D~%" (length (machine-interrupt-queue m)))
+  (assert (/= 1 (sref m 'a)))
+  (signal-interrupt m 2 :priority 1 :non-maskable t)
+  (step-machine m)
+  (format t "Non-maskable priority 1 delivered: a=~D~%" (sref m 'a))
+  (assert (= 2 (sref m 'a))))

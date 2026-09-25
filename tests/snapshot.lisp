@@ -538,9 +538,17 @@ twice
 (fiveam:test snapshot-round-trips-signal-priorities-and-handler-depth
   (let ((source (%fresh)) (target (%fresh)))
     (setf (sref source 'pc) #x100)
-    (signal-interrupt source 1 nil 2)
-    (signal-interrupt source 2 nil 7)
+    (signal-interrupt source 1 :priority 2)
+    (signal-interrupt source 2 :priority 7)
     (setf (machine-interrupt-active source) '(4 1))
     (restore-snapshot target (machine-snapshot source))
     (fiveam:is (equal '(7 2) (mapcar #'third (machine-interrupt-queue target))))
     (fiveam:is (equal '(4 1) (machine-interrupt-active target)))))
+
+(fiveam:test snapshot-round-trips-non-maskable-signals
+  (let ((source (%fresh)) (target (%fresh)))
+    (setf (sref source 'pc) #x100)
+    (signal-interrupt source 1 :non-maskable t)
+    (signal-interrupt source 2)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (equal '(t nil) (mapcar #'fourth (machine-interrupt-queue target))))))

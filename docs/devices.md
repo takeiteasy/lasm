@@ -16,12 +16,13 @@ object is both enumerated and memory-mapped.
 
 ```lisp
 (device NAME [:id n] [:version n] [:manufacturer n] [:priority n]
-             [:init fn] [:tick fn] [:receive fn] [:detach fn]
+             [:non-maskable t/nil] [:init fn] [:tick fn] [:receive fn] [:detach fn]
              [:save fn] [:load fn] [:read fn] [:write fn])
 ```
 
 Identity fields default to zero. `:priority` (default `0`) orders the
-device's [interrupt signals](interrupts.md#priority). Hooks are bare function names:
+device's [interrupt signals](interrupts.md#priority). `:non-maskable t` makes
+them [ignore interrupt masks](interrupts.md#non-maskable-signals). Hooks are bare function names:
 
 | Hook | Called as | When |
 | --- | --- | --- |

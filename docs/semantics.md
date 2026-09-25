@@ -33,6 +33,10 @@ access functions; see [Machine model](machine-model.md) and
 | `(zero? value)`, `(bit-set? value bit)` | Predicates for flag expressions. |
 | `(page-crossed? from to [page-size])` | Test whether two addresses cross a page boundary. |
 
+Explicit `sref`, `regref`, `flag`, `stack-push`, `stack-pop`, `sp-push` and
+`sp-pop` calls in semantics honor [element gates](privilege.md#gating-registers-flags-and-stacks)
+like the bound names do.
+
 `mref` defaults to the sole memory element in semantics; name it when there
 are several. Stack operators default to the sole fixed stack, or the sole
 register-backed stack pointer if there is no fixed stack. An ambiguous

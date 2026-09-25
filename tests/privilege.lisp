@@ -344,7 +344,19 @@ rte")))
      (definstruction ,name push-ks (encoding (opcode #x07)) (semantics (push 3 ks)))
      (definstruction ,name pop-ks (encoding (opcode #x08)) (semantics (set! a (pop ks))))
      (definstruction ,name push-us (encoding (opcode #x09)) (semantics (push 3 us)))
-     (definstruction ,name wr-z (encoding (opcode #x0a)) (semantics (set-flags! (z 1))))))
+     (definstruction ,name wr-z (encoding (opcode #x0a)) (semantics (set-flags! (z 1))))
+     (definstruction ,name x-rd-cr (encoding (opcode #x0b)) (semantics (set! a (sref machine 'cr))))
+     (definstruction ,name x-wr-cr (encoding (opcode #x0c)) (semantics (setf (sref machine 'cr) 9)))
+     (definstruction ,name x-inc-cr (encoding (opcode #x0d)) (semantics (incf (sref machine 'cr))))
+     (definstruction ,name x-wr-b (encoding (opcode #x0e)) (semantics (setf (regref machine 'bank 1) 9)))
+     (definstruction ,name x-wr-ie (encoding (opcode #x0f)) (semantics (setf (flag machine 'ie) 1)))
+     (definstruction ,name x-push-ks (encoding (opcode #x10)) (semantics (stack-push machine 'ks 3)))
+     (definstruction ,name x-pop-ks (encoding (opcode #x11)) (semantics (set! a (stack-pop machine 'ks))))
+     (definstruction ,name x-dyn-cr (encoding (opcode #x12))
+       (semantics (let ((n 'cr)) (set! a (sref machine n)))))
+     (definstruction ,name x-wr-a (encoding (opcode #x13)) (semantics (setf (sref machine 'a) 1)))
+     (definstruction ,name x-rd-z (encoding (opcode #x14)) (semantics (set! a (flag machine 'z))))
+     (definstruction ,name x-push-us (encoding (opcode #x15)) (semantics (stack-push machine 'us 3)))))
 
 (%def-priv-gate-machine priv-gate-machine)
 (%def-priv-gate-machine priv-gate-trap-machine :on-violation :trap)
@@ -378,6 +390,34 @@ rte")))
 (fiveam:test gated-element-violation-leaves-the-element-unchanged
   (let ((m (%priv-gate-step 'priv-gate-machine #x02 0)))
     (fiveam:is (= 0 (sref m 'cr)))))
+
+;;; #307: explicit accessor calls in semantics
+
+(fiveam:test explicit-accessors-fault-from-semantics-at-user-level
+  (loop for (opcode kind name) in '((#x0b :register cr) (#x0c :register cr) (#x0d :register cr)
+                                    (#x0e :register bank) (#x0f :flag ie)
+                                    (#x10 :stack ks) (#x11 :stack ks) (#x12 :register cr))
+        do (let ((c (nth-value 1 (%priv-gate-step 'priv-gate-machine opcode 0))))
+             (fiveam:is (typep c 'privilege-violation))
+             (fiveam:is (eq kind (privilege-violation-kind c)))
+             (fiveam:is (eq name (storage-error-name c))))))
+
+(fiveam:test explicit-accessors-pass-at-the-required-level
+  (dolist (opcode '(#x0b #x0c #x0d #x0e #x0f #x10 #x12))
+    (fiveam:is (null (nth-value 1 (%priv-gate-step 'priv-gate-machine opcode 1))))))
+
+(fiveam:test explicit-accessors-on-ungated-elements-stay-open
+  (dolist (opcode '(#x13 #x14 #x15))
+    (fiveam:is (null (nth-value 1 (%priv-gate-step 'priv-gate-machine opcode 0))))))
+
+(fiveam:test explicit-accessor-violation-leaves-the-element-unchanged
+  (fiveam:is (= 0 (sref (%priv-gate-step 'priv-gate-machine #x0c 0) 'cr)))
+  (fiveam:is (= 9 (sref (%priv-gate-step 'priv-gate-machine #x0c 1) 'cr))))
+
+(fiveam:test explicit-accessor-violation-follows-the-violation-policy
+  (let ((m (make-machine 'priv-gate-trap-machine)))
+    (load-program m (list #x0b))
+    (fiveam:is (eq :trap (run m :max-steps 1)))))
 
 (fiveam:test host-access-bypasses-element-gates
   (let ((m (make-machine 'priv-gate-machine)))
@@ -455,7 +495,7 @@ rte")))
      (definstruction ,name rd-cr (encoding (opcode #x02)) (semantics (set! a cr)) (cycles 2))
      (definstruction ,name sup (privilege supervisor) (encoding (opcode #x03)) (semantics nil))))
 
-(%def-priv-irq-machine priv-irq-machine :on-violation (:interrupt 7 3))
+(%def-priv-irq-machine priv-irq-machine :on-violation (:interrupt 7 :priority 3))
 (%def-priv-irq-machine priv-irq-fault-machine :on-violation (:interrupt 7))
 
 (defun %priv-irq-machine (program &key (name 'priv-irq-machine) (vector 32))
@@ -540,4 +580,52 @@ rte")))
                  (stack st :width 8 :depth 2))
   (%priv-rejects (privilege :level s :levels (user supervisor) :on-violation (:interrupt -1)))
   (%priv-rejects (privilege :level s :levels (user supervisor) :on-violation (:interrupt)))
-  (%priv-rejects (privilege :level s :levels (user supervisor) :on-violation (:interrupt 1 2 3))))
+  (%priv-rejects (privilege :level s :levels (user supervisor) :on-violation (:interrupt 1 2 3)))
+  (dolist (policy '((:interrupt 1 2) (:interrupt 1 :priority) (:interrupt 1 :priority :high)
+                    (:interrupt 1 :bogus 1) (:interrupt 1 :non-maskable 5)))
+    (fiveam:signals machine-definition-error
+      (eval `(defmachine priv-bad-policy-machine
+               (register pc :width 8) (register ia :width 8) (register a :width 8)
+               (stack st :width 8 :depth 4) (memory ram :width 8 :addr-width 8) (flags s)
+               (interrupts :vector ia :message a :save (pc))
+               (privilege :level s :levels (user supervisor) :on-violation ,policy))))))
+
+(fiveam:test violation-interrupt-accepts-priority-and-non-maskable-options
+  (fiveam:finishes
+    (eval '(defmachine priv-good-policy-machine
+            (register pc :width 8) (register ia :width 8) (register a :width 8)
+            (stack st :width 8 :depth 4) (memory ram :width 8 :addr-width 8) (flags s)
+            (interrupts :vector ia :message a :save (pc))
+            (privilege :level s :levels (user supervisor)
+                       :on-violation (:interrupt 1 :non-maskable t :priority 2))))))
+
+;;; #305: non-maskable violation interrupts
+
+(defmacro %def-priv-masked-machine (name &rest policy)
+  `(progn
+     (defmachine ,name
+       (register pc :width 8) (register ia :width 8) (register a :width 8)
+       (register cr :width 8 :privilege supervisor)
+       (stack st :width 8 :depth 8)
+       (memory ram :width 8 :addr-width 8)
+       (flags s im)
+       (privilege :level s :levels (user supervisor) :on-violation (:interrupt 7 ,@policy))
+       (interrupts :vector ia :message a :save (pc s) :deliver-level supervisor :mask-flag im))
+     (definstruction ,name rd-cr (encoding (opcode #x02)) (semantics (set! a cr)))))
+
+(%def-priv-masked-machine priv-masked-machine)
+(%def-priv-masked-machine priv-nmi-machine :non-maskable t)
+
+(fiveam:test violation-interrupt-repeats-on-a-masked-machine-until-non-maskable
+  (let ((m (%priv-irq-machine (list #x02) :name 'priv-masked-machine)))
+    (setf (flag m 'im) 1)
+    (dotimes (i 3) (fiveam:is (eq :privilege-violation (step-machine m))))
+    (fiveam:is (= 3 (length (machine-interrupt-queue m))))))
+
+(fiveam:test non-maskable-violation-interrupt-delivers-on-a-masked-machine
+  (let ((m (%priv-irq-machine (list #x02) :name 'priv-nmi-machine)))
+    (setf (flag m 'im) 1)
+    (fiveam:is (eq :privilege-violation (step-machine m)))
+    (step-machine m)
+    (fiveam:is (= 7 (sref m 'a)))
+    (fiveam:is (eq 'supervisor (privilege-level m)))))
