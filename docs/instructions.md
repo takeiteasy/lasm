@@ -281,7 +281,8 @@ registers bind as `(NAME idx)` in semantics; see
 
 [^registration]: `definstruction` registers descriptors during compilation
   and loading. A word-encoded instruction compiles its semantics on first
-  execution, then shares that function among its variants.
+  execution under a fast policy and recompiles at the default policy after
+  1,000 calls, sharing the function among its variants.
 [^subcodes]: The `holes` indices are interpreted in pattern order even if
   listed out of order. Selected alternatives supply descriptor-specific
   signedness, width, and relative flags. Unselected alternatives have no

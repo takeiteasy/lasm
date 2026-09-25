@@ -139,15 +139,23 @@ descriptor was removed from the machine, so the cells decode as nothing."
              (values found disabledp))))))
 
 (defun %word-decode-table (descriptor layout)
-  "Publish a complete, read-only dispatch table for words up to 16 bits. A
-removed instruction's word maps to :DISABLED."
+  "Publish the dispatch table for words up to 16 bits, every entry unfilled
+until first looked up (%WORD-DECODE-ENTRY)."
   (when (<= (instruction-word-layout-width layout) 16)
     (or (machine-descriptor-word-decode-table descriptor)
-        (let ((table (make-array (ash 1 (instruction-word-layout-width layout)))))
-          (dotimes (word (length table))
-            (multiple-value-bind (found disabledp) (%find-word-decode-candidate descriptor layout word)
-              (setf (aref table word) (if disabledp :disabled found))))
-          (setf (machine-descriptor-word-decode-table descriptor) table)))))
+        (setf (machine-descriptor-word-decode-table descriptor)
+              (make-array (ash 1 (instruction-word-layout-width layout))
+                          :initial-element '%unfilled)))))
+
+(defun %word-decode-entry (descriptor layout table word)
+  "TABLE's entry for WORD, computed and stored on first use. A removed
+instruction's word maps to :DISABLED. Racing fills store the same value."
+  (let ((entry (aref table word)))
+    (if (eq entry '%unfilled)
+        (setf (aref table word)
+              (multiple-value-bind (found disabledp) (%find-word-decode-candidate descriptor layout word)
+                (if disabledp :disabled found)))
+        entry)))
 
 (defun %try-decode-word-candidate (read-cell address width-cells cell-width descriptor word endian)
   "Decode one candidate, returning values, size, choices and a success flag.
@@ -203,7 +211,8 @@ field choices rather than the descriptor's encoding-size variant."
          (machine (find-machine-descriptor machine-name))
          (table (%word-decode-table machine layout))
          (descriptor (if table
-                         (aref table (ldb (byte (instruction-word-layout-width layout) 0) word))
+                         (%word-decode-entry machine layout table
+                                             (ldb (byte (instruction-word-layout-width layout) 0) word))
                          (multiple-value-bind (found disabledp)
                              (%find-word-decode-candidate machine layout word)
                            (if disabledp :disabled found)))))

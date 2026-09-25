@@ -861,6 +861,28 @@ second: nop" :machine 'instr-test-machine))))
       (execute-instruction replacement machine (list 3))
       (fiveam:is (= 4 (sref machine 'a))))))
 
+(fiveam:test word-semantics-promote-after-enough-calls
+  (eval '(definstruction lazy-semantics-test-machine lazypromote
+           (modes word-imm)
+           (encoding (opcode 2)
+                     (operand value :field value
+                       (variant (range 0 7) inline)
+                       (variant :else (extra-word :escape #xfff))))
+           (semantics (set! a value))))
+  (let* ((*semantics-promotion-calls* 3)
+         (descriptor (first (find-instruction-variants 'lazy-semantics-test-machine "LAZYPROMOTE")))
+         (machine (make-machine 'lazy-semantics-test-machine)))
+    (execute-instruction descriptor machine (list 1))
+    (let ((fast (instruction-descriptor-semantics-fn descriptor)))
+      (execute-instruction descriptor machine (list 2))
+      (fiveam:is (eq fast (instruction-descriptor-semantics-fn descriptor)))
+      (execute-instruction descriptor machine (list 3))
+      (fiveam:is (not (eq fast (instruction-descriptor-semantics-fn descriptor))))
+      (let ((final (instruction-descriptor-semantics-fn descriptor)))
+        (execute-instruction descriptor machine (list 5))
+        (fiveam:is (= 5 (sref machine 'a)))
+        (fiveam:is (eq final (instruction-descriptor-semantics-fn descriptor)))))))
+
 ;;; instruction-word layout parsing (machine.lisp)
 
 (fiveam:test instruction-word-clause-requires-width

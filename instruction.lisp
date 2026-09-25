@@ -1551,34 +1551,57 @@ actually run for this descriptor."
   (let ((source (if mapping (nth index mapping) index)))
     (and source (nth source operands))))
 
+(defvar *fast-compile-policy* nil
+  "When non-NIL, the OPTIMIZE policy %COMPILE-DEFINITION compiles under.")
+
 (defun %compile-definition (form name)
   "COMPILE FORM, re-signalling a DEFINITION-ERROR raised while it expanded,
 which SBCL would otherwise defer to a COMPILED-PROGRAM-ERROR at call time."
   (let* ((*definition-name* name)
          (*last-definition-error* nil)
-         (function (compile nil form)))
+         (function (if *fast-compile-policy*
+                       (with-compilation-unit (:policy *fast-compile-policy*)
+                         (compile nil form))
+                       (compile nil form))))
     (when *last-definition-error*
       (error *last-definition-error*))
     function))
 
+(defparameter *semantics-promotion-calls* 1000
+  "Calls after which a quickly compiled word semantics is recompiled at the
+default policy.")
+
 (defun %lazy-instruction-semantics (form machine-name name)
-  "Compile on first use, then replace every sibling's shared proxy, on the
-machine and on each descendant holding a copy."
-  (let (compiled proxy)
-    (setf proxy
-          (lambda (machine operands choices &optional selections mapping)
-            (unless compiled
-              (setf compiled (%compile-definition form name))
-              (labels ((patch (machine-name)
-                         (dolist (descriptor (gethash (string-upcase (string name))
-                                                      (machine-descriptor-instructions
-                                                       (find-machine-descriptor machine-name))))
-                           (when (eq (instruction-descriptor-semantics-fn descriptor) proxy)
-                             (setf (instruction-descriptor-semantics-fn descriptor) compiled)))
-                         (dolist (child (%machine-children machine-name))
-                           (patch (machine-descriptor-name child)))))
-                (patch machine-name)))
-            (funcall compiled machine operands choices selections mapping)))
+  "Compile on first use with a fast policy, then after
+*SEMANTICS-PROMOTION-CALLS* calls recompile at the default policy. Each tier
+replaces the previous function in every sibling descriptor, on the machine and
+on each descendant holding a copy."
+  (let (installed proxy (calls 0))
+    (labels ((install (function)
+               (labels ((patch (machine-name)
+                          (dolist (descriptor (gethash (string-upcase (string name))
+                                                       (machine-descriptor-instructions
+                                                        (find-machine-descriptor machine-name))))
+                            (when (eq (instruction-descriptor-semantics-fn descriptor) installed)
+                              (setf (instruction-descriptor-semantics-fn descriptor) function)))
+                          (dolist (child (%machine-children machine-name))
+                            (patch (machine-descriptor-name child)))))
+                 (patch machine-name)
+                 (setf installed function)))
+             (promote ()
+               (install (%compile-definition form name))))
+      (setf proxy
+            (lambda (machine operands choices &optional selections mapping)
+              (let ((fast (let ((*fast-compile-policy* '(optimize (compilation-speed 3) (debug 0))))
+                            (%compile-definition form name))))
+                (setf calls 1)
+                (install
+                 (lambda (machine operands choices &optional selections mapping)
+                   (when (= (incf calls) *semantics-promotion-calls*)
+                     (promote))
+                   (funcall fast machine operands choices selections mapping)))
+                (funcall fast machine operands choices selections mapping)))
+            installed proxy))
     proxy))
 
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list

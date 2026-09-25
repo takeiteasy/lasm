@@ -121,6 +121,15 @@
                                      (vector-cell-reader #(#x113))
                                      0 'decode-cache-machine)))))
 
+(fiveam:test dispatch-table-fills-entries-on-first-lookup
+  (let ((descriptor (find-machine-descriptor 'decode-cache-machine)))
+    (setf (machine-descriptor-word-decode-table descriptor) nil)
+    (decode-instruction-at (vector-cell-reader #(#x13)) 0 'decode-cache-machine)
+    (let ((table (machine-descriptor-word-decode-table descriptor)))
+      (fiveam:is (= 1 (count-if-not (lambda (e) (eq e '%unfilled)) table)))
+      (decode-instruction-at (vector-cell-reader #(#x13)) 0 'decode-cache-machine)
+      (fiveam:is (= 1 (count-if-not (lambda (e) (eq e '%unfilled)) table))))))
+
 (fiveam:test failed-registration-keeps-the-existing-dispatch
   (decode-instruction-at (vector-cell-reader #(#x13)) 0 'decode-cache-machine)
   (let* ((machine (find-machine-descriptor 'decode-cache-machine))

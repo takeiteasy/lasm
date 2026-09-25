@@ -67,8 +67,8 @@ fault signals during a direct step; `run` catches it. See
 The decoder reads an instruction word, selects a matching descriptor, and
 reads any extra cells indicated by its fields. PC advances by the cells
 actually consumed. Words up to 16 bits use a dispatch table shared by
-machines of that type; wider words scan candidates. The first decode builds
-the table. See [Word-encoded instructions](word-instructions.md) and
+machines of that type; wider words scan candidates. The table fills each
+entry on its first lookup. See [Word-encoded instructions](word-instructions.md) and
 [Memory audit](memory-audit.md).[^decode]
 
 ### Device ticking

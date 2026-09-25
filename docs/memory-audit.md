@@ -14,14 +14,14 @@ microbenchmarks.
 | Estimated state for 1,000 CPUs | About 126 MiB, excluding other objects |
 | Shared 16-bit decode table per machine type | At most 512 KiB on a 64-bit host |
 
-A first STAR step builds the decode table and compiles semantics in about
-0.19 s. Warm both before a latency-sensitive loop. Wider instruction words
-scan candidates instead of using the table.
+A first STAR step takes about 0.014 s. The decode table fills entries on first
+lookup, and each instruction's semantics compile on first use.[^tiers] Wider
+instruction words scan candidates instead of using the table.
 
 ## Execution measurements
 
 One million alternating `ADD A, #1` and `SET PC, #loop` instructions take
-0.616 s and allocate 75.6 MiB cumulatively in the measured setup. Live
+0.56 s and allocate 75.6 MiB cumulatively in the measured setup. Live
 heap after execution is about 50.4 MiB. Cumulative allocation measures
 memory churn, not simultaneously retained memory.
 
@@ -55,9 +55,9 @@ through `debug-continue`, then reverses over a watchpoint.
 
 ## Build memory
 
-A forced STAR build allocates about 1,308 MiB cumulatively. Under a
-256 MiB SBCL heap, a forced build plus 188 STAR checks peaks at 170 MB
-process RSS and retains 51.6 MiB of dynamic heap after full GC. A combined
+A forced STAR build allocates about 1,790 MiB cumulatively. Under a
+256 MiB SBCL heap, a forced build plus 221 STAR checks peaks at 178 MB
+process RSS and retains 54.6 MiB of dynamic heap after full GC. A combined
 LASM and STAR test run peaks at 200 MB RSS and retains 64.8 MiB.
 
 ## Reproduce
@@ -78,3 +78,8 @@ report allocation and post-GC heap; macOS `time -l` reports peak RSS.
 
 The workloads are short, synthetic, and sequential. They do not establish
 a production CPU count, a long-running RSS limit, or parallel performance.
+
+[^tiers]: A word-encoded instruction first compiles under a fast policy
+  (`compilation-speed 3`, `debug 0`), then recompiles at the default policy
+  after `*semantics-promotion-calls*` calls (1,000), so warm speed matches
+  fully optimized code.
