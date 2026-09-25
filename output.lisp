@@ -39,11 +39,11 @@
         (when (logbitp cell-bit (aref cells cell))
           (setf (aref bytes byte) (logior (aref bytes byte) (ash 1 byte-bit))))))))
 
-(defun %unpack-bits (bytes width endian)
+(defun %unpack-bits (bytes width endian count)
   (let* ((total (* 8 (length bytes)))
-         (count (floor total width)))
-    (when (>= (- total (* count width)) 8)
-      (%output-usage-error "~D bytes is not a whole number of ~D-bit cells" (length bytes) width))
+         (count (or count (floor total width))))
+    (unless (<= 0 (- total (* count width)) 7)
+      (%output-usage-error "~D bytes do not hold ~D ~D-bit cells" (length bytes) count width))
     (let ((cells (make-array count :element-type `(unsigned-byte ,width) :initial-element 0)))
       (dotimes (k (* count width) cells)
         (multiple-value-bind (cell cell-bit byte byte-bit) (%stream-bit-position k width endian)
@@ -114,17 +114,21 @@ there."
                            (ldb (byte 8 (* 8 (if (eq endian :big) (- n 1 i) i))) cell))))
           bytes))))
 
-(defun bytes-to-cells (bytes cell-width &key (endian :little) (packing :pad))
+(defun bytes-to-cells (bytes cell-width &key (endian :little) (packing :pad) count)
   "Inverse of ASSEMBLY-BYTES: BYTES (a sequence of octets) regrouped into a
 (vector (unsigned-byte CELL-WIDTH)). Signals when the byte count is not a whole
 number of cells, or under :PAD when a cell's value does not fit CELL-WIDTH
 bits. Under :BITS, up to 7 trailing bits are padding; for a CELL-WIDTH below 8
-that padding can decode as extra zero cells."
+that padding decodes as extra zero cells unless COUNT gives the number of
+cells. COUNT, when given, must account for BYTES exactly: whole bytes under
+:PAD, all but up to 7 padding bits under :BITS."
   (let ((endian (%check-endian endian 'output)))
     (if (eq (%output-packing packing) :bits)
-        (%unpack-bits bytes cell-width endian)
+        (%unpack-bits bytes cell-width endian count)
         (let ((n (%output-cell-bytes cell-width)))
-          (unless (zerop (mod (length bytes) n))
+          (unless (if count
+                      (= (length bytes) (* count n))
+                      (zerop (mod (length bytes) n)))
             (%output-usage-error "~D bytes is not a whole number of ~D-bit cells" (length bytes) cell-width))
           (let ((cells (make-array (floor (length bytes) n) :element-type `(unsigned-byte ,cell-width))))
             (dotimes (c (length cells) cells)

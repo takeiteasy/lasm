@@ -20,7 +20,7 @@ commands:
                     [--bank N] [--region NAME] [--packing pad|bits]
   run FILE          assemble and run          [--max-steps N] [--cycles N]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
-                    [--data-region START:END]...
+                    [--cells N] [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
 
 options:
@@ -32,6 +32,7 @@ options:
   --region NAME          banked region for --bank when there are several
   --packing pad|bits     cells that are not whole bytes: pad each to bytes (default)
                          or pack them as a bitstream
+  --cells N              number of cells in the file (disassemble), to drop bit padding
   -h, --help             show this help
 ")
 
@@ -40,7 +41,7 @@ options:
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
-    ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing)
+    ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)))
 
 (defparameter *cli-repeatable-options*
@@ -227,7 +228,8 @@ the calling image."
          (packing (%cli-packing options))
          (origin (or (%cli-option-integer options :origin "--origin") 0))
          (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian
-                                                                  :packing packing)
+                                                                  :packing packing
+                                                                  :count (%cli-option-integer options :cells "--cells"))
                                    :machine machine :origin origin :lexer lexer :memory memory
                                    :data-regions (%cli-data-regions options))))
     (if (getf options :annotate)

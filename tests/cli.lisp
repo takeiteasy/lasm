@@ -244,3 +244,17 @@
 (fiveam:test cli-packing-rejects-an-unknown-value
   (fiveam:is (= 2 (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
                                     (list "--packing" "nibbles"))))))
+
+(fiveam:test cli-disassemble-cells-drops-bit-padding
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (let ((lasm (%cli-path "tests/fixtures/cli/nibble.lasm")))
+      (%run-cli (list "assemble" (%cli-path "tests/fixtures/cli/nibble.asm") "-m" lasm
+                      "-o" (namestring path) "--packing" "bits"))
+      (flet ((nops (&rest more)
+               (let ((text (nth-value 1 (%run-cli (append (list "disassemble" (namestring path) "-m" lasm
+                                                                "--packing" "bits")
+                                                          more)))))
+                 (count-if (lambda (line) (search "nop" line))
+                           (%hex-lines text)))))
+        (fiveam:is (= 3 (nops "--cells" "3")))
+        (fiveam:is (= 2 (%run-cli (list "disassemble" (namestring path) "-m" lasm "--cells" "x"))))))))

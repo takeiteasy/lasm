@@ -27,7 +27,7 @@ defined, the default lexer is used.
 | --- | --- | --- |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
 | `run FILE` | assembles, then runs to a stop | `--max-steps N`, `--cycles N` |
-| `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits` |
+| `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
 Every command takes `-m FILE` (required), `--machine-name`, `--lexer`,

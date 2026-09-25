@@ -38,6 +38,12 @@ The two agree when the width is a multiple of 8. `:bits` always needs an
 endian source unless the width is 8; `:pad` needs one only for cells wider than
 8 bits.[^bits]
 
+Under `:bits` the last byte can hold up to 7 padding bits. Reading a
+narrow-cell image back, such as 4-bit cells, decodes that padding as extra zero
+cells unless the count is given: `:count N` on `bytes-to-cells`, or
+`--cells N` on `lasm disassemble`. `N` must account for every byte, apart from
+the padding.
+
 ```sh
 lasm assemble examples/cli/twelve.asm -m examples/cli/twelve.lasm --packing bits
 ```
@@ -69,7 +75,7 @@ and a start that is not a whole byte signals.
 
 ```lisp
 (assembly-bytes ASSEMBLY &key machine memory endian bank region (packing :pad))
-(bytes-to-cells BYTES CELL-WIDTH &key (endian :little) (packing :pad))
+(bytes-to-cells BYTES CELL-WIDTH &key (endian :little) (packing :pad) count)
 (write-binary ASSEMBLY PATH &key machine memory endian bank region (packing :pad))
 (hex-text ASSEMBLY &key stream machine memory endian bank region (packing :pad))
 (write-intel-hex ASSEMBLY PATH &key machine memory endian bank region (packing :pad))
@@ -79,13 +85,6 @@ and a start that is not a whole byte signals.
 its inverse. `write-binary` and `write-intel-hex` replace an existing file and
 return `path`. `hex-text` returns the HEX text as a string, or writes it to
 `stream` and returns `nil`.
-
-## Limitations
-
-- `bytes-to-cells` cannot tell `:bits` padding from cells when the width is
-  below 8, so trailing zero cells can appear ([#282]).
-
-[#282]: https://todo.sr.ht/~takeiteasy/lasm/282
 
 [^bits]: Without `:bank`, the banks are concatenated as cells, so under
     `:bits` a bank boundary falls mid-byte when `region size * cell-width` is

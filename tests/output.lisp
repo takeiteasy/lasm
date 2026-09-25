@@ -175,3 +175,16 @@ hlt" :machine 'disasm-test-machine)))
 
 (fiveam:test hex-text-bits-rejects-an-origin-off-a-byte-boundary
   (fiveam:signals error (hex-text (%cells-assembly 12 1 #xABC) :endian :big :packing :bits)))
+
+;;; bytes-to-cells :count
+
+(fiveam:test bytes-to-cells-count-drops-bit-padding
+  (let ((bytes (assembly-bytes (%cells-assembly 4 0 1 2 3) :endian :big :packing :bits)))
+    (fiveam:is (= 4 (length (bytes-to-cells bytes 4 :endian :big :packing :bits))))
+    (fiveam:is (equalp #(1 2 3) (bytes-to-cells bytes 4 :endian :big :packing :bits :count 3)))))
+
+(fiveam:test bytes-to-cells-count-must-account-for-the-bytes
+  (fiveam:signals error (bytes-to-cells #(#x12 #x30) 4 :endian :big :packing :bits :count 5))
+  (fiveam:signals error (bytes-to-cells #(#x12 #x30) 4 :endian :big :packing :bits :count 1))
+  (fiveam:signals error (bytes-to-cells #(1 2 3) 12 :endian :big :count 1))
+  (fiveam:is (= 2 (length (bytes-to-cells #(0 1 0 2) 12 :endian :big :count 2)))))
