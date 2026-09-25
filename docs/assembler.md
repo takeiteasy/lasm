@@ -253,8 +253,9 @@ Syntax errors include source excerpts when source text is available. See
   handles scoped lookups.
 [^layout]: Directives take precedence over instruction names. Instructions
   occupy their selected encoded size; `.org` and `.res` change the address
-  counter. Encode reuses the parsed operands and selected variants without
-  repeating mode matching.
+  counter. Operands parse once per assembly; every relaxation pass and
+  encode reuse the parsed operands, and encode reuses the selected variants
+  without repeating mode matching.
 [^selection]: Syntax matching runs before value checks. A more specific
   pattern does not fall back to a less specific one when its value overflows.
   Ordinary fields accept unsigned or two's-complement signed values;

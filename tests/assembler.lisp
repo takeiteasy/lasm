@@ -1562,3 +1562,40 @@ nop
     .asciz s
 .endm
     msg \"hi\""))))
+
+;;; Operand ASTs parse once per assembly and are reused across relaxation
+;;; passes (#39) -- qualification and .set capture must not corrupt them.
+
+(fiveam:test forced-mode-suffix-accepts-a-local-label-operand
+  (let ((a (assemble (format nil "start:~%.x: nop~%lda.w .x") :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x12 0 0) (subseq (assembly-cells a) 1)))))
+
+(fiveam:test set-capture-survives-relaxation-passes
+  (let ((a (assemble ".set n, 3
+lda later
+.byte n
+.set n, n + 1
+.byte n
+later: nop" :machine 'instr-test-machine)))
+    (fiveam:is (equalp #(#x11 4 3 4) (subseq (assembly-cells a) 0 4)))))
+
+(fiveam:test org-operand-on-a-labelled-line-uses-the-scope-before-the-label
+  (let ((a (assemble (format nil "start: nop~%.equ .n, 5~%later: .org .n + 10") :machine 'instr-test-machine)))
+    (fiveam:is (= 15 (gethash "later" (assembly-symbols a))))))
+
+(fiveam:test qualify-locals-twice-is-a-no-op
+  (let ((ast (make-expr-label :name ".x" :localp t)))
+    (%qualify-locals! ast "start" 1)
+    (let ((once (expr-label-name ast)))
+      (%qualify-locals! ast "other" 1)
+      (fiveam:is (string= once (expr-label-name ast)))
+      (fiveam:is (not (expr-label-localp ast))))))
+
+(fiveam:test capture-set-values-leaves-its-input-unmodified
+  (let* ((ast (make-expr-binary :op :plus :left (make-expr-label :name "n") :right (make-expr-number :value 1)))
+         (set-names (make-hash-table :test 'equal))
+         (symbols (make-hash-table :test 'equal)))
+    (setf (gethash "n" set-names) t (gethash "n" symbols) 7)
+    (let ((captured (%capture-set-values ast symbols set-names 1)))
+      (fiveam:is (expr-label-p (expr-binary-left ast)))
+      (fiveam:is (expr-number-p (expr-binary-left captured))))))

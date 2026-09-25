@@ -391,6 +391,22 @@ its own hole count actually matches CHOICES' length."
           always (or (null wanted)
                      (and hole-choice (equal wanted (%choice-entry-key hole-choice)))))))
 
+(defvar *operand-cache* nil
+  "Bound by %LAYOUT to an EQ table so each statement's operands parse once
+across every layout pass (#39); NIL elsewhere, where nothing is cached.")
+
+(defun %cached-operands (statement key compute)
+  "Return COMPUTE's values, memoised under KEY (an EQ-comparable tag) for
+STATEMENT while *OPERAND-CACHE* is bound. A COMPUTE that signals is not cached."
+  (if (null *operand-cache*)
+      (funcall compute)
+      (let ((hit (assoc key (gethash statement *operand-cache*) :test #'eq)))
+        (if hit
+            (values-list (cdr hit))
+            (let ((values (multiple-value-list (funcall compute))))
+              (cl:push (cons key values) (gethash statement *operand-cache*))
+              (values-list values))))))
+
 (defun %narrow-to-forced-mode (statement variants)
   "STATEMENT carries a mnemonic mode suffix (e.g. \"w\" from \"lda.w\"). Return
 (VALUES narrowed-variants mode): the VARIANTS using the suffix's mode -- more
@@ -551,7 +567,8 @@ alternative's :STRICT once a value exists to check it against."
                  for (asts okp choices selections hole-prefixes ties score)
                    = (multiple-value-list
                       (if mode
-                          (try-match-operand-mode tokens mode)
+                          (%cached-operands statement mode
+                                            (lambda () (try-match-operand-mode tokens mode)))
                           (values nil (zerop (length tokens)) nil nil nil nil (cons 0 0))))
                  when (and okp (>= (instruction-descriptor-size v) floor)
                            ;; #104/#126: drop a candidate whose CHOICE-
@@ -570,7 +587,9 @@ alternative's :STRICT once a value exists to check it against."
     (when (null candidates)
       (let ((prefixes (loop for v in variants
                             for mode = (instruction-descriptor-mode v)
-                            for prefixes = (and mode (nth-value 4 (try-match-operand-mode tokens mode)))
+                            for prefixes = (and mode (nth-value 4 (%cached-operands
+                                                                   statement mode
+                                                                   (lambda () (try-match-operand-mode tokens mode)))))
                             when (some #'identity prefixes) return prefixes)))
         (when prefixes
           (%hole-prefix-error statement tokens variants prefixes anchor)))
@@ -779,8 +798,10 @@ operand is always one bare expression, never an addressing-mode pattern."
       (%assembly-error line ".assert: a mode suffix is not valid here"))
     (unless (<= 1 (length operands) 2)
       (%assembly-error line ".assert: expected a condition and an optional message"))
-    (values (%directive-operand-ast (first operands))
-            (and (second operands) (%message-operand (second operands) statement)))))
+    (%cached-operands statement :assert
+                      (lambda ()
+                        (values (%directive-operand-ast (first operands))
+                                (and (second operands) (%message-operand (second operands) statement)))))))
 
 (defun %signal-user-error (statement)
   "Signal ASSERTION-ERROR with the message of a reached .error STATEMENT."
@@ -806,7 +827,8 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
             (%assembly-error (statement-line statement)
                               "~A: expected ~D operand~:P, got ~D"
                               (statement-mnemonic statement) n (length operands))))))
-    (mapcar #'%directive-operand-ast operands)))
+    (%cached-operands statement :args
+                      (lambda () (mapcar #'%directive-operand-ast operands)))))
 
 (defun %expand-string-operands (asts terminator element-bits line mnemonic)
   "Replace each top-level EXPR-STRING in ASTS with one EXPR-NUMBER per
@@ -880,19 +902,14 @@ MAIN-END describe the main image only: a .ORG into a banked region (see
 (defun %qualify-locals! (ast scope line)
   "Destructively rewrite every local EXPR-LABEL node (LOCALP true) reachable
 from AST to its SCOPE-qualified name (%QUALIFY-LOCAL), leaving every other
-node untouched. Safe to call on any AST since each statement's operand ASTs
-(mode.lisp/parser.lisp) are freshly parsed and not shared -- it does not
-clear LOCALP after qualifying, so calling it twice on the same node
-double-qualifies the name. This
-is why %LAYOUT re-parses every statement's operands on every relaxation
-pass instead of reusing one pass's ASTs on the next -- a follow-up ticket
-tracks caching them across passes, which would need this cleared or the
-call made idempotent some other way."
+node untouched. Clears LOCALP afterwards, so qualifying an AST again (a
+cached operand AST, #39) is a no-op: the first scope wins."
   (etypecase ast
     ((or expr-number expr-string expr-location))
     (expr-label
      (when (expr-label-localp ast)
-       (setf (expr-label-name ast) (%qualify-local scope (expr-label-name ast) line))))
+       (setf (expr-label-name ast) (%qualify-local scope (expr-label-name ast) line)
+             (expr-label-localp ast) nil)))
     (expr-unary (%qualify-locals! (expr-unary-operand ast) scope line))
     (expr-binary (%qualify-locals! (expr-binary-left ast) scope line)
                  (%qualify-locals! (expr-binary-right ast) scope line)))
@@ -980,7 +997,9 @@ symbol ~S is not yet defined"
         (values name value)))))
 
 (defun %capture-set-values (ast symbols set-names line)
-  "Replace references to reassignable names with their value at this statement."
+  "Return AST with references to reassignable names replaced by their value at
+this statement. AST itself is never modified (it may be a cached operand AST,
+#39); unchanged subtrees are shared."
   (etypecase ast
     ((or expr-number expr-string expr-location) ast)
     (expr-label
@@ -992,16 +1011,23 @@ symbol ~S is not yet defined"
            (make-expr-number :value value))
          ast))
     (expr-unary
-     (unless (eq (expr-unary-op ast) :defined)
-       (setf (expr-unary-operand ast)
-             (%capture-set-values (expr-unary-operand ast) symbols set-names line)))
-     ast)
+     (if (eq (expr-unary-op ast) :defined)
+         ast
+         (let ((operand (%capture-set-values (expr-unary-operand ast) symbols set-names line)))
+           (if (eq operand (expr-unary-operand ast))
+               ast
+               (let ((copy (copy-expr-unary ast)))
+                 (setf (expr-unary-operand copy) operand)
+                 copy)))))
     (expr-binary
-     (setf (expr-binary-left ast)
-           (%capture-set-values (expr-binary-left ast) symbols set-names line)
-           (expr-binary-right ast)
-           (%capture-set-values (expr-binary-right ast) symbols set-names line))
-     ast)))
+     (let ((left (%capture-set-values (expr-binary-left ast) symbols set-names line))
+           (right (%capture-set-values (expr-binary-right ast) symbols set-names line)))
+       (if (and (eq left (expr-binary-left ast)) (eq right (expr-binary-right ast)))
+           ast
+           (let ((copy (copy-expr-binary ast)))
+             (setf (expr-binary-left copy) left
+                   (expr-binary-right copy) right)
+             copy))))))
 
 (defun %mode-symbols (previous set-names)
   "Keep forward labels from the previous pass while excluding future .set values."
@@ -1332,8 +1358,6 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                              (%choose-variant statement variants address
                                                :symbols mode-symbols :scope scope :floor (aref floors i)
                                                :cell-width cell-width :finalp finalp)
-                           (when (statement-mode-suffix statement)
-                             (%qualify-locals-in-asts! asts scope line))
                            (setf asts (mapcar (lambda (ast)
                                                 (%capture-set-values ast symbols set-names line)) asts))
                            ;; #115: CHOICES rides along in the sized entry so
@@ -1364,7 +1388,12 @@ symbol table, each pass only ever widening a statement that no longer fits.
 The loop stops when widths, directive effects, and symbols all agree across
 passes. One final pass checks that layout still agrees.
 CELL-WIDTH is MACHINE's own code cell width (#53), resolved once here and
-threaded through every pass."
+threaded through every pass. Operands parse once, into *OPERAND-CACHE* (#39)."
+  (let ((*operand-cache* (make-hash-table :test 'eq)))
+    (%layout-passes statements machine origin cell-width)))
+
+(defun %layout-passes (statements machine origin cell-width)
+  "The relaxation loop of %LAYOUT."
   (multiple-value-bind (labels assignments scopes) (%layout-labels statements)
     (%check-layout-dependencies statements labels assignments scopes)
     (let ((floors (make-array (length statements) :initial-element 0))
@@ -1386,7 +1415,7 @@ threaded through every pass."
                    (equalp new-effects effects)
                    (%same-symbols-p new-symbols symbols)
                    (%same-symbols-p new-banks banks))
-          (return-from %layout
+          (return-from %layout-passes
             (multiple-value-bind (final-symbols final-sized final-address final-asm-origin
                                    final-floors final-widths final-info final-effects final-banks)
                 (%layout-pass statements machine origin new-symbols set-names new-floors t cell-width labels new-banks)
