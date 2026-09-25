@@ -253,6 +253,11 @@ element."
   (defun %choice-key-descriptor (key)
     (find-mode-descriptor (%key-head key)))
 
+  (defun %key-declares-signed-p (key)
+    "T if KEY's alternative, or any alternative along its path, makes a hole signed."
+    (or (mode-descriptor-signedp (%choice-key-descriptor key))
+        (some #'identity (%option-hole-attributes key :signed))))
+
   (defun %pattern-one-of-min-hole-count (alt-names &optional seen)
     "The minimum MODE-HOLE-COUNT across ALT-NAMES (a :ONE-OF element's own
 alternative mode-name symbols) -- since #120, an alternative may contribute
@@ -326,7 +331,9 @@ against a DEFMODE cycle, same as %PATTERN-HOLE-COUNT/%MODE-HOLE-COUNT."
                (mode-descriptor-name mode)))
       (ecase attribute
         (:relative relative)
-        (:signed (or relative signed)))))
+        (:signed (or relative signed))
+        (:width (mode-descriptor-width mode))
+        (:strict (mode-descriptor-strictp mode)))))
 
   (defun %option-hole-attributes (key attribute)
     (if (consp key)
@@ -348,58 +355,42 @@ taken by MODE's varying ONE-OF element."
                                    (car (first (%one-of-element-options element))))
                                attribute))))))
 
-  (defun %pattern-nested-one-of-signed-p (pattern &optional seen)
-    "T if any :ONE-OF element nested anywhere in PATTERN -- at any depth, not
-just PATTERN's own top-level elements -- has an alternative declaring
-:SIGNED T. Used by %CHECK-ONE-OF-ELEMENTS! to reject a nested :ONE-OF's
-:SIGNED alternative: %MATCH-MODE-ELEMENTS' outermost-ONE-OF-wins rule (this
-file) means only the *outermost* :ONE-OF a hole belongs to ever gets that
-hole's CHOICES entry, so a :SIGNED declared on some inner alternative -- two
-:ONE-OF levels down from the hole a DEFINSTRUCTION site actually sees -- has
-no decode-time record anywhere that could recover it; letting it through here
-would silently not honor it later instead of erroring where the mistake is
-made. SEEN guards the same hand-written-redefinition-cycle case
-%MODE-HOLE-COUNT does, for the same reason."
-    (loop for element in pattern
-          thereis (when (eq (first element) :one-of)
-                     (let ((alts (mapcar #'find-mode-descriptor (%one-of-alternatives element))))
-                      (or (some #'mode-descriptor-signedp alts)
-                          (some (lambda (alt)
-                                  (some (lambda (hole)
-                                          (and (eq (first hole) :expr)
-                                               (or (getf (cddr hole) :signed)
-                                                   (getf (cddr hole) :relative))))
-                                        (mode-descriptor-pattern alt)))
-                                alts)
-                          (some (lambda (alt)
-                                  (let ((alt-name (mode-descriptor-name alt)))
-                                    (unless (member alt-name seen)
-                                      (%pattern-nested-one-of-signed-p
-                                       (mode-descriptor-pattern alt) (cons alt-name seen)))))
-                                alts))))))
+  (defun %alternative-declares-p (alt attribute)
+    "T if ALT declares ATTRIBUTE (:SIGNED, :WIDTH or :STRICT) on itself or,
+for :SIGNED, on one of its own EXPR holes."
+    (ecase attribute
+      (:signed (or (mode-descriptor-signedp alt)
+                   (some (lambda (hole)
+                           (and (eq (first hole) :expr)
+                                (or (getf (cddr hole) :signed)
+                                    (getf (cddr hole) :relative))))
+                         (mode-descriptor-pattern alt))))
+      (:width (mode-descriptor-width alt))
+      (:strict (mode-descriptor-strictp alt))))
 
-  (defun %pattern-nested-one-of-width-p (pattern &optional seen)
-    "T if any :ONE-OF element nested anywhere in PATTERN -- at any depth, not
-just PATTERN's own top-level elements -- has an alternative declaring
-:WIDTH. Used by %CHECK-ONE-OF-ELEMENTS! to reject a nested :ONE-OF's :WIDTH
-alternative, for the same reason %PATTERN-NESTED-ONE-OF-SIGNED-P (above)
-rejects a nested :SIGNED one: %MATCH-MODE-ELEMENTS' outermost-ONE-OF-wins
-rule means only the outermost :ONE-OF a hole belongs to ever gets that
-hole's CHOICES entry, so a :WIDTH declared on some inner alternative has no
-decode-time record anywhere that could recover it -- error where the mistake
-is made rather than silently not honoring it later. SEEN guards the same
-hand-written-redefinition-cycle case %MODE-HOLE-COUNT does, for the same
-reason."
-    (loop for element in pattern
-          thereis (when (eq (first element) :one-of)
-                     (let ((alts (mapcar #'find-mode-descriptor (%one-of-alternatives element))))
-                      (or (some #'mode-descriptor-width alts)
-                          (some (lambda (alt)
-                                  (let ((alt-name (mode-descriptor-name alt)))
-                                    (unless (member alt-name seen)
-                                      (%pattern-nested-one-of-width-p
-                                       (mode-descriptor-pattern alt) (cons alt-name seen)))))
-                                alts))))))
+  (defun %unrecorded-nested-attribute-p (pattern attribute recordedp &optional seen)
+    "T if a ONE-OF nested anywhere in PATTERN, whose pick no CHOICES entry
+records, has an alternative declaring ATTRIBUTE -- nothing at decode or
+assembly time could recover it. RECORDEDP says PATTERN's varying ONE-OF
+elements are recorded: they are when PATTERN belongs to a varying alternative
+whose own ONE-OF is recorded in turn (%NESTED-CHOICE-ENTRY), and their
+alternatives are then reached through the path. SEEN guards the same
+hand-written-redefinition-cycle case %MODE-HOLE-COUNT does."
+    (let ((varying (and recordedp (%pattern-varying-one-of-elements pattern))))
+      (loop for element in pattern
+            thereis (when (eq (first element) :one-of)
+                      (let ((alts (mapcar #'find-mode-descriptor (%one-of-alternatives element)))
+                            (recorded (member element varying :test #'eq)))
+                        (or (and (not recorded)
+                                 (some (lambda (alt) (%alternative-declares-p alt attribute)) alts))
+                            (some (lambda (alt)
+                                    (let ((alt-name (mode-descriptor-name alt)))
+                                      (unless (member alt-name seen)
+                                        (%unrecorded-nested-attribute-p
+                                         (mode-descriptor-pattern alt) attribute
+                                         (and recorded (mode-descriptor-varyingp alt))
+                                         (cons alt-name seen)))))
+                                  alts)))))))
 
   (defun %check-one-of-elements! (name pattern)
     "Validate alternative syntax and supported ONE-OF nesting.
@@ -435,19 +426,15 @@ that pick can be selected"
 declare :WIDTH, :SIGNED, :RELATIVE, :SUFFIX or :STRICT -- declare them on its holes or inner ~
 alternatives instead"
                          name (mode-descriptor-name alt)))))
-            (when (%pattern-nested-one-of-signed-p (mode-descriptor-pattern alt))
-              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
-alternative declares :SIGNED T or :RELATIVE T -- only the outermost ONE-OF a hole belongs ~
-to keeps its CHOICES entry, so a nested :SIGNED/:RELATIVE can never be recovered at decode ~
-time; give ~S itself :SIGNED T or :RELATIVE T instead, or move the alternative up to this ~
-ONE-OF directly"
-                     name (mode-descriptor-name alt) (mode-descriptor-name alt)))
-            (when (%pattern-nested-one-of-width-p (mode-descriptor-pattern alt))
-              (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
-alternative declares :WIDTH -- only the outermost ONE-OF a hole belongs to keeps its ~
-CHOICES entry, so a nested :WIDTH can never be recovered at decode time; give ~S itself ~
-:WIDTH instead, or move the :WIDTH alternative up to this ONE-OF directly"
-                     name (mode-descriptor-name alt) (mode-descriptor-name alt))))
+            (loop for (attribute label) in '((:signed ":SIGNED T or :RELATIVE T") (:width ":WIDTH")
+                                             (:strict ":STRICT T"))
+                  when (%unrecorded-nested-attribute-p (mode-descriptor-pattern alt) attribute
+                                                       (mode-descriptor-varyingp alt))
+                    do (%defmode-error "DEFMODE ~S: ONE-OF alternative ~S has a nested ONE-OF whose own ~
+alternative declares ~A -- only the outermost ONE-OF a hole belongs to, or a varying ONE-OF inside a ~
+varying alternative, keeps its CHOICES entry, so this can never be recovered at decode or assembly ~
+time; declare it on ~S itself, or move the alternative up to this ONE-OF directly"
+                                       name (mode-descriptor-name alt) label (mode-descriptor-name alt))))
           (loop for (alt . later) on alts
                 do (dolist (other later)
                      (when (and (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))

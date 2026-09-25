@@ -807,3 +807,33 @@ looks like."
   (fiveam:is (null (nv-error-text '(defmode mz-ok (one-of (mz-ok-slot oo-reg mz-stk))))))
   (let ((text (nv-error-text '(defmode mz-bad (one-of oo-reg mz-stk)))))
     (fiveam:is-true (search "name the outer ONE-OF" text))))
+
+;;; #221 -- attributes on the inner alternatives of a varying nested ONE-OF
+;;; resolve through the path, so DEFMODE accepts them.
+
+(defmode nv-attr-near expr :width 1 :signed t)
+(defmode nv-attr-far "[" expr "," expr "]" :width 2 :strict t)
+(defmode nv-attr-ind (one-of nv-attr-near nv-attr-far))
+
+(fiveam:test nested-varying-inner-attributes-are-accepted
+  (fiveam:finishes (eval '(defmode nv-attr-outer (one-of nv-attr-ind nv-plain)))))
+
+(fiveam:test nested-varying-inner-attributes-follow-the-path
+  (fiveam:is (equal '(1) (%option-hole-attributes '(nv-attr-ind nv-attr-near) :width)))
+  (fiveam:is (equal '(2 2) (%option-hole-attributes '(nv-attr-ind nv-attr-far) :width)))
+  (fiveam:is (equal '(t) (%option-hole-attributes '(nv-attr-ind nv-attr-near) :signed)))
+  (fiveam:is (equal '(nil) (%option-hole-attributes '(nv-attr-ind nv-attr-near) :strict)))
+  (fiveam:is (equal '(t t) (%option-hole-attributes '(nv-attr-ind nv-attr-far) :strict))))
+
+;; A non-varying ONE-OF beside the varying one is not recorded in a path, so
+;; an attribute declared on its alternatives is still rejected.
+(defmode nv-attr-flat-a expr :strict t)
+(defmode nv-attr-flat-b "[" expr "]")
+(defmode nv-attr-flat (one-of nv-attr-flat-a nv-attr-flat-b))
+(defmode nv-attr-mixed (one-of nv-attr-near nv-attr-far) "," (one-of nv-attr-flat-a nv-attr-flat-b))
+
+(fiveam:test nested-unrecorded-one-of-still-rejects-strict
+  (fiveam:signals mode-definition-error
+    (eval '(defmode nv-attr-mixed-outer (one-of nv-attr-mixed nv-plain))))
+  (fiveam:signals mode-definition-error
+    (eval '(defmode nv-attr-flat-outer (one-of nv-attr-flat nv-plain)))))

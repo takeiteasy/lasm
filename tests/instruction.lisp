@@ -6089,3 +6089,117 @@ present, so an error comes from the ENCODING under test."
                (modes ss-unnamed-fixed)
                (encoding (opcode #x24))
                (semantics nil))))))
+
+;;; Attributes declared on the inner alternatives of a varying nested ONE-OF:
+;;; :WIDTH, :SIGNED, :STRICT and :RELATIVE resolve per hole through the path.
+
+(defmachine nested-attr-machine
+  (register pc :width 16)
+  (register a :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(defmode na-near expr :width 1 :signed t)
+(defmode na-far "[" expr "," expr "]" :width 2 :strict t)
+(defmode na-ind (one-of na-near na-far))
+(defmode na-lit "#" expr :width 1)
+(defmode na-mode (one-of na-ind na-lit))
+
+(definstruction nested-attr-machine nat
+  (modes na-mode)
+  (encoding
+    (opcode 1)
+    (operand src :mode
+      (variant (choice (na-ind na-near)) (sub 0))
+      (variant (choice (na-ind na-far)) (sub 1))
+      (variant (choice na-lit) (sub 2)))
+    (for-choice (src na-ind na-far) (operand off :mode)))
+  (semantics
+    (choice-case src
+      (na-lit (set! a src))
+      (na-ind (choice-case (src na-ind)
+                (na-near (set! a src))
+                (na-far (set! a (+ src off))))))))
+
+(defun %na-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'nested-attr-machine)) 'list))
+
+(defun %na-decode (cells)
+  (decode-instruction-at (vector-cell-reader (coerce cells 'vector)) 0 'nested-attr-machine))
+
+(fiveam:test nested-inner-width-sizes-each-hole
+  (fiveam:is (equal '(1 0 5) (%na-cells "nat 5")))
+  (fiveam:is (equal '(1 1 232 3 2 0) (%na-cells "nat [1000, 2]")))
+  (fiveam:is (equal '(1 2 44) (%na-cells "nat #300")))
+  (fiveam:is (equal '(2 2) (instruction-descriptor-operand-widths
+                            (nth-value 0 (%na-decode '(1 1 232 3 2 0)))))))
+
+(fiveam:test nested-inner-signed-sign-extends-on-decode
+  (multiple-value-bind (descriptor values) (%na-decode '(1 0 255))
+    (fiveam:is (equal '(-1) values))
+    (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness descriptor))))
+  (multiple-value-bind (descriptor values) (%na-decode '(1 1 232 3 2 0))
+    (fiveam:is (equal '(1000 2) values))
+    (fiveam:is (equal '(nil nil) (instruction-descriptor-operand-signedness descriptor)))))
+
+(fiveam:test nested-inner-signed-and-width-run
+  (let ((m (make-machine 'nested-attr-machine)))
+    (load-program m (assembly-cells (assemble "nat [1000, 2]" :machine 'nested-attr-machine)))
+    (step-machine m)
+    (fiveam:is (= 1002 (sref m 'a)))))
+
+(fiveam:test nested-inner-strict-applies-to-the-chosen-alternative-only
+  (fiveam:signals assembly-error (assemble "nat [70000, 1]" :machine 'nested-attr-machine))
+  (fiveam:signals assembly-error (assemble "nat [1, 70000]" :machine 'nested-attr-machine))
+  (fiveam:is (equal '(1 0 44) (%na-cells "nat 300")))
+  (fiveam:is (equal '(1 2 44) (%na-cells "nat #300"))))
+
+(defmode na-bra expr :relative t :width 1)
+(defmode na-brb "(" expr "," expr ")")
+(defmode na-br (one-of na-bra na-brb))
+(defmode na-jmp (one-of na-br na-lit))
+
+(definstruction nested-attr-machine jmpn
+  (modes na-jmp)
+  (encoding
+    (opcode 2)
+    (operand tgt :width 1
+      (variant (choice (na-br na-bra)) (sub 0))
+      (variant (choice (na-br na-brb)) (sub 1))
+      (variant (choice na-lit) (sub 2)))
+    (for-choice (tgt na-br na-brb) (operand extra :width 1)))
+  (semantics nil))
+
+(fiveam:test nested-inner-relative-encodes-an-offset
+  (fiveam:is (equal '(2 0 2) (%na-cells "jmpn 5")))
+  (fiveam:is (equal '(2 1 1 2) (%na-cells "jmpn (1, 2)")))
+  (fiveam:is (equal '(t) (instruction-descriptor-relative-holes
+                          (nth-value 0 (%na-decode '(2 0 2))))))
+  (fiveam:is (equal '(nil nil) (instruction-descriptor-relative-holes
+                                (nth-value 0 (%na-decode '(2 1 1 2)))))))
+
+(defmode naw-near expr :width 1)
+(defmode naw-ind (one-of naw-near vh-idx))
+(defmode naw-mode expr "," (one-of naw-ind nw-lit))
+(defmode naws-near expr :signed t)
+(defmode naws-ind (one-of naws-near vh-idx))
+(defmode naws-mode expr "," (one-of naws-ind nw-lit))
+
+(defun %naw-form (name opcode mode near ind)
+  `(definstruction varying-hole-test-machine ,name
+     (modes ,mode)
+     (encoding
+       (opcode ,opcode)
+       (operand dst :field dst)
+       (operand src :field src
+         (variant (choice (,ind ,near)) inline :range (0 7) :bias #x00)
+         (variant (choice (,ind vh-idx)) inline :range (0 7) :bias #x10)
+         (variant (choice nw-lit) inline :range (0 7) :bias #x20))
+       (for-choice (src ,ind vh-idx) (operand off :trailing-word)))
+     (semantics nil)))
+
+(fiveam:test nested-inner-width-is-rejected-on-word-machines
+  (fiveam:signals instruction-definition-error
+    (eval (%naw-form 'nawd 13 'naw-mode 'naw-near 'naw-ind))))
+
+(fiveam:test nested-inner-signed-is-accepted-on-word-machines
+  (fiveam:finishes (eval (%naw-form 'nawsd 14 'naws-mode 'naws-near 'naws-ind))))

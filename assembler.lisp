@@ -1488,18 +1488,31 @@ field" (instruction-descriptor-name descriptor) offset)))
                               (- (ash 1 (1- (* cell-width width)))) (1- (ash 1 (1- (* cell-width width))))))))
     offset))
 
+(defun %hole-choice-strict-p (choices i)
+  "T if the alternative CHOICES records for hole I declares :STRICT for it.
+Every hole of a matched alternative carries the same entry, so a run of equal
+entries splits into whole alternatives of %OPTION-HOLE-COUNT holes each."
+  (let ((entry (nth i choices)))
+    (when entry
+      (let* ((key (%choice-entry-key entry))
+             (start (loop with j = i
+                          while (and (plusp j) (equal (nth (1- j) choices) entry))
+                          do (decf j)
+                          finally (return j))))
+        (or (nth (mod (- i start) (%option-hole-count key)) (%option-hole-attributes key :strict))
+            (mode-descriptor-strictp (%choice-key-descriptor key)))))))
+
 (defun %check-strict-operand-range! (descriptor mode values line cell-width choices)
   "Check ordinary strict fields against the bounds of the field each is
 encoded into. Relative fields are checked by %RELATIVE-OFFSET."
   (let ((relative-holes (instruction-descriptor-relative-holes descriptor))
         (word-fields (instruction-descriptor-word-fields descriptor)))
     (loop for value in values
-          for choice in (or choices (make-list (length values)))
           for i from 0
           when (and (not (nth i relative-holes))
                     (or *strict-operand-range*
                         (and mode (mode-descriptor-strictp mode))
-                        (and choice (mode-descriptor-strictp (if (consp choice) (first choice) choice)))))
+                        (%hole-choice-strict-p choices i)))
             do (if word-fields
                    (multiple-value-bind (lo hi) (%word-field-bounds (nth i word-fields) cell-width)
                      (unless (<= lo value hi)

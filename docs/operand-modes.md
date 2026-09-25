@@ -132,6 +132,17 @@ An explicit `(operand :width n)` overrides an alternative's width.
 [Diagnostics](diagnostics.md#strict-operand-range) and
 [Assembler](assembler.md#pc-relative-offsets).
 
+Inner alternatives of a [varying nested `one-of`](#nested-varying-alternatives)
+can declare all four; each hole takes the attribute of the alternative that
+owns it:
+
+```lisp
+(defmode near expr :width 1 :signed t)
+(defmode far "[" expr "," expr "]" :width 2 :strict t)
+(defmode ind (one-of near far))
+(defmode any (one-of ind lit))
+```
+
 ## Forcing one hole
 
 A mode alternative with `:suffix "rb"` can be selected with a prefix such
@@ -144,9 +155,13 @@ prefixes select the alternative first and then the variant. See
 - A `one-of` with hole-less alternatives needs a slot on it. A
   cell-encoded one must be selected by a
   [sub-opcode table](instructions.md#slot-participants).
-- A nested varying alternative has one varying `one-of` of its own. Set
-  width, signedness, relative, suffix, and strict options on holes or outer
-  alternatives instead.[^nested]
+- A nested varying alternative has one varying `one-of` of its own. It
+  cannot declare width, signedness, relative, suffix, or strict options
+  itself; declare them on its holes or inner alternatives.[^nested]
+- A `one-of` nested where no path records the pick (inside a non-varying
+  alternative, or beside a varying one) rejects alternatives that declare
+  `:signed`, `:relative`, `:width`, or `:strict`
+  ([#275](https://todo.sr.ht/~takeiteasy/lasm/275)).[^nested]
 
 [^nested]: A path lists the selected alternative at each varying level.
   A bare outer name does not identify a unique shape. A nonvarying nested

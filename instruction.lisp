@@ -1758,7 +1758,16 @@ SUB-CHOICES or field-variant combo."
         for chosen = (nth i sub-choices)
         collect (%hole-source-attribute mode source :relative chosen)))
 
-(defun %byte-operand-widths (hole-alternatives-list sub-choices declared-widths mode-specified)
+(defun %hole-width (mode source key)
+  "The :WIDTH the alternative KEY declares for the hole SOURCE names, or NIL.
+Follows KEY's path to the alternative owning the hole; a hole of a ONE-OF
+nested where no path is recorded takes its outer alternative's own width."
+  (and (eq (first source) :one-of)
+       (or (%hole-source-attribute mode source :width key)
+           (mode-descriptor-width (%choice-key-descriptor key)))))
+
+(defun %byte-operand-widths (hole-alternatives-list sub-choices declared-widths mode-specified mode
+                             &optional (sources (%mode-hole-sources mode)))
   "Hole-aligned list, one entry per DECLARED-WIDTHS -- this descriptor's own
 per-hole width (#129), computed once per expanded descriptor since
 SUB-CHOICES can differ between sibling descriptors sharing one carrying
@@ -1769,20 +1778,20 @@ was (operand :mode) rather than an explicit (operand :width n)
 width directly, and always wins over a matched alternative's own :WIDTH, so
 a hole given one needs no per-hole record at all regardless of whether its
 alternatives agree (%CHECK-BYTE-ONE-OF-WIDTH). At a MODE-SPECIFIED hole,
-entry I is the SUB-CHOICES-named alternative's own MODE-DESCRIPTOR-WIDTH
-when that alternative declares one, else -- an ungoverned hole, a ONE-OF
-hole whose alternatives all agree, or a chosen alternative that itself
-declares no :WIDTH -- DECLARED-WIDTHS' own entry, whatever %OPERAND-WIDTH
-already resolved (the mode's default width, or -- for an agreeing ONE-OF
-hole sharing a common :WIDTH -- that shared value)."
+entry I is the :WIDTH declared for that hole by the SUB-CHOICES-named
+alternative (%HOLE-WIDTH), else -- an ungoverned hole, a ONE-OF hole whose
+alternatives all agree, or a chosen alternative that itself declares no
+:WIDTH -- the first alternative's, else DECLARED-WIDTHS' own entry, whatever
+%OPERAND-WIDTH already resolved (the mode's default width)."
   (loop for i below (length declared-widths)
         for alts = (nth i hole-alternatives-list)
         for chosen = (nth i sub-choices)
         for declared = (nth i declared-widths)
         for specified = (nth i mode-specified)
+        for source = (nth i sources)
         collect (if specified
-                    (or (and chosen (mode-descriptor-width (%choice-key-descriptor chosen)))
-                        (and alts (mode-descriptor-width (%choice-key-descriptor (first alts))))
+                    (or (and chosen (%hole-width mode source chosen))
+                        (and alts (%hole-width mode source (first alts)))
                         declared)
                     declared)))
 
@@ -1850,7 +1859,7 @@ hole-selected one would both be trying to write it."
                  (%semantics-fn-form semantics-forms machine name operand-names hole-alternatives-list)))
      (if (null sub-spec)
          (list (%descriptor-form machine name mode-form opcode
-                                  (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified)
+                                  (%byte-operand-widths hole-alternatives-list nil operand-widths mode-specified mode)
                                   operand-names cycles
                                   semantics-fn-gensym explicit-sub nil
                                   (%byte-operand-signedness mode nil)
@@ -1864,7 +1873,7 @@ hole-selected one would both be trying to write it."
                              do (setf (nth idx sub-choices) chosen-name))
                        (%descriptor-form machine name mode-form opcode
                                           (%byte-operand-widths hole-alternatives-list sub-choices operand-widths
-                                                                 mode-specified)
+                                                                 mode-specified mode)
                                           operand-names cycles
                                           semantics-fn-gensym (cdr pair) sub-choices
                                           (%byte-operand-signedness mode sub-choices)
@@ -2003,7 +2012,7 @@ bindings forms) like %BYTE-DESCRIPTOR-FORMS."
                                      collect (let ((sub-choices (%byte-tuple-sub-choices pair hole-indices tuple)))
                                                (%descriptor-form
                                                 machine name mode-form opcode
-                                                (%byte-operand-widths alternatives sub-choices widths mode-specified)
+                                                (%byte-operand-widths alternatives sub-choices widths mode-specified mode sources)
                                                 names cycles semantics-fn-gensym (cdr pair) sub-choices
                                                 (%byte-operand-signedness mode sub-choices sources)
                                                 (%byte-relative-flags mode sub-choices sources)
@@ -2031,7 +2040,7 @@ alternatives disagree on hole count" machine name mode-name))
       (%resolve-operand-fields mode operand-subclauses machine name mode-name machine sub-opcode-subclause)
     (let ((hole-alternatives (%mode-hole-alternatives mode)))
       (%check-byte-one-of-signed mode hole-alternatives sub-spec machine name)
-      (%check-byte-one-of-width hole-alternatives sub-spec mode-specified machine name)
+      (%check-byte-one-of-width mode hole-alternatives sub-spec mode-specified machine name)
       (%check-byte-one-of-relative mode hole-alternatives sub-spec machine name)
       (if (%byte-selected-mode-p mode)
           (%byte-varying-descriptor-forms machine name mode-form opcode explicit-sub mode mode-name
@@ -2571,7 +2580,7 @@ below the same as any other signed variant would."
   (if (word-variant-choice v)
       (if source
           (%hole-source-attribute mode source :signed (word-variant-choice v))
-          (mode-descriptor-signedp (%choice-key-descriptor (word-variant-choice v))))
+          (%key-declares-signed-p (word-variant-choice v)))
       hole-signedp))
 
 (define-condition signed-range-out-of-field (error)
@@ -2751,14 +2760,13 @@ non-alias variant on that escape to be an alias of" field-name e))
   "Require identical value interpretation for alternate encoding spellings."
   (unless (and (word-variant-choice alias) (word-variant-choice canonical))
     (%definstruction-error "DEFINSTRUCTION: field ~S: aliases require both variants to be CHOICE-selected" field-name))
-  (let ((am (%choice-key-descriptor (word-variant-choice alias)))
-        (cm (%choice-key-descriptor (word-variant-choice canonical))))
+  (let ((a (word-variant-choice alias))
+        (c (word-variant-choice canonical)))
     (unless (and (eql (word-variant-extra-cells alias) (word-variant-extra-cells canonical))
-                 (= (%option-hole-count (word-variant-choice alias))
-                    (%option-hole-count (word-variant-choice canonical)))
-                 (eq (mode-descriptor-signedp am) (mode-descriptor-signedp cm))
-                 (eql (mode-descriptor-width am) (mode-descriptor-width cm))
-                 (eq (mode-descriptor-relativep am) (mode-descriptor-relativep cm)))
+                 (= (%option-hole-count a) (%option-hole-count c))
+                 (equal (%option-hole-attributes a :signed) (%option-hole-attributes c :signed))
+                 (equal (%option-hole-attributes a :width) (%option-hole-attributes c :width))
+                 (equal (%option-hole-attributes a :relative) (%option-hole-attributes c :relative)))
       (%definstruction-error "DEFINSTRUCTION: field ~S: alias ~S does not encode like ~S -- cells, hole count, signedness, width and relativeness must agree"
              field-name (word-variant-choice alias) (word-variant-choice canonical)))))
 
@@ -2849,7 +2857,7 @@ at decode" field-name unclaimed))
           ;; legalize a mixed-field shape docs/instructions.md and
           ;; docs/modes.md both currently document as rejected outright, and
           ;; is out of #63's scope (see #63's closing comment).
-          ((mode-descriptor-signedp (%choice-key-descriptor (first unclaimed)))
+          ((%key-declares-signed-p (first unclaimed))
            (%definstruction-error "DEFINSTRUCTION: field ~S: the unclaimed ONE-OF alternative ~S left for this ~
 field's value-selected variant~P declares :SIGNED T -- a value-selected variant has no (CHOICE ~
 ...) of its own to read :SIGNED from, so a mixed field cannot carry a signed fallback; give ~S ~
@@ -3274,20 +3282,24 @@ sibling %TRY-DECODE-WORD-CANDIDATE (decoder.lisp) tries first."
 (defun %check-for-choice-alias-extras! (specs tuple for-choice-alist layout layout-name machine-name)
   "Aliased alternatives must also encode their extra holes identically."
   (labels ((encoding (alt group)
-             (mapcar
-              (lambda (subclause)
-                (let ((spec (%parse-word-operand-subclause
-                             subclause layout layout-name machine-name (list alt)
-                             (mode-descriptor-signedp (%choice-key-descriptor alt)))))
-                  (list (word-operand-spec-field spec)
-                        (mapcar (lambda (v)
-                                  (list (word-variant-kind v) (word-variant-range v)
-                                        (word-variant-bias v) (word-variant-escape v)
-                                        (word-variant-extra-cells v)))
-                                (word-operand-spec-variants spec)))))
-              (cdr (assoc (list (mode-hole-group-slot group)
-                                (mode-hole-group-base-start group) alt)
-                          for-choice-alist :test #'equal)))))
+             (let* ((subclauses (cdr (assoc (list (mode-hole-group-slot group)
+                                                  (mode-hole-group-base-start group) alt)
+                                            for-choice-alist :test #'equal)))
+                    (extras (nthcdr (mode-hole-group-base-count group)
+                                    (%option-hole-attributes alt :signed))))
+               (loop for subclause in subclauses
+                     for i from 0
+                     collect (let ((spec (%parse-word-operand-subclause
+                                          subclause layout layout-name machine-name (list alt)
+                                          (if (< i (length extras))
+                                              (nth i extras)
+                                              (mode-descriptor-signedp (%choice-key-descriptor alt))))))
+                               (list (word-operand-spec-field spec)
+                                     (mapcar (lambda (v)
+                                               (list (word-variant-kind v) (word-variant-range v)
+                                                     (word-variant-bias v) (word-variant-escape v)
+                                                     (word-variant-extra-cells v)))
+                                             (word-operand-spec-variants spec))))))))
     (dolist (group (mode-hole-tuple-groups tuple))
       (loop for i from (mode-hole-group-start group)
             below (+ (mode-hole-group-start group) (mode-hole-group-base-count group))
@@ -3479,7 +3491,8 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                                                                (%word-constants-form tuple-constants)))))
                     (%check-word-one-of-signed specs mode tuple-hole-alternatives
                                                (mode-hole-tuple-hole-sources tuple) machine name)
-                    (%check-word-one-of-width tuple-hole-alternatives machine name)
+                    (%check-word-one-of-width mode tuple-hole-alternatives machine name
+                                              (mode-hole-tuple-hole-sources tuple))
                     (let* ((alternatives-form (%word-alternatives-form specs hole-signedp-list mode
                                                                        (mode-hole-tuple-hole-sources tuple)))
                            (alternatives-gensym (gensym "WORD-ALTERNATIVES"))
@@ -3563,22 +3576,21 @@ disagree on :SIGNED, but this hole carries no sub-opcode selector -- per-hole :S
 decode-time record of which alternative matched"
                       machine name i alts))))
 
-(defun %one-of-width-disagreement (hole-alternatives-list)
+(defun %one-of-width-disagreement (mode hole-alternatives-list &optional sources)
   "Hole-aligned list, one entry per HOLE-ALTERNATIVES-LIST -- NIL for a hole
 not governed by any ONE-OF, or for a ONE-OF hole whose alternatives all
-declare the same MODE-DESCRIPTOR-WIDTH (including all-NIL, i.e. none of them
-declares :WIDTH at all); the hole's own alternative mode-name symbols when
+declare the same width for it (%HOLE-WIDTH, including all-NIL, i.e. none of
+them declares :WIDTH at all); the hole's own alternative option keys when
 they disagree, i.e. exactly the holes #129's per-hole :WIDTH needs a
 decode-time discriminator for. Alternatives that agree need no discriminator
 at all -- the hole's width is static regardless of which one matched."
-  (mapcar (lambda (alts)
+  (mapcar (lambda (alts source)
             (and alts
-                 (rest (remove-duplicates (mapcar (lambda (m) (mode-descriptor-width (%choice-key-descriptor m)))
-                                                   alts)))
+                 (rest (remove-duplicates (mapcar (lambda (m) (%hole-width mode source m)) alts)))
                  alts))
-          hole-alternatives-list))
+          hole-alternatives-list (or sources (%mode-hole-sources mode))))
 
-(defun %check-byte-one-of-width (hole-alternatives-list sub-spec mode-specified machine name)
+(defun %check-byte-one-of-width (mode hole-alternatives-list sub-spec mode-specified machine name)
   "Byte-encoded analogue of %CHECK-BYTE-ONE-OF-SIGNED, for #129's per-hole
 :WIDTH. Signal a DEFINSTRUCTION-time error for a hole whose ONE-OF
 alternatives disagree on :WIDTH, is MODE-SPECIFIED (hole-aligned, T when
@@ -3591,7 +3603,7 @@ of whether its alternatives disagree: an explicit :WIDTH is the author
 naming a width directly, always wins over a matched alternative's own
 :WIDTH (%BYTE-OPERAND-WIDTHS), and so needs no per-hole record at all."
   (let ((carrying-indices (and sub-spec (car sub-spec))))
-    (loop for alts in (%one-of-width-disagreement hole-alternatives-list)
+    (loop for alts in (%one-of-width-disagreement mode hole-alternatives-list)
           for specified in mode-specified
           for i from 0
           when (and alts specified (not (member i carrying-indices)))
@@ -3652,7 +3664,7 @@ disagree on :SIGNED, but not every field variant at that hole is CHOICE-selected
 per-hole :SIGNED needs a (choice m) selector on every variant as its decode-time record ~
 of which alternative matched" machine name i alts)))
 
-(defun %check-word-one-of-width (hole-alternatives-list machine name)
+(defun %check-word-one-of-width (mode hole-alternatives-list machine name &optional sources)
   "Per-hole :WIDTH (#129) is permanently, intentionally out of scope on a
 word-encoded machine -- OPERAND-WIDTHS is always NIL there since operand
 sizes come from word fields, so a per-hole :WIDTH has nothing to mean.
@@ -3663,8 +3675,9 @@ it constrains OPERAND-WIDTHS whether or not the alternatives disagree) --
 keeping docs/modes.md's \"permanently out of scope\" true by erroring loudly
 rather than silently ignoring an inert declaration."
   (loop for alts in hole-alternatives-list
+        for source in (or sources (%mode-hole-sources mode))
         for i from 0
-        when (and alts (some (lambda (m) (mode-descriptor-width (%choice-key-descriptor m))) alts))
+        when (and alts (some (lambda (m) (%hole-width mode source m)) alts))
           do (%definstruction-error "DEFINSTRUCTION ~S ~S: operand hole ~D's ONE-OF alternatives ~S declare ~
 :WIDTH, but per-hole :WIDTH is permanently out of scope on word-encoded machine ~S -- operand ~
 sizes come from word fields, not OPERAND-WIDTHS, which is always NIL there"
