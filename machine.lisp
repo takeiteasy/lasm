@@ -209,7 +209,8 @@ function), got ~S" context name (car fn) (cdr fn))))
                                :addr-width addr-width
                                :cell-width (%check-positive (or cell-width width) ":cell-width" name)
                                :endian (%check-endian endian name)
-                               :regions regions)))))
+                               :regions regions
+                               :region-index (%sorted-region-index regions))))))
 
 (defun parse-flags-clause (form)
   ;; (flags A B C ...) -- expands to one storage-element per flag, width 1

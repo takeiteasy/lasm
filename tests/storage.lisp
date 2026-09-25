@@ -688,3 +688,28 @@ nop" :machine 'rom-program-test-machine)))
     (stack-pop m 's)
     (fiveam:is (equal '((0 :write 9 0) (:pointer :write 1 0) (0 :read 9 1) (:pointer :write 0 1))
                       (reverse events)))))
+
+;;; #156: %REGION-AT binary-searches a start-sorted index, not declaration order.
+(defmachine region-order-test-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8
+    (region c #x60 #x6F :kind :rom)
+    (region a #x10 #x10 :kind :rom)
+    (region d #xF0 #xFF :kind :rom)
+    (region b #x20 #x2F :kind :rom)
+    (region e #x40 #x40 :kind :rom)))
+
+(fiveam:test region-at-finds-out-of-order-regions
+  (let ((element (find 'ram (machine-descriptor-elements
+                             (find-machine-descriptor 'region-order-test-machine))
+                       :key #'storage-element-name)))
+    (flet ((name-at (address)
+             (let ((region (%region-at element address)))
+               (and region (memory-region-name region)))))
+      (fiveam:is (equal '(nil a nil) (list (name-at #x0F) (name-at #x10) (name-at #x11))))
+      (fiveam:is (equal '(nil b nil) (list (name-at #x1F) (name-at #x20) (name-at #x30))))
+      (fiveam:is (equal '(b nil) (list (name-at #x2F) (name-at #x3F))))
+      (fiveam:is (equal '(e nil c c nil) (list (name-at #x40) (name-at #x41) (name-at #x60)
+                                        (name-at #x6F) (name-at #x70))))
+      (fiveam:is (equal '(nil d d) (list (name-at #xEF) (name-at #xF0) (name-at #xFF))))
+      (fiveam:is (equal '(c a d b e) (mapcar #'memory-region-name (storage-element-regions element)))))))

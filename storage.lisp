@@ -172,10 +172,11 @@ memory ~S on machine ~S"
   ;; forwarded to handlers instead of touching backing storage). NIL on every
   ;; machine before this ticket and on any memory element declaring no
   ;; (region ...) forms, which is what keeps MREF/(SETF MREF)'s no-region
-  ;; path a single NULL test with no added indirection. Declaration order
-  ;; doesn't matter for lookup (%REGION-AT scans all of them), only for
-  ;; MACHINE-MODEL.MD's rendering of them.
-  (regions nil :type list))
+  ;; path a single NULL test with no added indirection. Kept in declaration
+  ;; order for MACHINE-MODEL.MD's rendering; %REGION-AT searches REGION-INDEX.
+  (regions nil :type list)
+  ;; #156: REGIONS sorted by start address, binary-searched by %REGION-AT.
+  (region-index nil :type (or null simple-vector)))
 
 ;; #107: one declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
@@ -336,17 +337,26 @@ memory ~S on machine ~S"
   (memory nil :type (or null symbol))
   (grows :down :type (member :down :up)))
 
+(defun %sorted-region-index (regions)
+  "REGIONS as a simple-vector sorted by start address, or NIL when empty."
+  (when regions
+    (coerce (sort (copy-list regions) #'< :key #'memory-region-start) 'simple-vector)))
+
 (defun %region-at (element address)
   "The MEMORY-REGION in ELEMENT containing ADDRESS, or NIL when ELEMENT
 declares no regions or none of them cover ADDRESS. NIL up front on the
 common case (no REGIONS at all) so an unregioned memory element's MREF/
-(SETF MREF) does no scanning whatsoever.
-TODO: linear region scan; bucket/page table if region counts grow (#107
-follow-up)."
-  (let ((regions (storage-element-regions element)))
-    (and regions
-         (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
-                   regions))))
+(SETF MREF) does no searching whatsoever."
+  (let ((index (storage-element-region-index element)))
+    (when index
+      (let ((low 0)
+            (high (1- (length index))))
+        (loop while (<= low high)
+              do (let* ((mid (ash (+ low high) -1))
+                        (region (svref index mid)))
+                   (cond ((< address (memory-region-start region)) (setf high (1- mid)))
+                         ((> address (memory-region-end region)) (setf low (1+ mid)))
+                         (t (return region)))))))))
 
 ;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
 ;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
@@ -781,8 +791,7 @@ ELEMENT lies in a :ROM region."
   (and (<= start end)
        (loop with address = start
              while (<= address end)
-             do (let ((region (find-if (lambda (r) (<= (memory-region-start r) address (memory-region-end r)))
-                                       (storage-element-regions element))))
+             do (let ((region (%region-at element address)))
                   (unless (and region (eq (memory-region-kind region) :rom))
                     (return nil))
                   (setf address (1+ (memory-region-end region))))
