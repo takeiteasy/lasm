@@ -78,6 +78,7 @@ receives the cell-width-wrapped value.
 | Device detached | Reads `0`; writes discarded. |
 | After `reset` | Binding restored to the freshly initialised device. |
 | `mpeek`, `%poke` | Skip the hooks. |
+| Debugger `step-back` | Needs the device's `:save`/`:load`; see [Debugger](debugger.md). |
 
 `:device` cannot be combined with the region's own `:read`/`:write`, and
 applies only to `:device` regions. The name must be a declared device.
