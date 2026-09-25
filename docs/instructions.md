@@ -34,6 +34,7 @@ once. Invalid clauses and missing required fields signal
 | `(encoding ...)` | Opcode and one operand field per expression hole. |
 | `(semantics ...)` | Effect when the emulator executes the instruction. |
 | `(cycles n)` | Nonnegative cycle cost; defaults to `1`. |
+| `(privilege LEVEL)` | Lowest [privilege level](privilege.md) that may execute it. |
 
 ### `(modes MODE)` — sugar for one mode
 

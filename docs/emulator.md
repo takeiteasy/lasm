@@ -183,8 +183,8 @@ marks such instructions with `+` in its cycles column.
 
 - An idle step always costs one cycle. A declarable idle cost is tracked in
   [ticket 164](https://todo.sr.ht/~takeiteasy/lasm/164).
-- Privilege levels and a unified trap/interrupt model are outside this
-  execution model.
+- A unified trap/interrupt model is outside this execution model.
+  [Privilege levels](privilege.md) gate regions and instructions only.
 - `machine-program` holds one assembly, so a machine that loads several
   images names source lines only for the last; see
   [ticket 261](https://todo.sr.ht/~takeiteasy/lasm/261).

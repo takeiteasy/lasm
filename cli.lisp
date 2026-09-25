@@ -245,6 +245,9 @@ there is one."
       (write-snapshot (machine-snapshot m :assembly assembly) path
                       :format (%cli-snapshot-format options)))))
 
+(defun %cli-fatal-trap-p (condition)
+  (member (lasm-trap-tag condition) '(:undefined-opcode :privilege-violation)))
+
 (defun %cli-command-run (file machine lexer options out)
   (%cli-snapshot-format options)
   (multiple-value-bind (assembly snapshot) (%cli-program file machine lexer options)
@@ -261,7 +264,7 @@ there is one."
       (%cli-save-snapshot m assembly options)
       (format out "stopped: ~(~A~) after ~D step~:P, pc = $~4,'0X~%" reason steps (sref m 'pc))
       (when (or (eq reason :fault)
-                (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
+                (and (eq reason :trap) (%cli-fatal-trap-p condition)))
         (format out "~A~%" condition))
       (when (eq reason :decode-failure)
         (let ((line (machine-listing-line m (sref m 'pc) :memory memory))
@@ -274,7 +277,7 @@ there is one."
                     line (and line (string-trim '(#\Space #\Tab)
                                                 (or (listing-line-source-text line assembly) "")))))))
       (if (or (member reason '(:decode-failure :fault))
-              (and (eq reason :trap) (eq (lasm-trap-tag condition) :undefined-opcode)))
+              (and (eq reason :trap) (%cli-fatal-trap-p condition)))
           1
           0))))
 

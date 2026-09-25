@@ -62,6 +62,7 @@
                (:file "storage")
                (:file "device")
                (:file "interrupt")
+               (:file "privilege")
                (:file "semantics")
                (:file "lexer")
                (:file "parser")

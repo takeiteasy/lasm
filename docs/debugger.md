@@ -196,7 +196,8 @@ would. A `:rom` region drops the value, or signals `memory-write-protected`
 with `:on-write :error`, and a `:device` region's `write` hook runs. It
 returns the cell now at `where` and whether it holds `value`. A `:bank` other
 than the mapped one signals. It targets memory only; registers, flags, and
-stacks use `debug-set`. It suppresses the access hook, like `debug-set`.
+stacks use `debug-set`. It suppresses the access hook, like `debug-set`, and ignores
+[privilege](privilege.md) gates on regions.
 
 ```
 (lasm-dbg) write $10 = 5

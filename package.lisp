@@ -22,6 +22,11 @@
    #:address-out-of-range-address
    #:memory-write-protected
    #:memory-write-protected-address
+   #:privilege-violation
+   #:privilege-violation-address
+   #:privilege-violation-required
+   #:privilege-violation-current
+   #:privilege-level
    #:stack-overflow
    #:stack-underflow
    #:stack-index-out-of-range

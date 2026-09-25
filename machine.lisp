@@ -128,7 +128,7 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
 ;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
 ;; alone knows the element's address range.
 (defun %parse-memory-region-form (form context)
-  (%definition-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write device) form
+  (%definition-bind (head name start end &key (kind :ram) banks (on-write :ignore) read write device privilege) form
     (unless (eq head 'region)
       (%defmachine-error "~A: expected (region name start end ...), got ~S" context form))
     (unless (symbolp name)
@@ -163,8 +163,11 @@ function), got ~S" context name (car fn) (cdr fn))))
         (%defmachine-error "~A region ~S: :device only applies to a :DEVICE region" context name))
       (when (or read write)
         (%defmachine-error "~A region ~S: :device cannot be combined with :read/:write" context name)))
+    (when (and privilege (not (symbolp privilege)))
+      (%defmachine-error "~A region ~S: :privilege must be a level name, got ~S" context name privilege))
     (make-memory-region :name name :start start :end end :kind kind :banks banks
-                         :on-write on-write :read read :write write :device device)))
+                         :on-write on-write :read read :write write :device device
+                         :privilege privilege)))
 
 ;; Cross-region checks (#107): unique names and non-overlapping ranges,
 ;; applied once every (region ...) form in the clause is parsed -- mirrors
@@ -731,6 +734,71 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (%defmachine-error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
     policy))
 
+;; #111: (privilege :level NAME :levels (LEVEL...) [:on-violation :fault/:trap]).
+;; Each LEVEL is NAME or (NAME VALUE); VALUE defaults to the entry's index.
+;; :LEVEL itself is resolved against the machine's elements later, in
+;; %FINISH-PRIVILEGE-MODEL.
+(defun parse-privilege-clause (form)
+  (%definition-bind (&key level levels (on-violation :fault)) form
+    (unless (and level (symbolp level))
+      (%defmachine-error "privilege requires :level naming a flag or register, got ~S" level))
+    (unless (and (consp levels) (listp (cdr (last levels))))
+      (%defmachine-error "privilege requires :levels, a non-empty list ordered least to most privileged, got ~S"
+             levels))
+    (unless (member on-violation '(:fault :trap))
+      (%defmachine-error "privilege :on-violation must be :FAULT or :TRAP, got ~S" on-violation))
+    (let (names values)
+      (loop for entry in levels
+            for index from 0
+            do (let ((name (if (consp entry) (first entry) entry))
+                     (value (if (consp entry) (second entry) index)))
+                 (unless (and name (symbolp name) (not (keywordp name))
+                              (or (atom entry) (and (= (length entry) 2))))
+                   (%defmachine-error "privilege :levels entries must be NAME or (NAME VALUE), got ~S" entry))
+                 (unless (and (integerp value) (>= value 0))
+                   (%defmachine-error "privilege level ~S: value must be a non-negative integer, got ~S"
+                          name value))
+                 (when (member name names)
+                   (%defmachine-error "privilege: duplicate level ~S" name))
+                 (when (member value values)
+                   (%defmachine-error "privilege level ~S: value ~D is already used by another level"
+                          name value))
+                 (cl:push name names)
+                 (cl:push value values)))
+      (make-privilege-descriptor :level level :levels (nreverse names) :values (nreverse values)
+                                 :on-violation on-violation))))
+
+(defun %finish-privilege-model (descriptor)
+  "Resolve the privilege clause's :LEVEL and every region's :PRIVILEGE against
+DESCRIPTOR's finished elements."
+  (let* ((privilege (machine-descriptor-privilege descriptor))
+         (name (machine-descriptor-name descriptor))
+         (element (and privilege (gethash (privilege-descriptor-level privilege)
+                                          (machine-descriptor-table descriptor)))))
+    (when privilege
+      (unless (and element
+                   (or (eq (storage-element-kind element) :flag)
+                       (and (eq (storage-element-kind element) :register)
+                            (= (storage-element-count element) 1))))
+        (%defmachine-error "privilege on machine ~S: :level ~S must be a declared flag or scalar register"
+               name (privilege-descriptor-level privilege)))
+      (dolist (value (privilege-descriptor-values privilege))
+        (unless (< value (ash 1 (if (eq (storage-element-kind element) :flag)
+                                    1
+                                    (storage-element-width element))))
+          (%defmachine-error "privilege on machine ~S: level value ~D does not fit ~S"
+                 name value (privilege-descriptor-level privilege)))))
+    (dolist (element (machine-descriptor-elements descriptor))
+      (dolist (region (storage-element-regions element))
+        (let ((required (memory-region-privilege region)))
+          (when required
+            (unless privilege
+              (%defmachine-error "region ~S on machine ~S: :privilege requires a (privilege ...) clause"
+                     (memory-region-name region) name))
+            (unless (member required (privilege-descriptor-levels privilege))
+              (%defmachine-error "region ~S on machine ~S: unknown privilege level ~S"
+                     (memory-region-name region) name required))))))))
+
 (defun parse-properties-clause (form)
   (unless (evenp (length form))
     (%defmachine-error "properties requires key/value pairs, got ~S" form))
@@ -744,7 +812,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
   (copy-list form))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed devices interrupts stack-pointers
+  (let (elements instruction-word clock-speed devices interrupts stack-pointers privilege
         (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
     (dolist (clause clauses)
       (case (first clause)
@@ -766,6 +834,10 @@ rationale as CELL-WIDTH-CACHE (#63)."
            (%defmachine-error "DEFMACHINE: more than one interrupts clause"))
          (setf interrupts (parse-interrupts-clause (rest clause))))
         (stack-pointer (cl:push (parse-stack-pointer-clause (rest clause)) stack-pointers))
+        (privilege
+         (when privilege
+           (%defmachine-error "DEFMACHINE: more than one privilege clause"))
+         (setf privilege (parse-privilege-clause (rest clause))))
         (undefined-opcode
          (when undefined-opcode-seen
            (%defmachine-error "DEFMACHINE: more than one undefined-opcode clause"))
@@ -781,15 +853,15 @@ rationale as CELL-WIDTH-CACHE (#63)."
                 (first clause)))
         (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
-            (nreverse stack-pointers) undefined-opcode properties)))
+            (nreverse stack-pointers) undefined-opcode properties privilege)))
 
 (defun build-machine-descriptor (name clauses)
   (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
-                        undefined-opcode properties)
+                        undefined-opcode properties privilege)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
                                                 :clock-speed clock-speed :devices devices
-                                                :interrupts interrupts
+                                                :interrupts interrupts :privilege privilege
                                                 :undefined-opcode undefined-opcode
                                                 :properties properties
                                                 :source-clauses clauses))
@@ -865,6 +937,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
       ;; known -- same deferred-finishing reason as INSTRUCTION-WORD above.
       (when interrupts
         (%finish-interrupt-model descriptor))
+      (%finish-privilege-model descriptor)
       descriptor)))
 
 ;;; Machine families
@@ -896,7 +969,7 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
 existing register/stack/memory/device merges into the parent's in place, a new
 one is appended. Singletons replace (clock-speed, undefined-opcode) or merge
-key by key (interrupts, properties); flags are additive."
+key by key (interrupts, properties, privilege); flags are additive."
   (let ((merged (copy-list parent-clauses))
         (added '()))
     (dolist (clause child-clauses)
@@ -922,7 +995,7 @@ instructions are compiled against the parent's" head))
              (if position
                  (setf (nth position merged) clause)
                  (cl:push clause added))))
-          ((interrupts properties)
+          ((interrupts properties privilege)
            (let ((position (position head merged :key #'first)))
              (if position
                  (setf (nth position merged)
@@ -975,6 +1048,14 @@ instructions are compiled against the parent's" head))
                                       (stack-pointer-descriptor-grows csp)))
                        (fail "stack-pointer ~S differs" reg))))
                  pp))
+      (let ((pp (machine-descriptor-privilege parent))
+            (cp (machine-descriptor-privilege child)))
+        (when pp
+          (unless (and cp
+                       (eq (privilege-descriptor-level pp) (privilege-descriptor-level cp))
+                       (equal (privilege-descriptor-levels pp) (privilege-descriptor-levels cp))
+                       (equal (privilege-descriptor-values pp) (privilege-descriptor-values cp)))
+            (fail "the privilege level, levels or values differ"))))
       (let ((pi* (machine-descriptor-interrupts parent))
             (ci (machine-descriptor-interrupts child)))
         (when (and pi* ci)

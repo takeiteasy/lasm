@@ -179,6 +179,9 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; the one place that default lives, rather than by every caller
   ;; separately defaulting a NIL.
   (cycles nil :type (or null (integer 0)))
+  ;; #111: minimum privilege level name from a (privilege LEVEL) clause, or
+  ;; NIL for an instruction any level may execute.
+  (privilege nil :type (or null symbol))
   ;; #20 (M4): non-NIL only on a word-encoded machine (MACHINE-DESCRIPTOR-
   ;; INSTRUCTION-WORD non-NIL, storage.lisp). WORD-FIELDS is *this*
   ;; descriptor's chosen field encoding -- one WORD-FIELD-CHOICE per operand,
@@ -4148,6 +4151,13 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 (defvar *definstruction-fallback* nil
   "True while DEFINSTRUCTION expands an instruction declaring (fallback).")
 
+(defvar *definstruction-privilege* nil
+  "The level named by the expanding DEFINSTRUCTION's (privilege LEVEL) clause.")
+
+(defun %mark-privilege (descriptors level)
+  (dolist (descriptor descriptors descriptors)
+    (setf (instruction-descriptor-privilege descriptor) level)))
+
 (defun %mark-fallback (descriptors)
   (dolist (descriptor descriptors descriptors)
     (setf (instruction-descriptor-fallback descriptor) t)))
@@ -4172,9 +4182,12 @@ is walked as written."
 (defun %instruction-registration-form (machine name descriptors-form)
   (let ((registration `(register-instruction-variants!
                         ',machine
-                        ,(if *definstruction-fallback*
-                             `(%mark-fallback ,descriptors-form)
-                             descriptors-form))))
+                        ,(let ((form (if *definstruction-fallback*
+                                         `(%mark-fallback ,descriptors-form)
+                                         descriptors-form)))
+                           (if *definstruction-privilege*
+                               `(%mark-privilege ,form ',*definstruction-privilege*)
+                               form)))))
     (%definition-toplevel-form (if (%word-machine-p machine)
                                    `(%evaluate-instruction-registration ',registration)
                                    registration)
@@ -4196,6 +4209,21 @@ is walked as written."
       (t (values (cons (first encoding-clause)
                        (remove (first subclauses) (rest encoding-clause)))
                  t)))))
+
+(defun %parse-privilege-clause (machine name clause)
+  "The level a (privilege LEVEL) clause names, or NIL without one. Signals
+unless MACHINE declares that level."
+  (when clause
+    (let* ((level (second clause))
+           (privilege (machine-descriptor-privilege (find-machine-descriptor machine))))
+      (unless (and (= (length clause) 2) (symbolp level))
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: expected (privilege LEVEL), got ~S" machine name clause))
+      (unless privilege
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: (privilege ~S) requires a (privilege ...) clause on the machine"
+               machine name level))
+      (unless (member level (privilege-descriptor-levels privilege))
+        (%definstruction-error "DEFINSTRUCTION ~S ~S: unknown privilege level ~S" machine name level))
+      level)))
 
 (defmacro definstruction (&environment env machine name &body clauses)
   "Define an instruction named NAME on machine MACHINE from CLAUSES, each
@@ -4238,6 +4266,10 @@ one of:
                                          omitted. A multi-mode variant's own
                                          (cycles n) subclause overrides this
                                          shared default for that mode alone.
+  (privilege LEVEL)                  -- the lowest privilege level that may
+                                         execute this instruction (#111);
+                                         needs a (privilege ...) clause on
+                                         the machine declaring LEVEL.
 
 A mode with more than one EXPR hole (mode.lisp) needs one (operand ...)
 subclause per hole, in hole order -- (operand :mode)/(operand :width n) for
@@ -4354,7 +4386,7 @@ choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own (#126) -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
   (%with-definition (name instruction-definition-error)
-    (let (modes-clause encoding-clause semantics-clause cycles-clause seen-heads fallbackp)
+    (let (modes-clause encoding-clause semantics-clause cycles-clause privilege-clause seen-heads fallbackp)
       (dolist (clause clauses)
         (when (member (first clause) seen-heads)
           (%definstruction-error "DEFINSTRUCTION ~S ~S: duplicate ~S clause" machine name (first clause)))
@@ -4364,10 +4396,12 @@ NO-MATCHING-CHOICE rather than silently falling through."
           (encoding (setf encoding-clause clause))
           (semantics (setf semantics-clause clause))
           (cycles (setf cycles-clause clause))
+          (privilege (setf privilege-clause clause))
           (t (%definstruction-error "Unknown DEFINSTRUCTION clause head ~S in ~S" (first clause) clause))))
       (multiple-value-setq (encoding-clause fallbackp)
         (%extract-fallback machine name encoding-clause))
-      (let* ((*definstruction-fallback* fallbackp)
+      (let* ((*definstruction-privilege* (%parse-privilege-clause machine name privilege-clause))
+             (*definstruction-fallback* fallbackp)
              (*definstruction-environment* env)
              (*mode-scope* machine)
              (mode-forms (rest modes-clause))

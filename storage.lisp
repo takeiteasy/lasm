@@ -61,6 +61,25 @@ memory ~S on machine ~S"
                      (memory-write-protected-address c)
                      (storage-error-name c) (storage-error-machine c))))))
 
+;; #111: signalled when the current privilege level is below a region's or an
+;; instruction's :PRIVILEGE. NAME is the memory element for a region access,
+;; or the mnemonic for an instruction, whose ADDRESS is NIL. REQUIRED and
+;; CURRENT are level names; CURRENT is NIL when the level register holds a
+;; value no declared level maps to.
+(define-condition privilege-violation (storage-error)
+  ((address :initarg :address :initform nil :reader privilege-violation-address)
+   (required :initarg :required :reader privilege-violation-required)
+   (current :initarg :current :initform nil :reader privilege-violation-current))
+  (:report (lambda (c s) (%with-location-suffix (c s)
+             (if (privilege-violation-address c)
+                 (format s "Access to address ~S on memory ~S requires privilege ~S, current is ~S (machine ~S)"
+                         (privilege-violation-address c) (storage-error-name c)
+                         (privilege-violation-required c) (privilege-violation-current c)
+                         (storage-error-machine c))
+                 (format s "Instruction ~A requires privilege ~S, current is ~S (machine ~S)"
+                         (storage-error-name c) (privilege-violation-required c)
+                         (privilege-violation-current c) (storage-error-machine c)))))))
+
 (define-condition stack-overflow (storage-error) ()
   (:report (lambda (c s) (%with-location-suffix (c s)
              (format s "Stack overflow on ~S (machine ~S)"
@@ -228,7 +247,22 @@ memory ~S on machine ~S"
   (read nil :type (or null symbol function))           ; :device only
   (write nil :type (or null symbol function))          ; :device only
   (device nil :type (or null symbol))                  ; :device only, exclusive with read/write
-  (device-index nil :type (or null (integer 0))))      ; bus index DEVICE resolves to
+  (device-index nil :type (or null (integer 0)))       ; bus index DEVICE resolves to
+  (privilege nil :type (or null symbol)))              ; #111: minimum level for CPU access
+
+;; #111: a machine's (privilege ...) clause. LEVEL names the flag or scalar
+;; register holding the current level's value. LEVELS and VALUES are
+;; parallel, ordered least to most privileged: a level's rank is its index,
+;; and VALUES[i] is what LEVEL holds while at rank i.
+(defstruct privilege-descriptor
+  (level nil :type symbol)
+  (levels nil :type list)
+  (values nil :type list)
+  (on-violation :fault :type (member :fault :trap)))
+
+(defvar *privilege-checks* t
+  "When NIL, region and instruction privilege gates are not enforced. Bound
+to NIL by host actions (the debugger's write) that must reach gated memory.")
 
 ;; #108: a machine's declared (device ...) clause (machine.lisp) -- identity
 ;; (the ID/VERSION/MANUFACTURER triple an HWQ-style instruction reads back,
@@ -458,6 +492,9 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; single NULL test on a machine declaring no interrupt model, the same
   ;; way DEVICES being NIL keeps TICK-DEVICES a no-op loop.
   (interrupts nil :type (or null interrupt-descriptor))
+  ;; #111: NIL unless DEFMACHINE declares a (privilege ...) clause. NIL keeps
+  ;; every region access and instruction step free of privilege work.
+  (privilege nil :type (or null privilege-descriptor))
   ;; #166: register name -> STACK-POINTER-DESCRIPTOR, one entry per declared
   ;; (stack-pointer ...) clause. Consulted by %RESOLVE-INTERRUPT-STACK
   ;; (machine.lisp) when (interrupts ...)'s :stack names a register rather
@@ -1059,6 +1096,37 @@ declares no NAMES or INDEX is outside them."
         (let ((write (memory-region-write region)))
           (when write (funcall write machine address value))))))
 
+;; #111: rank of the level VALUE names, or -1 for a value no level maps to.
+(defun %privilege-rank (privilege value)
+  (or (position value (privilege-descriptor-values privilege)) -1))
+
+(defun privilege-level (machine)
+  "The name of MACHINE's current privilege level, or NIL when it declares no
+(privilege ...) clause or its level register holds a value no level maps to."
+  (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
+    (when privilege
+      (let ((rank (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
+        (and (>= rank 0) (nth rank (privilege-descriptor-levels privilege)))))))
+
+(defun %check-privilege (machine required name address)
+  "Signal, per the machine's :ON-VIOLATION policy, unless the current level
+ranks at least as high as REQUIRED. NAME is the memory element accessed at
+ADDRESS, or an instruction's mnemonic with ADDRESS NIL. Checked before any
+access-hook notification, so a rejected access is not reported as one."
+  (let* ((descriptor (machine-descriptor machine))
+         (privilege (machine-descriptor-privilege descriptor)))
+    (when (and privilege *privilege-checks*)
+      (let ((current (%privilege-rank privilege (%sref machine (privilege-descriptor-level privilege)))))
+        (when (< current (position required (privilege-descriptor-levels privilege)))
+          (ecase (privilege-descriptor-on-violation privilege)
+            (:fault (error 'privilege-violation
+                           :machine (machine-descriptor-name descriptor) :name name
+                           :address address :required required
+                           :current (privilege-level machine)))
+            (:trap (error 'lasm-trap :tag :privilege-violation
+                                     :data (list :name name :address address
+                                                 :required required)))))))))
+
 (defun %mref (machine name address)
   "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS. #107: an address falling
 in a :DEVICE region calls that region's READ (or its bound device's, #158)
@@ -1067,6 +1135,8 @@ reads the live bank; every other address -- including one in an unbanked
 :RAM or :ROM region -- reads backing storage directly. A device read is
 masked to the cell width, as writes are."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
+    (when (and region (memory-region-privilege region))
+      (%check-privilege machine (memory-region-privilege region) name address))
     (cond
       ((null region) (aref slot address))
       ((eq (memory-region-kind region) :device)
@@ -1096,6 +1166,8 @@ wrapped value in every case, matching plain (SETF MREF)'s existing return
 contract."
   (multiple-value-bind (slot element region) (%memory-slot-checked machine name address)
     (let ((wrapped (wrap-value value (storage-element-cell-width element))))
+      (when (and region (memory-region-privilege region))
+        (%check-privilege machine (memory-region-privilege region) name address))
       (%notify-access machine name address :write wrapped)
       (cond
         ((and region (eq (memory-region-kind region) :rom))

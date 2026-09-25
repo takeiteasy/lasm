@@ -115,5 +115,6 @@ hook in place as host wiring.
   tracked in [ticket 165](https://todo.sr.ht/~takeiteasy/lasm/165).
 - A register-backed stack saves each place in one cell; splitting wider
   places across cells is unavailable.
-- Nested-interrupt priority, privilege levels, and a unified trap/interrupt
-  model are outside this subsystem.
+- Nested-interrupt priority and a unified trap/interrupt model are outside
+  this subsystem.
+- Delivery does not change the [privilege level](privilege.md#limitations).

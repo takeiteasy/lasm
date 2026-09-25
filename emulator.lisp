@@ -301,7 +301,10 @@ decoded, not just the values."
         (if (eq descriptor :decode-failure)
             (%undefined-opcode-step machine pc address memory machine-name layout)
             (let ((cost (%descriptor-cycle-cost descriptor))
-                  (start-cycles (machine-cycles machine)))
+                  (start-cycles (machine-cycles machine))
+                  (required (instruction-descriptor-privilege descriptor)))
+              (when required
+                (%check-privilege machine required (instruction-descriptor-name descriptor) nil))
               (setf (%sref machine pc) (+ address size))
               (incf (machine-cycles machine) cost)
               (tick-devices machine cost)
