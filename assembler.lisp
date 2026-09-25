@@ -1776,6 +1776,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
     ;; check, for the whole of this assembly.
     (let* ((cell-width (%machine-cell-width machine memory))
            (*cell-width* cell-width)
+           (*mode-scope* machine)
            (endian (%machine-endian machine memory))
            (*banked-regions*
              (let ((element (descriptor-element (find-machine-descriptor machine)

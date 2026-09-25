@@ -15,10 +15,11 @@
 ;;;; macroexpansion time, so a mode must be visible as soon as its DEFMODE
 ;;;; form is compiled, not only after the file loads.
 ;;;;
-;;;; Modes are a global registry (mirroring *LEXERS*, lexer.lisp), not scoped
-;;;; per machine -- a mode is a syntax concept, like a lexer's surface syntax,
-;;;; not part of any one machine's storage model. Two machines wanting the
-;;;; same mode name with different syntax is a follow-up concern.
+;;;; Modes live in a global registry (mirroring *LEXERS*, lexer.lisp), plus an
+;;;; optional per-machine table: (DEFMODE (NAME (:MACHINE M)) ...) registers a
+;;;; mode only M and its descendants see, shadowing a global of the same name.
+;;;; Names resolve through *MODE-SCOPE*, the machine being defined, assembled
+;;;; or decoded (#29).
 
 (in-package #:lasm)
 
@@ -33,6 +34,7 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defstruct mode-descriptor
     name       ; symbol, upcased on lookup like instruction mnemonics
+    machine    ; machine name for a machine-local mode (#29), or nil for a global one
     pattern    ; list of (:literal "text") | (:expr), in match order
     width      ; default operand byte width, or nil (caller/machine decides)
     relativep  ; T if this mode's operand is a PC-relative offset (#23), not
@@ -63,7 +65,7 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL preserves #28/#43's
                ; original wrap-on-overflow behavior.
-    shape-cache)  ; (GENERATION VARYING KEYED STRICTP), read through %MODE-SHAPE
+    shape-cache)  ; (GENERATION SCOPE VARYING KEYED STRICTP), read through %MODE-SHAPE
   )
 
 ;; Registry of defined addressing modes, keyed by name -- mirrors *LEXERS*
@@ -78,12 +80,50 @@
   ;; Bumped by every DEFMODE, invalidating the cached %MODE-SHAPE of modes
   ;; that reference a redefined one.
   (defvar *mode-generation* 0)
-  (defvar *shape-in-progress* nil))
+  (defvar *shape-in-progress* nil)
+  ;; Machine name -> (mode name -> descriptor) for machine-local modes (#29).
+  (defvar *machine-modes* (make-hash-table :test 'eq))
+  (defvar *mode-scope* nil
+    "The machine whose local modes shadow the global ones, or NIL for globals only."))
 
-(defun find-mode-descriptor (name)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun %scope-chain (scope)
+    "SCOPE and its :EXTENDS ancestors, nearest first."
+    (and scope (cons scope (%machine-ancestors scope))))
+
+  (defun %lookup-mode (name scope)
+    (or (loop for machine in (%scope-chain scope)
+              for table = (gethash machine *machine-modes*)
+              thereis (and table (gethash name table)))
+        (gethash name *modes*)))
+
+  (defun %visible-modes (scope)
+    "Every mode SCOPE resolves a name to: local modes nearest-first, then unshadowed globals."
+    (let (result seen)
+      (dolist (machine (%scope-chain scope))
+        (let ((table (gethash machine *machine-modes*)))
+          (when table
+            (maphash (lambda (name mode)
+                       (unless (member name seen)
+                         (cl:push name seen)
+                         (cl:push mode result)))
+                     table))))
+      (maphash (lambda (name mode)
+                 (unless (member name seen) (cl:push mode result)))
+               *modes*)
+      result))
+
+  (defun %mode-table (machine)
+    (if machine
+        (or (gethash machine *machine-modes*)
+            (setf (gethash machine *machine-modes*) (make-hash-table :test 'eq)))
+        *modes*)))
+
+(defun find-mode-descriptor (name &optional (scope *mode-scope*))
   "Look up the MODE-DESCRIPTOR registered under NAME (a symbol) with DEFMODE.
-Signals an error if none is registered."
-  (or (gethash name *modes*)
+A machine-local mode of SCOPE (a machine name) or one of its ancestors shadows
+a global one. Signals an error if none is registered."
+  (or (%lookup-mode name scope)
       (%lookup-error 'unknown-mode name "No addressing mode named ~S has been defined with DEFMODE" name)))
 
 ;; Both wrapped in an EVAL-WHEN, like BUILD-MODE-DESCRIPTOR itself (below) --
@@ -92,31 +132,35 @@ Signals an error if none is registered."
 ;; built-in DEFMODE forms (bottom of this file), so a plain DEFUN (only
 ;; guaranteed callable at load time) would be too late.
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defun find-mode-by-suffix (suffix)
-    "Look up the MODE-DESCRIPTOR whose :SUFFIX (a string, #40) equals SUFFIX
-case-insensitively, or NIL if none declares one. A linear scan over *MODES*
+  (defun find-mode-by-suffix (suffix &optional (scope *mode-scope*))
+    "Look up the MODE-DESCRIPTOR visible from SCOPE whose :SUFFIX (a string, #40)
+equals SUFFIX case-insensitively, or NIL if none declares one. A linear scan
 rather than a second suffix -> descriptor table -- there are only a handful
 of modes registered at once, and a parallel table would need its own
 invalidation whenever a DEFMODE is redefined dropping (or changing) its
 suffix. Used by the assembler's forced-mode operand syntax (assembler.lisp's
 %CHOOSE-VARIANT) to resolve e.g. \"w\" in \"lda.w\" to ABSOLUTE."
-    (loop for mode being the hash-values of *modes*
-          when (and (mode-descriptor-suffix mode)
-                    (string-equal (mode-descriptor-suffix mode) suffix))
-            return mode))
+    (find-if (lambda (mode)
+               (and (mode-descriptor-suffix mode)
+                    (string-equal (mode-descriptor-suffix mode) suffix)))
+             (%visible-modes scope)))
 
-  (defun %check-suffix-collision (name suffix)
-    "Signal an error if SUFFIX (non-NIL) is already claimed by a mode other
-than NAME -- e.g. two DEFMODE forms both declaring :SUFFIX \"w\" would make
-FIND-MODE-BY-SUFFIX's lookup ambiguous. Compares by MODE-DESCRIPTOR-NAME,
-not object identity: DEFMODE re-registering the same NAME (a plain file
-reload, e.g. under ASDF) builds a fresh MODE-DESCRIPTOR struct each time, so
-an EQ check would spuriously reject a mode reclaiming its own suffix."
+  (defun %check-suffix-collision (name suffix machine)
+    "Signal an error if SUFFIX (non-NIL) is already claimed, as seen from MACHINE,
+by a mode other than NAME -- e.g. two DEFMODE forms both declaring :SUFFIX \"w\"
+would make FIND-MODE-BY-SUFFIX's lookup ambiguous. A global mode is checked
+against every machine's view as well. Compares by MODE-DESCRIPTOR-NAME, not
+object identity: DEFMODE re-registering the same NAME (a plain file reload,
+e.g. under ASDF) builds a fresh MODE-DESCRIPTOR struct each time, so an EQ
+check would spuriously reject a mode reclaiming its own suffix."
     (when suffix
-      (let ((existing (find-mode-by-suffix suffix)))
-        (when (and existing (not (eq (mode-descriptor-name existing) name)))
-          (%defmode-error "DEFMODE ~S: suffix ~S is already used by mode ~S"
-                 name suffix (mode-descriptor-name existing)))))))
+      (dolist (scope (if machine
+                         (list machine)
+                         (cons nil (loop for m being the hash-keys of *machine-modes* collect m))))
+        (let ((existing (find-mode-by-suffix suffix scope)))
+          (when (and existing (not (eq (mode-descriptor-name existing) name)))
+            (%defmode-error "DEFMODE ~S: suffix ~S is already used by mode ~S"
+                            name suffix (mode-descriptor-name existing))))))))
 
 ;;; DEFMODE pattern parsing
 ;;;
@@ -290,8 +334,8 @@ can be strict. Recomputed when a DEFMODE has run since the last call, so
 redefining an inner mode is seen by its dependents."
     (let ((cache (mode-descriptor-shape-cache mode))
           (name (mode-descriptor-name mode)))
-      (if (and cache (eql (car cache) *mode-generation*))
-          (cdr cache)
+      (if (and cache (eql (car cache) *mode-generation*) (eq (cadr cache) *mode-scope*))
+          (cddr cache)
           (progn
             (when (member name *shape-in-progress*)
               (%defmode-error "DEFMODE ~S: ONE-OF cycle -- ~{~S~^ -> ~} -> ~S references itself"
@@ -306,7 +350,8 @@ redefining an inner mode is seen by its dependents."
                                                        (some (lambda (alt)
                                                                (%mode-strict-reachable-p (find-mode-descriptor alt)))
                                                              (%one-of-alternatives element))))))))
-              (setf (mode-descriptor-shape-cache mode) (cons *mode-generation* shape))
+              ;; TODO: one cache entry per mode thrashes when scopes alternate, keep one per scope if it shows up (#281)
+              (setf (mode-descriptor-shape-cache mode) (list* *mode-generation* *mode-scope* shape))
               shape)))))
 
   (defun %mode-varying-elements (mode) (first (%mode-shape mode)))
@@ -562,7 +607,7 @@ a mode with no varying :ONE-OF element."
                            (%mode-hole-tuples mode seen))))
       (values (reduce #'min counts) (reduce #'max counts))))
 
-  (defun build-mode-descriptor (name body)
+  (defun build-mode-descriptor (name body &optional machine)
   (%with-definition (name mode-definition-error)
       (multiple-value-bind (pattern-elements options) (%split-mode-clause body)
         (when (null pattern-elements)
@@ -576,9 +621,9 @@ a mode with no varying :ONE-OF element."
             (when (and relative (not (eq signed t)) (member :signed options))
               (%defmode-error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
-            (%check-suffix-collision name suffix)
+            (%check-suffix-collision name suffix machine)
             (let ((descriptor
-                    (make-mode-descriptor :name name :pattern pattern :width width
+                    (make-mode-descriptor :name name :machine machine :pattern pattern :width width
                                           :relativep relative :signedp (or relative signed)
                                           :suffix suffix :strictp strict)))
               (dolist (element pattern)
@@ -592,15 +637,15 @@ a mode with no varying :ONE-OF element."
           when (eq (first element) :one-of)
             append (%one-of-alternatives element)))
 
-  (defun %mode-dependents (name)
-    "Modes that reference NAME through ONE-OF, transitively, innermost first."
+  (defun %mode-dependents (name &optional (scope *mode-scope*))
+    "Modes visible from SCOPE that reference NAME through ONE-OF, transitively, innermost first."
     (let ((depths (make-hash-table :test 'eq)))
       (labels ((depth (mode-name visiting)
                  (multiple-value-bind (known foundp) (gethash mode-name depths)
                    (cond (foundp known)
                          ((eq mode-name name) 0)
                          ((member mode-name visiting) nil)
-                         (t (let* ((mode (gethash mode-name *modes*))
+                         (t (let* ((mode (%lookup-mode mode-name scope))
                                    (inner (and mode
                                                (loop for ref in (%mode-references mode)
                                                      for d = (depth ref (cons mode-name visiting))
@@ -608,12 +653,11 @@ a mode with no varying :ONE-OF element."
                               (setf (gethash mode-name depths)
                                     (and inner (1+ (reduce #'max inner))))))))))
         (let (result)
-          (maphash (lambda (mode-name mode)
-                     (declare (ignore mode))
-                     (unless (eq mode-name name)
-                       (let ((d (depth mode-name nil)))
-                         (when d (cl:push (cons d mode-name) result)))))
-                   *modes*)
+          (dolist (mode (%visible-modes scope))
+            (let ((mode-name (mode-descriptor-name mode)))
+              (unless (eq mode-name name)
+                (let ((d (depth mode-name nil)))
+                  (when d (cl:push (cons d mode-name) result))))))
           (mapcar #'cdr (stable-sort (sort result #'string< :key (lambda (e) (symbol-name (cdr e))))
                                      #'< :key #'car))))))
 
@@ -622,36 +666,53 @@ a mode with no varying :ONE-OF element."
           (mode-descriptor-relativep mode) (mode-descriptor-signedp mode)
           (mode-descriptor-strictp mode) (mode-descriptor-suffix mode)))
 
-  (defun %instructions-using-modes (mode-names)
-    "((MACHINE . MNEMONIC)...) of registered instructions whose mode is in MODE-NAMES."
+  (defun %instructions-using-modes (mode-names machines)
+    "((MACHINE . MNEMONIC)...) of instructions defined on MACHINES whose mode is in MODE-NAMES."
     (let (result)
       (maphash (lambda (machine md)
-                 (declare (ignore machine))
-                 (maphash (lambda (mnemonic descriptors)
-                            (dolist (d descriptors)
-                              (let ((mode (instruction-descriptor-mode d)))
-                                (when (and mode (member (mode-descriptor-name mode) mode-names))
-                                  (pushnew (cons (instruction-descriptor-machine d) mnemonic) result
-                                           :test #'equal)))))
-                          (machine-descriptor-instructions md)))
+                 (when (member machine machines)
+                   (maphash (lambda (mnemonic descriptors)
+                              (dolist (d descriptors)
+                                (let ((mode (instruction-descriptor-mode d)))
+                                  (when (and mode (member (mode-descriptor-name mode) mode-names))
+                                    (pushnew (cons (instruction-descriptor-machine d) mnemonic) result
+                                             :test #'equal)))))
+                            (machine-descriptor-instructions md))))
                *machines*)
       (nreverse result)))
 
-  (defun %recheck-mode-dependents! (name)
-    "Warn (STALE-MODE) about modes that reference the redefined mode NAME and no
-longer validate, and about instructions compiled against NAME or its dependents."
-    (let ((dependents (%mode-dependents name)))
-      (dolist (dependent dependents)
-        (let ((failure (handler-case
-                           (progn (%check-one-of-elements!
-                                   dependent (mode-descriptor-pattern (gethash dependent *modes*)))
-                                  nil)
-                         (lasm-error (c) c))))
-          (when failure
-            (warn 'stale-mode :mode name :dependents (list dependent)
-                              :message (format nil "Redefining mode ~S invalidates mode ~S: ~A"
-                                               name dependent failure)))))
-      (let ((instructions (%instructions-using-modes (cons name dependents))))
+  (defun %machines-seeing-mode (mode)
+    "Machines whose scope resolves MODE's name to MODE itself."
+    (loop for machine being the hash-keys of *machines*
+          when (eq (%lookup-mode (mode-descriptor-name mode) machine) mode)
+            collect machine))
+
+  (defun %recheck-mode-dependents! (mode)
+    "Warn (STALE-MODE) about modes that reference the redefined MODE and no
+longer validate, and about instructions compiled against MODE or its dependents.
+A machine-local MODE is checked for its machine and descendants; a global one
+for the global scope and every machine that does not shadow it."
+    (let* ((name (mode-descriptor-name mode))
+           (machines (%machines-seeing-mode mode))
+           (scopes (if (mode-descriptor-machine mode) machines (cons nil machines)))
+           (warned nil)
+           (all-dependents nil))
+      (dolist (scope scopes)
+        (let ((*mode-scope* scope))
+          (dolist (dependent (%mode-dependents name scope))
+            (pushnew dependent all-dependents)
+            (let ((failure (handler-case
+                               (progn (%check-one-of-elements!
+                                       dependent (mode-descriptor-pattern (find-mode-descriptor dependent)))
+                                      nil)
+                             (lasm-error (c) c))))
+              (when (and failure (not (member dependent warned)))
+                (cl:push dependent warned)
+                (warn 'stale-mode :mode name :dependents (list dependent)
+                                  :message (format nil "Redefining mode ~S invalidates mode ~S: ~A"
+                                                   name dependent failure)))))))
+      (let* ((dependents (nreverse all-dependents))
+             (instructions (%instructions-using-modes (cons name dependents) machines)))
         (when instructions
           (warn 'stale-mode :mode name :dependents dependents :instructions instructions
                             :message (format nil "Redefining mode ~S leaves instructions built against its old shape: ~
@@ -659,17 +720,34 @@ longer validate, and about instructions compiled against NAME or its dependents.
                                              name (mapcar (lambda (i) (format nil "~A ~A" (car i) (cdr i)))
                                                           instructions)))))))
 
-  (defun %register-mode (name body)
-    (let* ((old (gethash name *modes*))
-           (new (build-mode-descriptor name body)))
-      (setf (gethash name *modes*) new)
-      (incf *mode-generation*)
-      (when (and old (not (equalp (%mode-signature old) (%mode-signature new))))
-        (%recheck-mode-dependents! name))
-      name)))
+  (defun %split-defmode-head (head)
+    "(VALUES NAME MACHINE) for DEFMODE's NAME or (NAME (:MACHINE M))."
+    (cond ((symbolp head) (values head nil))
+          ((and (consp head) (symbolp (first head)) (first head)
+                (equal (length head) 2) (consp (second head))
+                (eq (first (second head)) :machine)
+                (equal (length (second head)) 2) (symbolp (second (second head)))
+                (second (second head)))
+           (values (first head) (second (second head))))
+          (t (%defmode-error "DEFMODE: the name must be a symbol or (NAME (:MACHINE M)), got ~S" head))))
+
+  (defun %register-mode (head body)
+    (multiple-value-bind (name machine) (%split-defmode-head head)
+      (when (and machine (not (gethash machine *machines*)))
+        (%defmode-error "DEFMODE ~S: no machine named ~S has been defined with DEFMACHINE" name machine))
+      (let* ((*mode-scope* machine)
+             (old (%lookup-mode name machine))
+             (new (build-mode-descriptor name body machine)))
+        (setf (gethash name (%mode-table machine)) new)
+        (incf *mode-generation*)
+        (when (and old (not (equalp (%mode-signature old) (%mode-signature new))))
+          (%recheck-mode-dependents! new))
+        name))))
 
 (defmacro defmode (name &body pattern)
   "Define a mode from literal tokens, EXPR holes, and ONE-OF alternatives.
+NAME may be (NAME (:MACHINE M)) to define a mode only machine M and its
+descendants see, shadowing a global mode of the same name.
 A hole may use (EXPR :REGISTER name :SIGNED boolean :RELATIVE boolean).
 Hole options override mode-wide :SIGNED and :RELATIVE defaults. A relative
 hole is signed, and any number of holes may be relative. :WIDTH supplies
@@ -677,7 +755,7 @@ the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
 checks ordinary operand ranges. See docs/modes.md."
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (%register-mode ',name ',pattern)
-     ',name))
+     ',(if (consp name) (first name) name)))
 
 ;;; Pattern matching
 

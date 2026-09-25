@@ -543,7 +543,8 @@ Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
 of round-trip fidelity."
   (unless machine (%disassembler-usage-error "DISASSEMBLE-CELLS: :MACHINE is required"))
-  (let* ((end (or end (+ origin (length cells))))
+  (let* ((*mode-scope* machine)
+         (end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
          (lines (%disassemble-raw-lines read-cell origin end machine memory
                                         (%machine-cell-width machine memory) data-regions)))
@@ -719,6 +720,7 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
   (unless (and start count)
     (%disassembler-usage-error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
+         (*mode-scope* machine-name)
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))

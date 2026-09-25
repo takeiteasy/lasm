@@ -1026,7 +1026,7 @@ mode names such as (outer inner), got ~S" context form)))
 (defun %choice-hint (key)
   "Extra diagnostic text for a KEY that does not select a shape: a keyed mode
 without its inner alternatives, or a flat list where a tree is needed."
-  (let ((mode (and (symbolp key) (gethash key *modes*))))
+  (let ((mode (and (symbolp key) (%lookup-mode key *mode-scope*))))
     (cond ((and mode (mode-descriptor-keyedp mode))
            (format nil " -- ~S ~:[is selected by a tree~;varies in hole count~]; name its inner alternative with a tree such as ~S"
                    key (mode-descriptor-varyingp mode)
@@ -1034,9 +1034,9 @@ without its inner alternatives, or a flat list where a tree is needed."
                                        (car (first (%one-of-element-options element))))
                                      (%mode-keyed-elements mode)))))
           ((and (consp key) (rest (rest key)) (every #'symbolp key)
-                (gethash (first key) *modes*)
+                (%lookup-mode (first key) *mode-scope*)
                 (/= (length (rest key))
-                    (length (%mode-keyed-elements (gethash (first key) *modes*)))))
+                    (length (%mode-keyed-elements (%lookup-mode (first key) *mode-scope*)))))
            (format nil " -- nested alternatives form a tree, one subkey per keyed ONE-OF, e.g. (~S (~S~{ ~S~}))"
                    (first key) (second key) (cddr key)))
           (t ""))))
@@ -3329,16 +3329,16 @@ extras join in pattern order (%EXTRA-ROLES)."
         (declare (ignore head))
         (let* ((qualified (consp selector))
                (parts (and qualified (rest selector)))
-               (element-info (and qualified (symbolp (first parts)) (gethash (first parts) *modes*)
+               (element-info (and qualified (symbolp (first parts)) (%lookup-mode (first parts) *mode-scope*)
                                   (multiple-value-list
-                                   (%for-choice-element-selector (gethash (first parts) *modes*) parts))))
+                                   (%for-choice-element-selector (%lookup-mode (first parts) *mode-scope*) parts))))
                (element-p (first element-info))
                (alt (cond (element-p (first parts))
                           (qualified (if (rest parts) parts (first parts)))
                           (t selector)))
-               (own-p (and (not element-p) (symbolp alt) (gethash alt *modes*)
+               (own-p (and (not element-p) (symbolp alt) (%lookup-mode alt *mode-scope*)
                            (rest (%pattern-varying-one-of-elements
-                                  (mode-descriptor-pattern (gethash alt *modes*))))))
+                                  (mode-descriptor-pattern (%lookup-mode alt *mode-scope*))))))
                (position (and qualified (position (first selector) names)))
                (matches (remove-if-not
                          (lambda (g)
@@ -4128,11 +4128,11 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                                             machine name mode-sym)))))
           (%check-word-opcode machine name opcode)
           (if (%word-machine-p machine)
-              (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+              (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
                                             opcode operand-subclauses mode mode-sym machine
                                             cycles-form semantics-forms layout-name
                                             field-value-subclauses for-choice-subclauses)
-              (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
+              (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
                                            opcode sub operand-subclauses for-choice-subclauses
                                            sub-opcode-subclause cycles-form semantics-forms))))))))
 
@@ -4359,6 +4359,7 @@ NO-MATCHING-CHOICE rather than silently falling through."
       (multiple-value-setq (encoding-clause fallbackp)
         (%extract-fallback machine name encoding-clause))
       (let* ((*definstruction-fallback* fallbackp)
+             (*mode-scope* machine)
              (*definstruction-variable-cycles* (and (%uses-dynamic-cycles-p clauses) t))
              (mode-forms (rest modes-clause))
              (cycles-form (and cycles-clause (second cycles-clause))))
@@ -4491,7 +4492,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                (%check-word-opcode machine name opcode)
                (if (%word-machine-p machine)
                    (multiple-value-bind (bindings forms)
-                       (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym)
+                       (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
                                                      opcode operand-subclauses
                                                      mode mode-sym machine
                                                      cycles-form (rest semantics-clause) layout-name
@@ -4500,7 +4501,7 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
                       machine name
                       `(let* (,@bindings) (%collect-instruction-descriptors ,@forms))))
                    (multiple-value-bind (bindings forms)
-                       (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym) mode mode-sym
+                       (%byte-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine) mode mode-sym
                                                     opcode sub operand-subclauses for-choice-subclauses
                                                     sub-opcode-subclause cycles-form (rest semantics-clause))
                      (%instruction-registration-form

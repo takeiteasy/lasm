@@ -137,6 +137,8 @@ the calling image."
   (let ((file (or (getf options :machine-file) (%usage-error "-m MACHINE.lasm is required"))))
     (let* ((*machines* (make-hash-table :test 'eq))
            (*lexers* (%copy-table *lexers*))
+           (*modes* (%copy-table *modes*))
+           (*machine-modes* (make-hash-table :test 'eq))
            (before (%table-keys *lexers*))
            (*package* (find-package '#:lasm)))
       (let ((*standard-output* (make-broadcast-stream))

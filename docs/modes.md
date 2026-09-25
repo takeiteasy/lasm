@@ -31,8 +31,8 @@ A malformed definition signals `mode-definition-error`.
 
 A mode may contain only literals and have no expression hole. Built-in modes
 are `immediate`, `zero-page`, `absolute`, `indexed-x`, `indirect-y`,
-`relative`, and `stack-relative`. Modes are registered globally and must be
-defined before an instruction uses them.
+`relative`, and `stack-relative`. Modes must be defined before an instruction
+uses them. A mode is global unless it is [machine-local](#machine-local-modes).
 
 | Option | Meaning |
 | --- | --- |
@@ -144,6 +144,29 @@ already split at top-level commas, but a mode may include commas as literal
 pattern elements. See [Parser](parser.md) and
 [Per-operand modes](operand-modes.md#matching-and-backtracking).
 
+## Machine-local modes
+
+`(defmode (NAME (:machine M)) ...)` defines a mode only machine `M` and its
+`:extends` descendants see. It shadows a global mode of the same name, so
+machines can use one name with different syntax:
+
+```lisp
+(defmode indexed-x expr "," "X")                       ; global
+(defmode (indexed-x (:machine sixtyfoo)) "(" expr ",X)") ; sixtyfoo only
+```
+
+| Rule | Behavior |
+| --- | --- |
+| Lookup order | `M`'s local modes, its ancestors' local modes, then global modes. |
+| Definition | `M` must already be defined with `defmachine`; otherwise `mode-definition-error`. |
+| `one-of` | Alternative names resolve in the machine being defined, assembled, or disassembled.[^scope] |
+| `:suffix` | Must be unique among the modes a machine sees. |
+| Redefinition | Warns as [below](#redefining-a-mode), only for machines that see the redefined mode. |
+
+`find-mode-descriptor` and `find-mode-by-suffix` take an optional machine name.
+
+[^scope]: `*mode-scope*` holds the machine name. An instruction's own mode is fixed when its `definstruction` is compiled; a child machine that shadows a mode a `one-of` names changes how inherited instructions match that alternative.
+
 ## Redefining a mode
 
 Redefining a mode updates the hole counts and option keys of modes that
@@ -153,11 +176,6 @@ that no longer validates. Instructions already compiled keep their old
 shapes; one more `stale-mode` warning lists them, and re-evaluating their
 `definstruction` forms updates them. Redefining a mode with an identical
 shape is silent.
-
-## Limitations
-
-Modes are global. Machines that need different syntax for the same concept
-use distinct mode names; a machine-local mode namespace is future work.
 
 ## Note on operand binding
 

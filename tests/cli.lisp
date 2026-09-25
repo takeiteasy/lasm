@@ -205,3 +205,15 @@
   (multiple-value-bind (status out) (%run-cli (%cli-args "listing" "examples/cli/counter.asm"))
     (fiveam:is (= 0 status))
     (fiveam:is (not (search "1    A2 0A" out)))))
+
+(fiveam:test cli-load-does-not-leak-modes
+  (let ((before (gethash 'immediate *modes*)))
+    (%cli-call-with-definitions (list :machine-file (%cli-path "tests/fixtures/cli/local-mode.lasm"))
+                                (lambda (machine lexer)
+                                  (declare (ignore lexer))
+                                  (fiveam:is (eq 'cli-local-mode machine))
+                                  (fiveam:is (find-mode-descriptor 'cli-leak-probe))
+                                  (fiveam:is (find-mode-descriptor 'cli-leak-local 'cli-local-mode))))
+    (fiveam:is (eq before (gethash 'immediate *modes*)))
+    (fiveam:is (null (gethash 'cli-leak-probe *modes*)))
+    (fiveam:is (null (gethash 'cli-local-mode *machine-modes*)))))

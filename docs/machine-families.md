@@ -45,6 +45,11 @@ A child clause is merged over the parent's clause of the same kind:
 A clause naming something the parent does not have adds it. Element order and
 device bus indices of the parent are kept.
 
+## Modes
+
+A child sees its parent's [machine-local modes](modes.md#machine-local-modes)
+and can shadow them with `(defmode (NAME (:machine CHILD)) ...)`.
+
 ## What a child cannot change
 
 Inherited instructions are compiled against the parent's layout, so a child

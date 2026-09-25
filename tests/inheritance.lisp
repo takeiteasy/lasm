@@ -393,3 +393,20 @@ stop" :machine 'fam-w8))
     (restore-snapshot fresh (machine-snapshot m))
     (fiveam:is (= 5 (sref fresh 'a)))
     (fiveam:signals error (restore-snapshot (make-machine 'fam-base) (machine-snapshot m)))))
+
+;;; #29 -- a child machine inherits its parent's local modes and can shadow them.
+
+(defmachine fam-modes-base (register pc :width 16) (memory ram :width 8 :addr-width 16))
+(defmode (fam-mode (:machine fam-modes-base)) "(" expr ")" :width 1)
+(defmachine (fam-modes-child (:extends fam-modes-base)) (clock-speed 2))
+(defmachine (fam-modes-shadow (:extends fam-modes-base)) (clock-speed 3))
+(defmode (fam-mode (:machine fam-modes-shadow)) "[" expr "]" :width 1)
+(definstruction fam-modes-base fmv (modes fam-mode) (encoding (opcode 1) (operand :mode)) (semantics))
+(definstruction fam-modes-shadow fmw (modes fam-mode) (encoding (opcode 2) (operand :mode)) (semantics))
+
+(fiveam:test child-machine-assembles-inherited-instruction-with-parent-local-mode
+  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :machine 'fam-modes-child)))))
+
+(fiveam:test child-shadowing-a-mode-leaves-inherited-instruction-on-the-parents-mode
+  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :machine 'fam-modes-shadow))))
+  (fiveam:is (equalp #(2 5) (assembly-cells (assemble "fmw [5]" :machine 'fam-modes-shadow)))))
