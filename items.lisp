@@ -564,13 +564,31 @@ to the enclosing label when one has been defined and the lexer has local labels.
                 when more collect (%punct-token :comma))
           'simple-vector))
 
+(defun %constant-value-pick (candidates)
+  "The one of the syntax CANDIDATES the assembler's value filter picks, when every operand is a
+constant and none is relative; NIL when a value is unknown."
+  (let ((cell-width (%machine-cell-width *items-machine* *items-memory*)))
+    (flet ((fit (candidate) (%candidate-fit candidate nil 0 cell-width)))
+      (handler-case
+          (when (and (every (lambda (candidate) (member (fit candidate) '(t nil))) candidates)
+                     (notany (lambda (candidate)
+                               (some #'identity (instruction-descriptor-relative-holes (first candidate))))
+                             candidates))
+            (or (find-if (lambda (candidate) (eq t (fit candidate))) candidates)
+                (first (stable-sort (copy-list candidates) #'>
+                                    :key (lambda (candidate) (instruction-descriptor-size (first candidate)))))))
+        (error () nil)))))
+
 (defun %line-variants (line)
-  "The variants of LINE's instruction that its operands select best, as the assembler picks them."
+  "The variants of LINE's instruction that its operands select best, as the assembler picks them;
+with constant operands, the one the assembler's value filter picks among those tied."
   (let ((variants (handler-case (find-instruction-variants *items-machine* (item-line-mnemonic line))
                     (unknown-instruction () nil))))
     (when (item-line-forced line)
       (setf variants (%variants-in-mode variants (item-line-forced line))))
-    (mapcar #'first (%best-scored (%syntax-candidates variants (%line-operand-tokens line))))))
+    (let* ((candidates (%best-scored (%syntax-candidates variants (%line-operand-tokens line))))
+           (pick (and (rest candidates) (%constant-value-pick candidates))))
+      (mapcar #'first (if pick (list pick) candidates)))))
 
 (defun %check-stack-lines (lines item)
   "Reject, in a function without a frame pointer, an instruction line whose selected variant writes the stack pointer."

@@ -514,6 +514,40 @@ naming such labels are sized :WIDEST."
        *layout-defined-names*
        (notany (lambda (table) (nth-value 1 (gethash name table))) *layout-defined-names*)))
 
+(defun %candidate-fit (candidate symbols address cell-width)
+  "T when every operand of CANDIDATE, a %SYNTAX-CANDIDATES entry, folds against SYMBOLS and
+fits its hole, NIL when one folds and does not, :UNRESOLVED or :EXTERNAL when a label has no value."
+  (let* ((descriptor (first candidate))
+         (word-fields (instruction-descriptor-word-fields descriptor)))
+    (handler-case
+        (let ((widths (instruction-descriptor-operand-widths descriptor))
+              (vals (mapcar (lambda (ast)
+                              (eval-expr ast :symbols symbols :pc address))
+                            (second candidate))))
+          (cond
+            ;; Word fields check their own ranges after
+            ;; relative targets become offsets.
+            (word-fields (%word-variant-fits-p
+                          (%relative-adjusted-values address descriptor vals)
+                          descriptor cell-width))
+            ;; Byte fields each use their resolved attributes.
+            (t (let ((signedness (or (instruction-descriptor-operand-signedness descriptor)
+                                     (make-list (length widths))))
+                     (relative-holes (instruction-descriptor-relative-holes descriptor)))
+                 (loop for v in vals
+                       for w in widths
+                       for signedp in signedness
+                       for i from 0
+                       always (if (nth i relative-holes)
+                                  (%relative-fits-p v address descriptor w cell-width)
+                                  (if signedp
+                                      (%fits-signed-width-p v w cell-width)
+                                      (%fits-width-p v w cell-width))))))))
+      (unresolved-label (c)
+        (if (%external-label-p (unresolved-label-name c))
+            :external
+            :unresolved)))))
+
 (defun %choose-variant (statement variants address &key symbols scope (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
@@ -659,37 +693,7 @@ accepts ~A"
            ;; docs/assembler.md.
            (widest (first (stable-sort (copy-list candidates) #'> :key width-key)))
            (narrowest (first (stable-sort (copy-list candidates) #'< :key width-key)))
-           (resolvedp (lambda (c)
-                        (let* ((descriptor (first c))
-                               (word-fields (instruction-descriptor-word-fields descriptor)))
-                          (handler-case
-                              (let ((widths (instruction-descriptor-operand-widths descriptor))
-                                    (vals (mapcar (lambda (ast)
-                                                    (eval-expr ast :symbols symbols :pc address))
-                                                  (second c))))
-                                (cond
-                                  ;; Word fields check their own ranges after
-                                  ;; relative targets become offsets.
-                                  (word-fields (%word-variant-fits-p
-                                                (%relative-adjusted-values address descriptor vals)
-                                                descriptor cell-width))
-                                  ;; Byte fields each use their resolved attributes.
-                                  (t (let ((signedness (or (instruction-descriptor-operand-signedness descriptor)
-                                                            (make-list (length widths))))
-                                           (relative-holes (instruction-descriptor-relative-holes descriptor)))
-                                       (loop for v in vals
-                                             for w in widths
-                                             for signedp in signedness
-                                             for i from 0
-                                             always (if (nth i relative-holes)
-                                                        (%relative-fits-p v address descriptor w cell-width)
-                                                        (if signedp
-                                                            (%fits-signed-width-p v w cell-width)
-                                                            (%fits-width-p v w cell-width))))))))
-                            (unresolved-label (c)
-                              (if (%external-label-p (unresolved-label-name c))
-                                  :external
-                                  :unresolved))))))
+           (resolvedp (lambda (c) (%candidate-fit c symbols address cell-width)))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
            (any-externalp (some (lambda (c) (eq :external (funcall resolvedp c))) candidates))

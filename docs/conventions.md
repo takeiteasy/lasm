@@ -243,8 +243,8 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| A stack pointer write under a condition held in a variable, not directly under `choice-case`, counts as unconditional. | [#345](https://todo.sr.ht/~takeiteasy/lasm/345) |
-| A macro defined by `macrolet` inside `semantics` is not expanded when looking for stack writes. | [#347](https://todo.sr.ht/~takeiteasy/lasm/347) |
-| Operand variants tied on width are all checked, so the instruction is a stack writer if any writes the stack pointer. | [#348](https://todo.sr.ht/~takeiteasy/lasm/348) |
+| A stack pointer write under a condition other than a `choice-case` variable tested by `if`, `when`, `unless`, `and`, `cond`, `not` or `null` counts as unconditional. | [#350](https://todo.sr.ht/~takeiteasy/lasm/350) |
+| A macro bound by a `macrolet` around the `definstruction` itself is not expanded when looking for stack writes. | [#351](https://todo.sr.ht/~takeiteasy/lasm/351) |
+| Width-tied operand variants whose operands have no value at check time are all checked, so the instruction is a stack writer if any writes the stack pointer. | [#349](https://todo.sr.ht/~takeiteasy/lasm/349) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

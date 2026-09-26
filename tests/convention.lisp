@@ -750,8 +750,12 @@ ret
 (fiveam:test a-forced-mode-selects-the-variant-checked
   (fiveam:is (null (%cv-in-function '(drop (:force (:mode zero-page 5))) 'cv-addx-abi)))
   (fiveam:is (search "writes the stack pointer"
-                     (%cv-in-function '(drop (:force (:mode absolute 5))) 'cv-addx-abi)))
-  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop 5) 'cv-addx-abi))))
+                     (%cv-in-function '(drop (:force (:mode absolute 5))) 'cv-addx-abi))))
+
+(fiveam:test a-constant-operand-selects-the-variant-the-assembler-picks
+  (fiveam:is (null (%cv-in-function '(drop 5) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop 70000) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop somewhere) 'cv-addx-abi))))
 
 (fiveam:test an-operand-matching-no-variant-is-left-to-the-assembler
   (let ((items '((:function f () (addx (reg a) (imm 2)) (:return)))))
@@ -871,3 +875,112 @@ ret
                     (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-sel 'nst)))))
   (fiveam:is (equal '(("BUMP" "CV-SEL-KIND") ("HS" "CV-SEL-SRC") ("NST" "CV-SEL-NESTED") ("ZAP" "CV-SEL-KIND"))
                     (backend-stack-writers 'cv-sel-abi))))
+
+;;; A write under a variable holding a CHOICE-CASE result, and in a local macro (#345, #347)
+
+(defmachine cv-var
+  (register pc :width 16)
+  (register sp :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :grows :down))
+
+(defmacro cv-write-sp ()
+  '(set! sp 0))
+
+(defmacro cv-definstruction-kind (name opcode &body semantics)
+  `(definstruction cv-var ,name
+     (modes cv-sel-kind)
+     (encoding (opcode ,opcode)
+               (sub-opcode (holes kind)
+                           (variant (choice cv-sel-sp) (sub 0))
+                           (variant (choice cv-sel-pc) (sub 1))
+                           (variant (choice cv-sel-reg) (sub 2)))
+               (for-choice (kind cv-sel-reg) (operand v :width 1)))
+     (semantics ,@semantics)))
+
+(cv-definstruction-kind vwhen #x01
+  (let* ((p (choice-case kind (cv-sel-sp t) (otherwise nil))))
+    (when p (set! sp 0))
+    (unless p (set! a 1))))
+
+(cv-definstruction-kind vnot #x02
+  (let ((p (choice-case kind (cv-sel-pc t) (otherwise nil))))
+    (if (not p) (set! sp 1) (set! pc 0))))
+
+(cv-definstruction-kind vsequential #x03
+  (let* ((p (choice-case kind (cv-sel-sp t) (otherwise nil)))
+         (q (when p (set! sp 0))))
+    q))
+
+(cv-definstruction-kind vcomputed #x04
+  (let ((p (choice-case kind (cv-sel-sp (> a 0)) (otherwise nil))))
+    (when p (set! sp 0))))
+
+(cv-definstruction-kind vassigned #x05
+  (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil))))
+    (setq p t)
+    (when p (set! sp 0))))
+
+(cv-definstruction-kind vshadowed #x06
+  (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil))))
+    (let ((p nil))
+      (when p (set! sp 0)))))
+
+(definstruction cv-var vlocal
+  (encoding (opcode #x10))
+  (semantics (macrolet ((wipe () '(set! sp 0))) (wipe))))
+
+(definstruction cv-var vnested
+  (encoding (opcode #x11))
+  (semantics (macrolet ((wipe () '(set! sp 0)))
+               (macrolet ((again () '(wipe)))
+                 (again)))))
+
+(definstruction cv-var vglobal
+  (encoding (opcode #x12))
+  (semantics (cv-write-sp)))
+
+(definstruction cv-var vshadow
+  (encoding (opcode #x13))
+  (semantics (macrolet ((cv-write-sp () '(set! a 0))) (cv-write-sp))))
+
+(defun %cv-var-writes (name)
+  (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-var name))))
+
+(fiveam:test a-variable-holding-a-choice-case-carries-its-condition
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)))
+                      ("A" (kind nil :not-in (cv-sel-sp))))
+                    (%cv-var-writes 'vwhen)))
+  (fiveam:is (equal '(("SP" (kind nil :not-in (cv-sel-pc)))
+                      ("PC" (kind nil :in (cv-sel-pc))))
+                    (%cv-var-writes 'vnot)))
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)))) (%cv-var-writes 'vsequential))))
+
+(fiveam:test a-variable-that-is-not-a-constant-choice-stays-unconditional
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vcomputed)))
+  (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vassigned) :test #'string=)))
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vshadowed))))
+
+(fiveam:test a-local-macro-is-expanded-when-looking-for-writes
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vlocal)))
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vnested)))
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vglobal))))
+
+(fiveam:test a-local-macro-shadows-a-global-one-of-the-same-name
+  (fiveam:is (equal '(("A")) (%cv-var-writes 'vshadow))))
+
+(defbackend cv-var-abi (:machine cv-var)
+  (registers :stack-pointer sp :program-counter pc)
+  (ops (:nothing () (vlocal))))
+
+(fiveam:test a-write-under-a-variable-counts-for-its-alternative-only
+  (flet ((writes (source)
+           (and (search "writes the stack pointer" (%cv-in-function source 'cv-var-abi)) t)))
+    (fiveam:is-true (writes '(vwhen "SP")))
+    (fiveam:is-false (writes '(vwhen "PC")))
+    (fiveam:is-false (writes '(vwhen 5)))
+    (fiveam:is-true (writes '(vnot 5)))
+    (fiveam:is-false (writes '(vnot "PC")))
+    (fiveam:is-true (writes '(vlocal)))
+    (fiveam:is-false (writes '(vshadow)))))

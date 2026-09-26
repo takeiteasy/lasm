@@ -342,6 +342,22 @@ at the start of each test that reads it.")
   (semantics (elapse 3) (trap :halt))
   (cycles 2))
 
+(definstruction elapse-machine viamacrolet
+  (encoding (opcode #x03))
+  (semantics (macrolet ((wait () '(elapse 5))) (wait)))
+  (cycles 2))
+
+(definstruction elapse-machine shadowed
+  (encoding (opcode #x04))
+  (semantics (macrolet ((elapse-later () '(set! a 3))) (elapse-later)))
+  (cycles 2))
+
+(fiveam:test a-macrolet-inside-semantics-is-searched-for-elapse
+  (flet ((variable-cycles (name)
+           (instruction-descriptor-variable-cycles (first (find-instruction-variants 'elapse-machine name)))))
+    (fiveam:is-true (variable-cycles 'viamacrolet))
+    (fiveam:is-false (variable-cycles 'shadowed))))
+
 (fiveam:test elapse-ticks-devices-between-the-bodys-side-effects
   (let ((m (make-machine 'elapse-machine))
         (*tick-log* nil))

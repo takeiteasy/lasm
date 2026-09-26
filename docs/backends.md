@@ -160,8 +160,10 @@ pointer.
 
 The variant the operands select decides, as the assembler selects it. With
 `addx` taking `a, b` in one mode and `sp, #n` in another, `addx a, b` is
-accepted and `addx sp, #2` is rejected. A write under a `choice-case` clause
-counts for that alternative only.
+accepted and `addx sp, #2` is rejected. A write under a `choice-case` clause,
+or under a test of a variable holding one, counts for that alternative only.
+With `drop` taking a zero-page or absolute operand, `drop 5` is checked as
+zero-page and `drop 70000` as absolute.
 
 `(stack-writers ENTRY... :except ENTRY...)` adds to and removes from those
 variants. An entry is a mnemonic, covering every mode, or `(MNEMONIC MODE)`:
@@ -225,4 +227,4 @@ parent no longer defines is dropped from the child with a `stale-backend`
 
 The command line loads backends from its machine file; see [Command line](cli.md).
 
-[^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros, with the `choice-case` clauses around each. A write under `if`, `when` or a variable is unconditional. When the operand syntax leaves several variants, such as modes told apart only by value width, the instruction is a stack writer if any of them is. See the [limitations](conventions.md#limitations).
+[^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros, including those a `macrolet` in `semantics` defines, with the `choice-case` clauses around each. A `let` or `let*` variable bound to a `choice-case` whose clauses all return literals carries that choice into the branches of an `if`, `when`, `unless`, `and` or `cond` testing it, or its `not` or `null`; a variable assigned with `setq` is not followed. Other `if` and `when` conditions are not, so a write under one is unconditional ([#350](conventions.md#limitations)). When the operand syntax leaves several variants tied on width, such as zero-page and absolute, constant operands select the one the assembler picks; operands with no value yet leave all of them checked ([#349](conventions.md#limitations)). See the [limitations](conventions.md#limitations).
