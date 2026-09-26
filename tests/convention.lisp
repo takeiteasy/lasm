@@ -31,6 +31,8 @@
 (%cv-abi cv-callee-abi :cleanup :callee :return-pop t)
 (%cv-abi cv-aligned-abi :alignment 2)
 (%cv-abi cv-reg-abi :args (b c) :registers (:return (a) :caller-saved (b c) :callee-saved (d)))
+(%cv-abi cv-scratch-abi :args (b c) :registers (:return (a) :scratch (b a) :caller-saved (b c) :callee-saved (d)))
+(%cv-abi cv-three-abi :args (b c d) :registers (:return (a) :scratch (a) :caller-saved (b c d)))
 
 (defmachine cv-up
   (register pc :width 16)
@@ -213,11 +215,36 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
                     'cv-reg-abi :setup '((2 40)))))
     (fiveam:is (= 42 (%cv-a m)))))
 
-(fiveam:test register-moves-in-a-cycle-are-rejected
-  (flet ((call (&rest arguments)
-           (%cv-malformed `((:call f ,@arguments) (hlt) ,*cv-sum-function*) 'cv-reg-abi)))
-    (fiveam:is (search "cycle" (call '(reg c) '(reg b) '(imm 0))))
-    (fiveam:is (null (call '(reg b) '(reg c) '(imm 0))))))
+(fiveam:test a-register-move-cycle-needs-a-scratch-register
+  (let ((detail (%cv-malformed `((:call f (reg c) (reg b) (imm 0)) (hlt) ,*cv-sum-function*) 'cv-reg-abi)))
+    (fiveam:is (search "cycle" detail))
+    (fiveam:is (search ":scratch" detail)))
+  (fiveam:is (null (%cv-malformed `((:call f (reg b) (reg c) (imm 0)) (hlt) ,*cv-sum-function*) 'cv-reg-abi))))
+
+(fiveam:test a-register-swap-goes-through-a-free-scratch-register
+  (let* ((items `((:call f (reg c) (reg b) (imm 0)) (hlt)
+                  (:function f (:args 2) (:op :add (reg a) (:arg 0)) (:return))))
+         (m (%cv-run items 'cv-scratch-abi :setup '((1 40) (2 2))))
+         (text (render-items items :backend 'cv-scratch-abi)))
+    (fiveam:is (= 2 (regref m 'r 1)))
+    (fiveam:is (= 40 (regref m 'r 2)))
+    (fiveam:is (search "movv a, b" text))))
+
+(fiveam:test a-swap-of-a-functions-own-arguments-is-a-swap
+  (let ((m (%cv-run '((:call f (imm 1) (imm 2)) (hlt)
+                      (:function f (:args 2) (:call g (:arg 1) (:arg 0)) (:return))
+                      (:function g (:args 2) (:op :add (reg a) (:arg 0)) (:return)))
+                    'cv-scratch-abi)))
+    (fiveam:is (= 2 (regref m 'r 1)))
+    (fiveam:is (= 1 (regref m 'r 2)))))
+
+(fiveam:test a-three-register-cycle-is-broken-once
+  (let ((m (%cv-run `((:call f (reg c) (reg d) (reg b)) (hlt)
+                      (:function f (:args 3) (:return)))
+                    'cv-three-abi :setup '((1 10) (2 20) (3 30)))))
+    (fiveam:is (= 20 (regref m 'r 1)))
+    (fiveam:is (= 30 (regref m 'r 2)))
+    (fiveam:is (= 10 (regref m 'r 3)))))
 
 (fiveam:test keep-saves-caller-saved-registers-around-a-call
   (let* ((items `((:call f (imm 1) (imm 2) (imm 3) :keep (b d)) (hlt) ,*cv-sum-function*))

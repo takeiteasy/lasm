@@ -108,3 +108,19 @@
        (:free (n) (adds (sp) (imm n)))
        (:call (f) (call f))
        (:return () (ret))))
+
+;; The first two arguments go in b and c, and a is free to break an argument
+;; swap.
+(defbackend callfoo-reg-abi (:machine callfoo)
+  (registers :return (a) :scratch (a) :caller-saved (b c) :callee-saved (d)
+             :stack-pointer sp :program-counter pc :operand reg)
+  (call :args (b c) :order :right-to-left :cleanup :caller :return-address-slots 1)
+  (frame :grows :down :slot sp-idx)
+  (operands (reg call-reg) (imm call-imm) (sp-idx call-sp-idx) (sp call-sp))
+  (ops (:push (x) (pushv x))
+       (:pop (x) (popr x))
+       (:move (d s) (movv d s))
+       (:alloc (n) (subs (sp) (imm n)))
+       (:free (n) (adds (sp) (imm n)))
+       (:call (f) (call f))
+       (:return () (ret))))

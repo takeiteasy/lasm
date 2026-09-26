@@ -13,7 +13,8 @@ See [`examples/cli/`](../examples/cli/sixtyfoo.lisp) for a runnable pair, and
 [`callfoo.lisp`](../examples/cli/callfoo.lisp) with
 [`double.lasm`](../examples/cli/double.lasm) for an items program, and
 [`calls.lasm`](../examples/cli/calls.lasm) for one that lowers a
-[calling convention](conventions.md). [`framed.lasm`](../examples/cli/framed.lasm)
+[calling convention](conventions.md). [`swap.lasm`](../examples/cli/swap.lasm)
+swaps register arguments through a scratch register. [`framed.lasm`](../examples/cli/framed.lasm)
 uses a [frame pointer](conventions.md#frame-pointer) on
 [`callfoo-fp.lisp`](../examples/cli/callfoo-fp.lisp), which defines two machines
 and is run with `--machine-name callfoo-fp`.

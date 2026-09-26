@@ -581,3 +581,11 @@
         (%run-cli (list "run" "-m" (%cli-path "examples/cli/callfoo.lisp") "--load-snapshot" (namestring snap)))
       (fiveam:is (= 0 status))
       (fiveam:is (search "stopped: trap" out)))))
+
+(fiveam:test cli-runs-an-items-program-that-swaps-register-arguments
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "examples/cli/swap.lasm"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "call swap" out)))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "examples/cli/swap.lasm"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped: trap after 8 steps" out))))

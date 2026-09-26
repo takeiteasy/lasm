@@ -13,8 +13,9 @@
 ;;;; Items:  (:label NAME)  (:directive NAME expr...)  (:op NAME arg...)
 ;;;;         (MNEMONIC operand...)  and the lowered (:function ...) (:call ...)
 ;;;;         (:return) (:push X) (:pop X)
-;;;; Operands: an expression, (KIND value...), (:mode MODE value...) or the
-;;;;           frame slots (:arg i) and (:local i).
+;;;; Operands: an expression, (KIND value...), (:mode MODE value...), the
+;;;;           frame slots (:arg i) and (:local i), or (:force OPERAND), which
+;;;;           writes OPERAND's mode as the mnemonic's suffix.
 ;;;; Expressions: an integer, a name, or (OPERATOR expr...).
 ;;;; A symbol names by its downcased name, a string by itself.
 
@@ -176,9 +177,22 @@ counted in tokens from the pattern's start."
       (%items-fail 'items-malformed item "too many values for the operand: ~S" values))
     (values tokens (nreverse claims))))
 
+(defun %force-operand-p (operand)
+  (and (consp operand) (%keyword-named-p (first operand) "FORCE")))
+
 (defun %operand-tokens (operand item)
-  "The tokens of OPERAND, the addressing mode it names, if any, and its claims
-(MODE START END): the named mode over the whole operand, then its alternatives."
+  "The tokens of OPERAND, the addressing mode it names, if any, its claims
+(MODE START END): the named mode over the whole operand, then its alternatives,
+and whether it is a (:force ...) operand."
+  (when (%force-operand-p operand)
+    (let ((inner (second operand)))
+      (unless (and (= (length operand) 2) (consp inner)
+                   (not (%force-operand-p inner)) (not (%frame-operand-p inner)))
+        (%items-fail 'items-malformed item "expected (:force (:mode MODE value...)) or (:force (KIND value...))"))
+      (multiple-value-bind (tokens mode claims) (%operand-tokens inner item)
+        (unless mode
+          (%items-fail 'items-malformed item "~S names no addressing mode to force" inner))
+        (return-from %operand-tokens (values tokens mode claims t)))))
   (when (%frame-operand-p operand)
     (setf operand (%frame-operand operand item)))
   (if (and (consp operand) (not (%expression-head-p (first operand))))
@@ -538,10 +552,24 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (cons (or (%reads-register-p (car tree) register) (%reads-register-p (cdr tree) register)))
     (t (%same-name-p tree register))))
 
-(defun %order-moves (moves item)
+(defun %substitute-register (tree register replacement)
+  (typecase tree
+    (cons (cons (%substitute-register (car tree) register replacement)
+                (%substitute-register (cdr tree) register replacement)))
+    (t (if (%same-name-p tree register) replacement tree))))
+
+(defun %free-scratch (moves pending target)
+  "A :scratch register no move writes, no PENDING move reads and TARGET does not read."
+  (find-if (lambda (register)
+             (and (notany (lambda (move) (%same-name-p (first move) register)) moves)
+                  (notany (lambda (move) (%reads-register-p (third move) register)) pending)
+                  (not (%reads-register-p target register))))
+           (backend-register *items-backend* :scratch)))
+
+(defun %order-moves (moves target item)
   "MOVES, (REGISTER DESTINATION SOURCE) entries, ordered so no move overwrites a
-register another still to run reads. TODO: a cycle is an error; break it through a
-:scratch register (#328)."
+register another still to run reads. A cycle is broken by first copying one of
+its registers into a free :scratch register."
   (let ((pending (remove-if (lambda (move)
                               (string-equal (princ-to-string (second move)) (princ-to-string (third move))))
                             moves))
@@ -553,11 +581,20 @@ register another still to run reads. TODO: a cycle is an error; break it through
                                                     (%reads-register-p (third other) (first move))))
                                              pending))
                                    pending)))
-               (unless ready
-                 (%items-fail 'items-malformed item "register arguments ~{~A~^, ~} form a cycle"
-                              (mapcar #'first pending)))
-               (cl:push ready ordered)
-               (setf pending (remove ready pending))))
+               (if ready
+                   (progn (cl:push ready ordered)
+                          (setf pending (remove ready pending)))
+                   (let ((scratch (%free-scratch moves pending target))
+                         (from (first (first pending))))
+                     (unless scratch
+                       (%items-fail 'items-malformed item
+                                    "register arguments ~{~A~^, ~} form a cycle and the backend has no free :scratch register"
+                                    (mapcar #'first pending)))
+                     (cl:push (list scratch (%register-operand scratch item) (%register-operand from item)) ordered)
+                     (setf pending (loop for move in pending
+                                         collect (list (first move) (second move)
+                                                       (%substitute-register (third move) from
+                                                                             (string-downcase (string scratch))))))))))
     (nreverse ordered)))
 
 (defun %keep-registers (keeps item)
@@ -594,12 +631,13 @@ survive a call, and any other register cannot be kept."
             (push-cell (%register-operand name item)))
           (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
             (push-cell argument))
+          ;; TODO: the moves can overwrite a register TARGET reads (#335).
           (dolist (move (%order-moves (loop for register in registers
                                             for argument in arguments
                                             collect (list register
                                                           (%register-operand register item)
                                                           (%resolve-operand argument item)))
-                                      item))
+                                      target item))
             (emit (%hook-lines :move (list (second move) (third move)) item)))
           (emit (%hook-lines :call (list target) item))
           (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
@@ -615,24 +653,42 @@ survive a call, and any other register cannot be kept."
 (defstruct item-line
   label       ; string, or NIL
   mnemonic    ; string, or NIL
+  suffix      ; the forced mode's suffix with its separator, or NIL
   operands    ; list of token lists
   item        ; the item it came from
   claims)     ; (MODE START END) per named mode, as token indices into the operands
 
+(defun %forced-suffix (mode mnemonic form item)
+  "The suffix text that makes the assembler use MODE for MNEMONIC."
+  (let ((separator (lexer-descriptor-mode-suffix-separator *items-lexer-descriptor*)))
+    (unless (= (length form) 2)
+      (%items-fail 'items-malformed item "a (:force ...) operand must be the instruction's only operand"))
+    (unless (mode-descriptor-suffix mode)
+      (%items-fail 'items-malformed item "mode ~A has no suffix to force it with" (mode-descriptor-name mode)))
+    (unless separator
+      (%items-fail 'items-malformed item "lexer ~A has no mode suffix syntax" *items-lexer*))
+    (unless (member (mode-descriptor-name mode) (car (%mnemonic-pickables mnemonic)) :test #'%same-name-p)
+      (%items-fail 'items-malformed item "~A is not a mode of ~A" (mode-descriptor-name mode) mnemonic))
+    (concatenate 'string separator (mode-descriptor-suffix mode))))
+
 (defun %instruction-line (form item)
   (unless (and (consp form) (or (stringp (first form)) (and (symbolp (first form)) (not (keywordp (first form))))))
     (%items-fail 'items-malformed item "~S is not an instruction" form))
-  (let ((offset 0) (claims '()) (operands '()))
+  (let ((offset 0) (claims '()) (operands '()) (forced nil))
     (dolist (operand (rest form))
-      (multiple-value-bind (tokens mode operand-claims) (%operand-tokens operand item)
+      (multiple-value-bind (tokens mode operand-claims forcedp) (%operand-tokens operand item)
         (when mode
           (%check-operand-syntax tokens mode item))
+        (when forcedp
+          (setf forced mode))
         (dolist (claim operand-claims)
           (cl:push (list (first claim) (+ offset (second claim)) (+ offset (third claim))) claims))
         (cl:push tokens operands)
         (incf offset (1+ (length tokens)))))
-    (make-item-line :mnemonic (%source-name (first form) item) :operands (nreverse operands)
-                    :item item :claims (nreverse claims))))
+    (let ((mnemonic (%source-name (first form) item)))
+      (make-item-line :mnemonic mnemonic :operands (nreverse operands)
+                      :suffix (and forced (%forced-suffix forced mnemonic form item))
+                      :item item :claims (nreverse claims)))))
 
 (defun %directive-line (item)
   (destructuring-bind (name &rest args) (rest item)
@@ -695,7 +751,7 @@ survive a call, and any other register cannot be kept."
           (emit (%name-token (item-line-label line)))
           (emit (make-token :type :label-suffix :value :label-suffix :text suffix) nil)))
       (when (item-line-mnemonic line)
-        (emit (%name-token (item-line-mnemonic line))))
+        (emit (%name-token (concatenate 'string (item-line-mnemonic line) (or (item-line-suffix line) "")))))
       (loop for (operand . more) on (item-line-operands line)
             do (loop for token in operand
                      do (emit token))

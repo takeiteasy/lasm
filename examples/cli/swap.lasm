@@ -1,0 +1,14 @@
+;;;; examples/cli/swap.lasm
+;;;; Calling with the registers the callee's arguments swap: callfoo-reg-abi
+;;;; breaks the cycle through its scratch register (docs/conventions.md#calls).
+;;;;
+;;;;   lasm run swap.lasm -m callfoo.lisp
+
+(:program (:backend callfoo-reg-abi)
+  (ldi (reg b) (imm 1))
+  (ldi (reg c) (imm 2))
+  (:call swap (reg c) (reg b))
+  (hlt)
+
+  (:function swap (:args 2)
+    (:return)))

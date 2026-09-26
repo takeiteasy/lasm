@@ -97,7 +97,8 @@ the same signs as from the stack pointer: `+n` when the stack grows down,
    an error.
 2. A push of each argument beyond the `call :args` registers, in the `:order`.
 3. A `:move` into each argument register, ordered so no move overwrites a
-   register a later one reads.
+   register a later one reads. A [cycle](#register-cycles) goes through a
+   `:scratch` register.
 4. The `:call`.
 5. A `:free` of the stack arguments when `:cleanup` is `:caller`.
 6. A pop of each kept register, in reverse.
@@ -105,6 +106,25 @@ the same signs as from the stack pointer: `+n` when the stack grows down,
 With `call :args (b c)`, `(:call f (imm 1) (imm 2) (imm 3))` moves `1` into
 `b` and `2` into `c` and pushes `3`; the callee finds its arguments `0` and `1`
 in `b` and `c` and `2` on the stack.
+
+### Register cycles
+
+Arguments that swap registers form a cycle. The first move's destination is
+copied into a free `:scratch` register, and the moves that read it read the copy.
+A scratch register is free when no argument register is it, no remaining move
+reads it and the call target does not. With no free one, the call is
+`items-malformed`.
+
+```lisp
+(:call f (reg c) (reg b))   ; call :args (b c), registers :scratch (a)
+```
+
+```
+movv a, b
+movv b, c
+movv c, a
+call f
+```
 
 ## Backend operations
 
@@ -146,6 +166,7 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| Register arguments that swap with each other are an error. | [#328](https://todo.sr.ht/~takeiteasy/lasm/328) |
+| A register-argument cycle costs one extra move; there is no exchange operation. | [#333](https://todo.sr.ht/~takeiteasy/lasm/333) |
+| Argument moves can overwrite a register the call target reads. | [#335](https://todo.sr.ht/~takeiteasy/lasm/335) |
 | Without a frame pointer, the stack depth is tracked per item, not across labels or branches; a raw push in a body is not seen. | [#329](https://todo.sr.ht/~takeiteasy/lasm/329) |
 | Every function of a frame-pointer backend has a frame pointer, even a leaf. | [#331](https://todo.sr.ht/~takeiteasy/lasm/331) |

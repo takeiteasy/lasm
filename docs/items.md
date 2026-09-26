@@ -38,6 +38,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | `(:mode MODE value...)` | A mode named directly; works without a backend. |
 | An expression | A bare value, as in `call 6`. |
 | `(:arg i)` `(:local i)` | A [frame slot](conventions.md#functions) of the enclosing function. |
+| `(:force OPERAND)` | `OPERAND`, a `:mode` or kind, with its mode [forced](#forcing-a-variant). |
 
 The values fill the mode's `expr` holes in order. A mode with a `one-of`
 takes the chosen alternative's name before that alternative's values:
@@ -75,12 +76,29 @@ A symbol with mixed case, such as `|Main|`, and a string keep their case.
   declaration order decides.[^check]
 
 Choosing between a mnemonic's variants by width is not a mismatch:
-`(:mode absolute 5)` assembles as zero-page when the mnemonic has one.
+`(:mode absolute 5)` assembles as zero-page when the mnemonic has one. See
+[Forcing a variant](#forcing-a-variant) to prevent it.
 
 `items-malformed` is signalled for an item that is not well formed: an unknown
 operation or kind, a wrong argument count, a keyword where a value belongs.
 Both are `items-error`s; `items-error-detail` and `items-error-item` give the
 message and the item.
+
+## Forcing a variant
+
+`(:force OPERAND)` renders the mnemonic with the mode's
+[suffix](modes.md#forcing-a-mode-with-a-mnemonic-suffix), so the assembler uses
+exactly that mode.
+
+```lisp
+(lda (:mode absolute 5))          ; lda 5    zero-page, by width
+(lda (:force (:mode absolute 5))) ; lda.w 5  absolute
+```
+
+`items-malformed` is signalled when the `(:force)` is not the instruction's
+only operand, its mode has no `:suffix`, the mode is not one of the mnemonic's
+variants (a `one-of` alternative, for example), or the lexer has no mode suffix
+separator. A forced value that does not fit the mode wraps as in source.[^wrap]
 
 ## Sizing
 
@@ -154,7 +172,7 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| A named variant mode cannot be forced against width relaxation. | [#327](https://todo.sr.ht/~takeiteasy/lasm/327) |
+| A forced mode wraps a value that does not fit it, silently. | [#334](https://todo.sr.ht/~takeiteasy/lasm/334) |
 | There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
 
 [^check]: The assembler records each `one-of` pick as a token span, exposed as
@@ -162,3 +180,5 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
   also loses to a variant of the mnemonic that matches its syntax more
   specifically. Instructions from macros, `.rept` and `.include` are not
   checked.
+
+[^wrap]: `(:force (:mode zero-page 300))` assembles the byte 44.

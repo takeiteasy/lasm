@@ -277,6 +277,28 @@ call .inner" :machine 'callfoo))
                                (instruction-descriptor-mode
                                 (listing-line-descriptor (first (assembly-listing assembly)))))))))
 
+(fiveam:test force-writes-the-mode-suffix-and-stops-relaxation
+  (let* ((items '((lda (:force (:mode absolute 5)))))
+         (assembly (assemble-items items :machine 'instr-test-machine)))
+    (fiveam:is (eq 'absolute (mode-descriptor-name
+                              (instruction-descriptor-mode
+                               (listing-line-descriptor (first (assembly-listing assembly)))))))
+    (fiveam:is (search "lda.w 5" (render-items items :machine 'instr-test-machine)))
+    (fiveam:is (< (items-size '((lda (:mode absolute 5))) :machine 'instr-test-machine)
+                  (items-size items :machine 'instr-test-machine)))))
+
+(fiveam:test force-is-malformed-when-it-cannot-name-one-variant
+  (flet ((detail (items &rest keys)
+           (let ((c (apply #'%items-error-of items :machine 'instr-test-machine keys)))
+             (and (typep c 'items-malformed) (items-error-detail c)))))
+    (fiveam:is (search "no suffix" (detail '((lda (:force (:mode immediate 5)))))))
+    (fiveam:is (search "not a mode of" (detail '((ldx (:force (:mode absolute 5)))))))
+    (fiveam:is (search "only operand" (detail '((lda (:force (:mode absolute 5)) 1)))))
+    (fiveam:is (search "expected (:force" (detail '((lda (:force 5))))))
+    (fiveam:is (search "expected (:force" (detail '((lda (:force (:force (:mode absolute 5))))))))
+    (fiveam:is (search "no mode suffix" (detail '((lda (:force (:mode absolute 5))))
+                                                :lexer 'bk-no-underscore-syntax)))))
+
 (fiveam:test assembler-errors-point-into-the-rendered-source
   (let ((c (handler-case (assemble-items '((:label x) (call missing)) :machine 'callfoo)
              (lasm-error (c) c))))

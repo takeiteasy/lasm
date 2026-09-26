@@ -40,7 +40,7 @@ Every name is a register or register alias of the machine.
 
 | Key | Value |
 | --- | --- |
-| `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. |
+| `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. A [call](conventions.md#register-cycles) breaks an argument cycle through a `:scratch` one. |
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
 | `:operand` | The [operand kind](#operand-kinds) that writes a register. |
 
