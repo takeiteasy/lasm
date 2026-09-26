@@ -11,27 +11,39 @@
 ;;; under several conventions, and a machine whose stack grows up.
 
 (defmacro %cv-abi (name &key (args :stack) (order :right-to-left) (cleanup :caller) (alignment 1)
-                          (registers '(:return (a) :callee-saved (c d))) return-pop)
-  `(defbackend ,name (:machine callfoo)
-     (registers ,@registers :stack-pointer sp :program-counter pc :operand reg)
-     (call :args ,args :order ,order :cleanup ,cleanup :return-address-slots 1)
-     (frame :grows :down :alignment ,alignment :slot sp-idx)
-     (operands (reg call-reg) (imm call-imm) (sp-idx call-sp-idx) (sp call-sp))
-     (ops (:add (d s) (add d s))
-          (:push (x) (pushv x))
-          (:pop (x) (popr x))
-          (:move (d s) (movv d s))
-          (:alloc (n) (subs (sp) (imm n)))
-          (:free (n) (adds (sp) (imm n)))
-          (:call (f) (call f))
-          (:return () (ret))
-          ,@(and return-pop '((:return-pop (n) (retn (imm n))))))))
+                          (registers '(:return (a) :callee-saved (c d))) return-pop extra-ops)
+  "EXTRA-OPS add operations to the fixture's, or replace one of the same name."
+  (let ((ops (append (remove-if (lambda (op) (member (first op) extra-ops :key #'first))
+                                `((:add (d s) (add d s))
+                                  (:push (x) (pushv x))
+                                  (:pop (x) (popr x))
+                                  (:move (d s) (movv d s))
+                                  (:alloc (n) (subs (sp) (imm n)))
+                                  (:free (n) (adds (sp) (imm n)))
+                                  (:call (f) (call f))
+                                  (:return () (ret))))
+                     (and return-pop '((:return-pop (n) (retn (imm n)))))
+                     extra-ops)))
+    `(defbackend ,name (:machine callfoo)
+       (registers ,@registers :stack-pointer sp :program-counter pc :operand reg)
+       (call :args ,args :order ,order :cleanup ,cleanup :return-address-slots 1)
+       (frame :grows :down :alignment ,alignment :slot sp-idx)
+       (operands (reg call-reg) (imm call-imm) (sp-idx call-sp-idx) (sp call-sp))
+       (ops ,@ops))))
 
 (%cv-abi cv-ltr-abi :order :left-to-right)
 (%cv-abi cv-callee-abi :cleanup :callee :return-pop t)
 (%cv-abi cv-aligned-abi :alignment 2)
 (%cv-abi cv-reg-abi :args (b c) :registers (:return (a) :caller-saved (b c) :callee-saved (d)))
 (%cv-abi cv-scratch-abi :args (b c) :registers (:return (a) :scratch (b a) :caller-saved (b c) :callee-saved (d)))
+(%cv-abi cv-xchg-abi :args (b c d) :registers (:return (a) :caller-saved (b c d))
+         :extra-ops ((:exchange (x y) (xchg x y))))
+(%cv-abi cv-xchg-scratch-abi :args (b c) :registers (:return (a) :scratch (a) :caller-saved (b c))
+         :extra-ops ((:exchange (x y) (xchg x y))))
+(%cv-abi cv-indirect-abi :args (b c) :registers (:return (a) :scratch (a) :caller-saved (b c))
+         :extra-ops ((:call (f) (callr f))))
+(%cv-abi cv-indirect-bare-abi :args (b c) :registers (:return (a) :caller-saved (b c))
+         :extra-ops ((:call (f) (callr f))))
 (%cv-abi cv-three-abi :args (b c d) :registers (:return (a) :scratch (a) :caller-saved (b c d)))
 
 (defmachine cv-up
@@ -245,6 +257,76 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (= 20 (regref m 'r 1)))
     (fiveam:is (= 30 (regref m 'r 2)))
     (fiveam:is (= 10 (regref m 'r 3)))))
+
+;;; Exchange (#333)
+
+(defun %cv-count (text needle)
+  (count-if (lambda (line) (search needle line)) (uiop:split-string text :separator '(#\Newline))))
+
+(fiveam:test a-two-register-swap-is-one-exchange
+  (let* ((items `((:call f (reg c) (reg b) (imm 0)) (hlt) (:function f (:args 3) (:return))))
+         (m (%cv-run items 'cv-xchg-abi :setup '((1 10) (2 20))))
+         (text (render-items items :backend 'cv-xchg-abi)))
+    (fiveam:is (= 20 (regref m 'r 1)))
+    (fiveam:is (= 10 (regref m 'r 2)))
+    (fiveam:is (= 0 (regref m 'r 3)))
+    (fiveam:is (= 1 (%cv-count text "xchg")))
+    (fiveam:is (= 1 (%cv-count text "movv")))))
+
+(fiveam:test an-n-register-cycle-is-n-minus-one-exchanges
+  (let* ((items `((:call f (reg c) (reg d) (reg b)) (hlt) (:function f (:args 3) (:return))))
+         (m (%cv-run items 'cv-xchg-abi :setup '((1 10) (2 20) (3 30))))
+         (text (render-items items :backend 'cv-xchg-abi)))
+    (fiveam:is (= 20 (regref m 'r 1)))
+    (fiveam:is (= 30 (regref m 'r 2)))
+    (fiveam:is (= 10 (regref m 'r 3)))
+    (fiveam:is (= 2 (%cv-count text "xchg")))
+    (fiveam:is (= 0 (%cv-count text "movv")))))
+
+(fiveam:test an-exchange-needs-no-scratch-register
+  (let* ((items `((:call f (reg c) (reg b)) (hlt) (:function f (:args 2) (:return))))
+         (text (render-items items :backend 'cv-xchg-scratch-abi)))
+    (fiveam:is (= 1 (%cv-count text "xchg")))
+    (fiveam:is (= 0 (%cv-count text "movv a")))))
+
+(fiveam:test an-exchange-is-not-used-for-a-register-no-move-writes
+  (let* ((items `((:call f (reg d) (reg b)) (hlt) (:function f (:args 2) (:return))))
+         (m (%cv-run items 'cv-xchg-abi :setup '((1 10) (2 20) (3 30))))
+         (text (render-items items :backend 'cv-xchg-abi)))
+    (fiveam:is (= 30 (regref m 'r 1)))
+    (fiveam:is (= 10 (regref m 'r 2)))
+    (fiveam:is (= 0 (%cv-count text "xchg")))))
+
+;;; Call targets (#335)
+
+(fiveam:test a-target-in-an-argument-register-is-copied-before-the-moves
+  (let* ((items `((:call (reg b) (imm 5)) (hlt) (:function f (:args 1) (:return))))
+         (text (render-items items :backend 'cv-indirect-abi)))
+    (fiveam:is (search "movv a, b" text))
+    (fiveam:is (< (search "movv a, b" text) (search "movv b, # 5" text)))
+    (fiveam:is (search "callr a" text))))
+
+(fiveam:test an-indirect-call-runs-the-function-its-target-named
+  (let ((m (%cv-run '((ldi (reg b) (imm f)) (:call (reg b) (imm 5)) (hlt)
+                      (:function f (:args 1) (movv (reg c) (reg b)) (:return)))
+                    'cv-indirect-abi)))
+    (fiveam:is (= 5 (regref m 'r 2)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))))
+
+(fiveam:test a-frame-operand-target-is-copied-too
+  (let ((text (render-items '((:function g (:args 1) (:call (:arg 0) (imm 5)) (:return)))
+                            :backend 'cv-indirect-abi)))
+    (fiveam:is (search "movv a, b" text))
+    (fiveam:is (search "callr a" text))))
+
+(fiveam:test a-target-with-no-free-scratch-register-is-malformed
+  (fiveam:is (search "call target"
+                     (%cv-malformed '((:call (reg b) (imm 5))) 'cv-indirect-bare-abi))))
+
+(fiveam:test a-target-in-a-register-no-move-writes-is-not-copied
+  (let ((text (render-items '((:call (reg d) (imm 5))) :backend 'cv-indirect-abi)))
+    (fiveam:is (search "callr d" text))
+    (fiveam:is (= 1 (%cv-count text "movv")))))
 
 (fiveam:test keep-saves-caller-saved-registers-around-a-call
   (let* ((items `((:call f (imm 1) (imm 2) (imm 3) :keep (b d)) (hlt) ,*cv-sum-function*))

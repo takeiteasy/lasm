@@ -547,6 +547,7 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (prog1 (%hook-lines (if pushp :push :pop) (list (second item)) item)
       (%bump-depth (if pushp 1 -1)))))
 
+;; TODO: matches any atom named like REGISTER, a label included (#336).
 (defun %reads-register-p (tree register)
   (typecase tree
     (cons (or (%reads-register-p (car tree) register) (%reads-register-p (cdr tree) register)))
@@ -566,13 +567,36 @@ to the enclosing label when one has been defined and the lexer has local labels.
                   (not (%reads-register-p target register))))
            (backend-register *items-backend* :scratch)))
 
+(defun %swap-registers (tree a b)
+  "TREE with a read of register A turned into one of B and the reverse, in one pass."
+  (typecase tree
+    (cons (cons (%swap-registers (car tree) a b) (%swap-registers (cdr tree) a b)))
+    (t (cond ((%same-name-p tree a) (string-downcase (string b)))
+             ((%same-name-p tree b) (string-downcase (string a)))
+             (t tree)))))
+
+(defun %self-move-p (move)
+  (string-equal (princ-to-string (second move)) (princ-to-string (third move))))
+
+(defun %has-op-p (name)
+  (assoc (%designator-name name) (backend-descriptor-ops *items-backend*) :test #'equal))
+
+(defun %exchange-candidate (pending)
+  "A pending move that copies another pending move's destination register, and that register."
+  (let ((kind (backend-register *items-backend* :operand)))
+    (loop for move in pending
+          for source = (third move)
+          do (when (and kind (consp source) (= (length source) 2) (%same-name-p (first source) kind)
+                        (find-if (lambda (other) (and (not (eq other move)) (%same-name-p (first other) (second source))))
+                                 pending))
+               (return (values move (second source)))))))
+
 (defun %order-moves (moves target item)
-  "MOVES, (REGISTER DESTINATION SOURCE) entries, ordered so no move overwrites a
-register another still to run reads. A cycle is broken by first copying one of
-its registers into a free :scratch register."
-  (let ((pending (remove-if (lambda (move)
-                              (string-equal (princ-to-string (second move)) (princ-to-string (third move))))
-                            moves))
+  "The operations that perform MOVES, (REGISTER DESTINATION SOURCE) entries, as
+(HOOK OPERAND OPERAND) entries ordered so none overwrites a register another
+still to run reads. A cycle is broken by exchanging two of its registers, or
+by first copying one of them into a free :scratch register."
+  (let ((pending (remove-if #'%self-move-p moves))
         (ordered '()))
     (loop while pending
           do (let ((ready (find-if (lambda (move)
@@ -582,20 +606,46 @@ its registers into a free :scratch register."
                                              pending))
                                    pending)))
                (if ready
-                   (progn (cl:push ready ordered)
+                   (progn (cl:push (list :move (second ready) (third ready)) ordered)
                           (setf pending (remove ready pending)))
-                   (let ((scratch (%free-scratch moves pending target))
-                         (from (first (first pending))))
-                     (unless scratch
-                       (%items-fail 'items-malformed item
-                                    "register arguments ~{~A~^, ~} form a cycle and the backend has no free :scratch register"
-                                    (mapcar #'first pending)))
-                     (cl:push (list scratch (%register-operand scratch item) (%register-operand from item)) ordered)
-                     (setf pending (loop for move in pending
-                                         collect (list (first move) (second move)
-                                                       (%substitute-register (third move) from
-                                                                             (string-downcase (string scratch))))))))))
+                   (multiple-value-bind (swapped other) (if (%has-op-p :exchange) (%exchange-candidate pending) nil)
+                     (if swapped
+                         (let ((register (first swapped)))
+                           (cl:push (list :exchange (second swapped) (%register-operand other item)) ordered)
+                           (setf pending (remove-if #'%self-move-p
+                                                    (loop for move in (remove swapped pending)
+                                                          collect (list (first move) (second move)
+                                                                        (%swap-registers (third move) register other))))))
+                         (let ((scratch (%free-scratch moves pending target))
+                               (from (first (first pending))))
+                           (unless scratch
+                             (%items-fail 'items-malformed item
+                                          "register arguments ~{~A~^, ~} form a cycle and the backend has no free :scratch register"
+                                          (mapcar #'first pending)))
+                           (cl:push (list :move (%register-operand scratch item) (%register-operand from item)) ordered)
+                           (setf pending (loop for move in pending
+                                               collect (list (first move) (second move)
+                                                             (%substitute-register (third move) from
+                                                                                   (string-downcase (string scratch))))))))))))
     (nreverse ordered)))
+
+(defun %protect-target (moves target item)
+  "The moves that copy each register TARGET reads and MOVES write into a free
+:scratch register, and TARGET reading the copies."
+  (let ((pending (remove-if #'%self-move-p moves))
+        (copies '()))
+    (when (consp target)
+      (dolist (move moves)
+        (let ((register (first move)))
+          (when (and (%reads-register-p target register) (not (%self-move-p move)))
+            (let ((scratch (%free-scratch moves pending target)))
+              (unless scratch
+                (%items-fail 'items-malformed item
+                             "the call target reads argument register ~A and the backend has no free :scratch register"
+                             register))
+              (cl:push (list :move (%register-operand scratch item) (%register-operand register item)) copies)
+              (setf target (%substitute-register target register (string-downcase (string scratch)))))))))
+    (values (nreverse copies) target)))
 
 (defun %keep-registers (keeps item)
   "The upcased names of the :caller-saved registers in KEEPS; :callee-saved ones
@@ -631,15 +681,14 @@ survive a call, and any other register cannot be kept."
             (push-cell (%register-operand name item)))
           (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
             (push-cell argument))
-          ;; TODO: the moves can overwrite a register TARGET reads (#335).
-          (dolist (move (%order-moves (loop for register in registers
-                                            for argument in arguments
-                                            collect (list register
-                                                          (%register-operand register item)
-                                                          (%resolve-operand argument item)))
-                                      target item))
-            (emit (%hook-lines :move (list (second move) (third move)) item)))
-          (emit (%hook-lines :call (list target) item))
+          (let* ((moves (loop for register in registers
+                              for argument in arguments
+                              collect (list register (%register-operand register item) (%resolve-operand argument item))))
+                 (target (%resolve-operand target item)))
+            (multiple-value-bind (copies target) (%protect-target moves target item)
+              (dolist (move (append copies (%order-moves moves target item)))
+                (emit (%hook-lines (first move) (rest move) item)))
+              (emit (%hook-lines :call (list target) item))))
           (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
             (emit (%hook-lines :free (list (length on-stack)) item)))
           (%bump-depth (- (length on-stack)))

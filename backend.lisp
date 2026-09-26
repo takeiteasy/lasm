@@ -220,7 +220,7 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
 ;;; Checks run once every clause is known
 
 (defparameter +backend-hook-arities+
-  '(("PUSH" . 1) ("POP" . 1) ("ALLOC" . 1) ("FREE" . 1) ("MOVE" . 2) ("CALL" . 1) ("RETURN" . 0) ("RETURN-POP" . 1)
+  '(("PUSH" . 1) ("POP" . 1) ("ALLOC" . 1) ("FREE" . 1) ("MOVE" . 2) ("EXCHANGE" . 2) ("CALL" . 1) ("RETURN" . 0) ("RETURN-POP" . 1)
     ("ENTER" . 0) ("LEAVE" . 0))
   "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 

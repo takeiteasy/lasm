@@ -96,12 +96,15 @@ the same signs as from the stack pointer: `+n` when the stack grows down,
    register is skipped; a `:return` register or a register with neither role is
    an error.
 2. A push of each argument beyond the `call :args` registers, in the `:order`.
-3. A `:move` into each argument register, ordered so no move overwrites a
-   register a later one reads. A [cycle](#register-cycles) goes through a
-   `:scratch` register.
-4. The `:call`.
-5. A `:free` of the stack arguments when `:cleanup` is `:caller`.
-6. A pop of each kept register, in reverse.
+3. A `:move` of each register the call target reads into a free `:scratch`
+   register, when an argument move would overwrite it. The call goes through
+   the copy. With no free one, the call is `items-malformed`.
+4. A `:move` into each argument register, ordered so no move overwrites a
+   register a later one reads. A [cycle](#register-cycles) uses `:exchange`
+   or a `:scratch` register.
+5. The `:call`.
+6. A `:free` of the stack arguments when `:cleanup` is `:caller`.
+7. A pop of each kept register, in reverse.
 
 With `call :args (b c)`, `(:call f (imm 1) (imm 2) (imm 3))` moves `1` into
 `b` and `2` into `c` and pushes `3`; the callee finds its arguments `0` and `1`
@@ -109,11 +112,23 @@ in `b` and `c` and `2` on the stack.
 
 ### Register cycles
 
-Arguments that swap registers form a cycle. The first move's destination is
-copied into a free `:scratch` register, and the moves that read it read the copy.
-A scratch register is free when no argument register is it, no remaining move
-reads it and the call target does not. With no free one, the call is
-`items-malformed`.
+Arguments that swap registers form a cycle. With an `:exchange` operation, each
+step swaps two registers of the cycle: one exchange for two registers, `n-1` for
+`n`, and no scratch register.
+
+```lisp
+(:call f (reg c) (reg b))   ; call :args (b c), :exchange (x y) (xchg x y)
+```
+
+```
+xchg b, c
+call f
+```
+
+Without one, the first move's destination is copied into a free `:scratch`
+register, and the moves that read it read the copy. A scratch register is free
+when no argument register is it, no remaining move reads it and the call target
+does not. With no free one, the call is `items-malformed`.
 
 ```lisp
 (:call f (reg c) (reg b))   ; call :args (b c), registers :scratch (a)
@@ -136,7 +151,8 @@ an `items-malformed`.
 | --- | --- |
 | `:push (x)` `:pop (x)` | Saves, kept registers, spilled arguments, `(:push)` `(:pop)`. |
 | `:alloc (n)` `:free (n)` | Locals; caller clean-up. `n` is a positive count of cells. |
-| `:move (dst src)` | Register arguments. |
+| `:move (dst src)` | Register arguments; a copy of a register the call target reads. |
+| `:exchange (a b)` | A register-argument cycle, when defined. Swaps two registers. |
 | `:call (f)` | `(:call ...)`. |
 | `:return ()` | `(:return)`, or with `:cleanup :caller`. |
 | `:return-pop (n)` | `(:return)` with `:cleanup :callee` and stack arguments. |
@@ -166,7 +182,6 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| A register-argument cycle costs one extra move; there is no exchange operation. | [#333](https://todo.sr.ht/~takeiteasy/lasm/333) |
-| Argument moves can overwrite a register the call target reads. | [#335](https://todo.sr.ht/~takeiteasy/lasm/335) |
+| A symbol spelled like a register is read as that register in an argument or the call target. | [#336](https://todo.sr.ht/~takeiteasy/lasm/336) |
 | Without a frame pointer, the stack depth is tracked per item, not across labels or branches; a raw push in a body is not seen. | [#329](https://todo.sr.ht/~takeiteasy/lasm/329) |
 | Every function of a frame-pointer backend has a frame pointer, even a leaf. | [#331](https://todo.sr.ht/~takeiteasy/lasm/331) |

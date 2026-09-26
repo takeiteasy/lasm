@@ -74,6 +74,14 @@
     (call-ri (opcode 13) (operand dst :width 1) (operand value :width 1)
              (semantics (set! (r dst) value)))))
 
+(definstruction callfoo xchg (modes call-rr)
+  (encoding (opcode 25) (operand lhs :width 1) (operand rhs :width 1))
+  (semantics (let ((old (r lhs))) (set! (r lhs) (r rhs)) (set! (r rhs) old))))
+
+(definstruction callfoo callr (modes call-reg)
+  (encoding (opcode 24) (operand target :width 1))
+  (semantics (push pc sp) (set! pc (r target))))
+
 (definstruction callfoo popr (modes call-reg)
   (encoding (opcode 14) (operand dst :width 1))
   (semantics (set! (r dst) (pop sp))))

@@ -40,7 +40,7 @@ Every name is a register or register alias of the machine.
 
 | Key | Value |
 | --- | --- |
-| `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. A [call](conventions.md#register-cycles) breaks an argument cycle through a `:scratch` one. |
+| `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. A [call](conventions.md#register-cycles) breaks an argument cycle through a `:scratch` one, and copies a register its target reads into one. |
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
 | `:operand` | The [operand kind](#operand-kinds) that writes a register. |
 
@@ -123,7 +123,7 @@ keep their scope; before any, it is global. An argument named like a template
 label is never captured. Operations that [call lowering](conventions.md#backend-operations)
 emits may define labels too.
 
-`:push` `:pop` `:alloc` `:free` `:move` `:call` `:return` `:return-pop`
+`:push` `:pop` `:alloc` `:free` `:move` `:exchange` `:call` `:return` `:return-pop`
 `:enter` and `:leave` are the operations
 [call lowering](conventions.md#backend-operations) emits; each has a fixed
 number of parameters.
