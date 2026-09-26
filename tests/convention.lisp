@@ -629,3 +629,42 @@ ret
   (fiveam:is (null (%cv-malformed '((:function f () (pushv (imm 1)) (:return))) 'callfoo-fp-abi)))
   (fiveam:is (search "use (:push)/(:pop)"
                      (%cv-malformed '((:function f (:frame nil) (pushv (imm 1)) (:return))) 'callfoo-fp-abi))))
+
+;;; Branch mnemonics and declared stack effects (#337, #338)
+
+(defbackend cv-branches-abi (:extends callfoo-abi) (branches call))
+(defbackend cv-effects-abi (:extends cv-branches-abi)
+  (ops (:grab (n) :pops n (adds (sp) (imm n)))
+       (:push2 (a b) :pushes 2 (pushv a) (pushv b))))
+
+(fiveam:test only-a-branch-mnemonic-is-checked-against-the-label-depth
+  (let ((data '((:function f ()
+                  (:push (imm 1)) (ldi (reg a) (imm there)) (:pop (reg b))
+                  (:label there) (:return)))))
+    (fiveam:is (search "reached at depth 1" (%cv-malformed data 'callfoo-abi)))
+    (fiveam:is (null (%cv-malformed data 'cv-branches-abi))))
+  (fiveam:is (search "reached at depth 1"
+                     (%cv-malformed '((:function f () (:push (imm 1)) (call there) (:pop (reg b))
+                                       (:label there) (:return)))
+                                    'cv-branches-abi))))
+
+(fiveam:test an-operand-kind-name-is-not-a-label-reference
+  (fiveam:is (null (%cv-malformed '((:function f ()
+                                      (:label imm) (:push (imm 1)) (:pop (reg b)) (:label reg) (:return)))
+                                  'callfoo-abi))))
+
+(fiveam:test a-declared-stack-effect-is-tracked
+  (let ((items '((:function f (:args 1)
+                  (:op :push2 (imm 1) (imm 2)) (lds (reg a) (:arg 0))
+                  (:op :grab 2) (lds (reg b) (:arg 0)) (:return)))))
+    (let* ((text (render-items items :backend 'cv-effects-abi))
+           (lines (remove-if-not (lambda (line) (search "lds" line)) (uiop:split-string text :separator '(#\Newline)))))
+      (fiveam:is (= 2 (length lines)))
+      (fiveam:is (not (string= (first lines) (second lines)))))
+    (fiveam:is (null (%cv-malformed items 'cv-effects-abi)))
+    (fiveam:is (search "use (:push)/(:pop)"
+                       (%cv-malformed '((:function f () (:op :grab 2) (:return))) 'cv-grab-abi)))))
+
+(fiveam:test a-declared-effect-needs-a-numeric-argument
+  (fiveam:is (search "non-negative integer"
+                     (%cv-malformed '((:function f () (:op :grab (reg a)) (:return))) 'cv-effects-abi))))

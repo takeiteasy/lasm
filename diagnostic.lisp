@@ -280,6 +280,10 @@ alternatives' own MODE-DESCRIPTORs."))
 invalid (DEPENDENTS, innermost first) or leaves compiled instructions built
 against its old shape (INSTRUCTIONS, a list of (MACHINE . MNEMONIC))."))
 
+(define-condition stale-backend (lasm-warning style-warning) ()
+  (:documentation "Signalled when redefining a backend drops an operation that a
+child backend's without-ops still names; the child is rebuilt without the name."))
+
 ;;; Source-context propagation
 
 (defmacro with-source-context (source &body body)

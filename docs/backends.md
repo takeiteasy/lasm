@@ -30,6 +30,7 @@ package. A mistake signals `backend-definition-error`.
 | `(frame ...)` | [Frame layout](#frame). |
 | `(operands (KIND MODE)...)` | [Operand kinds](#operand-kinds). |
 | `(ops (NAME (PARAM...) FORM...)...)` | [Operations](#operations). |
+| `(branches MNEMONIC...)` | The instructions whose operands are [branch targets](#branches). |
 | `(without-ops NAME...)` | Drops [inherited](#inheritance) operations. |
 
 Each clause is optional and may appear once.
@@ -102,6 +103,16 @@ be a whole operand or one value inside one.
 ;; (:op :load (reg a) 5)  ->  (ldi (reg a) (imm 5))
 ```
 
+`:pushes` and `:pops` after the parameters declare the cells an operation puts
+on or takes off the stack: an integer, or a parameter. A function without a
+[frame pointer](conventions.md#stack-depth) tracks a declared effect instead of
+rejecting the operation. The operations call lowering emits cannot declare one.
+
+```lisp
+(ops (:grab (n) :pops n (adds (sp) (imm n)))
+     (:push2 (a b) :pushes 2 (pushv a) (pushv b)))
+```
+
 `(backend-expand-op backend name args)` returns the forms; a `(:label NAME)`
 form is returned as written. A form's mnemonic
 must exist on the machine, and its operand kinds must be declared.
@@ -129,6 +140,13 @@ emits may define labels too.
 [call lowering](conventions.md#backend-operations) emits; each has a fixed
 number of parameters.
 
+## Branches
+
+`(branches call jz br)` lists the instructions whose operands are branch
+targets. In a function without a frame pointer, only their operands are checked
+against [label depths](conventions.md#stack-depth). Without the clause every
+instruction is checked.
+
 ## Inheritance
 
 `(defbackend CHILD (:extends PARENT) clause...)` starts from the parent's
@@ -148,6 +166,7 @@ the child's machine.
 | `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
 | `operands` | By kind. |
 | `ops` | By operation name. |
+| `branches` | The child's list replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 
 `:machine` defaults to the parent's machine. When given, it must be that machine
@@ -156,20 +175,15 @@ is checked again on the child's machine, so an operation using an instruction th
 child machine removed is an error until the child overrides or drops it.
 Redefining a parent rebuilds its children, and their children, from their own
 clauses. If one no longer builds, the redefinition is a `backend-definition-error`
-naming it, and every backend stays as it was. A backend cannot extend one that
-extends it.
+naming it, and every backend stays as it was. A `without-ops` name the new
+parent no longer defines is dropped from the child with a `stale-backend`
+[warning](conditions.md). A backend cannot extend one that extends it.
 
 ## Lookup
 
 | Function | Returns |
 | --- | --- |
 | `(find-backend name)` | The `backend-descriptor`; `unknown-backend` if none. |
-| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` | The stored clauses. |
+| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
-
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| A child's `without-ops` naming an operation the new parent drops blocks redefining the parent. | [#339](https://todo.sr.ht/~takeiteasy/lasm/339) |

@@ -392,7 +392,9 @@ to the enclosing label when one has been defined and the lexer has local labels.
 ;;; and (:pop), for a stack-pointer distance to hold.
 
 ;;; Without a frame pointer a label must be reached at the depth it is defined
-;;; at, and a raw instruction that matches a stack operation is rejected.
+;;; at by a branch instruction (the backend's BRANCHES), and a raw instruction
+;;; that matches a stack operation is rejected unless the operation declares
+;;; its :PUSHES and :POPS.
 
 (defstruct items-frame
   nargs     ; declared arguments
@@ -497,18 +499,26 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (cl:push (cons (%designator-name name) (items-frame-depth *items-frame*))
              (items-frame-labels *items-frame*))))
 
-(defun %record-references (operands item)
-  "Note the names OPERANDS mention, at the current depth."
-  (when (%depth-tracked-p)
-    (labels ((walk (tree)
-               (typecase tree
-                 (cons (walk (car tree)) (walk (cdr tree)))
+(defun %branch-form-p (form)
+  "True when FORM is an instruction whose operands the backend may take as branch targets."
+  (let ((branches (if *items-backend* (backend-descriptor-branches *items-backend*) t)))
+    (or (eq branches t)
+        (member (%designator-name (first form)) branches :test #'equal))))
+
+(defun %record-references (form item)
+  "Note the names FORM's operand values mention, at the current depth, when FORM branches."
+  (when (and (%depth-tracked-p) (consp form) (not (%label-form-p form)) (%branch-form-p form))
+    (labels ((walk (operand)
+               (typecase operand
+                 (cons (dolist (value (if (%keyword-named-p (car operand) "MODE") (cddr operand) (cdr operand)))
+                         (walk value)))
                  (keyword nil)
                  ((or string symbol)
-                  (when tree
-                    (cl:push (list (%designator-name tree) (items-frame-depth *items-frame*) item)
+                  (when operand
+                    (cl:push (list (%designator-name operand) (items-frame-depth *items-frame*) item)
                              (items-frame-references *items-frame*)))))))
-      (walk operands))))
+      (dolist (operand (rest form))
+        (walk operand)))))
 
 (defun %check-label-depths (frame)
   (dolist (reference (reverse (items-frame-references frame)))
@@ -545,6 +555,22 @@ to the enclosing label when one has been defined and the lexer has local labels.
           (%items-fail 'items-malformed item
                        "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
                        form (intern hook :keyword)))))))
+
+(defun %op-stack-effect (name args item)
+  "The net cells the backend's operation NAME puts on the stack, and true, when it declares an effect."
+  (let ((declared (assoc (%designator-name name) (backend-descriptor-op-effects *items-backend*) :test #'equal)))
+    (when declared
+      (let ((params (second (assoc (%designator-name name) (backend-descriptor-ops *items-backend*) :test #'equal))))
+        (flet ((cells (key)
+                 (let ((value (getf (rest declared) key 0)))
+                   (if (stringp value)
+                       (let ((arg (nth (position value params :test #'equal) args)))
+                         (unless (typep arg '(integer 0))
+                           (%items-fail 'items-malformed item "~A: ~(~S~) ~A must be a non-negative integer, got ~S"
+                                        (first item) key value arg))
+                         arg)
+                       value))))
+          (values (- (cells :pushes) (cells :pops)) t))))))
 
 (defun %function-lines (item)
   (unless (and (>= (length item) 3) (listp (third item)) (evenp (length (third item))))
@@ -852,9 +878,15 @@ survive a call, and any other register cannot be kept."
        (when (and (%depth-tracked-p) (member (%designator-name (second item)) '("PUSH" "POP" "ALLOC" "FREE") :test #'equal))
          (%items-fail 'items-malformed item "(:op ~(~S~) ...) changes the stack depth; use (:push)/(:pop) or a frame pointer"
                       (second item)))
-       (%check-stack-forms (%expand-op *items-backend* (second item) (cddr item)) item)
-       (%record-references (cddr item) item)
-       (%op-lines (second item) (cddr item) item))
+       (let ((forms (%expand-op *items-backend* (second item) (cddr item))))
+         (multiple-value-bind (effect declaredp) (%op-stack-effect (second item) (cddr item) item)
+           (unless declaredp
+             (%check-stack-forms forms item))
+           (dolist (form forms)
+             (%record-references form item))
+           (prog1 (%op-lines (second item) (cddr item) item)
+             (when declaredp
+               (%bump-depth effect))))))
       ((%keyword-named-p head "FUNCTION") (%function-lines item))
       ((%keyword-named-p head "CALL") (%call-lines item))
       ((%keyword-named-p head "RETURN") (%return-lines item))
@@ -863,7 +895,7 @@ survive a call, and any other register cannot be kept."
       ((keywordp head)
        (%items-fail 'items-malformed item "unknown item ~S" head))
       (t (%check-stack-forms (list item) item)
-         (%record-references (rest item) item)
+         (%record-references item item)
          (list (%instruction-line item item))))))
 
 (defun %layout-line (line number)

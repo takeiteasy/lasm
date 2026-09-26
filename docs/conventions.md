@@ -69,9 +69,21 @@ without a frame pointer is checked three ways:
 
 | Check | Error when |
 | --- | --- |
-| Labels | A label is defined at one depth and an instruction that names it is at another. |
+| Labels | A label is defined at one depth and a [branch](backends.md#branches) instruction that names it is at another. |
 | Raw stack instructions | An instruction, or an `(:op)` expansion form, is a backend's `:push`, `:pop`, `:alloc` or `:free` template: the same mnemonic, the parameters matching anything, the rest equal. `(:op :push ...)` is rejected too. |
 | `(:depth n)` | `n` is negative, or it is outside a `:function`. |
+
+An `(:op)` that declares [`:pushes` and `:pops`](backends.md#operations) is
+accepted, and the depth follows its net effect:
+
+```lisp
+(ops (:push2 (a b) :pushes 2 (pushv a) (pushv b)))
+```
+
+```lisp
+(:op :push2 (imm 1) (imm 2))   ; depth + 2
+(lds (reg a) (:arg 0))         ; addressed two cells deeper
+```
 
 `(:depth n)` states the depth where the tracking cannot know it, such as after
 a jump:
@@ -231,7 +243,6 @@ frame pointer with one.
 | Limitation | Ticket |
 | --- | --- |
 | A symbol spelled like a register is read as that register in an argument or the call target. | [#336](https://todo.sr.ht/~takeiteasy/lasm/336) |
-| A data reference to a body label at another depth is rejected as a branch. | [#337](https://todo.sr.ht/~takeiteasy/lasm/337) |
-| Raw stack changes are found only for single-form `:push` `:pop` `:alloc` `:free` templates. | [#338](https://todo.sr.ht/~takeiteasy/lasm/338) |
+| A raw instruction that writes the stack pointer, and matches no stack template or declared effect, is not seen. | [#340](https://todo.sr.ht/~takeiteasy/lasm/340) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

@@ -68,4 +68,5 @@ For context, see [Machine model](machine-model.md#conditions),
 | `lasm-warning` | `warning` | `lasm-warning-message`, `lasm-warning-line`, `lasm-warning-file` |
 | `ambiguous-mode` | `lasm-warning` | `ambiguous-mode-mnemonic`, `ambiguous-mode-chosen`, `ambiguous-mode-alternatives` |
 | `ambiguous-alternative` | `ambiguous-mode` | `ambiguous-alternative-hole`, `ambiguous-alternative-slot` |
+| `stale-backend` | `lasm-warning`, `style-warning` | — |
 | `stale-mode` | `lasm-warning`, `style-warning` | `stale-mode-mode`, `stale-mode-dependents`, `stale-mode-instructions` |

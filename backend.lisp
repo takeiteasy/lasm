@@ -28,10 +28,12 @@
   frame       ; plist :GROWS :ALIGNMENT, and :SLOT, :STACK-SLOT (kind names) and :POINTER (a register name) when given
   operands    ; alist of (KIND-NAME . MODE-NAME)
   ops         ; alist of (OP-NAME PARAMS FORM...), names upcased
+  op-effects  ; alist of (OP-NAME :PUSHES X :POPS Y) for the ops that declare a stack effect
+  (branches t) ; upcased mnemonics that branch, or T when the backend does not say
   parent      ; name of the backend extended, or NIL
   options     ; the DEFBACKEND options as given
   own-clauses ; the DEFBACKEND clauses as given, before merging with the parent's
-  clauses)    ; the registers, call, frame, operands and ops clauses after merging with the parent's
+  clauses)    ; the registers, call, frame, operands, ops and branches clauses after merging with the parent's
 
 (defvar *backends* (make-hash-table :test 'equal)
   "Defined backends, keyed by upcased name.")
@@ -203,8 +205,29 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
             (cl:push (cons key mode-name) result)))))
     (nreverse result)))
 
+(defparameter +backend-hook-arities+
+  '(("PUSH" . 1) ("POP" . 1) ("ALLOC" . 1) ("FREE" . 1) ("MOVE" . 2) ("EXCHANGE" . 2) ("CALL" . 1) ("RETURN" . 0) ("RETURN-POP" . 1)
+    ("ENTER" . 0) ("LEAVE" . 0))
+  "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
+
+(defun %parse-op-effects (key names forms)
+  "The (:PUSHES X :POPS Y) leading FORMS, and the forms after them."
+  (let ((effects '()))
+    (loop while (keywordp (first forms))
+          do (let ((effect (first forms)) (value (second forms)))
+               (unless (member effect '(:pushes :pops))
+                 (%backend-error "ops: ~A: unknown option ~S; expected :pushes or :pops" key effect))
+               (when (getf effects effect)
+                 (%backend-error "ops: ~A: ~S given more than once" key effect))
+               (unless (or (typep value '(integer 0)) (and (%designator-name value) (member (%designator-name value) names :test #'equal)))
+                 (%backend-error "ops: ~A: ~S must be a non-negative integer or a parameter, got ~S" key effect value))
+               (setf (getf effects effect) (if (integerp value) value (%designator-name value))
+                     forms (cddr forms))))
+    (values effects forms)))
+
 (defun %parse-ops-clause (entries)
-  (let (result)
+  "The parsed operations, and the alist of the stack effects some declare."
+  (let (result effects)
     (dolist (entry entries)
       (%definition-bind (name params &rest forms) entry
         (let ((key (%designator-name name)))
@@ -217,17 +240,32 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
           (let ((names (mapcar #'%designator-name params)))
             (unless (= (length names) (length (remove-duplicates names :test #'string=)))
               (%backend-error "ops: ~A repeats a parameter" key))
-            (unless forms
-              (%backend-error "ops: ~A has no instruction forms" key))
-            (cl:push (list* key names forms) result)))))
+            (multiple-value-bind (declared forms) (%parse-op-effects key names forms)
+              (unless forms
+                (%backend-error "ops: ~A has no instruction forms" key))
+              (when (and declared (assoc key +backend-hook-arities+ :test #'string=))
+                (%backend-error "ops: ~A is used by call lowering, which knows its stack effect" key))
+              (when declared
+                (cl:push (list* key declared) effects))
+              (cl:push (list* key names forms) result))))))
+    (values (nreverse result) (nreverse effects))))
+
+(defun %parse-branches-clause (machine entries)
+  "The upcased mnemonics ENTRIES name, each an instruction of MACHINE."
+  (let (result)
+    (dolist (entry entries)
+      (let ((key (%designator-name entry)))
+        (unless key
+          (%backend-error "branches: ~S is not a mnemonic" entry))
+        (when (member key result :test #'string=)
+          (%backend-error "branches: ~A is listed twice" key))
+        (handler-case (find-instruction-variants machine key)
+          (unknown-instruction ()
+            (%backend-error "branches: machine ~S has no instruction ~A" machine key)))
+        (cl:push key result)))
     (nreverse result)))
 
 ;;; Checks run once every clause is known
-
-(defparameter +backend-hook-arities+
-  '(("PUSH" . 1) ("POP" . 1) ("ALLOC" . 1) ("FREE" . 1) ("MOVE" . 2) ("EXCHANGE" . 2) ("CALL" . 1) ("RETURN" . 0) ("RETURN-POP" . 1)
-    ("ENTER" . 0) ("LEAVE" . 0))
-  "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 
 (defun %check-backend-hooks (descriptor)
   (loop for (name . arity) in +backend-hook-arities+
@@ -382,6 +420,7 @@ not another register the convention uses."
   "The clause HEAD, CHILD's over PARENT's; either may be NIL."
   (cond ((null child) parent)
         ((null parent) child)
+        ((string= head "BRANCHES") child)
         ((member head '("OPERANDS" "OPS") :test #'string=)
          (cons (first child) (%merge-entries (rest parent) (rest child))))
         (t (let ((result (copy-list (rest parent))))
@@ -390,11 +429,20 @@ not another register the convention uses."
                    do (setf (getf result key) value))
              (cons (first child) result)))))
 
+(defvar *rebuilding-child* nil
+  "True while a child is rebuilt for a redefined parent, when a without-ops name the parent lacks is dropped.")
+
+(defun %without-op-missing (name op)
+  (if *rebuilding-child*
+      (warn 'stale-backend :message (format nil "DEFBACKEND ~S: without-ops names ~S, which the parent no longer defines"
+                                            name op))
+      (%backend-error "DEFBACKEND ~S: without-ops names ~S, which the parent does not define" name op)))
+
 (defun %drop-ops (name ops without)
   "The ops clause OPS without the operations WITHOUT names."
   (dolist (op without)
     (unless (and (%designator-name op) (find (%designator-name op) (rest ops) :test #'equal :key #'%entry-key))
-      (%backend-error "DEFBACKEND ~S: without-ops names ~S, which the parent does not define" name op)))
+      (%without-op-missing name op)))
   (cons (first ops) (remove-if (lambda (entry) (member (%entry-key entry) without :test #'equal :key #'%designator-name))
                                (rest ops))))
 
@@ -404,13 +452,13 @@ not another register the convention uses."
                        when (equal (%clause-head-name clause) "WITHOUT-OPS") append (rest clause)))
         (own (remove "WITHOUT-OPS" clauses :test #'equal :key #'%clause-head-name)))
     (flet ((find-clause (head list) (find head list :test #'equal :key #'%clause-head-name)))
-      (let ((merged (loop for head in '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS")
+      (let ((merged (loop for head in '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES")
                           for clause = (%merge-clause head (find-clause head parent) (find-clause head own))
                           when clause collect clause)))
         (if (and without (find-clause "OPS" merged))
             (substitute (%drop-ops name (find-clause "OPS" merged) without) (find-clause "OPS" merged) merged)
-            (progn (when without (%backend-error "DEFBACKEND ~S: without-ops names ~S, which the parent does not define"
-                                                 name (first without)))
+            (progn (dolist (op without)
+                     (%without-op-missing name op))
                    merged))))))
 
 (defvar *pending-backends* nil
@@ -466,9 +514,9 @@ not another register the convention uses."
         (when (member head seen :test #'equal)
           (%backend-error "DEFBACKEND ~S: more than one ~(~A~) clause" name head))
         (cl:push head seen)
-        (unless (or (member head '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS") :test #'equal)
+        (unless (or (member head '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES") :test #'equal)
                     (and extendsp (equal head "WITHOUT-OPS")))
-          (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands, ops~:[~; or without-ops~]"
+          (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands, ops, branches~:[~; or without-ops~]"
                           name clause extendsp))))))
 
 (defun %build-backend (name options clauses)
@@ -499,7 +547,11 @@ not another register the convention uses."
                 ((equal head "OPERANDS")
                  (setf (backend-descriptor-operands descriptor) (%parse-operands-clause machine (rest clause))))
                 ((equal head "OPS")
-                 (setf (backend-descriptor-ops descriptor) (%parse-ops-clause (rest clause)))))))
+                 (multiple-value-bind (ops effects) (%parse-ops-clause (rest clause))
+                   (setf (backend-descriptor-ops descriptor) ops
+                         (backend-descriptor-op-effects descriptor) effects)))
+                ((equal head "BRANCHES")
+                 (setf (backend-descriptor-branches descriptor) (%parse-branches-clause machine (rest clause)))))))
       (%finish-backend-stack descriptor machine-descriptor)
       (%finish-backend-pointer descriptor)
       (%check-backend-kinds descriptor)
@@ -519,8 +571,9 @@ not another register the convention uses."
         (build (%designator-name name) name options clauses)
         (dolist (key (%backend-descendants name))
           (let ((old (gethash key *backends*)))
-            (handler-case (build key (backend-descriptor-name old)
-                                 (backend-descriptor-options old) (backend-descriptor-own-clauses old))
+            (handler-case (let ((*rebuilding-child* t))
+                            (build key (backend-descriptor-name old)
+                                   (backend-descriptor-options old) (backend-descriptor-own-clauses old)))
               (backend-definition-error (c)
                 (%backend-error "DEFBACKEND ~S: child backend ~S no longer builds: ~A"
                                 name (backend-descriptor-name old) c))))))
@@ -539,12 +592,16 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
            [:cleanup :caller/:callee] [:return-address-slots n])
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg])
      (operands (KIND mode-name)...)
-     (ops (NAME (param...) (mnemonic operand...)...)...)
+     (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
+     (branches mnemonic...)
      (without-ops NAME...)                    ; with :extends only
 :extends merges PARENT's clauses under these by key, for the same machine or one
 extending it. An operand kind names an addressing mode; an operation expands to instruction
 forms whose operands are (KIND value...) items, parameters, or expressions. A
-(:label NAME) form defines a label unique to each expansion.
+(:label NAME) form defines a label unique to each expansion. :pushes and :pops
+declare the cells (an integer or a parameter) an operation puts on or takes off
+the stack. The instructions in branches are the ones whose operands are
+branch targets; without the clause every instruction is taken to branch.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

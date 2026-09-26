@@ -95,6 +95,7 @@
    #:lasm-warning-message
    #:lasm-warning-line
    #:lasm-warning-file
+   #:stale-backend
    #:ambiguous-mode
    #:ambiguous-mode-mnemonic
    #:ambiguous-mode-chosen
@@ -253,6 +254,8 @@
    #:backend-descriptor-frame
    #:backend-descriptor-operands
    #:backend-descriptor-ops
+   #:backend-descriptor-op-effects
+   #:backend-descriptor-branches
    #:backend-register
    #:backend-expand-op
    #:assemble-items
