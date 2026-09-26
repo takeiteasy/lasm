@@ -163,16 +163,19 @@
 
 (fiveam:test fixed-stack-accessors-require-a-default-or-explicit-name
   (dolist (machine '(two-stack-test-machine no-stack-test-machine pointer-only-test-machine))
-    (dolist (form '((stack-depth) (stack-ref 0) (stack-pointer)
-                    (setf (stack-ref 0) 1) (setf (stack-pointer) 1)))
+    (dolist (form '((stack-depth) (stack-pointer) (setf (stack-pointer) 1)))
+      (fiveam:signals error
+        (eval `(with-machine (m ,machine) ,form)))))
+  ;; A sole stack-pointer register is STACK-REF's default target (#169).
+  (dolist (machine '(two-stack-test-machine no-stack-test-machine))
+    (dolist (form '((stack-ref 0) (setf (stack-ref 0) 1)))
       (fiveam:signals error
         (eval `(with-machine (m ,machine) ,form))))))
 
 (fiveam:test fixed-stack-accessors-reject-a-pointer-register
   (with-machine (m pointer-only-test-machine)
     (fiveam:signals unknown-storage (stack-depth sp))
-    (fiveam:signals unknown-storage (stack-pointer sp))
-    (fiveam:signals unknown-storage (stack-ref 0 sp))))
+    (fiveam:signals unknown-storage (stack-pointer sp))))
 
 (fiveam:test push-with-no-stack-name-errors-on-multiple-stacks
   (fiveam:signals error
@@ -243,3 +246,106 @@
     (fiveam:signals error
       (eval `(let ((m (make-machine 'bank-test-machine)))
                (with-machine-bindings (m bank-test-machine) (set-bank! ,region 1)))))))
+
+;;; #167, #168, #169: multi-cell slots, :bounds and stack-ref on a
+;;; (stack-pointer ...) stack.
+
+(defmachine wide-pointer-test-machine
+  (register sp :width 16)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram :grows :down :width 16))
+
+(defmachine wide-pointer-up-test-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram :grows :up :width 16))
+
+(defmachine bounded-pointer-test-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram :grows :down :bounds (#x10 #x1f)))
+
+(fiveam:test wide-slot-push-pop-round-trips-and-lays-out-little-endian
+  (with-machine (m wide-pointer-test-machine)
+    (set! sp #x40)
+    (push #xBEEF)
+    (fiveam:is (= #x3E (sref m 'sp)))
+    (fiveam:is (equal '(#xEF #xBE) (list (mref m 'ram #x3E) (mref m 'ram #x3F))))
+    (fiveam:is (= #xBEEF (pop)))
+    (fiveam:is (= #x40 (sref m 'sp)))))
+
+(fiveam:test wide-slot-pointer-wraps-through-the-address-space
+  (with-machine (m wide-pointer-test-machine)
+    (push #x1234)
+    (fiveam:is (= #xFFFE (sref m 'sp)))
+    (fiveam:is (= #x1234 (pop)))
+    (fiveam:is (zerop (sref m 'sp)))))
+
+(fiveam:test stack-ref-reads-and-writes-below-the-top-on-a-down-pointer-stack
+  (with-machine (m wide-pointer-test-machine)
+    (set! sp #x40)
+    (push #x1111)
+    (push #x2222)
+    (fiveam:is (= #x2222 (stack-ref 0)))
+    (fiveam:is (= #x1111 (stack-ref 1)))
+    (set! sp sp)
+    (setf (stack-ref 1) #x3333)
+    (fiveam:is (= #x3333 (stack-ref 1)))
+    (fiveam:is (= #x2222 (pop)))
+    (fiveam:is (= #x3333 (pop)))
+    (fiveam:is (= #x40 (sref m 'sp)))))
+
+(fiveam:test stack-ref-on-an-up-pointer-stack-counts-back-from-the-top
+  (with-machine (m wide-pointer-up-test-machine)
+    (push #x1111)
+    (push #x2222)
+    (fiveam:is (= #x2222 (stack-ref 0)))
+    (fiveam:is (= #x1111 (stack-ref 1)))
+    (fiveam:is (= 4 (sref m 'sp)))))
+
+(fiveam:test stack-ref-still-defaults-to-the-fixed-stack-on-a-mixed-machine
+  (with-machine (m stack-and-pointer-test-machine)
+    (push 9)
+    (fiveam:is (= 9 (stack-ref 0)))
+    (push 5 sp)
+    (fiveam:is (= 5 (stack-ref 0 sp)))))
+
+(fiveam:test bounded-pointer-stack-signals-overflow-before-changing-state
+  (let ((m (make-machine 'bounded-pointer-test-machine)))
+    (setf (sref m 'sp) #x20)
+    (dotimes (i 16) (sp-push m 'sp i))
+    (fiveam:is (= #x10 (sref m 'sp)))
+    (fiveam:signals stack-overflow (sp-push m 'sp 99))
+    (fiveam:is (= #x10 (sref m 'sp)))
+    (fiveam:is (= 15 (mref m 'ram #x10)))))
+
+(fiveam:test bounded-pointer-stack-signals-underflow-and-index-out-of-range
+  (let ((m (make-machine 'bounded-pointer-test-machine)))
+    (setf (sref m 'sp) #x20)
+    (fiveam:signals stack-underflow (sp-pop m 'sp))
+    (fiveam:is (= #x20 (sref m 'sp)))
+    (sp-push m 'sp 7)
+    (fiveam:is (= 7 (sp-ref m 'sp 0)))
+    (fiveam:signals stack-index-out-of-range (sp-ref m 'sp 1))
+    (fiveam:signals stack-index-out-of-range (sp-ref m 'sp -1))))
+
+(fiveam:test unbounded-pointer-stack-still-wraps-silently
+  (with-machine (m sole-pointer-wrap-test-machine)
+    (push 1)
+    (fiveam:is (= 255 (sref m 'sp)))
+    (fiveam:is (= 1 (pop)))))
+
+(defmachine sole-pointer-wrap-test-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram))
+
+(fiveam:test stack-pointer-clause-validates-width-and-bounds
+  (dolist (clause '((stack-pointer sp :memory ram :width 0)
+                    (stack-pointer sp :memory ram :bounds (5 2))
+                    (stack-pointer sp :memory ram :bounds (1))
+                    (stack-pointer sp :memory ram :bounds (0 #x100))))
+    (fiveam:signals machine-definition-error
+      (eval `(defmachine stack-pointer-invalid-clause-test
+               (register sp :width 8) (memory ram :width 8 :addr-width 8)
+               ,clause)))))

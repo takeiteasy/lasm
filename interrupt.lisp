@@ -16,6 +16,10 @@
 
 ;;; Software-raised interrupts
 
+(defun %interrupt-place-width (descriptor place)
+  "The bit width of interrupt :SAVE PLACE, a name or (NAME INDEX)."
+  (storage-element-width (descriptor-element descriptor (if (consp place) (first place) place))))
+
 (defun signal-interrupt (machine data &key device priority (non-maskable nil non-maskable-p))
   "The public, DEVICE-optional entry point for raising an interrupt --
 called directly by an INT-style instruction's semantics, MACHINE passed
@@ -141,15 +145,12 @@ stays idle until unmasked, same as delivery itself."
         (handler-bind ((runtime-location
                          (lambda (c) (%locate-runtime-condition c machine interrupted memory))))
           (%enter-delivery-level machine interrupts)
-          ;; #166: a :POINTER stack pushes through SP-PUSH instead of
-          ;; STACK-PUSH -- STACK names the bound register, and its
-          ;; STACK-POINTER-DESCRIPTOR (resolved at DEFMACHINE time) carries
-          ;; which memory and which growth direction to use.
+          ;; #166: a :POINTER stack pushes through SP-PUSH, each place at its own width (#167).
           (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
-              (let ((sp (gethash stack (machine-descriptor-stack-pointers (machine-descriptor machine)))))
-                (dolist (value saved)
-                  (sp-push machine stack (stack-pointer-descriptor-memory sp)
-                           (stack-pointer-descriptor-grows sp) value)))
+              (loop for place in (interrupt-descriptor-save interrupts)
+                    for value in saved
+                    do (sp-push machine stack value
+                                :width (%interrupt-place-width (machine-descriptor machine) place)))
               (dolist (value saved)
                 (stack-push machine stack value)))
           (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data)

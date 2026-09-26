@@ -126,7 +126,8 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                              :read-privilege read-privilege
                              :write-privilege write-privilege))))
 
-;; #166: (stack-pointer REGISTER [:memory NAME] [:grows :down/:up]) -- binds
+;; #166: (stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width N]
+;; [:bounds (LOW HIGH)]) -- binds
 ;; an existing scalar :register element as an address pointer into a :memory
 ;; element, for machines whose "stack" is a plain register indexed by
 ;; push/pop convention rather than a lasm :stack element (DCPU-16, ANIMA-16).
@@ -135,14 +136,21 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 ;; REGISTER/MEMORY actually name the right kind of element can't be checked
 ;; until every other clause is known (%FINISH-STACK-POINTERS, below).
 (defun parse-stack-pointer-clause (form)
-  (%definition-bind (register &key memory (grows :down)) form
+  (%definition-bind (register &key memory (grows :down) width bounds) form
     (unless (symbolp register)
       (%defmachine-error "stack-pointer ~S must be a symbol" register))
     (when (and memory (not (symbolp memory)))
       (%defmachine-error "stack-pointer ~S :memory must be a symbol, got ~S" register memory))
     (unless (member grows '(:down :up))
       (%defmachine-error "stack-pointer ~S :grows must be :DOWN or :UP, got ~S" register grows))
-    (make-stack-pointer-descriptor :register register :memory memory :grows grows)))
+    (when width
+      (%check-positive width ":width" register))
+    (when (and bounds (not (and (consp bounds) (= (length bounds) 2) (every #'integerp bounds)
+                                (<= 0 (first bounds) (second bounds)))))
+      (%defmachine-error "stack-pointer ~S :bounds must be (LOW HIGH) with 0 <= LOW <= HIGH, got ~S"
+                         register bounds))
+    (make-stack-pointer-descriptor :register register :memory memory :grows grows
+                                   :width width :bounds bounds)))
 
 ;; #166: resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
 ;; DESCRIPTOR's own ELEMENTS, once they're fully known -- same two-pass split
@@ -180,6 +188,13 @@ name one explicitly with :memory" reg name))
                   (t (%defmachine-error "stack-pointer ~S on machine ~S: more than one memory element ~
 declared (~{~S~^ ~}) -- name one explicitly with :memory"
                             reg name (mapcar #'storage-element-name memories)))))))
+        (let ((memory (gethash (stack-pointer-descriptor-memory sp) (machine-descriptor-table descriptor)))
+              (bounds (stack-pointer-descriptor-bounds sp)))
+          (unless (stack-pointer-descriptor-width sp)
+            (setf (stack-pointer-descriptor-width sp) (storage-element-cell-width memory)))
+          (when (and bounds (>= (second bounds) (ash 1 (storage-element-addr-width memory))))
+            (%defmachine-error "stack-pointer ~S on machine ~S: :bounds ~S exceeds memory ~S's ~D-bit address space"
+                               reg name bounds (storage-element-name memory) (storage-element-addr-width memory))))
         (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
 
 ;; #107: (region NAME start end [:kind :ram/:rom/:device] [:banks n] [:on-write
@@ -513,23 +528,7 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
     (multiple-value-bind (stack-name stack-kind)
         (%resolve-interrupt-stack descriptor (interrupt-descriptor-stack-name interrupts))
       (setf (interrupt-descriptor-stack-name interrupts) stack-name)
-      (setf (interrupt-descriptor-stack-kind interrupts) stack-kind)
-      ;; #166: a :POINTER stack pushes every :SAVE place, un-split, into one
-      ;; memory cell (SP-PUSH, storage.lisp) -- a place wider than the bound
-      ;; memory's cell width would silently truncate on delivery instead of
-      ;; failing loudly here. Splitting a wide place across cells is
-      ;; unscoped follow-up work (#166 follow-up).
-      (when (eq stack-kind :pointer)
-        (let* ((sp (gethash stack-name (machine-descriptor-stack-pointers descriptor)))
-               (memory (gethash (stack-pointer-descriptor-memory sp) (machine-descriptor-table descriptor)))
-               (cell-width (storage-element-cell-width memory)))
-          (dolist (place (interrupt-descriptor-save interrupts))
-            (let* ((n (if (consp place) (first place) place))
-                   (width (storage-element-width (gethash n (machine-descriptor-table descriptor)))))
-              (when (> width cell-width)
-                (%defmachine-error "interrupts on machine ~S: :save place ~S is ~D bits wide, too wide ~
-for stack-pointer ~S's memory ~S (~D-bit cells)"
-                       name place width stack-name (stack-pointer-descriptor-memory sp) cell-width)))))))))
+      (setf (interrupt-descriptor-stack-kind interrupts) stack-kind))))
 
 ;; (instruction-word :width n (field name width) (field name width) ...)
 ;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
@@ -1247,7 +1246,11 @@ instructions are compiled against the parent's" head))
                                   (eq (stack-pointer-descriptor-memory psp)
                                       (stack-pointer-descriptor-memory csp))
                                   (eq (stack-pointer-descriptor-grows psp)
-                                      (stack-pointer-descriptor-grows csp)))
+                                      (stack-pointer-descriptor-grows csp))
+                                  (eql (stack-pointer-descriptor-width psp)
+                                       (stack-pointer-descriptor-width csp))
+                                  (equal (stack-pointer-descriptor-bounds psp)
+                                         (stack-pointer-descriptor-bounds csp)))
                        (fail "stack-pointer ~S differs" reg))))
                  pp))
       (let ((pp (machine-descriptor-privilege parent))
@@ -1354,7 +1357,7 @@ and the parent's instructions are copied in."
      (device NAME [:id n] [:version n] [:manufacturer n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn]
              [:priority n] [:non-maskable t/nil])
-     (stack-pointer REGISTER [:memory name] [:grows :down/:up])
+     (stack-pointer REGISTER [:memory name] [:grows :down/:up] [:width n] [:bounds (low high)])
      (interrupts :vector reg :message reg :save (name...)
                  [:nmi-vector reg] [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:mask-level place]
@@ -1459,10 +1462,15 @@ pre-decrements then stores, pop loads then post-increments; :UP has it point
 one PAST the top item -- push stores then post-increments, pop
 pre-decrements then loads. PUSH/POP (semantics.lisp) and an (interrupts ...)
 clause's :STACK both accept a stack-pointer register wherever they accept a
-(stack ...) element's name; there is no overflow/underflow condition -- a
-wrapping register is the machine's own business, same as the hardware it
-models, and the indexed address is masked to :MEMORY's :ADDR-WIDTH so
-REGISTER may be wider than the address space.
+(stack ...) element's name. :WIDTH (default :MEMORY's cell width) is the
+bits per push/pop/ref slot; a wider slot spans several cells in :MEMORY's
+own endianness (#167). :BOUNDS (LOW HIGH) is an inclusive cell-address
+window outside which a push, pop or ref signals STACK-OVERFLOW,
+STACK-UNDERFLOW or STACK-INDEX-OUT-OF-RANGE before anything changes
+(#168); without it there is no condition -- a wrapping register is the
+machine's own business, same as the hardware it models. The indexed
+address is masked to :MEMORY's :ADDR-WIDTH so REGISTER may be wider than
+the address space.
 
 INTERRUPTS (#109) declares the machine's interrupt-delivery model:
 :VECTOR names the register holding the handler address, written to PC on
@@ -1474,8 +1482,8 @@ are written -- INTERRUPT-RETURN (semantics.lisp) pops them in reverse.
 or a (stack-pointer ...)-bound register -- defaulting to the machine's sole
 :stack element, or (with none declared) its sole stack-pointer (an error on
 zero or more than one candidate of whichever kind applies). A :STACK naming
-a stack-pointer additionally requires every :SAVE place to fit the bound
-memory's cell width.
+a stack-pointer saves each place at its own width, spanning several
+cells when it is wider than the memory's cell width.
 :QUEUE (default 256) caps the number of pending, undelivered signals;
 :ON-OVERFLOW (default :ERROR) picks what SIGNAL-INTERRUPT (interrupt.lisp)
 does when a signal arrives past that cap -- :ERROR signals INTERRUPT-

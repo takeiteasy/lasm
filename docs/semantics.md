@@ -23,7 +23,8 @@ access functions; see [Machine model](machine-model.md) and
 | `(set! place value)` | Write a register, flag, or other settable place. |
 | `(mref machine [memory] address)` | Read or write a memory cell. |
 | `(push value [stack])`, `(pop [stack])` | Use a fixed stack or register-backed stack pointer. |
-| `(stack-depth [stack])`, `(stack-pointer [stack])`, `(stack-ref offset [stack])` | Inspect a fixed stack. |
+| `(stack-depth [stack])`, `(stack-pointer [stack])` | Inspect a fixed stack. |
+| `(stack-ref offset [stack])` | Read or (with `setf`) write a slot below the top of a fixed or register stack. |
 | `(set-bank! region n)` | Map a memory bank. |
 | `(set-flags! (flag form)...)` | Set named flags. |
 | `(trap tag [data])` | Signal `lasm-trap`. |
@@ -33,8 +34,8 @@ access functions; see [Machine model](machine-model.md) and
 | `(zero? value)`, `(bit-set? value bit)` | Predicates for flag expressions. |
 | `(page-crossed? from to [page-size])` | Test whether two addresses cross a page boundary. |
 
-Explicit `sref`, `regref`, `flag`, `stack-push`, `stack-pop`, `sp-push` and
-`sp-pop` calls in semantics honor [element gates](privilege.md#gating-registers-flags-and-stacks)
+Explicit `sref`, `regref`, `flag`, `stack-push`, `stack-pop`, `sp-push`,
+`sp-pop` and `sp-ref` calls in semantics honor [element gates](privilege.md#gating-registers-flags-and-stacks)
 like the bound names do.
 
 `mref` defaults to the sole memory element in semantics; name it when there
@@ -96,5 +97,5 @@ machine instance:
 
 [^stack]: `push` and `pop` accept a fixed-stack name or a register declared
   by `(stack-pointer ...)`. `stack-ref` uses a top-relative index into a
-  fixed stack. `set-bank!` requires a banked region and checks bank range
+  fixed stack or such a register. `set-bank!` requires a banked region and checks bank range
   when executed. `interrupt-return` requires an interrupt declaration.

@@ -1087,7 +1087,7 @@ count: ldx #3
     (debug-command session "set sp = $100")
     (debug-command session "set $100 = 42")
     (fiveam:is (= #x100 (sref m 'sp)))
-    (fiveam:is (= 42 (sp-pop m 'sp 'ram :down)))
+    (fiveam:is (= 42 (sp-pop m 'sp)))
     (fiveam:is (= #x101 (sref m 'sp)))
     (fiveam:is (search "Error" (debug-command session "set sp.depth = 1")))))
 

@@ -24,7 +24,7 @@ one namespace.
 | --- | --- | --- |
 | `(register NAME :width n [:count n] [:names (...)])` | Scalar or banked registers and optional aliases. | [Registers](#registers) |
 | `(stack NAME :width n :depth n)` | Fixed-depth LIFO storage. | [Stacks](#stacks) |
-| `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
+| `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width n] [:bounds (LOW HIGH)])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
 | `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
 | `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
@@ -67,8 +67,25 @@ Overflow and underflow signal storage conditions.
 A `(stack-pointer REGISTER ...)` instead uses a scalar register to index
 memory. `:down` (default) points at the top and pre-decrements on push;
 `:up` points past the top and post-increments on push. The indexed address
-wraps to the memory address width. `push`/`pop` and interrupt delivery accept
-either stack form. See [Semantics vocabulary](semantics.md).
+wraps to the memory address width. `push`/`pop`, `stack-ref` and interrupt
+delivery accept either stack form. See [Semantics vocabulary](semantics.md).
+
+| Option | Meaning |
+| --- | --- |
+| `:width n` | Bits per slot for `push`, `pop` and `stack-ref`. Defaults to the memory's `:cell-width`. |
+| `:bounds (LOW HIGH)` | Inclusive cell addresses the stack may touch. Without it nothing is checked. |
+
+A slot wider than one cell spans consecutive cells in the memory's `:endian`
+order. On 8-bit little-endian cells a 16-bit `#xBEEF` pushed on a `:down`
+stack stores `#xEF` at SP and `#xBE` at SP+1. An interrupt frame saves each
+`:save` place at its own width.
+
+`(stack-ref offset [register])` reads the slot `offset` slots below the top
+(`0` is the top) without popping; `(setf stack-ref)` writes it. With `:bounds`,
+a push past the window signals `stack-overflow`, a pop past it
+`stack-underflow`, and a `stack-ref` past it `stack-index-out-of-range`. Each
+check runs before SP or memory changes. Without `:bounds`, `stack-ref` has no
+live region to check and addresses memory directly.
 
 ## Memory regions
 
@@ -139,7 +156,7 @@ Storage is unsigned. Every write wraps to its declared width: `300` in an
 | Banked register | `regref` | `(setf regref)` |
 | Fixed stack | `stack-pop`, `stack-depth`, `stack-pointer`, `stack-ref` | `stack-push`, `(setf stack-pointer)`, `(setf stack-ref)` |
 | Memory | `mref`, `mpeek` | `(setf mref)` |
-| Register stack pointer | `sp-pop` | `sp-push` |
+| Register stack pointer | `sp-pop`, `sp-ref` | `sp-push`, `(setf sp-ref)` |
 
 `regref` accepts a scalar register at index 0; `sref` rejects a banked one.
 `flag` stores `0` or `1`. Semantics can omit the fixed-stack name when the
@@ -162,7 +179,7 @@ instruction fetch, and PC advancement do not call it. The
 | `unknown-storage` | Missing element or scalar access to a banked register. |
 | `address-out-of-range`, `memory-write-protected` | Invalid address or protected ROM write. |
 | `privilege-violation` | Access, register, flag, stack or instruction below its required [privilege level](privilege.md). |
-| `stack-overflow`, `stack-underflow`, `stack-index-out-of-range`, `stack-pointer-out-of-range` | Invalid fixed-stack operation. |
+| `stack-overflow`, `stack-underflow`, `stack-index-out-of-range`, `stack-pointer-out-of-range` | Invalid fixed-stack operation, or a register stack leaving its `:bounds`. |
 | `register-index-out-of-range` | Invalid bank index. |
 | `no-such-device`, `interrupt-queue-full` | Device or interrupt error. |
 
@@ -209,6 +226,13 @@ See [Assembler](assembler.md#assemblys-cell-width).
 The grouped form orders groups with its first keyword and cells within a
 group with its second. Word-addressed memory and word-encoded instructions
 can be combined; see [`dcpu16.lisp`](../examples/dcpu16.lisp).
+
+## Limitations
+
+| Limitation | Ticket |
+| --- | --- |
+| `push`/`pop` on a register stack use the clause `:width`; there is no per-call width. | [#358](https://todo.sr.ht/~takeiteasy/lasm/358) |
+| The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
 
 [^regions]: Regions change access behavior over one backing array.
   `:device` regions do not store values. `mpeek` reads zero there. A mapper

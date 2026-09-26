@@ -410,3 +410,16 @@ stop" :machine 'fam-w8))
 (fiveam:test child-shadowing-a-mode-leaves-inherited-instruction-on-the-parents-mode
   (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :machine 'fam-modes-shadow))))
   (fiveam:is (equalp #(2 5) (assembly-cells (assemble "fmw [5]" :machine 'fam-modes-shadow)))))
+
+(defmachine fam-sp-base
+  (register sp :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :bounds (0 255)))
+
+(fiveam:test child-must-keep-the-parents-stack-pointer-width-and-bounds
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (fam-sp-bounds (:extends fam-sp-base))
+             (stack-pointer sp :memory ram :bounds (0 127)))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (fam-sp-width (:extends fam-sp-base))
+             (stack-pointer sp :memory ram :bounds (0 255) :width 16)))))

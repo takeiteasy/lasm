@@ -92,8 +92,9 @@ than wrapping. The emulator sign-extends the operand before semantics runs;
 ## Stack-relative addressing
 
 `stack-relative` matches `expr "," "S"`. Its expression is an unsigned
-offset from the top of the machine's fixed stack: `0` names the top, `1`
-the cell below it.
+offset from the top of the machine's fixed stack or
+[register stack](machine-model.md#stacks): `0` names the top, `1` the slot
+below it.
 
 ```lisp
 (definstruction hybridfoo lda

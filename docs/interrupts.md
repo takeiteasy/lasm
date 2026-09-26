@@ -176,8 +176,10 @@ step, after that step's delivery check. See [Emulator](emulator.md#interrupt-del
 `:stack` can name a register declared with `(stack-pointer ...)` instead of
 a fixed `(stack ...)`. Delivery and return use the register-backed memory
 stack with the same save order. There is no fixed-stack overflow or
-underflow condition. Each saved place must fit one memory cell. See
-[Machine model](machine-model.md#stacks).
+underflow condition unless the clause declares `:bounds`. Each saved place
+takes as many cells as its own width needs, laid out in the memory's
+`:endian` order, so a 16-bit `pc` and an 8-bit flags register fit an 8-bit
+memory. See [Machine model](machine-model.md#stacks).
 
 ## `interrupt-return`
 

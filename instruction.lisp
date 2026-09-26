@@ -4852,23 +4852,6 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 
 ;;; Encoding / execution
 
-(defun %cell-significance-order (endian width)
-  "The significance (0 = low-order) of each cell of a WIDTH-cell value, in
-ascending address order. ENDIAN is :LITTLE, :BIG, or (OUTER INNER GROUP): the
-value's cells, low-order first, split into groups of GROUP cells; OUTER orders
-the groups in memory, INNER the cells within each group. (:BIG :LITTLE 2) is
-PDP-endian."
-  (ecase (if (consp endian) :grouped endian)
-    (:little (loop for i below width collect i))
-    (:big (loop for i from (1- width) downto 0 collect i))
-    (:grouped
-     (destructuring-bind (outer inner group) endian
-       (let ((groups (loop for start from 0 below width by group
-                           collect (loop for i from start below (min width (+ start group))
-                                         collect i))))
-         (loop for g in (if (eq outer :big) (reverse groups) groups)
-               append (if (eq inner :big) (reverse g) g)))))))
-
 (defun %encode-value-cells (value width cell-width &optional (endian :little))
   "Split (already-evaluated integer) VALUE into WIDTH (unsigned-byte
 CELL-WIDTH) cells in ENDIAN order (#66: :LITTLE, the default, :BIG, or a

@@ -1027,3 +1027,18 @@ rte")))
     (setf (sref m 'sr) #x0005)
     (let ((c (handler-case (progn (step-machine m) nil) (lasm-trap (c) c))))
       (fiveam:is (= #x2000 (getf (lasm-trap-data c) :mask))))))
+
+;;; #169: stack-ref on a gated (stack-pointer ...) register honors its gate.
+
+(defmachine priv-sp-ref-machine
+  (register sp :width 8 :privilege supervisor)
+  (flags s)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram)
+  (privilege :level s :levels (user supervisor)))
+
+(fiveam:test stack-ref-on-a-gated-pointer-register-needs-its-level
+  (fiveam:signals privilege-violation
+    (eval '(with-machine (m priv-sp-ref-machine) (stack-ref 0))))
+  (fiveam:signals privilege-violation
+    (eval '(with-machine (m priv-sp-ref-machine) (setf (stack-ref 0) 1)))))

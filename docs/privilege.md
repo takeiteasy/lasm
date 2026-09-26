@@ -115,7 +115,7 @@ semantics that use the element by name, for reads and writes.
 | Semantics form | Gated by |
 | --- | --- |
 | `cr`, an alias, `(bank 1)`, a flag name | The element's level. |
-| `(sref machine 'cr)`, `(regref ...)`, `(flag ...)`, `(stack-push ...)`, `(stack-pop ...)`, `(sp-push ...)`, `(sp-pop ...)` | The named element's level.[^explicit] |
+| `(sref machine 'cr)`, `(regref ...)`, `(flag ...)`, `(stack-push ...)`, `(stack-pop ...)`, `(sp-push ...)`, `(sp-pop ...)`, `(sp-ref ...)` | The named element's level.[^explicit] |
 | `(set-flags! (ie 1))` | The flag's write level. |
 | `push`, `pop`, `stack-ref`, `stack-pointer`, `stack-depth` | The stack's level, or the stack-pointer register's. |
 

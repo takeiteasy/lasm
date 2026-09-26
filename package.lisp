@@ -193,6 +193,8 @@
    #:stack-pointer-descriptor-register
    #:stack-pointer-descriptor-memory
    #:stack-pointer-descriptor-grows
+   #:stack-pointer-descriptor-width
+   #:stack-pointer-descriptor-bounds
 
    ;; Storage accessors
    #:sref
@@ -209,6 +211,7 @@
    #:stack-pointer
    #:sp-push
    #:sp-pop
+   #:sp-ref
    #:flag
    #:register-alias-at
    #:wrap-value

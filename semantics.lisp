@@ -25,7 +25,7 @@
 ;; expansions call %PLAIN-* so they are never captured again.
 (declaim #-ecl (inline %plain-sref (setf %plain-sref) %plain-regref (setf %plain-regref)
                  %plain-flag (setf %plain-flag) %plain-stack-push %plain-stack-pop
-                 %plain-sp-push %plain-sp-pop))
+                 %plain-sp-push %plain-sp-pop %plain-sp-ref))
 
 (defun %plain-sref (machine name) (sref machine name))
 (defun (setf %plain-sref) (value machine name) (setf (sref machine name) value))
@@ -35,8 +35,10 @@
 (defun (setf %plain-flag) (value machine name) (setf (flag machine name) value))
 (defun %plain-stack-push (machine name value) (stack-push machine name value))
 (defun %plain-stack-pop (machine name) (stack-pop machine name))
-(defun %plain-sp-push (machine reg memory grows value) (sp-push machine reg memory grows value))
-(defun %plain-sp-pop (machine reg memory grows) (sp-pop machine reg memory grows))
+(defun %plain-sp-push (machine reg value &optional width) (sp-push machine reg value :width width))
+(defun %plain-sp-pop (machine reg &optional width) (sp-pop machine reg :width width))
+(defun %plain-sp-ref (machine reg offset) (sp-ref machine reg offset))
+(defun (setf %plain-sp-ref) (value machine reg offset) (setf (sp-ref machine reg offset) value))
 
 (defun %check-element-gate (machine name accesses &optional kind)
   "Enforce NAME's read and write :PRIVILEGE for each of ACCESSES (:READ, :WRITE),
@@ -91,13 +93,21 @@ with KIND defaulting to the element's own."
   (%check-element-gate machine name '(:read :write) :stack)
   (stack-pop machine name))
 
-(defun %checked-sp-push (machine reg memory grows value)
+(defun %checked-sp-push (machine reg value &optional width)
   (%check-element-gate machine reg '(:write) :stack)
-  (sp-push machine reg memory grows value))
+  (sp-push machine reg value :width width))
 
-(defun %checked-sp-pop (machine reg memory grows)
+(defun %checked-sp-pop (machine reg &optional width)
   (%check-element-gate machine reg '(:read :write) :stack)
-  (sp-pop machine reg memory grows))
+  (sp-pop machine reg :width width))
+
+(defun %checked-sp-ref (machine reg offset)
+  (%check-element-gate machine reg '(:read) :stack)
+  (sp-ref machine reg offset))
+
+(defun (setf %checked-sp-ref) (value machine reg offset)
+  (%check-element-gate machine reg '(:write) :stack)
+  (setf (sp-ref machine reg offset) value))
 
 (defun %accessor-form (plain checked gates machine name args)
   "The call a semantics accessor macro expands to: PLAIN for a quoted name
@@ -237,11 +247,8 @@ these for a run-time-computed index."
                                           (storage-element-read-privilege element)
                                           (storage-element-write-privilege element)
                                           (storage-element-field-privileges element))))
-             (pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
-                                   collect (list (stack-pointer-descriptor-register sp)
-                                                 (stack-pointer-descriptor-memory sp)
-                                                 (stack-pointer-descriptor-grows sp))))
-             (pointer-names (mapcar #'first pointer-alist))
+             (pointer-names (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                                  collect (stack-pointer-descriptor-register sp)))
              (bank-names (mapcar (lambda (entry) (memory-region-name (cdr entry)))
                                  (%banked-regions descriptor)))
              (sole-stack (%sole-stack-target descriptor))
@@ -272,17 +279,18 @@ declared (~{~S~^ ~}) -- name one explicitly" machine-name pointer-names))))
              (interrupt-error (unless interrupts
                                  (format nil "INTERRUPT-RETURN on machine ~S: no (interrupts ...) ~
 clause declared" machine-name)))
-             ;; #166: a :POINTER interrupt stack pops through SP-POP instead
-             ;; of STACK-POP -- its memory/direction come from the bound
-             ;; register's own (stack-pointer ...) clause, resolved once here.
+             ;; #166: a :POINTER interrupt stack pops through SP-POP, each place at
+             ;; its own width (#167); the memory and direction come from the
+             ;; bound register's (stack-pointer ...) clause at run time.
              (interrupt-pop-form
                (when interrupts
                  (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
-                     (let ((sp (gethash (interrupt-descriptor-stack-name interrupts)
-                                         (machine-descriptor-stack-pointers descriptor))))
+                     (lambda (place)
                        `(%plain-sp-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)
-                                ',(stack-pointer-descriptor-memory sp) ',(stack-pointer-descriptor-grows sp)))
-                     `(%plain-stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts)))))
+                                       ,(%interrupt-place-width descriptor place)))
+                     (lambda (place)
+                       (declare (ignore place))
+                       `(%plain-stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts))))))
              ;; #301: the privilege level is restored last, so the other pops
              ;; still run at the handler's level, and every restore goes
              ;; through %INTERRUPT-PLACE so it bypasses register gates (#300).
@@ -296,8 +304,8 @@ clause declared" machine-name)))
                       ,@(mapcar
                          (lambda (place)
                            (if (eq place level)
-                               `(setf ,deferred (list ,interrupt-pop-form))
-                               `(setf (%interrupt-place ,machine-var ',place) ,interrupt-pop-form)))
+                               `(setf ,deferred (list ,(funcall interrupt-pop-form place)))
+                               `(setf (%interrupt-place ,machine-var ',place) ,(funcall interrupt-pop-form place))))
                          (reverse (interrupt-descriptor-save interrupts)))
                       ,@(when (member level (interrupt-descriptor-save interrupts))
                           `((setf (%interrupt-place ,machine-var ',level) (first ,deferred)))))))))
@@ -332,21 +340,21 @@ clause declared" machine-name)))
                               `(%semantics-mref ,machine ',target ,name-or-address))))
                       (push (value &optional (stack-name nil supplied-p))
                         (let* ((target (if supplied-p stack-name ',sole-stack))
-                               (entry (assoc target ',pointer-alist)))
+                               (pointer (member target ',pointer-names)))
                           (unless target (%definstruction-error ',stack-error))
                           (%gate-stack-form
                            ',machine-var ',gates target '(:write)
-                           (if entry
-                               `(%plain-sp-push ,',machine-var ',target ',(second entry) ',(third entry) ,value)
+                           (if pointer
+                               `(%plain-sp-push ,',machine-var ',target ,value)
                                `(%plain-stack-push ,',machine-var ',target ,value)))))
                       (pop (&optional (stack-name nil supplied-p))
                         (let* ((target (if supplied-p stack-name ',sole-stack))
-                               (entry (assoc target ',pointer-alist)))
+                               (pointer (member target ',pointer-names)))
                           (unless target (%definstruction-error ',stack-error))
                           (%gate-stack-form
                            ',machine-var ',gates target '(:read :write)
-                           (if entry
-                               `(%plain-sp-pop ,',machine-var ',target ',(second entry) ',(third entry))
+                           (if pointer
+                               `(%plain-sp-pop ,',machine-var ',target)
                                `(%plain-stack-pop ,',machine-var ',target)))))
                       (stack-pointer (&optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
@@ -359,10 +367,12 @@ clause declared" machine-name)))
                           (%gate-stack-form ',machine-var ',gates target '(:read)
                                             `(%stack-pointer ,',machine-var ',target))))
                       (stack-ref (offset &optional (stack-name nil supplied-p))
-                        (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
-                          (unless target (%definstruction-error ',fixed-stack-error))
+                        (let ((target (if supplied-p stack-name ',sole-stack)))
+                          (unless target (%definstruction-error ',stack-error))
                           (%gate-stack-form ',machine-var ',gates target '(:read)
-                                            `(%stack-ref ,',machine-var ',target ,offset))))
+                                            (if (member target ',pointer-names)
+                                                `(%plain-sp-ref ,',machine-var ',target ,offset)
+                                                `(%stack-ref ,',machine-var ',target ,offset)))))
                       (set-bank! (region bank)
                         (unless (member region ',bank-names)
                           (%definstruction-error "SET-BANK! on machine ~S: ~S is not a banked region"

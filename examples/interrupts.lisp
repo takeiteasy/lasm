@@ -10,6 +10,9 @@
 ;;;; convention real ANIMA-16 actually uses -- and shows the same SP backing
 ;;;; an ordinary JSR/RET pair outside any interrupt path.
 ;;;;
+;;;; #167-#169: a third, 6502-shaped machine spans 16-bit slots over 8-bit
+;;;; cells, bounds the stack, and reads below the top with stack-relative.
+;;;;
 ;;;; Run with:  sbcl --script examples/interrupts.lisp
 
 (load (merge-pathnames "boot.lisp" *load-pathname*))
@@ -164,6 +167,60 @@
   (assert (zerop (sref m 'sp)))
 
   (format t "~%All register-indexed-stack assertions passed.~%"))
+
+;;; #167-#169: a 6502-shaped register-indexed stack on 8-bit cells. Stack
+;;; slots are 16 bits wide, so JSR's return address spans two cells (little
+;;; endian, the memory's own order); an interrupt frame saves PC (16 bits)
+;;; and P (8 bits) at their own widths. :bounds fences the stack to page 1 --
+;;; overflowing it signals instead of wrapping -- and LDS reads a slot below
+;;; the top with stack-relative addressing, without popping.
+
+(defmachine intfoo-wide
+  (register pc :width 16)
+  (register ia :width 16)
+  (register a :width 16)
+  (register p :width 8)
+  (register sp :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :grows :down :width 16 :bounds (#x0100 #x01ff))
+  (interrupts :vector ia :message a :save (pc p) :stack sp))
+
+(definstruction intfoo-wide nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction intfoo-wide rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+(definstruction intfoo-wide jsr (encoding (opcode #x05)) (semantics (push pc)))
+(definstruction intfoo-wide lds
+  (modes stack-relative)
+  (encoding (opcode #x10) (operand :mode))
+  (semantics (set! a (stack-ref operand))))
+
+(let ((m (make-machine 'intfoo-wide)))
+  (setf (sref m 'sp) #x0200 (sref m 'ia) #x0300 (sref m 'pc) #x1234 (sref m 'p) #xAB)
+  (load-program m (list #x01) :origin #x0300) ; handler: rfi
+  (setf (sref m 'pc) #x1234)
+  (signal-interrupt m 9)
+  (step-machine m) ; delivers, then runs the rfi found at the vector
+  (format t "~%Wide frame restored: pc=~4,'0X p=~2,'0X sp=~4,'0X~%" (sref m 'pc) (sref m 'p) (sref m 'sp))
+  (assert (= #x1234 (sref m 'pc)))
+  (assert (= #xAB (sref m 'p)))
+  (assert (= #x0200 (sref m 'sp)))
+
+  (reset m)
+  (setf (sref m 'sp) #x0200)
+  (setf (sref m 'ia) #x0300)
+  (sp-push m 'sp #xBEEF)
+  (format t "Return address bytes: ~2,'0X ~2,'0X (little endian)~%" (mref m 'ram #x01fe) (mref m 'ram #x01ff))
+  (assert (= #xEF (mref m 'ram #x01fe)))
+  (assert (= #xBE (mref m 'ram #x01ff)))
+  (load-program m (list #x10 #x00) :origin 0) ; lds 0,S -- the top slot, unpopped
+  (step-machine m)
+  (assert (= #xBEEF (sref m 'a)))
+  (assert (= #x01fe (sref m 'sp)))
+
+  (setf (sref m 'sp) #x0100) ; the fence: one more push would leave page 1
+  (handler-case (progn (sp-push m 'sp 1) (error "expected stack-overflow"))
+    (stack-overflow () (format t "Push past the bounds signalled stack-overflow~%")))
+  (assert (= #x0100 (sref m 'sp)))
+  (format t "~%All wide-stack assertions passed.~%"))
 
 ;;; #161: priority and nesting. Devices declare a :priority; a higher-priority
 ;;; signal is delivered ahead of a lower one already queued, and :nesting

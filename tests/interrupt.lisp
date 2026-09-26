@@ -672,13 +672,56 @@
              (stack-pointer sp :memory ram)
              (stack-pointer sp :memory ram)))))
 
-(fiveam:test defmachine-rejects-a-save-place-wider-than-the-pointer-stacks-cell-width
-  (fiveam:signals machine-definition-error
-    (eval '(defmachine interrupt-sp-wide-save-test
-             (register pc :width 32) (register ia :width 16) (register a :width 16) (register sp :width 16)
-             (memory ram :width 16 :addr-width 16 :cell-width 16)
-             (stack-pointer sp :memory ram)
-             (interrupts :vector ia :message a :save (pc) :stack sp)))))
+;;; #167: a :save place wider than the memory's cell splits across cells in
+;;; the memory's own endianness, each place at its own width. 6502-shaped: an
+;;; 8-bit P and a 16-bit PC on an 8-bit stack.
+
+(defmacro %def-wide-frame-machine (name &key (endian :little) (grows :down))
+  `(progn
+     (defmachine ,name
+       (register pc :width 16) (register ia :width 16) (register a :width 8)
+       (register p :width 8) (register sp :width 16)
+       (memory ram :width 8 :addr-width 16 :endian ,endian)
+       (stack-pointer sp :memory ram :grows ,grows)
+       (interrupts :vector ia :message a :save (pc p) :stack sp))
+     (definstruction ,name nop (encoding (opcode #x00)) (semantics nil))
+     (definstruction ,name rfi (encoding (opcode #x01)) (semantics (interrupt-return)))))
+
+(%def-wide-frame-machine wide-frame-le)
+(%def-wide-frame-machine wide-frame-be :endian :big)
+(%def-wide-frame-machine wide-frame-up :grows :up)
+
+(defun %wide-frame-delivered (name)
+  (let ((m (make-machine name)))
+    (setf (sref m 'ia) #x0100 (sref m 'pc) #x1234 (sref m 'p) #xAB (sref m 'sp) #x0200)
+    (signal-interrupt m 7)
+    (deliver-pending-interrupt m 'pc)
+    m))
+
+(fiveam:test wide-save-place-splits-little-endian-onto-a-down-stack
+  (let ((m (%wide-frame-delivered 'wide-frame-le)))
+    (fiveam:is (= #x01FD (sref m 'sp)))
+    (fiveam:is (equal '(#xAB #x34 #x12) (list (mref m 'ram #x01FD) (mref m 'ram #x01FE) (mref m 'ram #x01FF))))))
+
+(fiveam:test wide-save-place-splits-big-endian-with-the-memorys-order
+  (let ((m (%wide-frame-delivered 'wide-frame-be)))
+    (fiveam:is (equal '(#xAB #x12 #x34) (list (mref m 'ram #x01FD) (mref m 'ram #x01FE) (mref m 'ram #x01FF))))))
+
+(fiveam:test wide-save-place-on-an-up-stack-ascends-and-post-increments
+  (let ((m (%wide-frame-delivered 'wide-frame-up)))
+    (fiveam:is (= #x0203 (sref m 'sp)))
+    (fiveam:is (equal '(#x34 #x12 #xAB) (list (mref m 'ram #x0200) (mref m 'ram #x0201) (mref m 'ram #x0202))))))
+
+(fiveam:test interrupt-return-restores-each-wide-place-at-its-own-width
+  (dolist (name '(wide-frame-le wide-frame-be wide-frame-up))
+    (let ((m (%wide-frame-delivered name)))
+      (setf (sref m 'pc) #x0100)
+      (load-program m (list #x01) :origin #x0100)
+      (setf (sref m 'pc) #x0100)
+      (step-machine m)
+      (fiveam:is (= #x1234 (sref m 'pc)))
+      (fiveam:is (= #xAB (sref m 'p)))
+      (fiveam:is (= #x0200 (sref m 'sp))))))
 
 ;;; Banked-register places (:message/:save/:vector as (NAME INDEX)) and
 ;;; :mask-on-deliver
