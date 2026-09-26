@@ -347,12 +347,13 @@ Signals ITEMS-MALFORMED for an unknown operation or a wrong argument count."
 (defun %fresh-label (label)
   "A name for the template LABEL, used by one expansion of an operation: local
 to the enclosing label when one has been defined and the lexer has local labels.
-TODO: the __LASM_ suffix needs \"_\" among the lexer's identifier characters to
-re-lex a rendering (#332)."
+The serial follows __LASM_, or LASM when the lexer's identifiers exclude _."
   (let* ((base (string-downcase label))
-         (prefix (lexer-descriptor-local-label-prefix *items-lexer-descriptor*))
-         (local (and *items-global-label-seen* prefix (plusp (length prefix)))))
-    (loop for candidate = (format nil "~@[~A~]~A__LASM_~D" (and local prefix) base (incf *items-serial*))
+         (descriptor *items-lexer-descriptor*)
+         (prefix (lexer-descriptor-local-label-prefix descriptor))
+         (local (and *items-global-label-seen* prefix (plusp (length prefix))))
+         (separator (if (find #\_ (lexer-descriptor-ident-extra-chars descriptor)) "__LASM_" "LASM")))
+    (loop for candidate = (format nil "~@[~A~]~A~A~D" (and local prefix) base separator (incf *items-serial*))
           unless (gethash candidate *items-used-names*)
             do (setf (gethash candidate *items-used-names*) t)
                (return candidate))))

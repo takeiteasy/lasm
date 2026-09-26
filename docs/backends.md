@@ -117,7 +117,7 @@ share its name.
 ;; (:op :cjz (reg a) done) twice ->  tst a / jz .skip__LASM_1 / br done / .skip__LASM_1: ...
 ```
 
-The generated name is `NAME__LASM_N`. It is local (the lexer's local-label
+The generated name is `NAME__LASM_N`, or `NAMELASMN` when the [lexer's](lexer.md) identifiers exclude `_`. It is local (the lexer's local-label
 prefix) once a non-local label precedes it, so labels of the surrounding code
 keep their scope; before any, it is global. An argument named like a template
 label is never captured. Operations that [call lowering](conventions.md#backend-operations)
@@ -169,6 +169,5 @@ The command line loads backends from its machine file; see [Command line](cli.md
 | Limitation | Ticket |
 | --- | --- |
 | A child backend does not follow later changes to its parent. | [#330](https://todo.sr.ht/~takeiteasy/lasm/330) |
-| Rendered text with generated labels does not re-lex under a lexer without `_` in identifiers. | [#332](https://todo.sr.ht/~takeiteasy/lasm/332) |
 
 [^copy]: Redefining the parent leaves its children as they were; redefine them too.

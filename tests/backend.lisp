@@ -579,3 +579,18 @@ call .inner" :machine 'callfoo))
                                             (operands (reg bk-br-reg))
                                             (ops ,@ops)))
                       'backend-definition-error))))
+
+(deflexer bk-no-underscore-syntax
+  (comment-styles (";" :line))
+  (number-formats (:dec :default))
+  (label-suffix ":")
+  (local-label-prefix ".")
+  (ident-chars :alnum "."))
+
+(fiveam:test generated-labels-re-lex-under-a-lexer-without-underscore
+  (let* ((items '((:label f) (:op :cjz (reg a) f) (nop)))
+         (source (render-items items :backend 'bk-br-abi :lexer 'bk-no-underscore-syntax)))
+    (fiveam:is (search ".skipLASM1:" source))
+    (fiveam:is (equalp (assembly-cells (assemble-items items :backend 'bk-br-abi :lexer 'bk-no-underscore-syntax))
+                       (assembly-cells (assemble source :machine 'bk-br-machine
+                                                        :lexer 'bk-no-underscore-syntax))))))
