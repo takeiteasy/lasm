@@ -137,7 +137,7 @@ and [Word-encoded instructions](word-instructions.md#variant-suffixes).
 | Function | Result |
 | --- | --- |
 | `match-operand-mode tokens mode` | First AST, all hole ASTs, choices, and named selections; signals `parse-failure` on mismatch. |
-| `try-match-operand-mode tokens mode` | Match data without signalling; includes prefixes, ties, and a specificity score. |
+| `try-match-operand-mode tokens mode` | Match data without signalling; includes prefixes, ties, a specificity score, and the token span of each `one-of` alternative matched. |
 
 Pass the whole `statement-operand-tokens` run. The parsed `operands` list is
 already split at top-level commas, but a mode may include commas as literal

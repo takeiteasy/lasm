@@ -61,13 +61,19 @@ A symbol with mixed case, such as `|Main|`, and a string keep their case.
 
 ## Checked operands
 
-Before assembling, each operand written with a kind or `:mode` is matched
-against its mode. `items-operand-mismatch` is signalled when:
+`items-operand-mismatch` is signalled when:
 
-- its tokens do not match the mode, as in `(reg 5)` where `reg` needs a register alias; or
-- its tokens match another alternative of the instruction's modes more
-  specifically, which the assembler would choose instead. `(:mode abs-mode a)`
-  written as `[a]` is read as the register form.[^check]
+- an operand written with a kind or `:mode` does not match its mode, as in
+  `(reg 5)` where `reg` needs a register alias. This is checked before
+  assembling, by `assemble-items` and `render-items`; or
+- the assembler reads an operand as a different alternative than the one it
+  names. `(:mode abs-mode a)` written as `[a]` is read as the register form.
+  This is checked after assembling, against the alternative the assembler
+  chose for that operand, including nested `one-of` selections and ties that
+  declaration order decides.[^check]
+
+Choosing between a mnemonic's variants by width is not a mismatch:
+`(:mode absolute 5)` assembles as zero-page when the mnemonic has one.
 
 `items-malformed` is signalled for an item that is not well formed: an unknown
 operation or kind, a wrong argument count, a keyword where a value belongs.
@@ -125,9 +131,12 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| The operand check compares one operand at a time. | [#326](https://todo.sr.ht/~takeiteasy/lasm/326) |
+| A named variant mode cannot be forced against width relaxation. | [#327](https://todo.sr.ht/~takeiteasy/lasm/327) |
 | There is no size query without assembling. | [#324](https://todo.sr.ht/~takeiteasy/lasm/324) |
 | There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
 
-[^check]: The check compares each operand alone with every leaf mode reachable
-  from the mnemonic's modes. It does not consider which slot the operand fills.
+[^check]: The assembler records each `one-of` pick as a token span, exposed as
+  [`listing-line-choices`](listing.md#chosen-alternatives). A whole operand
+  also loses to a variant of the mnemonic that matches its syntax more
+  specifically. Instructions from macros, `.rept` and `.include` are not
+  checked.

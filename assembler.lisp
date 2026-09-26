@@ -168,6 +168,9 @@ ever non-NIL for :INSTRUCTION."
   (definition-line nil :type (or null (integer 0)))
   (kind :instruction :type keyword)
   (descriptor nil :type (or null instruction-descriptor))
+  (choices nil :type list)              ; (MODE-NAME START END) per ONE-OF
+                                        ; alternative the operand matched, as
+                                        ; token indices into its operands (#326)
   (region nil :type (or null symbol))   ; banked region and bank the entry
   (bank nil :type (or null (integer 0)))) ; is placed in; NIL for the main image
 
@@ -560,7 +563,9 @@ a mid-relaxation trial pass (whose candidate set can still change) never
 produces a spurious or duplicate warning -- see %LAYOUT-PASS's own FINALP
 for the parallel deferral.
 
-Returns (VALUES chosen-descriptor hole-asts choices) -- CHOICES (#115) is
+Returns (VALUES chosen-descriptor hole-asts choices) -- and, after the
+ties and score the candidates carry, PICKS (#326), the (MODE-NAME START END)
+list TRY-MATCH-OPERAND-MODE reported for the chosen match. CHOICES (#115) is
 the hole-aligned MODE-DESCRIPTOR list TRY-MATCH-OPERAND-MODE reported for
 CHOSEN's own match (NIL entries for a hole not governed by any ONE-OF, NIL
 throughout for a no-operand statement), carried through so
@@ -575,12 +580,12 @@ alternative's :STRICT once a value exists to check it against."
          (candidates
            (loop for v in variants
                  for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices selections hole-prefixes ties score)
+                 for (asts okp choices selections hole-prefixes ties score picks)
                    = (multiple-value-list
                       (if mode
                           (%cached-operands statement mode
                                             (lambda () (try-match-operand-mode tokens mode)))
-                          (values nil (zerop (length tokens)) nil nil nil nil (cons 0 0))))
+                          (values nil (zerop (length tokens)) nil nil nil nil (cons 0 0) nil)))
                  when (and okp (>= (instruction-descriptor-size v) floor)
                            ;; #104/#126: drop a candidate whose CHOICE-
                            ;; selected word field(s) or hole-selected
@@ -594,7 +599,7 @@ alternative's :STRICT once a value exists to check it against."
                    ;; can read a hole's own matched ONE-OF alternative's
                    ;; :STRICT once ENCODE has a value to check it against.
                    collect (list v (%qualify-locals-in-asts! asts scope (statement-line statement))
-                                 choices selections hole-prefixes ties score))))
+                                 choices selections hole-prefixes ties score picks))))
     (when (null candidates)
       (let ((prefixes (loop for v in variants
                             for mode = (instruction-descriptor-mode v)
@@ -1221,7 +1226,7 @@ table (#37), built and keyed the same way, carrying the scope/kind metadata
 SYMBOLS itself cannot. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
-  (:instruction address descriptor asts line choices definition-line unit definition-unit)
+  (:instruction address descriptor asts line choices picks definition-line unit definition-unit)
   (:emit        address width endian asts line definition-line unit definition-unit)
   (:reserve     address count line definition-line unit definition-unit)
 CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
@@ -1385,10 +1390,11 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                               (unless region (setf emitted-p t main-end address)))))))
                       (t
                        (let ((variants (%statement-variants machine mnemonic statement)))
-                         (multiple-value-bind (descriptor asts choices)
+                         (multiple-value-bind (descriptor asts choices selections prefixes ties score picks)
                              (%choose-variant statement variants address
                                                :symbols mode-symbols :scope scope :floor (aref floors i)
                                                :cell-width cell-width :finalp finalp)
+                           (declare (ignore selections prefixes ties score))
                            (setf asts (mapcar (lambda (ast)
                                                 (%capture-set-values ast symbols set-names line)) asts))
                            ;; #115: CHOICES rides along in the sized entry so
@@ -1396,7 +1402,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                            ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
                            ;; RANGE!) once a value exists to check it against.
                            (cl:push (list :instruction address descriptor asts
-                                          line choices *current-definition-line*
+                                          line choices picks *current-definition-line*
                                           *current-source-unit* *current-definition-unit*)
                                     sized)
                            (let* ((size (instruction-descriptor-size descriptor))
@@ -1654,8 +1660,8 @@ ordered by region then bank; overlapping output in one bank is an error."
                (when (zerop (eval-expr ast :symbols symbols :pc address))
                  (error 'assertion-error :message (or message "assertion failed") :line line))))
             (:instruction
-             (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
-               (declare (ignore kind definition-line unit definition-unit))
+             (destructuring-bind (kind address descriptor asts line choices picks definition-line unit definition-unit) entry
+               (declare (ignore kind definition-line unit definition-unit picks))
                (let* ((mode (instruction-descriptor-mode descriptor))
                       (relative-holes (instruction-descriptor-relative-holes descriptor))
                       (values (mapcar (lambda (ast) (eval-expr ast :symbols symbols :pc address)) asts)))
@@ -1719,12 +1725,12 @@ separate from it (rather than folded into the same walk) since %ENCODE
 needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
   (ecase (first entry)
     (:instruction
-     (destructuring-bind (kind address descriptor asts line choices definition-line unit definition-unit) entry
+     (destructuring-bind (kind address descriptor asts line choices picks definition-line unit definition-unit) entry
        (declare (ignore asts choices definition-unit))
        (make-listing-line :address address :size (instruction-descriptor-size descriptor)
                             :line line :definition-line definition-line
                             :source-unit unit :file (and unit (source-unit-file unit))
-                            :kind kind :descriptor descriptor)))
+                            :kind kind :descriptor descriptor :choices picks)))
     (:emit
      (destructuring-bind (kind address width endian asts line definition-line unit definition-unit) entry
        (declare (ignore definition-unit endian))

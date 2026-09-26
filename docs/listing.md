@@ -20,6 +20,19 @@ applicable. `.org`, `.equ`, and `.set` occupy no cells and add no entry.
 `assembly-source` holds source text when known. `assemble-statements`
 accepts `:source` for caller-built statements; `assemble` supplies it.
 
+## Chosen alternatives
+
+`listing-line-choices` lists `(MODE-NAME START END)` for each `one-of`
+alternative the instruction's operands matched, nested ones included. `START`
+and `END` index the tokens after the mnemonic, commas included.
+
+```lisp
+(assemble "ld a, [b]" :machine 'm)   ; one-of picks the register-indirect form
+;; (listing-line-choices (first (assembly-listing a))) => ((ind 2 5))
+```
+
+The list is empty for an instruction and for data without a `one-of`.
+
 ## Lookup
 
 ```lisp

@@ -10,6 +10,30 @@
 (fiveam:def-suite listing :in lasm)
 (fiveam:in-suite listing)
 
+;;; Recorded alternatives (#326)
+
+(defmachine lc-machine
+  (register pc :width 16)
+  (register r :width 16 :names (a b c d))
+  (memory ram :width 16 :addr-width 16))
+
+(defmode lc-imm "#" expr)
+(defmode lc-ind "[" (expr :register r) "]")
+(defmode lc-abs "[" expr "]")
+(defmode lc-mode (expr :register r) "," (one-of lc-imm lc-ind lc-abs))
+
+(definstruction lc-machine ld
+  (modes lc-mode)
+  (encoding (opcode 1) (operand dst :width 1) (operand src :width 1))
+  (semantics (set! (r dst) src)))
+
+(fiveam:test listing-lines-record-the-alternatives-their-operands-matched
+  (let ((entries (assembly-listing (assemble "ld a, [b]
+ld a, [100]
+ld a, #1" :machine 'lc-machine))))
+    (fiveam:is (equal '(((lc-ind 2 5)) ((lc-abs 2 5)) ((lc-imm 2 4)))
+                      (mapcar #'listing-line-choices entries)))))
+
 ;;; Entries match their statements
 
 (fiveam:test listing-entries-match-statements

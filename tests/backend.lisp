@@ -236,6 +236,46 @@ call .inner" :machine 'callfoo))
     (fiveam:is (search "BK-LD-IND" (items-error-detail c)))
     (fiveam:is (equal '(ld (reg a) (abs b)) (items-error-item c)))))
 
+(defmode bk-slot-mode (one-of bk-ld-abs bk-ld-imm) "," (one-of bk-ld-ind bk-ld-reg))
+
+(definstruction bk-ld-machine ld2
+  (modes bk-slot-mode)
+  (encoding (opcode 2) (operand dst :width 1) (operand src :width 1))
+  (semantics (set! (r src) dst)))
+
+(defmode bk-tie-first "x" expr)
+(defmode bk-tie-second expr "x")
+(defmode bk-tie-mode (one-of bk-tie-first bk-tie-second))
+
+(definstruction bk-ld-machine tie
+  (modes bk-tie-mode)
+  (encoding (opcode 3) (operand v :width 1))
+  (semantics (set! (r v) 0)))
+
+(fiveam:test an-alternative-that-only-exists-in-another-slot-is-not-a-rival
+  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs b) (:mode bk-ld-reg c))) :machine 'bk-ld-machine)))
+  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs 5) (:mode bk-ld-ind c))) :machine 'bk-ld-machine))))
+
+(fiveam:test a-nested-alternative-the-assembler-did-not-pick-is-an-error
+  (let ((c (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs b))) :machine 'bk-ld-machine)))
+    (fiveam:is (typep c 'items-operand-mismatch))
+    (fiveam:is (search "BK-LD-IND" (items-error-detail c)))
+    (fiveam:is (search "BK-LD-ABS" (items-error-detail c))))
+  (fiveam:is (null (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs 100))) :machine 'bk-ld-machine))))
+
+(fiveam:test an-alternative-declaration-order-loses-is-an-error
+  (handler-bind ((warning #'muffle-warning))
+    (fiveam:is (null (%items-error-of '((:label x) (tie (:mode bk-tie-first x))) :machine 'bk-ld-machine)))
+    (let ((c (%items-error-of '((:label x) (tie (:mode bk-tie-second x))) :machine 'bk-ld-machine)))
+      (fiveam:is (typep c 'items-operand-mismatch))
+      (fiveam:is (search "BK-TIE-FIRST" (items-error-detail c))))))
+
+(fiveam:test width-relaxation-between-variants-is-not-a-mismatch
+  (let ((assembly (assemble-items '((lda (:mode absolute 5))) :machine 'instr-test-machine)))
+    (fiveam:is (eq 'zero-page (mode-descriptor-name
+                               (instruction-descriptor-mode
+                                (listing-line-descriptor (first (assembly-listing assembly)))))))))
+
 (fiveam:test assembler-errors-point-into-the-rendered-source
   (let ((c (handler-case (assemble-items '((:label x) (call missing)) :machine 'callfoo)
              (lasm-error (c) c))))

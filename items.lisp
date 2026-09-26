@@ -37,6 +37,7 @@
 (defvar *items-machine* nil)
 (defvar *items-backend* nil)
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
+(defvar *items-pickables* nil "Mnemonic -> its (VARIANT-MODE-NAMES . ALTERNATIVE-NAMES), for the assembly in progress.")
 
 (defun %source-name (designator item)
   "The source spelling of DESIGNATOR: a string as is, a symbol downcased unless it has mixed case."
@@ -139,8 +140,10 @@
 ;;; Operands
 
 (defun %fill-pattern (elements values item)
-  "The tokens of a mode pattern with VALUES in its holes."
-  (let ((tokens '()))
+  "The tokens of a mode pattern with VALUES in its holes, and a claim
+(ALTERNATIVE START END) for each ONE-OF alternative named in VALUES, its span
+counted in tokens from the pattern's start."
+  (let ((tokens '()) (claims '()))
     (loop while elements
           do (let ((element (cl:pop elements)))
                (ecase (first element)
@@ -148,6 +151,7 @@
                  (:expr (when (null values)
                           (%items-fail 'items-malformed item "too few values for the operand"))
                         (setf tokens (append tokens (%expression-tokens (cl:pop values) item))))
+                 (:end-of (cl:push (list (second element) (third element) (length tokens)) claims))
                  (:one-of
                   (let* ((name (cl:pop values))
                          (alternative (find-if (lambda (alternative) (%same-name-p alternative name))
@@ -157,13 +161,15 @@
                                    name (%one-of-alternatives element)))
                     (setf elements (append (mode-descriptor-pattern
                                             (find-mode-descriptor alternative *items-machine*))
-                                           elements)))))))
+                                           (cons (list :end-of alternative (length tokens))
+                                                 elements))))))))
     (when values
       (%items-fail 'items-malformed item "too many values for the operand: ~S" values))
-    tokens))
+    (values tokens (nreverse claims))))
 
 (defun %operand-tokens (operand item)
-  "The tokens of OPERAND, and the addressing mode it names, if any."
+  "The tokens of OPERAND, the addressing mode it names, if any, and its claims
+(MODE START END): the named mode over the whole operand, then its alternatives."
   (if (and (consp operand) (not (%expression-head-p (first operand))))
       (let* ((head (first operand))
              (mode (cond ((and (keywordp head) (string= (symbol-name head) "MODE"))
@@ -182,65 +188,89 @@
                               (%items-fail 'items-malformed item "backend ~A has no operand kind ~A"
                                            (backend-descriptor-name *items-backend*) head))
                             (find-mode-descriptor (cdr entry) *items-machine*))))))
-        (values (%fill-pattern (mode-descriptor-pattern mode)
-                               (if (keywordp head) (cddr operand) (rest operand))
-                               item)
-                mode))
-      (values (%expression-tokens operand item) nil)))
+        (multiple-value-bind (tokens claims)
+            (%fill-pattern (mode-descriptor-pattern mode)
+                           (if (keywordp head) (cddr operand) (rest operand))
+                           item)
+          (values tokens mode
+                  (cons (list (mode-descriptor-name mode) 0 (length tokens)) claims))))
+      (values (%expression-tokens operand item) nil nil)))
 
 ;;; Operands that another alternative would win
 
-(defun %leaf-mode-p (mode)
-  (notany (lambda (element) (eq (first element) :one-of)) (mode-descriptor-pattern mode)))
+(defun %check-operand-syntax (tokens mode item)
+  (unless (nth-value 1 (try-match-operand-mode (coerce tokens 'simple-vector) mode))
+    (%items-fail 'items-operand-mismatch item "the operand does not match its mode ~A"
+                 (mode-descriptor-name mode))))
 
-(defun %reachable-leaf-modes (variants)
-  (let ((leaves '()) (seen '()))
+(defun %mode-pickables (variants)
+  "The names of VARIANTS' modes, and of every ONE-OF alternative reachable from them."
+  (let ((modes '()) (alternatives '()) (seen '()))
     (labels ((visit (mode)
                (unless (member mode seen)
                  (cl:push mode seen)
-                 (let ((alternatives (loop for element in (mode-descriptor-pattern mode)
-                                           when (eq (first element) :one-of)
-                                             append (%one-of-alternatives element))))
-                   (if alternatives
-                       (dolist (name alternatives)
-                         (visit (find-mode-descriptor name *items-machine*)))
-                       (cl:push mode leaves))))))
+                 (dolist (element (mode-descriptor-pattern mode))
+                   (when (eq (first element) :one-of)
+                     (dolist (name (%one-of-alternatives element))
+                       (cl:pushnew name alternatives :test #'%same-name-p)
+                       (visit (find-mode-descriptor name *items-machine*))))))))
       (dolist (variant variants)
-        (when (instruction-descriptor-mode variant)
-          (visit (instruction-descriptor-mode variant)))))
-    leaves))
+        (let ((mode (instruction-descriptor-mode variant)))
+          (when mode
+            (cl:pushnew (mode-descriptor-name mode) modes :test #'%same-name-p)
+            (visit mode)))))
+    (cons modes alternatives)))
 
-;; TODO: compares each operand alone with every reachable leaf mode, not the slot
-;; it fills, and re-derives the leaf modes for every instruction; use the
-;; assembler's recorded choice (#326), and cache the leaves per mnemonic in the
-;; per-assembly context.
-(defun %check-alternatives (mnemonic operands item)
-  "Signal ITEMS-OPERAND-MISMATCH when an operand's tokens do not match the mode
-it names, or match another alternative of MNEMONIC's modes more specifically,
-which the assembler would then choose instead."
-  (let ((variants (handler-case (find-instruction-variants *items-machine* mnemonic)
-                    (unknown-instruction () nil))))
-    (loop with candidates = nil and computed = nil
-          for (tokens . mode) in operands
-          when (and mode variants (%leaf-mode-p mode))
-            do (let ((vector (coerce tokens 'simple-vector)))
-                 (multiple-value-bind (asts okp choices selections suffixes ties score)
-                     (try-match-operand-mode vector mode)
-                   (declare (ignore asts choices selections suffixes ties))
-                   (unless okp
-                     (%items-fail 'items-operand-mismatch item "the operand does not match its mode ~A"
-                                  (mode-descriptor-name mode)))
-                   (unless computed
-                     (setf candidates (%reachable-leaf-modes variants) computed t))
-                   (dolist (other candidates)
-                     (unless (eq other mode)
-                       (multiple-value-bind (asts okp choices selections suffixes ties other-score)
-                           (try-match-operand-mode vector other)
-                         (declare (ignore asts choices selections suffixes ties))
-                         (when (and okp (%score> other-score score))
-                           (%items-fail 'items-operand-mismatch item
-                                        "the operand for mode ~A also matches ~A, which the assembler would choose"
-                                        (mode-descriptor-name mode) (mode-descriptor-name other)))))))))))
+(defun %mnemonic-pickables (mnemonic)
+  (let ((key (string-upcase mnemonic)))
+    (or (gethash key *items-pickables*)
+        (setf (gethash key *items-pickables*)
+              (%mode-pickables (find-instruction-variants *items-machine* mnemonic))))))
+
+(defun %score-of (mode name tokens)
+  (nth-value 6 (try-match-operand-mode tokens (or mode (find-mode-descriptor name *items-machine*)))))
+
+(defun %claim-rival (claim line statement entry)
+  "The mode the assembler chose over CLAIM's, or NIL when CLAIM holds. LINE is
+the item line, STATEMENT its parsed statement and ENTRY its listing line.
+A claim holds when the assembler picked that alternative for its span, or its
+mode is the one the instruction's variant uses. Otherwise it loses to another
+alternative picked for the same span, or, for the whole operand, to a variant
+whose syntax matches more specifically."
+  (destructuring-bind (name start end) claim
+    (let* ((picks (listing-line-choices entry))
+           (mode (instruction-descriptor-mode (listing-line-descriptor entry)))
+           (tokens (statement-operand-tokens statement))
+           (pickables (%mnemonic-pickables (item-line-mnemonic line))))
+      (flet ((span-p (pick) (and (= (second pick) start) (= (third pick) end))))
+        (cond
+          ((find-if (lambda (pick) (and (span-p pick) (%same-name-p (first pick) name))) picks) nil)
+          ((and mode (%same-name-p (mode-descriptor-name mode) name) (= start 0) (= end (length tokens))) nil)
+          ((and (member name (cdr pickables) :test #'%same-name-p)
+                (find-if #'span-p picks))
+           (first (find-if #'span-p picks)))
+          ((and mode (= start 0) (= end (length tokens))
+                (member name (car pickables) :test #'%same-name-p)
+                (%score> (%score-of mode nil tokens) (%score-of nil name tokens)))
+           (mode-descriptor-name mode)))))))
+
+(defun %check-choices (assembly lines statements unit)
+  "Signal ITEMS-OPERAND-MISMATCH for an operand whose named mode lost to another
+alternative of the assembled instruction (see %CLAIM-RIVAL)."
+  (let ((lines (coerce lines 'simple-vector))
+        (statements (coerce statements 'simple-vector)))
+    (dolist (entry (assembly-listing assembly))
+      (when (and (eq (listing-line-kind entry) :instruction)
+                 (eq (listing-line-source-unit entry) unit)
+                 (null (listing-line-definition-line entry)))
+        (let* ((index (1- (listing-line-line entry)))
+               (line (aref lines index)))
+          (dolist (claim (item-line-claims line))
+            (let ((rival (%claim-rival claim line (aref statements index) entry)))
+              (when rival
+                (%items-fail 'items-operand-mismatch (item-line-item line)
+                             "the operand for mode ~A also matches ~A, which the assembler chose"
+                             (first claim) rival)))))))))
 
 ;;; Backend operations
 
@@ -275,18 +305,24 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
 (defstruct item-line
   label       ; string, or NIL
   mnemonic    ; string, or NIL
-  operands)   ; list of token lists
+  operands    ; list of token lists
+  item        ; the item it came from
+  claims)     ; (MODE START END) per named mode, as token indices into the operands
 
 (defun %instruction-line (form item)
   (unless (and (consp form) (or (stringp (first form)) (and (symbolp (first form)) (not (keywordp (first form))))))
     (%items-fail 'items-malformed item "~S is not an instruction" form))
-  (let ((mnemonic (%source-name (first form) item))
-        (operands (mapcar (lambda (operand)
-                            (multiple-value-bind (tokens mode) (%operand-tokens operand item)
-                              (cons tokens mode)))
-                          (rest form))))
-    (%check-alternatives mnemonic operands item)
-    (make-item-line :mnemonic mnemonic :operands (mapcar #'car operands))))
+  (let ((offset 0) (claims '()) (operands '()))
+    (dolist (operand (rest form))
+      (multiple-value-bind (tokens mode operand-claims) (%operand-tokens operand item)
+        (when mode
+          (%check-operand-syntax tokens mode item))
+        (dolist (claim operand-claims)
+          (cl:push (list (first claim) (+ offset (second claim)) (+ offset (third claim))) claims))
+        (cl:push tokens operands)
+        (incf offset (1+ (length tokens)))))
+    (make-item-line :mnemonic (%source-name (first form) item) :operands (nreverse operands)
+                    :item item :claims (nreverse claims))))
 
 (defun %directive-line (item)
   (destructuring-bind (name &rest args) (rest item)
@@ -382,13 +418,14 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
             (*items-lexer* lexer*)
             (*items-lexer-descriptor* (find-lexer-descriptor lexer*))
             (*items-literals* (make-hash-table :test 'equal))
+            (*items-pickables* (make-hash-table :test 'equal))
             (*mode-scope* machine*)
             (*register-alias-elements*
               (machine-descriptor-register-alias-elements (find-machine-descriptor machine*))))
        ,@body)))
 
 (defun %items-source (items)
-  "The statements ITEMS make, the source text they render as, and its unit."
+  "The statements ITEMS make, the source text they render as, its unit and the item lines."
   (let* ((lines (loop for item in items append (%item-lines item)))
          (descriptor *items-lexer-descriptor*)
          (text (make-string-output-stream))
@@ -408,7 +445,7 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
                                    (setf (statement-source-unit statement) unit)
                                    statement))
                                token-lines)))
-      (values statements text unit))))
+      (values statements text unit lines))))
 
 (defun render-items (items &key backend machine (lexer 'default))
   "The assembly source text ITEMS render as. Assembling it gives the cells
@@ -421,19 +458,21 @@ ASSEMBLE-ITEMS gives."
 BACKEND-DESCRIPTOR) or for MACHINE. Returns an ASSEMBLY like ASSEMBLE, whose
 source is the text RENDER-ITEMS gives; LEXER, ORIGIN and MEMORY are ASSEMBLE's.
 FILE names the program in diagnostics. Signals ITEMS-MALFORMED for an item that
-is not well formed and ITEMS-OPERAND-MISMATCH for an operand another
-alternative of the instruction's modes would win; the assembler's own
-conditions otherwise."
+is not well formed and ITEMS-OPERAND-MISMATCH for an operand that does not
+match its mode, or that the assembler read as another alternative of the
+instruction's modes; the assembler's own conditions otherwise."
   (%with-items-context (backend machine lexer)
-    (multiple-value-bind (statements text unit) (%items-source items)
+    (multiple-value-bind (statements text unit lines) (%items-source items)
       (setf (source-unit-file unit) (and file (namestring (pathname file))))
-      (with-source-unit unit
-        (assemble-statements statements
-                             :machine *items-machine* :lexer *items-lexer* :origin origin
-                             :memory (and memory
-                                          (or (%find-element-name *items-machine* memory)
-                                              (%signal-usage-error 'usage-error "No memory named ~S" memory)))
-                             :source text :source-unit unit)))))
+      (let ((assembly (with-source-unit unit
+                        (assemble-statements statements
+                                             :machine *items-machine* :lexer *items-lexer* :origin origin
+                                             :memory (and memory
+                                                          (or (%find-element-name *items-machine* memory)
+                                                              (%signal-usage-error 'usage-error "No memory named ~S" memory)))
+                                             :source text :source-unit unit))))
+        (%check-choices assembly lines statements unit)
+        assembly))))
 
 (defun %find-element-name (machine designator)
   (let ((element (find-if (lambda (element) (%same-name-p (storage-element-name element) designator))

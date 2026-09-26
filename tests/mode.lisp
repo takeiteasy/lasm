@@ -393,6 +393,36 @@ looks like."
     (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
     (fiveam:is (equal '(oo-bt-marked) (mapcar #'mode-descriptor-name choices)))))
 
+;;; Recorded picks (#326)
+
+(fiveam:test try-match-operand-mode-records-the-span-of-each-alternative
+  (let ((picks (nth-value 7 (try-match-operand-mode (%tokens-for "X 5") 'oo-nested-outer))))
+    (fiveam:is (equal '((oo-nested-marked 0 2) (oo-nested-specific 0 2)) picks)))
+  (fiveam:is (equal '((oo-overlap-ind 0 3))
+                    (nth-value 7 (try-match-operand-mode (%tokens-for "[5]") 'oo-overlap-ind-first))))
+  (fiveam:is (null (nth-value 7 (try-match-operand-mode (%tokens-for "5") 'oo-nested-plain)))))
+
+(defmode pk-zero-sp "sp")
+(defmode pk-zero-any expr)
+(defmode pk-zero-mode (one-of pk-zero-sp pk-zero-any))
+
+(fiveam:test a-zero-hole-alternative-records-its-span
+  (fiveam:is (equal '((pk-zero-sp 0 1))
+                    (nth-value 7 (try-match-operand-mode (%tokens-for "sp") 'pk-zero-mode))))
+  (fiveam:is (equal '((pk-zero-any 0 1))
+                    (nth-value 7 (try-match-operand-mode (%tokens-for "7") 'pk-zero-mode)))))
+
+(defmode pk-tail-any expr)
+(defmode pk-tail-hash "#" expr)
+(defmode pk-tail-plus (one-of pk-tail-any pk-tail-hash) "+" expr)
+
+(fiveam:test an-alternative-ending-in-a-hole-still-yields-to-a-following-plus
+  (multiple-value-bind (asts okp) (try-match-operand-mode (%tokens-for "1 + 2") 'pk-tail-plus)
+    (fiveam:is (eq t okp))
+    (fiveam:is (equal '(1 2) (mapcar #'expr-number-value asts)))
+    (fiveam:is (equal '((pk-tail-any 0 1))
+                      (nth-value 7 (try-match-operand-mode (%tokens-for "1 + 2") 'pk-tail-plus))))))
+
 ;;; ONE-OF validation errors
 
 (fiveam:test one-of-fewer-than-two-alternatives-signals-error

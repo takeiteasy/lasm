@@ -475,6 +475,7 @@
    #:listing-line-definition-line
    #:listing-line-kind
    #:listing-line-descriptor
+   #:listing-line-choices
    #:listing-line-file
    #:listing-line-region
    #:listing-line-bank
