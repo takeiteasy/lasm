@@ -124,6 +124,32 @@ writing it. Host access, [interrupt delivery](#interrupt-delivery),
 `interrupt-return`, the debugger and snapshots reach gated elements at any
 level. A machine extending another keeps each element's `:privilege`.[^direct]
 
+## Gating bits of a register
+
+`:fields` in a register's `:privilege` plist gates writes to some of its bits,
+so user code can write a status register but not its level bit.
+
+```lisp
+(register sr :width 16
+  :privilege (:fields ((#x2000 supervisor)                      ; S bit
+                       (#x0700 supervisor :on-write :ignore)))) ; IPL mask
+(privilege :level sr :shift 13 :width 1 :levels (user supervisor))
+```
+
+Each entry is `(MASK LEVEL [:on-write POLICY])`. A write that leaves the masked
+bits unchanged is always allowed.
+
+| `:on-write` | A write below `LEVEL` that changes the bits |
+| --- | --- |
+| `:violate` (default) | Violates as a `:register` write and leaves the register untouched. |
+| `:ignore` | Keeps the old bits and stores the rest. |
+
+`:fields` combines with `:read` and `:write`, and applies to banked registers
+and their aliases. It cannot gate a `(stack-pointer ...)` register, and masks
+must not overlap. Host access, delivery and `interrupt-return` bypass it as
+they bypass other [gates](#gating-registers-flags-and-stacks). See
+`examples/privilege.lisp`.
+
 ## Interrupt delivery
 
 `(interrupts ... :deliver-level LEVEL)` switches to `LEVEL` when a signal is
@@ -190,9 +216,8 @@ See `examples/privilege.lisp`.
 
 ## Limitations
 
-- A register's `:privilege` gates the whole register, so it cannot protect
-  only the level bits of a status register. See
-  [ticket 314](https://todo.sr.ht/~takeiteasy/lasm/314).
+- A `:fields` violation does not report which mask failed. See
+  [ticket 315](https://todo.sr.ht/~takeiteasy/lasm/315).
 - A helper function called from semantics, or `(funcall 'sref ...)`, is not
   gated. See [ticket 310](https://todo.sr.ht/~takeiteasy/lasm/310).
 - A violation interrupt does not undo effects an instruction had before it
@@ -213,4 +238,5 @@ See `examples/privilege.lisp`.
     any other name expression looks the element up on every call. A register
     gates as `:register`, a flag as `:flag`, and stack calls as `:stack`.
 [^inherit]: A machine extending another keeps its `:level`, `:shift`,
-    `:width`, `:levels` and values; it can change `:on-violation`.
+    `:width`, `:levels` and values, and each element's `:privilege` including
+    `:fields`; it can change `:on-violation`.

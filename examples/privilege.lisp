@@ -10,6 +10,8 @@
 ;;;; can switch level (:deliver-level), and a violation can raise an interrupt
 ;;;; (:on-violation (:interrupt DATA)) instead of faulting.
 ;;;;
+;;;; #314: a register can gate writes to bits of it (:fields).
+;;;;
 ;;;; #299, #303: the level can be a bit field of a status register, and a
 ;;;; region, register, flag or stack can gate reads, writes and fetches apart.
 ;;;;
@@ -121,3 +123,23 @@ hlt")
             sr (privilege-level m)
             (handler-case (progn (mref m 'ram 1) "ok")
               (privilege-violation (c) (format nil "violates (~(~A~))" (privilege-violation-access c)))))))
+
+;;; #314: user code may set SR's condition-code bits but not its S bit.
+
+(defmachine privfields
+  (register pc :width 8) (register a :width 8)
+  (register sr :width 16
+    :privilege (:fields ((#x2000 supervisor) (#x0700 supervisor :on-write :ignore))))
+  (memory ram :width 8 :addr-width 8)
+  (privilege :level sr :shift 13 :width 1 :levels (user supervisor)))
+
+(definstruction privfields set-cc (encoding (opcode #x01)) (semantics (set! sr (logior sr #x0001))))
+(definstruction privfields set-ipl (encoding (opcode #x02)) (semantics (set! sr (logior sr #x0700))))
+(definstruction privfields set-s (encoding (opcode #x03)) (semantics (set! sr (logior sr #x2000))))
+
+(dolist (opcode '(1 2 3))
+  (let ((m (make-machine 'privfields)))
+    (load-program m (list opcode))
+    (format t "~&privfields: opcode ~D -> ~A~%" opcode
+            (handler-case (progn (step-machine m) (format nil "sr = #x~4,'0X" (sref m 'sr)))
+              (privilege-violation (c) (format nil "~A" c))))))

@@ -84,7 +84,7 @@ Regions cover inclusive address ranges and cannot overlap:
 
 `:privilege LEVEL` on a region, register, flag or stack requires that level for
 CPU access, or `:privilege (:read L :write L :execute L)` gates each access
-apart; see
+apart. A register's `:fields` gates writes to some of its bits; see
 [Privilege levels](privilege.md).
 
 | Kind | Reads | Writes |

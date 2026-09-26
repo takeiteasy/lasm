@@ -875,3 +875,133 @@ rte")))
   (let ((m (make-machine 'priv-split-child)))
     (setf (sref m 's) 0)
     (fiveam:signals privilege-violation (mref m 'ram 0))))
+
+;;; #314: per-field write gates on a register
+
+(defmacro %def-priv-fields-machine (name &rest privilege-keys)
+  `(progn
+     (defmachine ,name
+       (register pc :width 8) (register ia :width 8) (register a :width 8)
+       (register sr :width 16
+         :privilege (:fields ((#x2000 supervisor) (#x0700 supervisor :on-write :ignore))))
+       (register r :width 8 :names (r0 r1) :privilege (:fields ((#x80 supervisor))))
+       (stack st :width 16 :depth 4)
+       (memory ram :width 8 :addr-width 8)
+       (privilege :level sr :shift 13 :width 1 :levels (user supervisor) ,@privilege-keys)
+       (interrupts :vector ia :message a :save (pc sr) :deliver-level supervisor))
+     (definstruction ,name nop (encoding (opcode #x00)) (semantics nil))
+     (definstruction ,name rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+     (definstruction ,name set-cc (encoding (opcode #x02)) (semantics (set! sr (logior sr #x0001))))
+     (definstruction ,name flip-s (encoding (opcode #x03)) (semantics (set! sr (logxor sr #x2000))))
+     (definstruction ,name same (encoding (opcode #x04)) (semantics (set! sr sr)))
+     (definstruction ,name flip-ipl (encoding (opcode #x05)) (semantics (set! sr (logxor sr #x0700))))
+     (definstruction ,name flip-s-sref (encoding (opcode #x06))
+       (semantics (setf (sref machine 'sr) (logxor (sref machine 'sr) #x2000))))
+     (definstruction ,name flip-s-incf (encoding (opcode #x07)) (semantics (incf sr #x2000)))
+     (definstruction ,name set-r1 (encoding (opcode #x08)) (semantics (set! r1 #x80)))
+     (definstruction ,name set-r1-regref (encoding (opcode #x09))
+       (semantics (setf (regref machine 'r 1) #x80)))))
+
+(%def-priv-fields-machine priv-fields-machine)
+(%def-priv-fields-machine priv-fields-irq-machine :on-violation (:interrupt 7))
+
+(defun %priv-fields-step (opcode sr &key (name 'priv-fields-machine))
+  (let ((m (make-machine name)))
+    (setf (sref m 'sr) sr)
+    (load-program m (list opcode))
+    (values m (handler-case (progn (step-machine m) nil)
+                (privilege-violation (c) c)))))
+
+(fiveam:test field-outside-the-mask-is-writable-at-user-level
+  (let ((m (%priv-fields-step #x02 #x0000)))
+    (fiveam:is (= #x0001 (sref m 'sr)))))
+
+(fiveam:test field-change-below-its-level-violates-and-leaves-the-register
+  (dolist (opcode '(#x03 #x06 #x07))
+    (multiple-value-bind (m c) (%priv-fields-step opcode #x0005)
+      (fiveam:is (typep c 'privilege-violation))
+      (fiveam:is (eq :register (privilege-violation-kind c)))
+      (fiveam:is (eq :write (privilege-violation-access c)))
+      (fiveam:is (eq 'sr (storage-error-name c)))
+      (fiveam:is (eq 'supervisor (privilege-violation-required c)))
+      (fiveam:is (= #x0005 (sref m 'sr))))))
+
+(fiveam:test field-written-back-unchanged-is-allowed
+  (fiveam:is (= #x0705 (sref (%priv-fields-step #x04 #x0705) 'sr))))
+
+(fiveam:test field-at-its-level-is-writable
+  (fiveam:is (= #x0005 (sref (%priv-fields-step #x03 #x2005) 'sr)))
+  (fiveam:is (= #x2005 (sref (%priv-fields-step #x05 #x2705) 'sr))))
+
+(fiveam:test field-ignore-policy-keeps-the-old-bits
+  (multiple-value-bind (m c) (%priv-fields-step #x05 #x0205)
+    (fiveam:is (null c))
+    (fiveam:is (= #x0205 (sref m 'sr)))))
+
+(fiveam:test field-on-a-banked-register-gates-alias-and-regref
+  (dolist (opcode '(#x08 #x09))
+    (multiple-value-bind (m c) (%priv-fields-step opcode 0)
+      (fiveam:is (eq 'r (storage-error-name c)))
+      (fiveam:is (= 0 (regref m 'r 1))))
+    (let ((m (%priv-fields-step opcode #x2000)))
+      (fiveam:is (= #x80 (regref m 'r 1))))))
+
+(fiveam:test field-gates-do-not-bind-the-host
+  (let ((m (make-machine 'priv-fields-machine)))
+    (setf (sref m 'sr) #x2700)
+    (setf (sref m 'sr) #x0000)
+    (fiveam:is (= 0 (sref m 'sr)))
+    (setf (regref m 'r 1) #x80)
+    (fiveam:is (= #x80 (regref m 'r 1)))))
+
+(fiveam:test field-violation-interrupt-leaves-the-register-and-return-restores-the-level
+  (let ((m (make-machine 'priv-fields-irq-machine)))
+    (load-program m (list #x03))
+    (load-program m (list #x00 #x01) :origin 32)
+    (setf (sref m 'pc) 0 (sref m 'ia) 32 (sref m 'sr) #x0005)
+    (fiveam:is (eq :privilege-violation (step-machine m)))
+    (fiveam:is (= #x0005 (sref m 'sr)))
+    (step-machine m)
+    (fiveam:is (eq 'supervisor (privilege-level m)))
+    (step-machine m)
+    (step-machine m)
+    (fiveam:is (= #x0005 (sref m 'sr)))))
+
+(fiveam:test field-gates-respect-disabled-privilege-checks
+  (let ((*privilege-checks* nil))
+    (fiveam:is (= #x2005 (sref (%priv-fields-step #x03 #x0005) 'sr)))
+    (fiveam:is (= #x0705 (sref (%priv-fields-step #x05 #x0005) 'sr)))))
+
+(fiveam:test field-definition-errors
+  (flet ((rejects (register &rest extra)
+           (fiveam:signals machine-definition-error
+             (eval `(defmachine priv-bad-fields-machine
+                      (register pc :width 8) (register sp :width 8)
+                      ,register ,@extra
+                      (memory ram :width 8 :addr-width 8)
+                      (flags s)
+                      (privilege :level s :levels (user supervisor)))))))
+    (rejects '(register x :width 8 :privilege (:fields ((#x100 supervisor)))))
+    (rejects '(register x :width 8 :privilege (:fields ((0 supervisor)))))
+    (rejects '(register x :width 8 :privilege (:fields ((#x03 supervisor) (#x06 supervisor)))))
+    (rejects '(register x :width 8 :privilege (:fields ((#x01 nobody)))))
+    (rejects '(register x :width 8 :privilege (:fields ((#x01 supervisor :on-write :frob)))))
+    (rejects '(register x :width 8 :privilege (:fields ())))
+    (rejects '(register x :width 8 :privilege (:fields ((#x01 supervisor :bad t)))))
+    (rejects '(flags (f :privilege (:fields ((1 supervisor))))))
+    (rejects '(stack k :width 8 :depth 2 :privilege (:fields ((1 supervisor)))))
+    (rejects '(register x :width 8 :privilege (:fields ((#x01 supervisor))))
+             '(stack-pointer x :memory ram))
+    (fiveam:signals machine-definition-error
+      (eval '(defmachine priv-bad-fields-machine
+              (register pc :width 8)
+              (register x :width 8 :privilege (:fields ((#x01 supervisor))))
+              (memory ram :width 8 :addr-width 8))))))
+
+(fiveam:test inheriting-machine-must-keep-fields
+  (fiveam:finishes
+    (eval '(defmachine (priv-fields-child (:extends priv-fields-machine))
+            (properties :child t))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (priv-fields-bad-child (:extends priv-fields-machine))
+            (register sr :width 16 :privilege (:fields ((#x2000 supervisor))))))))

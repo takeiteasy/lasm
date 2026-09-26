@@ -54,6 +54,32 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
       (t (%defmachine-error "~(~A~) ~S: :privilege must be a level name or a plist of ~{~S~^, ~} levels, got ~S"
                 kind name accesses spec)))))
 
+;; #314: (:fields ((MASK LEVEL [:on-write :violate/:ignore])...)) inside a
+;; register's :privilege plist. Returns the plist without :FIELDS and the
+;; parsed (MASK LEVEL POLICY) list; %FINISH-PRIVILEGE-MODEL checks the rest.
+(defun %split-field-privileges (spec name)
+  (if (and (consp spec) (listp (cdr (last spec))) (evenp (length spec)) (member :fields spec))
+      (let ((fields (getf spec :fields))
+            (rest (loop for (key value) on spec by #'cddr unless (eq key :fields) append (list key value))))
+        (unless (and (listp fields) fields)
+          (%defmachine-error "register ~S: :fields must be a non-empty list of (MASK LEVEL [:on-write POLICY]), got ~S"
+                 name fields))
+        (values rest
+                (loop for entry in fields
+                      collect (destructuring-bind (&optional mask level &rest options) (if (listp entry) entry (list entry))
+                                (unless (and (integerp mask) (plusp mask))
+                                  (%defmachine-error "register ~S: :fields mask must be a positive integer, got ~S" name mask))
+                                (unless (and level (symbolp level) (not (keywordp level)))
+                                  (%defmachine-error "register ~S: :fields level must be a level name, got ~S" name level))
+                                (unless (and (evenp (length options)) (subsetp (loop for (key) on options by #'cddr collect key) '(:on-write)))
+                                  (%defmachine-error "register ~S: :fields options must be :on-write, got ~S" name options))
+                                (let ((policy (getf options :on-write :violate)))
+                                  (unless (member policy '(:violate :ignore))
+                                    (%defmachine-error "register ~S: :fields :on-write must be :violate or :ignore, got ~S"
+                                           name policy))
+                                  (list mask level policy))))))
+      (values spec nil)))
+
 (defun parse-register-clause (name-form)
   ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
   ;; an optional list of alias symbols, one per bank cell in index order
@@ -76,14 +102,16 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                    name count (length names)))
           (setf count (length names))))
     (setf count (or count 1))
-    (destructuring-bind (read-privilege write-privilege)
+    (multiple-value-bind (privilege field-privileges) (%split-field-privileges privilege name)
+     (destructuring-bind (read-privilege write-privilege)
         (%parse-privilege-spec privilege 'register name '(:read :write))
       (make-storage-element :name name :kind :register
+                             :field-privileges field-privileges
                              :width (%check-positive width ":width" name)
                              :count (%check-positive count ":count" name)
                              :names names
                              :read-privilege read-privilege
-                             :write-privilege write-privilege))))
+                             :write-privilege write-privilege)))))
 
 (defun parse-stack-clause (form)
   ;; (stack NAME :width n :depth n)
@@ -929,6 +957,28 @@ DESCRIPTOR's finished elements."
           (unless (member required (privilege-descriptor-levels privilege))
             (%defmachine-error "~(~A~) ~S on machine ~S: unknown privilege level ~S"
                    (storage-element-kind element) (storage-element-name element) name required))))
+      (let ((fields (storage-element-field-privileges element))
+            (seen 0))
+        (when fields
+          (unless privilege
+            (%defmachine-error "register ~S on machine ~S: :fields requires a (privilege ...) clause"
+                   (storage-element-name element) name))
+          (when (gethash (storage-element-name element) (machine-descriptor-stack-pointers descriptor))
+            (%defmachine-error "register ~S on machine ~S: :fields cannot gate a stack-pointer register"
+                   (storage-element-name element) name)))
+        (dolist (field fields)
+          (destructuring-bind (mask required policy) field
+            (declare (ignore policy))
+            (unless (member required (privilege-descriptor-levels privilege))
+              (%defmachine-error "register ~S on machine ~S: unknown privilege level ~S"
+                     (storage-element-name element) name required))
+            (unless (< mask (ash 1 (storage-element-width element)))
+              (%defmachine-error "register ~S on machine ~S: :fields mask #x~X does not fit ~D bits"
+                     (storage-element-name element) name mask (storage-element-width element)))
+            (unless (zerop (logand seen mask))
+              (%defmachine-error "register ~S on machine ~S: :fields masks overlap at #x~X"
+                     (storage-element-name element) name (logand seen mask)))
+            (setf seen (logior seen mask)))))
       (dolist (region (storage-element-regions element))
         (dolist (required (list (memory-region-read-privilege region)
                                 (memory-region-write-privilege region)
@@ -1217,7 +1267,9 @@ instructions are compiled against the parent's" head))
                        (not (and (eq (storage-element-read-privilege parent-element)
                                      (storage-element-read-privilege child-element))
                                  (eq (storage-element-write-privilege parent-element)
-                                     (storage-element-write-privilege child-element)))))
+                                     (storage-element-write-privilege child-element))
+                                 (equal (storage-element-field-privileges parent-element)
+                                        (storage-element-field-privileges child-element)))))
               (fail "~S changes the inherited :privilege of ~S"
                     (machine-descriptor-name child) (storage-element-name parent-element))))))
       (let ((pi* (machine-descriptor-interrupts parent))

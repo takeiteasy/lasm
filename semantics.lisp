@@ -49,13 +49,20 @@ with KIND defaulting to the element's own."
 
 ;; TODO: the element is looked up on every call; a quoted, gated name could
 ;; resolve its level at macroexpansion time (#307 follow-up if it ever shows in a profile).
+;; #314: VALUE after NAME's field gates; OLD is called only when it has any.
+(defun %gate-fields (machine name value old)
+  (let ((fields (storage-element-field-privileges (descriptor-element (machine-descriptor machine) name))))
+    (if fields
+        (%apply-field-gates machine name fields (funcall old) value)
+        value)))
+
 (defun %checked-sref (machine name)
   (%check-element-gate machine name '(:read))
   (sref machine name))
 
 (defun (setf %checked-sref) (value machine name)
   (%check-element-gate machine name '(:write))
-  (setf (sref machine name) value))
+  (setf (sref machine name) (%gate-fields machine name value (lambda () (sref machine name)))))
 
 (defun %checked-regref (machine name index)
   (%check-element-gate machine name '(:read))
@@ -63,7 +70,8 @@ with KIND defaulting to the element's own."
 
 (defun (setf %checked-regref) (value machine name index)
   (%check-element-gate machine name '(:write))
-  (setf (regref machine name index) value))
+  (setf (regref machine name index)
+        (%gate-fields machine name value (lambda () (regref machine name index)))))
 
 (defun %checked-flag (machine name)
   (%check-element-gate machine name '(:read))
@@ -98,7 +106,8 @@ with no gate, otherwise CHECKED, which looks the gate up at run time."
 (defun %gate-stack-form (machine-var gates target accesses form)
   "FORM, preceded by a privilege check per access in ACCESSES (:READ, :WRITE)
 when TARGET (a stack or a stack-pointer register) is gated (#300)."
-  (destructuring-bind (&optional read write) (cdr (assoc target gates))
+  (destructuring-bind (&optional read write &rest fields) (cdr (assoc target gates))
+    (declare (ignore fields))
     (let ((checks (loop for access in accesses
                         for required = (if (eq access :read) read write)
                         when required
@@ -164,14 +173,14 @@ these for a run-time-computed index."
       (dolist (element (machine-descriptor-elements descriptor))
         (case (storage-element-kind element)
           (:register
-           (let ((name (storage-element-name element))
-                 (required (or (storage-element-read-privilege element)
-                               (storage-element-write-privilege element)))
+           (let* ((name (storage-element-name element))
                  (read (storage-element-read-privilege element))
-                 (write (storage-element-write-privilege element)))
+                 (write (storage-element-write-privilege element))
+                 (fields (storage-element-field-privileges element))
+                 (required (or read write fields)))
              (if (= (storage-element-count element) 1)
                  (cl:push (if required
-                              `(,name (%gated-sref ,machine-var ',name ',read ',write))
+                              `(,name (%gated-sref ,machine-var ',name ',read ',write ',fields))
                               `(,name (%plain-sref ,machine-var ',name)))
                           symbol-macros)
                  (progn
@@ -179,7 +188,7 @@ these for a run-time-computed index."
                    (loop for alias in (storage-element-names element)
                          for index from 0
                          do (cl:push (if required
-                                         `(,alias (%gated-regref ,machine-var ',name ,index ',read ',write))
+                                         `(,alias (%gated-regref ,machine-var ',name ,index ',read ',write ',fields))
                                          `(,alias (%plain-regref ,machine-var ',name ,index)))
                                      symbol-macros))))))
           (:flag
@@ -209,10 +218,12 @@ these for a run-time-computed index."
                                        machine-name)))
              (gates (loop for element in (machine-descriptor-elements descriptor)
                           when (or (storage-element-read-privilege element)
-                                   (storage-element-write-privilege element))
+                                   (storage-element-write-privilege element)
+                                   (storage-element-field-privileges element))
                             collect (list (storage-element-name element)
                                           (storage-element-read-privilege element)
-                                          (storage-element-write-privilege element))))
+                                          (storage-element-write-privilege element)
+                                          (storage-element-field-privileges element))))
              (pointer-alist (loop for sp being the hash-values of (machine-descriptor-stack-pointers descriptor)
                                    collect (list (stack-pointer-descriptor-register sp)
                                                  (stack-pointer-descriptor-memory sp)
@@ -285,7 +296,8 @@ clause declared" machine-name)))
                                      (if required
                                          `(,name (index)
                                                  `(%gated-regref ,',machine-var ',',name ,index
-                                                                 ',',(first required) ',',(second required)))
+                                                                 ',',(first required) ',',(second required)
+                                                                 ',',(third required)))
                                          `(,name (index) `(%plain-regref ,',machine-var ',',name ,index)))))
                                  (nreverse banked-names))
                       ,@(mapcar (lambda (entry)

@@ -212,7 +212,9 @@ memory ~S on machine ~S"
   ;; #300, #303: minimum privilege level for semantics reads and writes of a
   ;; register, flag or stack, or NIL for an ungated access.
   (read-privilege nil :type (or null symbol))
-  (write-privilege nil :type (or null symbol)))
+  (write-privilege nil :type (or null symbol))
+  ;; #314: bit-field write gates on a register, a list of (MASK LEVEL POLICY).
+  (field-privileges nil :type list))
 
 ;; #107: one declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
@@ -1307,6 +1309,25 @@ declares no NAMES or INDEX is outside them."
       (let ((rank (%privilege-rank privilege (%level-value machine privilege))))
         (and (>= rank 0) (nth rank (privilege-descriptor-levels privilege)))))))
 
+;; #314: the write to apply after gating the masked fields of a register.
+;; A :VIOLATE field whose bits change below its level signals; an :IGNORE
+;; one keeps its old bits.
+(defun %apply-field-gates (machine name fields old new)
+  (dolist (field fields)
+    (destructuring-bind (mask required policy) field
+      (when (and (eq policy :violate)
+                 (/= (logand old mask) (logand new mask)))
+        (%check-privilege machine required name nil :register :write))))
+  (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
+    (when (and privilege *privilege-checks*)
+      (let ((current (%privilege-rank privilege (%level-value machine privilege))))
+        (dolist (field fields)
+          (destructuring-bind (mask required policy) field
+            (when (and (eq policy :ignore)
+                       (< current (position required (privilege-descriptor-levels privilege))))
+              (setf new (logior (logandc2 new mask) (logand old mask)))))))))
+  new)
+
 (defun %check-privilege (machine required name address &optional kind access)
   "Signal, per the machine's :ON-VIOLATION policy, unless the current level
 ranks at least as high as REQUIRED. NAME is the memory element accessed at
@@ -1354,25 +1375,27 @@ privilege violation raised as an interrupt (#302), or NIL."
 (defmacro %check-gate (machine required name kind access)
   `(when ,required (%check-privilege ,machine ,required ,name nil ,kind ,access)))
 
-(defun %gated-sref (machine name read write)
-  (declare (ignore write))
+(defun %gated-sref (machine name read write &optional fields)
+  (declare (ignore write fields))
   (%check-gate machine read name :register :read)
   (sref machine name))
 
-(defun (setf %gated-sref) (value machine name read write)
+(defun (setf %gated-sref) (value machine name read write &optional fields)
   (declare (ignore read))
   (%check-gate machine write name :register :write)
-  (setf (sref machine name) value))
+  (setf (sref machine name)
+        (if fields (%apply-field-gates machine name fields (sref machine name) value) value)))
 
-(defun %gated-regref (machine name index read write)
-  (declare (ignore write))
+(defun %gated-regref (machine name index read write &optional fields)
+  (declare (ignore write fields))
   (%check-gate machine read name :register :read)
   (regref machine name index))
 
-(defun (setf %gated-regref) (value machine name index read write)
+(defun (setf %gated-regref) (value machine name index read write &optional fields)
   (declare (ignore read))
   (%check-gate machine write name :register :write)
-  (setf (regref machine name index) value))
+  (setf (regref machine name index)
+        (if fields (%apply-field-gates machine name fields (regref machine name index) value) value)))
 
 (defun %gated-flag (machine name read write)
   (declare (ignore write))
