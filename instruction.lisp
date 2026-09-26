@@ -4196,53 +4196,71 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
   (dolist (descriptor descriptors descriptors)
     (setf (instruction-descriptor-fallback descriptor) t)))
 
-(defvar *macrolet-walk* nil
-  "The function %WALK-IN-ENVIRONMENT calls with the macro environment it expands in.")
+(defvar *local-macros* '()
+  "An alist of macro name to expander function, for the MACROLET forms enclosing the walk,
+innermost first. An expander is called with the form and *DEFINSTRUCTION-ENVIRONMENT*.")
 
-(defvar *macrolet-frames* '()
-  "The binding lists of the MACROLET forms enclosing the walk, outermost first.")
-
-(defmacro %walk-in-environment (&environment environment)
-  (funcall *macrolet-walk* environment)
-  nil)
+(defun %local-expander (binding)
+  "The expander function of the MACROLET BINDING, or NIL when it cannot be built."
+  (ignore-errors
+   (destructuring-bind (name lambda-list &rest body) binding
+     (declare (ignore name))
+     (let* ((form (gensym "FORM"))
+            (env (gensym "ENV"))
+            (whole (when (eq (first lambda-list) '&whole) (second lambda-list)))
+            (lambda-list (if whole (cddr lambda-list) lambda-list))
+            (env-tail (member '&environment lambda-list))
+            (env-variable (second env-tail))
+            (lambda-list (if env-tail
+                             (append (ldiff lambda-list env-tail) (cddr env-tail))
+                             lambda-list))
+            (bindings `(,@(and whole `((,whole ,form)))
+                        ,@(and env-variable `((,env-variable ,env))))))
+       (handler-bind ((warning #'muffle-warning))
+         (compile nil `(lambda (,form ,env)
+                         (declare (ignorable ,form ,env))
+                         (let ,bindings
+                           (declare (ignorable ,@(mapcar #'first bindings)))
+                           (destructuring-bind ,lambda-list (cdr ,form) ,@body)))))))))
 
 (defun %call-with-macrolet (bindings function)
-  "FUNCTION's value and true, called with *DEFINSTRUCTION-ENVIRONMENT* extended by the macrolet
-BINDINGS; NIL and NIL when that environment cannot be built. The environment is built by EVAL,
-which starts without the macros of any MACROLET around the DEFINSTRUCTION."
-  (let* ((frames (append *macrolet-frames* (list bindings)))
-         (form (reduce (lambda (frame inner) `(macrolet ,frame ,inner)) frames
-                       :from-end t :initial-value '(%walk-in-environment)))
-         (entered nil)
-         (result nil))
-    (flet ((enter (environment)
-             (setf entered t)
-             (let ((*definstruction-environment* environment)
-                   (*macrolet-frames* frames))
-               (setf result (funcall function)))))
-      (let ((*macrolet-walk* #'enter))
-        (handler-case (handler-bind ((warning #'muffle-warning))
-                        (eval form)
-                        (values result t))
-          (error (condition)
-            (if entered (error condition) (values nil nil))))))))
+  "FUNCTION's value, called with the macros of the MACROLET BINDINGS in *LOCAL-MACROS*. A macro
+whose expander cannot be built is left out, so its uses are walked as written."
+  (let ((*local-macros* *local-macros*))
+    (dolist (binding bindings)
+      (let ((expander (and (consp binding) (symbolp (car binding)) (%local-expander binding))))
+        (when expander
+          (cl:push (cons (car binding) expander) *local-macros*))))
+    (funcall function)))
+
+(defun %macro-form-p (form)
+  "True when FORM's operator is a macro, local to the walk or in *DEFINSTRUCTION-ENVIRONMENT*."
+  (and (consp form)
+       (symbolp (car form))
+       (not (eq (car form) 'lambda)) ; expands to (function (lambda ...)), forever
+       (or (assoc (car form) *local-macros*)
+           (macro-function (car form) *definstruction-environment*))
+       t))
+
+(defun %expand-macro-form (form)
+  "The expansion of the macro FORM, local macros first, or NIL when it fails."
+  (handler-case (let ((local (cdr (assoc (car form) *local-macros*))))
+                  (if local
+                      (funcall local form *definstruction-environment*)
+                      (macroexpand-1 form *definstruction-environment*)))
+    (error () nil)))
 
 (defun %uses-dynamic-cycles-p (form)
   "True when FORM calls the ELAPSE semantics primitive, directly or through a
 macro expanded in *DEFINSTRUCTION-ENVIRONMENT* or bound by a MACROLET in FORM. A macro
 whose expansion fails is walked as written."
   (cond ((atom form) nil)
-        ((eq (car form) 'elapse) t)
         ((eq (car form) 'quote) nil)
         ((and (eq (car form) 'macrolet) (consp (cdr form)) (listp (second form)))
-         (multiple-value-bind (result ran)
-             (%call-with-macrolet (second form) (lambda () (some #'%uses-dynamic-cycles-p (cddr form))))
-           (if ran result (some #'%uses-dynamic-cycles-p (cddr form)))))
-        ((and (symbolp (car form))
-              (not (eq (car form) 'lambda)) ; expands to (function (lambda ...)), forever
-              (macro-function (car form) *definstruction-environment*))
-         (let ((expansion (handler-case (macroexpand-1 form *definstruction-environment*)
-                            (error () nil))))
+         (%call-with-macrolet (second form) (lambda () (some #'%uses-dynamic-cycles-p (cddr form)))))
+        ((eq (car form) 'elapse) t)
+        ((%macro-form-p form)
+         (let ((expansion (%expand-macro-form form)))
            (if expansion
                (%uses-dynamic-cycles-p expansion)
                (some #'%uses-dynamic-cycles-p (rest form)))))
@@ -4259,9 +4277,22 @@ whose expansion fails is walked as written."
         ((and (consp form) (eq (first form) 'quote)) (if (null (second form)) :false :true))))
 
 (defun %assigns-variable-p (variable forms)
-  "True when FORMS contain a SETQ, SETF, SET!, INCF or DECF naming VARIABLE."
+  "True when FORMS, macros expanded, assign VARIABLE with a SETQ, SETF, SET!, INCF, DECF, PSETQ,
+PSETF, ROTATEF, SHIFTF or MULTIPLE-VALUE-SETQ. A macro whose expansion fails counts as assigning."
   (cond ((atom forms) nil)
-        ((and (%named-p (first forms) "SETQ" "SETF" "SET!" "INCF" "DECF") (member variable (rest forms))) t)
+        ((%named-p (car forms) "QUOTE") nil)
+        ((%named-p (car forms) "SETQ" "SETF" "SET!" "INCF" "DECF" "PSETQ" "PSETF" "ROTATEF" "SHIFTF"
+                   "MULTIPLE-VALUE-SETQ")
+         (labels ((mentions (tree)
+                    (if (consp tree)
+                        (or (mentions (car tree)) (mentions (cdr tree)))
+                        (eq tree variable))))
+           (mentions (cdr forms))))
+        ((and (eq (car forms) 'macrolet) (consp (cdr forms)) (listp (second forms)))
+         (%call-with-macrolet (second forms) (lambda () (%assigns-variable-p variable (cddr forms)))))
+        ((%macro-form-p forms)
+         (let ((expansion (%expand-macro-form forms)))
+           (or (null expansion) (%assigns-variable-p variable expansion))))
         (t (or (%assigns-variable-p variable (car forms)) (%assigns-variable-p variable (cdr forms))))))
 
 (defun %written-registers (forms machine)
@@ -4318,11 +4349,23 @@ IF, or of a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL."
                                     polarity (remove-duplicates (reduce #'append conditions :key #'fourth))))))
                      (or (union-of falsy :not-in)
                          (union-of truthy :in))))))
-             (test-condition (test vars)
-               (cond ((symbolp test) (cdr (assoc test vars)))
-                     ((and (consp test) (%named-p (first test) "NOT" "NULL") (consp (rest test)))
-                      (let ((inner (test-condition (second test) vars)))
-                        (and inner (%negate-write-condition inner))))))
+             (test-conditions (test vars)
+               ;; The conditions holding in an IF's then branch and in its else branch.
+               (flet ((single (condition)
+                        (if condition
+                            (values (list condition) (list (%negate-write-condition condition)))
+                            (values nil nil))))
+                 (cond ((symbolp test) (single (cdr (assoc test vars))))
+                       ((not (consp test)) (values nil nil))
+                       ((and (%named-p (first test) "NOT" "NULL") (consp (rest test)))
+                        (multiple-value-bind (then else) (test-conditions (second test) vars)
+                          (values else then)))
+                       ((%named-p (first test) "AND")
+                        (values (loop for part in (rest test) append (test-conditions part vars)) nil))
+                       ((%named-p (first test) "OR")
+                        (values nil (loop for part in (rest test)
+                                          append (nth-value 1 (test-conditions part vars)))))
+                       (t (single (truthy-condition test))))))
              (walk-let (form conditions vars)
                (let ((sequential (eq (first form) 'let*))
                      (inner vars))
@@ -4358,20 +4401,16 @@ IF, or of a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL."
                         (when (and interrupts (eq (interrupt-descriptor-stack-kind interrupts) :pointer))
                           (note (interrupt-descriptor-stack-name interrupts) conditions))))
                      ((and (eq (first form) 'macrolet) (consp (rest form)) (listp (second form)))
-                      (multiple-value-bind (result ran)
-                          (%call-with-macrolet (second form) (lambda () (walk-list (cddr form) conditions vars)))
-                        (declare (ignore result))
-                        (unless ran (walk-list (cddr form) conditions vars))))
+                      (%call-with-macrolet (second form) (lambda () (walk-list (cddr form) conditions vars))))
                      ((and (member (first form) '(let let*)) (consp (rest form)) (listp (second form)))
                       (walk-let form conditions vars))
-                     ((and (eq (first form) 'if) (consp (rest form)) (test-condition (second form) vars))
-                      (let ((condition (test-condition (second form) vars)))
-                        (walk (third form) (cons condition conditions) vars)
-                        (walk (fourth form) (cons (%negate-write-condition condition) conditions) vars)))
-                     ((and (not (eq (first form) 'lambda))
-                           (macro-function (first form) *definstruction-environment*))
-                      (let ((expansion (handler-case (macroexpand-1 form *definstruction-environment*)
-                                         (error () nil))))
+                     ((and (eq (first form) 'if) (consp (rest form)))
+                      (multiple-value-bind (then else) (test-conditions (second form) vars)
+                        (walk (second form) conditions vars)
+                        (walk (third form) (append (reverse then) conditions) vars)
+                        (walk (fourth form) (append (reverse else) conditions) vars)))
+                     ((%macro-form-p form)
+                      (let ((expansion (%expand-macro-form form)))
                         (if expansion (walk expansion conditions vars) (walk-list (rest form) conditions vars))))
                      (t (walk-list (rest form) conditions vars))))
              (walk-list (forms conditions vars)

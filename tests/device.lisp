@@ -352,10 +352,17 @@ at the start of each test that reads it.")
   (semantics (macrolet ((elapse-later () '(set! a 3))) (elapse-later)))
   (cycles 2))
 
+(macrolet ((wait-outer () '(elapse 6)))
+  (definstruction elapse-machine viaoutermacrolet
+    (encoding (opcode #x05))
+    (semantics (wait-outer))
+    (cycles 2)))
+
 (fiveam:test a-macrolet-inside-semantics-is-searched-for-elapse
   (flet ((variable-cycles (name)
            (instruction-descriptor-variable-cycles (first (find-instruction-variants 'elapse-machine name)))))
     (fiveam:is-true (variable-cycles 'viamacrolet))
+    (fiveam:is-true (variable-cycles 'viaoutermacrolet))
     (fiveam:is-false (variable-cycles 'shadowed))))
 
 (fiveam:test elapse-ticks-devices-between-the-bodys-side-effects

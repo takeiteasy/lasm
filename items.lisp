@@ -280,6 +280,20 @@ whose syntax matches more specifically."
                 (%score> (%score-of mode nil tokens) (%score-of nil name tokens)))
            (mode-descriptor-name mode)))))))
 
+(defun %check-assembled-stack-lines (assembly lines unit)
+  "Signal ITEMS-MALFORMED for a line whose operands left variants that differ in writing the stack
+pointer (see %CHECK-STACK-LINES) when the variant the assembler chose writes it."
+  (let ((lines (coerce lines 'simple-vector)))
+    (dolist (entry (assembly-listing assembly))
+      (when (and (eq (listing-line-kind entry) :instruction)
+                 (eq (listing-line-source-unit entry) unit)
+                 (null (listing-line-definition-line entry)))
+        (let ((line (aref lines (1- (listing-line-line entry)))))
+          (when (and (item-line-stack-check line)
+                     (%stack-writer-p *items-backend* (listing-line-descriptor entry)))
+            (%items-fail 'items-malformed (item-line-item line)
+                         "~A" (%stack-writer-message (item-line-stack-check line)))))))))
+
 (defun %check-choices (assembly lines statements unit)
   "Signal ITEMS-OPERAND-MISMATCH for an operand whose named mode lost to another
 alternative of the assembled instruction (see %CLAIM-RIVAL)."
@@ -590,15 +604,22 @@ with constant operands, the one the assembler's value filter picks among those t
            (pick (and (rest candidates) (%constant-value-pick candidates))))
       (mapcar #'first (if pick (list pick) candidates)))))
 
+(defun %stack-writer-message (text)
+  (format nil "~A writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
+          text))
+
 (defun %check-stack-lines (lines item)
-  "Reject, in a function without a frame pointer, an instruction line whose selected variant writes the stack pointer."
+  "Reject, in a function without a frame pointer, an instruction line whose selected variant writes
+the stack pointer. A line whose operands leave variants that differ is left to %CHECK-ASSEMBLED-STACK-LINES."
   (when (and (%depth-tracked-p) *items-backend*)
     (dolist (line lines)
-      (when (and (item-line-mnemonic line)
-                 (some (lambda (variant) (%stack-writer-p *items-backend* variant)) (%line-variants line)))
-        (%items-fail 'items-malformed item
-                     "~A writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
-                     (nth-value 1 (%layout-line line 0)))))))
+      (when (item-line-mnemonic line)
+        (let* ((variants (%line-variants line))
+               (writers (count-if (lambda (variant) (%stack-writer-p *items-backend* variant)) variants)))
+          (cond ((and (plusp writers) (= writers (length variants)))
+                 (%items-fail 'items-malformed item "~A" (%stack-writer-message (nth-value 1 (%layout-line line 0)))))
+                ((plusp writers)
+                 (setf (item-line-stack-check line) (nth-value 1 (%layout-line line 0))))))))))
 
 (defun %op-stack-effect (name args item)
   "The net cells the backend's operation NAME puts on the stack, and true, when it declares an effect."
@@ -889,7 +910,8 @@ survive a call, and any other register cannot be kept."
   forced      ; the forced mode descriptor, or NIL
   operands    ; list of token lists
   item        ; the item it came from
-  claims)     ; (MODE START END) per named mode, as token indices into the operands
+  claims      ; (MODE START END) per named mode, as token indices into the operands
+  stack-check) ; the line's text when only the assembled variant shows whether it writes the stack pointer
 
 (defun %forced-suffix (mode mnemonic form item)
   "The suffix text that makes the assembler use MODE for MNEMONIC."
@@ -1128,6 +1150,7 @@ instruction's modes; the assembler's own conditions otherwise."
                                              :memory *items-memory*
                                              :source text :source-unit unit))))
         (%check-choices assembly lines statements unit)
+        (%check-assembled-stack-lines assembly lines unit)
         assembly))))
 
 (defun items-size (items &key backend machine (lexer 'default) (origin 0) memory (assume :widest))

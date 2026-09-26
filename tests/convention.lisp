@@ -754,8 +754,24 @@ ret
 
 (fiveam:test a-constant-operand-selects-the-variant-the-assembler-picks
   (fiveam:is (null (%cv-in-function '(drop 5) 'cv-addx-abi)))
-  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop 70000) 'cv-addx-abi)))
-  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop somewhere) 'cv-addx-abi))))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop 70000) 'cv-addx-abi))))
+
+(defun %cv-drop-label (value &key forward)
+  (let ((definition `(:directive equ lowpage ,value)))
+    (%cv-malformed `(,@(unless forward (list definition))
+                     (:function f () (drop lowpage) (:return))
+                     ,@(when forward (list definition)))
+                   'cv-addx-abi)))
+
+(fiveam:test a-label-operand-selects-the-variant-the-assembler-chose
+  (fiveam:is (null (%cv-drop-label 5)))
+  (fiveam:is (search "writes the stack pointer" (%cv-drop-label 70000)))
+  (fiveam:is (null (%cv-drop-label 5 :forward t)))
+  (fiveam:is (search "writes the stack pointer" (%cv-drop-label 70000 :forward t))))
+
+(fiveam:test rendering-accepts-a-width-tie-that-only-assembly-resolves
+  (fiveam:finishes (render-items '((:function f () (drop lowpage) (:return))) :backend 'cv-addx-abi))
+  (fiveam:finishes (items-size '((:function f () (drop lowpage) (:return))) :backend 'cv-addx-abi)))
 
 (fiveam:test an-operand-matching-no-variant-is-left-to-the-assembler
   (let ((items '((:function f () (addx (reg a) (imm 2)) (:return)))))
@@ -927,6 +943,35 @@ ret
     (let ((p nil))
       (when p (set! sp 0)))))
 
+(cv-definstruction-kind vand #x07
+  (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil)))
+        (q (choice-case kind (cv-sel-pc t) (otherwise nil))))
+    (if (and p (not q)) (set! sp 0) (set! a 1))))
+
+(cv-definstruction-kind vor #x08
+  (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil))))
+    (if (or p a) (set! a 1) (set! sp 0))))
+
+(cv-definstruction-kind vandelse #x09
+  (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil))))
+    (if (and p a) (set! a 1) (set! sp 0))))
+
+(cv-definstruction-kind vdirect #x0a
+  (if (choice-case kind (cv-sel-sp t) (otherwise nil)) (set! sp 0) (set! a 1)))
+
+(defmacro cv-assign-true (variable)
+  `(setq ,variable t))
+
+(cv-definstruction-kind vhidden #x0b
+  (let ((p (choice-case kind (cv-sel-pc t) (otherwise nil))))
+    (cv-assign-true p)
+    (when p (set! sp 0))))
+
+(cv-definstruction-kind vpsetq #x0c
+  (let ((p (choice-case kind (cv-sel-pc t) (otherwise nil))))
+    (psetq p t)
+    (when p (set! sp 0))))
+
 (definstruction cv-var vlocal
   (encoding (opcode #x10))
   (semantics (macrolet ((wipe () '(set! sp 0))) (wipe))))
@@ -945,6 +990,17 @@ ret
   (encoding (opcode #x13))
   (semantics (macrolet ((cv-write-sp () '(set! a 0))) (cv-write-sp))))
 
+(macrolet ((cv-outer-wipe () '(set! sp 0)))
+  (definstruction cv-var vouter
+    (encoding (opcode #x14))
+    (semantics (cv-outer-wipe)))
+  (definstruction cv-var vouter-inner
+    (encoding (opcode #x15))
+    (semantics (macrolet ((again () '(set! a 1))) (again) (cv-outer-wipe))))
+  (definstruction cv-var vouter-shadowed
+    (encoding (opcode #x16))
+    (semantics (macrolet ((cv-outer-wipe () '(set! a 0))) (cv-outer-wipe)))))
+
 (defun %cv-var-writes (name)
   (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-var name))))
 
@@ -957,6 +1013,23 @@ ret
                     (%cv-var-writes 'vnot)))
   (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)))) (%cv-var-writes 'vsequential))))
 
+(fiveam:test an-and-or-or-test-carries-only-the-conditions-that-hold-in-a-branch
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)) (kind nil :not-in (cv-sel-pc))) ("A"))
+                    (%cv-var-writes 'vand))
+             "the then branch of an AND takes its resolvable conjuncts")
+  (fiveam:is (equal '(("A") ("SP" (kind nil :not-in (cv-sel-sp))))
+                    (%cv-var-writes 'vor))
+             "the else branch of an OR takes its negated disjuncts, the then branch nothing")
+  (fiveam:is (equal '(("A" (kind nil :in (cv-sel-sp))) ("SP"))
+                    (%cv-var-writes 'vandelse))
+             "the else branch of an AND takes nothing")
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp))) ("A" (kind nil :not-in (cv-sel-sp))))
+                    (%cv-var-writes 'vdirect))))
+
+(fiveam:test an-assignment-hidden-in-a-macro-stops-the-variable-being-followed
+  (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vhidden) :test #'string=)))
+  (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vpsetq) :test #'string=))))
+
 (fiveam:test a-variable-that-is-not-a-constant-choice-stays-unconditional
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vcomputed)))
   (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vassigned) :test #'string=)))
@@ -966,6 +1039,11 @@ ret
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vlocal)))
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vnested)))
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vglobal))))
+
+(fiveam:test a-macro-bound-around-the-definstruction-is-expanded
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vouter)))
+  (fiveam:is (equal '(("A") ("SP")) (%cv-var-writes 'vouter-inner)))
+  (fiveam:is (equal '(("A")) (%cv-var-writes 'vouter-shadowed))))
 
 (fiveam:test a-local-macro-shadows-a-global-one-of-the-same-name
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vshadow))))
