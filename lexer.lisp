@@ -76,6 +76,13 @@
   (or (gethash name *lexers*)
       (%lookup-error 'unknown-lexer name "No lexer named ~S has been defined with DEFLEXER" name)))
 
+(defun lexer-generated-name (descriptor base serial)
+  "BASE with SERIAL appended as a name DESCRIPTOR's lexer reads back as one
+identifier: __LASM_N, or LASMN when its identifiers exclude _."
+  (format nil "~A~A~D" base
+          (if (find #\_ (lexer-descriptor-ident-extra-chars descriptor)) "__LASM_" "LASM")
+          serial))
+
 ;;; DEFLEXER clause parsing
 
 (defun parse-comment-styles-clause (specs)

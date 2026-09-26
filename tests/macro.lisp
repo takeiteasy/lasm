@@ -202,6 +202,21 @@ tag__LASM_1: nop
     tagged" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #xEA) (assembly-cells a)))))
 
+(deflexer macro-no-underscore-syntax
+  (comment-styles (";" :line))
+  (number-formats (:hex "$") (:dec :default))
+  (label-suffix ":")
+  (ident-chars :alnum "."))
+
+(fiveam:test generated-macro-names-follow-the-lexer-identifier-characters
+  (let ((a (assemble ".macro tagged
+tag: nop
+.endm
+tagLASM1: nop
+    tagged" :machine 'instr-test-machine :lexer 'macro-no-underscore-syntax)))
+    (fiveam:is (equalp #(#xEA #xEA) (assembly-cells a)))
+    (fiveam:is (gethash "tagLASM2" (assembly-symbols a)))))
+
 (fiveam:test macro-body-local-labels-are-unique-in-one-scope
   (let ((a (assemble ".macro spin
 .loop: nop

@@ -37,7 +37,7 @@ tokens stay as written. Pass `5` to `adc #k`: the body supplies `#`, so passing
 
 An invocation label names the start of the expanded body, including an empty
 body.[^label] Each invocation gives body-defined labels and `.equ` names unique
-names. Caller arguments keep their spelling.
+names, `NAME__LASM_N` or `NAMELASMN` when the [lexer's](lexer.md) identifiers exclude `_`. Caller arguments keep their spelling.
 
 ```asm
 .macro countdown

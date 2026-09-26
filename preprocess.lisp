@@ -64,7 +64,7 @@ INCLUDE-ERROR, MACRO-ERROR or CONDITIONAL-ERROR on a malformed construct."
            (maphash (lambda (name value) (setf (gethash name layout-names) value))
                     (%conditional-label-names list)))
          (fresh-name (name)
-           (loop for candidate = (format nil "~A__LASM_~D" name (incf serial))
+           (loop for candidate = (lexer-generated-name (find-lexer-descriptor lexer) name (incf serial))
                  unless (or (gethash candidate used)
                             (and aliases (gethash (string-upcase candidate) aliases)))
                    do (setf (gethash candidate used) t)
