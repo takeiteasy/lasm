@@ -45,6 +45,11 @@ A child clause is merged over the parent's clause of the same kind:
 A clause naming something the parent does not have adds it. Element order and
 device bus indices of the parent are kept.
 
+## Backends
+
+A [backend](backends.md#inheritance) can extend another for the same machine or
+a descendant, so a family shares one compiler-target description.
+
 ## Modes
 
 A child sees its parent's [machine-local modes](modes.md#machine-local-modes)

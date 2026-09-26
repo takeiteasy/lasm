@@ -279,3 +279,150 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (search "takes 1 parameter"
                        (definition-error '(defbackend cv-bad-abi (:machine callfoo)
                                            (operands (reg call-reg)) (ops (:push (a b) (pushv a)))))))))
+
+;;; Frame pointer (#321)
+
+(defmachine (cv-up-fp (:extends cv-up))
+  (register fp :width 16))
+(definstruction cv-up-fp pushfp (encoding (opcode 18)) (semantics (push fp sp)))
+(definstruction cv-up-fp popfp (encoding (opcode 19)) (semantics (set! fp (pop sp))))
+(definstruction cv-up-fp movfs (encoding (opcode 20)) (semantics (set! fp sp)))
+(definstruction cv-up-fp movsf (encoding (opcode 21)) (semantics (set! sp fp)))
+(definstruction cv-up-fp ldf (modes call-rf)
+  (encoding (opcode 22) (operand dst :width 1) (operand offset :width 1))
+  (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ fp offset) 16)))))
+(definstruction cv-up-fp stf (modes call-fr)
+  (encoding (opcode 23) (operand offset :width 1) (operand src :width 1))
+  (semantics (set! (mref machine 'ram (wrap-value (+ fp offset) 16)) (r src))))
+
+(defbackend cv-up-fp-abi (:extends cv-up-abi :machine cv-up-fp)
+  (frame :pointer fp :slot fp-idx)
+  (operands (fp-idx call-fp-idx))
+  (ops (:enter () (pushfp) (movfs))
+       (:leave () (movsf) (popfp))))
+
+(defbackend cv-fp-callee-abi (:extends callfoo-fp-abi)
+  (call :cleanup :callee)
+  (ops (:return-pop (n) (retn (imm n)))))
+(defbackend cv-fp-aligned-abi (:extends callfoo-fp-abi)
+  (frame :alignment 2))
+
+(defun %cv-fp (m) (sref m 'fp))
+
+(fiveam:test a-frame-pointer-function-saves-enters-and-leaves
+  (let ((items '((:call f (imm 21)) (hlt)
+                 (:function f (:args 1 :locals 1 :save (c))
+                   (ldf (reg a) (:arg 0))
+                   (stf (:local 0) (reg a))
+                   (:op :add (reg a) (reg a))
+                   (:return)))))
+    (fiveam:is (search "f:
+pushv c
+pushfp
+movfs
+subs sp, # 1
+ldf a, [ fp + 3 ]
+stf [ fp + - 1 ], a
+add a, a
+movsf
+popfp
+popr c
+ret
+" (render-items items :backend 'callfoo-fp-abi)))
+    (let ((m (%cv-run items 'callfoo-fp-abi :machine 'callfoo-fp :setup '((2 77)))))
+      (fiveam:is (= 42 (%cv-a m)))
+      (fiveam:is (= 77 (regref m 'r 2)))
+      (fiveam:is (= +cv-sp+ (sref m 'sp))))))
+
+(fiveam:test frame-pointer-slots-do-not-depend-on-the-stack-depth
+  (let ((m (%cv-run '((:call f (imm 21)) (hlt)
+                      (:function f (:args 1 :locals 1)
+                        (:push (imm 9)) (:push (imm 8))
+                        (ldf (reg a) (:arg 0))
+                        (stf (:local 0) (reg a))
+                        (ldf (reg b) (:local 0))
+                        (:return)))
+                    'callfoo-fp-abi :machine 'callfoo-fp)))
+    (fiveam:is (= 21 (%cv-a m)))
+    (fiveam:is (= 21 (regref m 'r 1)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp))))
+  (fiveam:is (search "ldf a, [ fp + 2 ]"
+                     (render-items '((:function f (:args 1) (:push (imm 9)) (ldf (reg a) (:arg 0)) (:return)))
+                                   :backend 'callfoo-fp-abi))))
+
+(fiveam:test a-frame-pointer-function-returns-at-any-depth
+  (let ((m (%cv-run '((:call f) (hlt)
+                      (:function f (:locals 2 :save (d))
+                        (:push (imm 1))
+                        (:return)))
+                    'callfoo-fp-abi :machine 'callfoo-fp :setup '((3 5)))))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))
+    (fiveam:is (= 5 (regref m 'r 3)))))
+
+(fiveam:test frame-pointer-frames-nest-and-restore-the-caller-pointer
+  (let ((m (%cv-run '((:call outer (imm 6)) (hlt)
+                      (:function outer (:args 1 :locals 1)
+                        (:call inner (imm 4))
+                        (ldf (reg b) (:arg 0))
+                        (:op :add (reg a) (reg b))
+                        (:return))
+                      (:function inner (:args 1 :locals 2)
+                        (ldf (reg a) (:arg 0))
+                        (:return)))
+                    'callfoo-fp-abi :machine 'callfoo-fp)))
+    (fiveam:is (= 10 (%cv-a m)))
+    (fiveam:is (= 0 (%cv-fp m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))))
+
+(fiveam:test frame-pointer-padding-counts-the-saved-pointer
+  (fiveam:is (search "subs sp, # 2" (render-items '((:function f (:locals 1 :save (c)) (:return)))
+                                                  :backend 'cv-fp-aligned-abi)))
+  (fiveam:is (search "subs sp, # 1" (render-items '((:function f (:locals 1)) )
+                                                  :backend 'cv-fp-aligned-abi)))
+  (let ((m (%cv-run '((:call f (imm 7)) (hlt)
+                      (:function f (:args 1 :locals 1 :save (c))
+                        (ldf (reg a) (:arg 0))
+                        (:return)))
+                    'cv-fp-aligned-abi :machine 'callfoo-fp)))
+    (fiveam:is (= 7 (%cv-a m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))))
+
+(fiveam:test frame-pointer-frames-work-with-callee-cleanup
+  (let ((m (%cv-run '((:call f (imm 3) (imm 4)) (hlt)
+                      (:function f (:args 2 :locals 1)
+                        (ldf (reg a) (:arg 1))
+                        (:return)))
+                    'cv-fp-callee-abi :machine 'callfoo-fp)))
+    (fiveam:is (= 4 (%cv-a m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))))
+
+(fiveam:test frame-pointer-frames-work-when-the-stack-grows-up
+  (let ((items '((:call f (imm 21)) (hlt)
+                 (:function f (:args 1 :locals 1 :save (c))
+                   (ldf (reg a) (:arg 0))
+                   (stf (:local 0) (reg a))
+                   (ldf (reg b) (:local 0))
+                   (:return)))))
+    (let ((m (%cv-run items 'cv-up-fp-abi :machine 'cv-up-fp :setup '((2 77)))))
+      (fiveam:is (= 21 (%cv-a m)))
+      (fiveam:is (= 21 (regref m 'r 1)))
+      (fiveam:is (= 77 (regref m 'r 2)))
+      (fiveam:is (= +cv-sp+ (sref m 'sp))))))
+
+(fiveam:test frame-pointer-lowering-signals-malformed-items
+  (fiveam:is (search "frame pointer"
+                     (%cv-malformed '((:function f (:save (fp)) (:return))) 'callfoo-fp-abi)))
+  (eval '(defbackend cv-fp-noenter-abi (:extends callfoo-abi :machine callfoo-fp)
+          (frame :pointer fp :slot fp-idx)
+          (operands (fp-idx call-fp-idx))))
+  (fiveam:is (search ":enter" (%cv-malformed '((:function f () (:return))) 'cv-fp-noenter-abi)))
+  (eval '(defbackend cv-fp-noleave-abi (:extends cv-fp-noenter-abi)
+          (ops (:enter () (pushfp) (movfs)))))
+  (fiveam:is (search ":leave" (%cv-malformed '((:function f () (:return))) 'cv-fp-noleave-abi))))
+
+(fiveam:test defbackend-checks-the-frame-pointer-hook-arities
+  (fiveam:is (search "takes 0 parameters"
+                     (handler-case (progn (eval '(defbackend cv-bad-fp-abi (:extends callfoo-fp-abi)
+                                                  (ops (:enter (x) (pushfp)))))
+                                          nil)
+                       (backend-definition-error (c) (princ-to-string c))))))

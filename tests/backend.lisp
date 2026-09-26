@@ -6,11 +6,12 @@
 (fiveam:def-suite backend :in lasm)
 (fiveam:in-suite backend)
 
-;;; Fixture: examples/cli/callfoo.lisp, the machine and backend behind
-;;; double.lasm, plus a machine whose LD takes a ONE-OF operand.
+;;; Fixture: examples/cli/callfoo-fp.lisp, which loads callfoo.lisp (the machine
+;;; and backend behind double.lasm) and adds the frame-pointer family member,
+;;; plus a machine whose LD takes a ONE-OF operand.
 
 (let ((*package* (find-package '#:lasm)))
-  (load (asdf:system-relative-pathname :lasm "examples/cli/callfoo.lisp")))
+  (load (asdf:system-relative-pathname :lasm "examples/cli/callfoo-fp.lisp")))
 
 (defmachine bk-ld-machine
   (register pc :width 16)
@@ -364,3 +365,85 @@ call .inner" :machine 'callfoo))
                      (assembly-cells (assemble-items '((ld (:mode bk-ld-mode a bk-ld-ind b))) :machine 'bk-ld-machine))))
   (fiveam:is (typep (%items-error-of '((ld (:mode bk-ld-mode a nope b))) :machine 'bk-ld-machine)
                     'items-malformed)))
+
+;;; Inheritance (#323)
+
+(eval '(defmachine (bk-noret-2 (:extends callfoo))
+        (without-instructions ret)))
+
+(fiveam:test an-extending-backend-merges-the-parent-clauses-by-key
+  (let ((child (find-backend 'callfoo-fp-abi)))
+    (fiveam:is (eq 'callfoo-fp (backend-descriptor-machine child)))
+    (fiveam:is (eq 'callfoo-abi (backend-descriptor-parent child)))
+    (fiveam:is (equal '("A") (backend-register child :return)))
+    (fiveam:is (equal "FP" (backend-register child :frame-pointer)))
+    (fiveam:is (equal '(:grows :down :alignment 1 :slot "FP-IDX" :pointer "FP") (backend-descriptor-frame child)))
+    (fiveam:is (equal (backend-descriptor-call (find-backend 'callfoo-abi)) (backend-descriptor-call child)))
+    (fiveam:is (equal '("REG" "IMM" "SP-IDX" "SP" "FP-IDX")
+                      (mapcar #'car (backend-descriptor-operands child))))
+    (fiveam:is (assoc "ADD" (backend-descriptor-ops child) :test #'string=))
+    (fiveam:is (assoc "ENTER" (backend-descriptor-ops child) :test #'string=))))
+
+(fiveam:test an-extending-backend-replaces-list-roles-and-ops-and-defaults-the-machine
+  (eval '(defbackend bk-child-1 (:extends callfoo-abi)
+          (registers :callee-saved (d))
+          (ops (:add (d s) (add s d)))))
+  (let ((child (find-backend 'bk-child-1)))
+    (fiveam:is (eq 'callfoo (backend-descriptor-machine child)))
+    (fiveam:is (equal '("D") (backend-register child :callee-saved)))
+    (fiveam:is (equal '("A") (backend-register child :return)))
+    (fiveam:is (equal '((add s d)) (cddr (assoc "ADD" (backend-descriptor-ops child) :test #'string=))))
+    (fiveam:is (assoc "CALL" (backend-descriptor-ops child) :test #'string=))
+    (fiveam:is (equal '((add d s))
+                      (cddr (assoc "ADD" (backend-descriptor-ops (find-backend 'callfoo-abi)) :test #'string=))))))
+
+(fiveam:test an-extending-backend-takes-its-options-in-either-order-and-assembles-inherited-ops
+  (eval '(defbackend bk-child-2 (:machine callfoo-fp :extends callfoo-abi)))
+  (fiveam:is (eq 'callfoo-fp (backend-descriptor-machine (find-backend 'bk-child-2))))
+  (fiveam:is (equalp (assembly-cells (assemble-items *double-items* :backend 'callfoo-abi))
+                     (assembly-cells (assemble-items *double-items* :backend 'bk-child-2)))))
+
+(fiveam:test a-child-backend-is-checked-against-its-own-machine
+  (let ((c (%backend-error-of '(defbackend bk-child-3 (:extends callfoo-abi :machine bk-noret-2)))))
+    (fiveam:is (typep c 'backend-definition-error))
+    (fiveam:is (search "no instruction ret" (string-downcase (princ-to-string c)))))
+  (fiveam:is (null (%backend-error-of '(defbackend bk-child-4 (:extends callfoo-abi :machine bk-noret-2)
+                                        (ops (:return () (hlt)))))))
+  (fiveam:is (null (%backend-error-of '(defbackend bk-child-5 (:extends callfoo-abi :machine bk-noret-2)
+                                        (without-ops :return)))))
+  (fiveam:is (null (assoc "RETURN" (backend-descriptor-ops (find-backend 'bk-child-5)) :test #'string=))))
+
+(fiveam:test extending-backends-signal-typed-definition-errors
+  (dolist (form '((defbackend bk-child-e1 (:extends no-such-backend))
+                  (defbackend bk-child-e2 (:extends callfoo-abi :machine bk-ld-machine))
+                  (defbackend bk-child-e3 (:extends callfoo-abi :machine no-such-machine))
+                  (defbackend bk-child-e4 (:extends callfoo-abi :extends callfoo-abi))
+                  (defbackend bk-child-e5 (:extends callfoo-abi) (without-ops no-such-op))
+                  (defbackend bk-child-e6 (:machine callfoo) (without-ops add))
+                  (defbackend bk-child-e7 (:extends callfoo-abi) (without-ops add) (without-ops add))
+                  (defbackend bk-child-e8 (:extends callfoo-abi) (call :cleanup :nobody))
+                  (defbackend bk-child-e9 (:extends callfoo-abi) (registers :bogus (a)))
+                  (defbackend callfoo-abi (:extends callfoo-abi))))
+    (fiveam:is (typep (%backend-error-of form) 'backend-definition-error) "~S" form)))
+
+(fiveam:test a-child-backend-does-not-follow-later-changes-to-its-parent
+  (eval '(defbackend bk-snap-parent (:machine callfoo) (registers :return (a))))
+  (eval '(defbackend bk-snap-child (:extends bk-snap-parent)))
+  (eval '(defbackend bk-snap-parent (:machine callfoo) (registers :return (b))))
+  (fiveam:is (equal '("A") (backend-register 'bk-snap-child :return))))
+
+;;; The frame pointer declaration (#321)
+
+(fiveam:test defbackend-reconciles-the-frame-pointer-role-and-declaration
+  (eval '(defbackend bk-fp-1 (:extends callfoo-abi :machine callfoo-fp) (frame :pointer fp)))
+  (fiveam:is (equal "FP" (backend-register 'bk-fp-1 :frame-pointer)))
+  (eval '(defbackend bk-fp-2 (:extends callfoo-abi :machine callfoo-fp) (registers :frame-pointer fp)))
+  (fiveam:is (null (getf (backend-descriptor-frame (find-backend 'bk-fp-2)) :pointer)))
+  (dolist (form '((defbackend bk-fp-e1 (:extends callfoo-abi :machine callfoo-fp)
+                    (registers :frame-pointer fp) (frame :pointer sp))
+                  (defbackend bk-fp-e2 (:extends callfoo-abi :machine callfoo-fp) (frame :pointer nope))
+                  (defbackend bk-fp-e3 (:extends callfoo-abi :machine callfoo-fp) (frame :pointer sp))
+                  (defbackend bk-fp-e4 (:extends callfoo-abi :machine callfoo-fp) (frame :pointer a))
+                  (defbackend bk-fp-e5 (:extends callfoo-abi :machine callfoo-fp)
+                    (call :args (a b)) (frame :pointer b))))
+    (fiveam:is (typep (%backend-error-of form) 'backend-definition-error) "~S" form)))

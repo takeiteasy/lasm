@@ -1,0 +1,15 @@
+;;;; examples/cli/framed.lasm
+;;;; double(21) in a frame addressed from the frame pointer (#321), on the
+;;;; callfoo-fp machine and callfoo-fp-abi, which extends callfoo-abi (#323):
+;;;;
+;;;;   lasm run framed.lasm -m callfoo-fp.lisp --machine-name callfoo-fp
+
+(:program (:backend callfoo-fp-abi)
+  (:call double (imm 21))
+  (hlt)
+
+  (:function double (:args 1 :locals 1 :save (c))
+    (ldf (reg a) (:arg 0))
+    (stf (:local 0) (reg a))
+    (:op :add (reg a) (reg a))
+    (:return)))

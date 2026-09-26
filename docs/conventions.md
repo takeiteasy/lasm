@@ -60,6 +60,34 @@ grows up.
 `(:arg i)` for a register argument names that register, so an inner `(:call)`
 overwrites it: copy it first or `:keep` it.
 
+## Frame pointer
+
+`(frame :pointer REG)` in the [backend](backends.md#frame) gives every function
+a frame register. Slots are addressed from it, so `(:arg i)`, `(:local i)` and
+`(:return)` do not depend on how many cells the body has pushed.
+
+```
+grows down     [fp + n]
+  argument j   above the return address
+  return addr
+  saved regs   fp + 1 ... fp + S
+  saved fp     fp + 0
+  local i      fp - L + i
+  pushes       below the locals, any number
+```
+
+| Step | Emits |
+| --- | --- |
+| Prologue | Push each `:save` register, `:enter`, then `:alloc` the locals. |
+| Epilogue | `:leave`, pop the saves, then return. |
+
+`:enter` pushes the frame pointer and points it at the top of the stack;
+`:leave` restores the stack pointer from it and pops it. The saved frame pointer
+counts towards the frame's `:alignment`. The frame pointer cannot be a `:save`
+register. The backend's `:slot` kind takes an offset from the frame pointer, with
+the same signs as from the stack pointer: `+n` when the stack grows down,
+`-1-n` when it grows up.
+
 ## Calls
 
 `(:call f a b c)` emits, in order:
@@ -92,10 +120,12 @@ an `items-malformed`.
 | `:call (f)` | `(:call ...)`. |
 | `:return ()` | `(:return)`, or with `:cleanup :caller`. |
 | `:return-pop (n)` | `(:return)` with `:cleanup :callee` and stack arguments. |
+| `:enter ()` `:leave ()` | The prologue and epilogue of a [frame pointer](#frame-pointer). |
 
 The backend also names the operand kind that writes a register, `(registers
 :operand KIND)`, and the one that addresses a stack slot, `(frame :slot KIND)`.
-The slot kind takes one value, the offset from the stack pointer.
+The slot kind takes one value, the offset from the stack pointer, or from the
+frame pointer with one.
 
 ```lisp
 (defbackend callfoo-abi (:machine callfoo)
@@ -117,5 +147,5 @@ The slot kind takes one value, the offset from the stack pointer.
 | Limitation | Ticket |
 | --- | --- |
 | Register arguments that swap with each other are an error. | [#328](https://todo.sr.ht/~takeiteasy/lasm/328) |
-| The stack depth is tracked per item, not across labels or branches; a raw push in a body is not seen. | [#329](https://todo.sr.ht/~takeiteasy/lasm/329) |
-| Frames are stack-pointer relative only. | [#321](https://todo.sr.ht/~takeiteasy/lasm/321) |
+| Without a frame pointer, the stack depth is tracked per item, not across labels or branches; a raw push in a body is not seen. | [#329](https://todo.sr.ht/~takeiteasy/lasm/329) |
+| Every function of a frame-pointer backend has a frame pointer, even a leaf. | [#331](https://todo.sr.ht/~takeiteasy/lasm/331) |

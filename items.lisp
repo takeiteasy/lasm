@@ -311,8 +311,9 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
 ;;; (:return), (:push X), (:pop X) and the operands (:arg i) and (:local i) lower to
 ;;; the backend's reserved operations (+BACKEND-HOOK-ARITIES+), following its
 ;;; call and frame clauses. A frame slot is addressed by its distance from the
-;;; top of the stack; a function body must keep the stack balanced between items,
-;;; or use (:push) and (:pop), for those distances to hold.
+;;; top of the stack, or from the frame pointer when the frame has one (#321); a
+;;; function body must keep the stack balanced between items, or use (:push)
+;;; and (:pop), for a stack-pointer distance to hold.
 ;;; TODO: depth is tracked item by item, not across labels or branches (#329).
 
 (defstruct items-frame
@@ -320,6 +321,7 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
   nlocals   ; declared locals
   locals    ; cells allocated for locals, padded to the frame alignment
   saves     ; registers saved on entry
+  pointer   ; the frame pointer register, or NIL
   (depth 0)); cells pushed since the prologue
 
 (defun %keyword-named-p (x name)
@@ -359,6 +361,10 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
   (when *items-frame*
     (incf (items-frame-depth *items-frame*) n)))
 
+(defun %frame-overhead (frame)
+  "Cells between a frame's locals and its return address: the saved registers and the saved frame pointer."
+  (+ (length (items-frame-saves frame)) (if (items-frame-pointer frame) 1 0)))
+
 (defun %frame-operand-p (operand)
   (and (consp operand) (or (%keyword-named-p (first operand) "ARG") (%keyword-named-p (first operand) "LOCAL"))))
 
@@ -369,25 +375,26 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
       (%items-fail 'items-malformed item "~S is only valid inside (:function ...)" operand))
     (unless (and (= (length operand) 2) (typep index '(integer 0)))
       (%items-fail 'items-malformed item "expected (~(~A~) INDEX), got ~S" (symbol-name (first operand)) operand))
-    (if (%keyword-named-p (first operand) "LOCAL")
-        (progn
-          (unless (< index (items-frame-nlocals frame))
-            (%items-fail 'items-malformed item "~S: the function has ~D local~:P" operand (items-frame-nlocals frame)))
-          (%slot-operand (+ (items-frame-depth frame) index) item))
-        (let* ((registers (%arg-registers))
-               (nstack (max 0 (- (items-frame-nargs frame) (length registers))))
-               (stack-index (- index (length registers))))
-          (unless (< index (items-frame-nargs frame))
-            (%items-fail 'items-malformed item "~S: the function has ~D argument~:P" operand (items-frame-nargs frame)))
-          (if (minusp stack-index)
-              (%register-operand (nth index registers) item)
-              (%slot-operand (+ (items-frame-depth frame) (items-frame-locals frame)
-                                (length (items-frame-saves frame))
-                                (%backend-call-option :return-address-slots)
-                                (if (eq (%backend-call-option :order) :right-to-left)
-                                    stack-index
-                                    (- nstack 1 stack-index)))
-                             item))))))
+    (let ((base (if (items-frame-pointer frame) (- (items-frame-locals frame)) (items-frame-depth frame))))
+      (if (%keyword-named-p (first operand) "LOCAL")
+          (progn
+            (unless (< index (items-frame-nlocals frame))
+              (%items-fail 'items-malformed item "~S: the function has ~D local~:P" operand (items-frame-nlocals frame)))
+            (%slot-operand (+ base index) item))
+          (let* ((registers (%arg-registers))
+                 (nstack (max 0 (- (items-frame-nargs frame) (length registers))))
+                 (stack-index (- index (length registers))))
+            (unless (< index (items-frame-nargs frame))
+              (%items-fail 'items-malformed item "~S: the function has ~D argument~:P" operand (items-frame-nargs frame)))
+            (if (minusp stack-index)
+                (%register-operand (nth index registers) item)
+                (%slot-operand (+ base (items-frame-locals frame)
+                                  (%frame-overhead frame)
+                                  (%backend-call-option :return-address-slots)
+                                  (if (eq (%backend-call-option :order) :right-to-left)
+                                      stack-index
+                                      (- nstack 1 stack-index)))
+                               item)))))))
 
 (defun %resolve-operand (operand item)
   (if (%frame-operand-p operand) (%frame-operand operand item) operand))
@@ -420,13 +427,21 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
                    (or (eq (%backend-call-option :cleanup) :callee)
                        (eq (%backend-call-option :order) :left-to-right)))
           (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
-        (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
+        (let* ((pointer (getf (backend-descriptor-frame *items-backend*) :pointer))
+               (saves (mapcar (lambda (register)
+                                (when (equal pointer (%designator-name register))
+                                  (%items-fail 'items-malformed item "~A is the frame pointer; the prologue already saves it"
+                                               pointer))
+                                (%frame-register register :callee-saved item))
+                              saves))
                (alignment (getf (backend-descriptor-frame *items-backend*) :alignment))
-               (locals (+ nlocals (mod (- (+ nlocals (length saves))) alignment)))
-               (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals locals :saves saves))
+               (locals (+ nlocals (mod (- (+ nlocals (length saves) (if pointer 1 0))) alignment)))
+               (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals locals :saves saves
+                                        :pointer pointer))
                (lines (append (%item-lines (list :label name))
                               (loop for register in saves
                                     append (%hook-lines :push (list (%register-operand register item)) item))
+                              (and pointer (%hook-lines :enter '() item))
                               (and (plusp locals) (%hook-lines :alloc (list locals) item)))))
           (let ((*items-frame* frame))
             (append lines (loop for element in body append (%item-lines element)))))))))
@@ -435,11 +450,13 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
   (let ((frame *items-frame*))
     (unless (and frame (null (rest item)))
       (%items-fail 'items-malformed item "expected (:return) inside (:function ...)"))
-    (unless (zerop (items-frame-depth frame))
+    (unless (or (items-frame-pointer frame) (zerop (items-frame-depth frame)))
       (%items-fail 'items-malformed item "the stack is ~D cell~:P deeper than at the function's entry"
                    (items-frame-depth frame)))
     (let ((nstack (max 0 (- (items-frame-nargs frame) (length (%arg-registers))))))
-      (append (and (plusp (items-frame-locals frame)) (%hook-lines :free (list (items-frame-locals frame)) item))
+      (append (if (items-frame-pointer frame)
+                  (%hook-lines :leave '() item)
+                  (and (plusp (items-frame-locals frame)) (%hook-lines :free (list (items-frame-locals frame)) item)))
               (loop for register in (reverse (items-frame-saves frame))
                     append (%hook-lines :pop (list (%register-operand register item)) item))
               (if (and (eq (%backend-call-option :cleanup) :callee) (plusp nstack))

@@ -30,6 +30,7 @@ package. A mistake signals `backend-definition-error`.
 | `(frame ...)` | [Frame layout](#frame). |
 | `(operands (KIND MODE)...)` | [Operand kinds](#operand-kinds). |
 | `(ops (NAME (PARAM...) FORM...)...)` | [Operations](#operations). |
+| `(without-ops NAME...)` | Drops [inherited](#inheritance) operations. |
 
 Each clause is optional and may appear once.
 
@@ -67,10 +68,14 @@ calls from them; see [Calling conventions](conventions.md).
 | --- | --- | --- |
 | `:grows` | `:down`, `:up` | The machine's stack-pointer direction, else `:down` |
 | `:alignment` | Positive integer, in cells | `1` |
-| `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer | None |
+| `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer, or from the frame pointer when there is one | None |
+| `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
 
 `:grows` must agree with the machine's `(stack-pointer ... :grows ...)` for the
-backend's `:stack-pointer`.
+backend's `:stack-pointer`. `:pointer` fills `(registers :frame-pointer)`, and
+must agree with it when both are given; it cannot be the stack pointer or a
+`:return` or `call :args` register. With a `:pointer`, `:slot` must address
+relative to it.
 
 ## Operand kinds
 
@@ -99,9 +104,37 @@ be a whole operand or one value inside one.
 `(backend-expand-op backend name args)` returns the forms. A form's mnemonic
 must exist on the machine, and its operand kinds must be declared.
 
-`:push` `:pop` `:alloc` `:free` `:move` `:call` `:return` and `:return-pop`
-are the operations [call lowering](conventions.md#backend-operations) emits;
-each has a fixed number of parameters.
+`:push` `:pop` `:alloc` `:free` `:move` `:call` `:return` `:return-pop`
+`:enter` and `:leave` are the operations
+[call lowering](conventions.md#backend-operations) emits; each has a fixed
+number of parameters.
+
+## Inheritance
+
+`(defbackend CHILD (:extends PARENT) clause...)` starts from the parent's
+clauses. The child's clauses merge over them and the result is checked against
+the child's machine.
+
+```lisp
+(defbackend callfoo-fp-abi (:extends callfoo-abi :machine callfoo-fp)
+  (frame :pointer fp :slot fp-idx)
+  (operands (fp-idx call-fp-idx))
+  (ops (:enter () (pushfp) (movfs))
+       (:leave () (movsf) (popfp))))
+```
+
+| Clause | Merge |
+| --- | --- |
+| `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
+| `operands` | By kind. |
+| `ops` | By operation name. |
+| `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
+
+`:machine` defaults to the parent's machine. When given, it must be that machine
+or one that [extends it](machine-families.md). Every operation, register and mode
+is checked again on the child's machine, so an operation using an instruction the
+child machine removed is an error until the child overrides or drops it.
+The parent is copied when the child is defined.[^copy]
 
 ## Lookup
 
@@ -116,6 +149,7 @@ The command line loads backends from its machine file; see [Command line](cli.md
 
 | Limitation | Ticket |
 | --- | --- |
-| Frames are stack-pointer relative only. | [#321](https://todo.sr.ht/~takeiteasy/lasm/321) |
-| A backend cannot extend another. | [#323](https://todo.sr.ht/~takeiteasy/lasm/323) |
+| A child backend does not follow later changes to its parent. | [#330](https://todo.sr.ht/~takeiteasy/lasm/330) |
 | An operation cannot define labels of its own. | [#325](https://todo.sr.ht/~takeiteasy/lasm/325) |
+
+[^copy]: Redefining the parent leaves its children as they were; redefine them too.

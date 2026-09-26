@@ -532,6 +532,13 @@
       (fiveam:is (= 28 (length bytes)))
       (fiveam:is (equalp #(4 0 21 0 7 0 7 0) (subseq bytes 0 8))))))
 
+(fiveam:test cli-runs-an-items-program-with-a-frame-pointer-backend
+  (multiple-value-bind (status out)
+      (%run-cli (list "run" (%cli-path "examples/cli/framed.lasm") "-m" (%cli-path "examples/cli/callfoo-fp.lisp")
+                      "--machine-name" "callfoo-fp"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped: trap after 15 steps" out))))
+
 (fiveam:test cli-listing-shows-an-items-program
   (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "examples/cli/double.lasm"))
     (fiveam:is (= 0 status))

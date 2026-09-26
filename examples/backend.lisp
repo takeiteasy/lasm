@@ -4,7 +4,7 @@
 ;;;; the register roles, calling convention, operand kinds and operations, and
 ;;;; a program is a list of items -- data, not source text -- that
 ;;;; ASSEMBLE-ITEMS assembles directly. The machine and backend are
-;;;; examples/cli/callfoo.lisp; the same program as a file is
+;;;; examples/cli/callfoo.lisp (loaded by callfoo-fp.lisp); the same program as a file is
 ;;;; examples/cli/double.lasm.
 ;;;;
 ;;;; Run with:  sbcl --script examples/backend.lisp
@@ -13,7 +13,7 @@
 
 (in-package #:lasm)
 
-(load (merge-pathnames "cli/callfoo.lisp" *load-pathname*))
+(load (merge-pathnames "cli/callfoo-fp.lisp" *load-pathname*))
 
 (let ((backend (find-backend 'callfoo-abi)))
   (format t "~&Backend ~A targets ~A~%  return register ~A, callee-saved ~{~A~^ ~}~%  call ~S~%"
@@ -82,5 +82,26 @@ hlt" :machine 'callfoo))
 (handler-case (assemble-items '((ldi (reg 5) (imm 1))) :backend 'callfoo-abi)
   (items-operand-mismatch (c)
     (format t "~%Rejected: ~A~%" (items-error-detail c))))
+
+;; A backend extends another for the same machine or a descendant (#323), and
+;; (frame :pointer REG) addresses locals and arguments from a frame register
+;; instead of the stack pointer (#321): callfoo-fp-abi adds fp to callfoo-abi.
+(let* ((framed '((:call double (imm 21))
+                 (hlt)
+                 (:function double (:args 1 :locals 1 :save (c))
+                   (ldf (reg a) (:arg 0))
+                   (stf (:local 0) (reg a))
+                   (:op :add (reg a) (reg a))
+                   (:return))))
+       (machine (make-machine 'callfoo-fp)))
+  (format t "~%Extended backend ~A, parent ~A, frame ~S~%~%~A"
+          'callfoo-fp-abi (backend-descriptor-parent (find-backend 'callfoo-fp-abi))
+          (backend-descriptor-frame (find-backend 'callfoo-fp-abi))
+          (render-items framed :backend 'callfoo-fp-abi))
+  (load-program machine (assemble-items framed :backend 'callfoo-fp-abi))
+  (setf (sref machine 'sp) #x100)
+  (run machine)
+  (assert (= 42 (regref machine 'r 0)))
+  (assert (= #x100 (sref machine 'sp))))
 
 (format t "~%All assertions passed.~%")
