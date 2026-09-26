@@ -36,6 +36,8 @@ one namespace.
 | `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |
 | `(properties :key value ...)` | Literal machine properties. | [Machine families](machine-families.md#properties) |
 
+A [backend](backends.md) describes a machine as a compiler target.
+
 Widths and depths are positive integers. Duplicate names and unknown
 clauses fail during compilation. A child machine can inherit clauses and
 instructions; see [Machine families](machine-families.md).

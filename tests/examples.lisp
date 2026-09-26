@@ -11,9 +11,12 @@
   (merge-pathnames relative (asdf:system-source-directory :lasm)))
 
 (defun %example-scripts ()
-  (remove "boot" (directory (%lasm-path (make-pathname :directory '(:relative "examples" :wild-inferiors)
-                                                       :name :wild :type "lisp")))
-          :key #'pathname-name :test #'string=))
+  "Standalone scripts; examples/cli/ holds machine files for the command line."
+  (remove-if (lambda (path)
+               (or (string= "boot" (pathname-name path))
+                   (member "cli" (pathname-directory path) :test #'string=)))
+             (directory (%lasm-path (make-pathname :directory '(:relative "examples" :wild-inferiors)
+                                                   :name :wild :type "lisp")))))
 
 (defun %host-cores ()
   (or (ignore-errors

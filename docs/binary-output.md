@@ -45,7 +45,7 @@ cells unless the count is given: `:count N` on `bytes-to-cells`, or
 the padding.
 
 ```sh
-lasm assemble examples/cli/twelve.asm -m examples/cli/twelve.lasm --packing bits
+lasm assemble examples/cli/twelve.asm -m examples/cli/twelve.lisp --packing bits
 ```
 
 Gaps left by `.org` and `.res` are already zero-filled in the cells, so the

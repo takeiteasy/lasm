@@ -274,7 +274,7 @@ nop" :machine 'bank-two-region-machine)))
 
 (defun %banked-cli-args (command &rest more)
   (list* command (%cli-path "tests/fixtures/cli/banked.asm")
-         "-m" (%cli-path "tests/fixtures/cli/banked.lasm") more))
+         "-m" (%cli-path "tests/fixtures/cli/banked.lisp") more))
 
 (fiveam:test cli-assemble-writes-the-physical-layout
   (uiop:with-temporary-file (:pathname path :type "bin")

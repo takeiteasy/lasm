@@ -1,8 +1,8 @@
-;;;; examples/cli/sixtyfoo.lasm
+;;;; examples/cli/sixtyfoo.lisp
 ;;;; Machine definition for the lasm command line, read in the LASM package
 ;;;; (see docs/cli.md). Pair it with counter.asm:
 ;;;;
-;;;;   lasm run counter.asm -m sixtyfoo.lasm
+;;;;   lasm run counter.asm -m sixtyfoo.lisp
 
 (deflexer sixtyfoo-syntax
   (comment-styles (";" :line))

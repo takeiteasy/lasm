@@ -27,6 +27,8 @@
 - [Listing and source map](listing.md) — retained address/statement mapping, `print-listing`
 - [Binary output](binary-output.md) — raw binary and Intel HEX files from an `assembly`
 - [Banked output](banked-output.md) — `.bank`, `bank(label)`, bank images, banked listings and loading
+- [Backends](backends.md) — `defbackend`: register roles, calling convention, frame, operand kinds, operations
+- [Items](items.md) — programs as data, `assemble-items`, `.lasm` files
 - [Command line](cli.md) — `lasm assemble`/`run`/`disassemble`/`listing`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range, definition errors
 - [Debugger](debugger.md) — breakpoints, step/continue/back, cycle budgets, register/memory inspection and editing, a reference REPL

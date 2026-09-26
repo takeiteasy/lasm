@@ -59,6 +59,8 @@
    #:unknown-machine
    #:unknown-mode
    #:unknown-lexer
+   #:unknown-backend
+   #:backend-definition-error
    #:definition-error
    #:with-definition-errors
    #:definition-error-message
@@ -238,6 +240,40 @@
    #:snapshot-malformed
    #:snapshot-device-unknown
    #:snapshot-unwritable
+
+   ;; Backends and items (#113)
+   #:defbackend
+   #:find-backend
+   #:backend-descriptor
+   #:backend-descriptor-p
+   #:backend-descriptor-name
+   #:backend-descriptor-machine
+   #:backend-descriptor-registers
+   #:backend-descriptor-call
+   #:backend-descriptor-frame
+   #:backend-descriptor-operands
+   #:backend-descriptor-ops
+   #:backend-register
+   #:backend-expand-op
+   #:assemble-items
+   #:assemble-items-file
+   #:render-items
+   #:read-items
+   #:read-items-from-string
+   #:items-program
+   #:items-program-p
+   #:items-program-items
+   #:items-program-backend
+   #:items-program-machine
+   #:items-program-origin
+   #:items-program-memory
+   #:items-program-lexer
+   #:items-error
+   #:items-error-detail
+   #:items-error-item
+   #:items-malformed
+   #:items-operand-mismatch
+   #:read-restricted-form
 
    ;; Interrupts (#109)
    #:signal-interrupt

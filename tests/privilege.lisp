@@ -227,7 +227,7 @@ rte")))
 (fiveam:test cli-run-privilege-trap-exits-one
   (multiple-value-bind (status out err)
       (%run-cli (list "run" (%cli-path "tests/fixtures/cli/privilege.asm")
-                      "-m" (%cli-path "tests/fixtures/cli/privilege.lasm")))
+                      "-m" (%cli-path "tests/fixtures/cli/privilege.lisp")))
     (fiveam:is (= 1 status))
     (fiveam:is (search "stopped: trap after 1 step, pc = $0000" out))
     (fiveam:is (string= "" err))))

@@ -64,11 +64,12 @@ Run a Lisp example with `sbcl --script <path>`.
 | `examples/regions.lisp` | ROM, RAM, and device memory regions | [Machine model](machine-model.md) |
 | `examples/devices.lisp` | Attached and declared devices | [Devices](devices.md) |
 | `examples/interrupts.lisp` | Interrupt delivery and masking | [Interrupts](interrupts.md) |
+| `examples/backend.lisp` | A backend and a program as items | [Backends](backends.md) |
 
 Run the command line example with:
 
 ```sh
-ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
+ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lisp
 ```
 
 ## Run the tests

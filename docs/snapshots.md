@@ -90,6 +90,13 @@ Only an assembly from `assemble-file` has a file to embed; one from
 `assemble` on a string does not. `restore-snapshot` ignores `:program`, and a
 snapshot without one still restores.
 
+## Reading
+
+The text reader is shared with [item programs](items.md#lasm-files): a restricted
+[Eclector](https://github.com/s-expressionists/Eclector) reader, `read-restricted-form`.
+An [items program](items.md) assembled from a file is embedded as the source
+text it renders as.
+
 ## Versioning and validation
 
 A snapshot carries a version (`+snapshot-version+`), machine name, storage

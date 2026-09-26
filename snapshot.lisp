@@ -428,8 +428,7 @@ fit, and whatever assembling signals for a program that no longer assembles."
 
 ;;; Data check and restricted reader
 
-;; Eclector reads digits in quadratic time: 200k digits take about 3 s.
-(defconstant +snapshot-max-number-chars+ 20000
+(defconstant +snapshot-max-number-chars+ +reader-max-number-chars+
   "Longest numeric token the text reader accepts.")
 
 (defconstant +snapshot-max-number-bits+ 66000
@@ -479,127 +478,13 @@ have and still print within +SNAPSHOT-MAX-NUMBER-CHARS+.")
                  (setf (gethash node done) t))))
       (walk data))))
 
-(defclass snapshot-client () ((depth :initform 0 :accessor client-depth)))
-
-(defmethod eclector.reader:interpret-symbol
-    ((client snapshot-client) stream package-indicator name internp)
-  (declare (ignore stream internp))
-  (if (null package-indicator)
-      (make-symbol name)
-      (let ((package (case package-indicator
-                       ((:keyword :current) (find-package :keyword))
-                       (t (find-package package-indicator)))))
-        (unless package
-          (%snapshot-fail 'snapshot-malformed "no package ~A" package-indicator))
-        (multiple-value-bind (symbol status) (find-symbol name package)
-          (unless status
-            (%snapshot-fail 'snapshot-malformed "unknown symbol ~A in ~A" name (package-name package)))
-          symbol))))
-
-(defmethod eclector.reader:find-character ((client snapshot-client) (designator string))
-  (or (name-char designator)
-      (call-next-method)))
-
-(defun %float-token-exponent (token)
-  "For a whole-token float with an exponent marker, the values sign, zero-mantissa-p,
-marker and exponent (capped at 10^12); NIL for anything else."
-  (let ((i 0) (end (length token)) (negative nil) (zero t) (digits 0))
-    (flet ((run (pred)
-             (loop while (and (< i end) (funcall pred (char token i)))
-                   do (when (and (digit-char-p (char token i)) (char/= (char token i) #\0))
-                        (setf zero nil))
-                      (incf digits)
-                      (incf i))))
-      (when (and (< i end) (find (char token i) "+-"))
-        (setf negative (char= (char token i) #\-))
-        (incf i))
-      (run #'digit-char-p)
-      (when (and (< i end) (char= (char token i) #\.))
-        (incf i)
-        (run #'digit-char-p))
-      (when (and (plusp digits) (< i end) (find (char token i) "esfdlESFDL"))
-        (let ((marker (char token i)) (exponent-negative nil))
-          (incf i)
-          (when (and (< i end) (find (char token i) "+-"))
-            (setf exponent-negative (char= (char token i) #\-))
-            (incf i))
-          (let ((start (or (position #\0 token :start i :test #'char/=) end)))
-            (when (and (< i end) (every #'digit-char-p (subseq token i)))
-              (let ((magnitude (if (> (- end start) 12)
-                                   (expt 10 12)
-                                   (if (= start end) 0 (parse-integer token :start start)))))
-                (values negative zero marker
-                        (if exponent-negative (- magnitude) magnitude))))))))))
-
-(defun %signed-zero (marker negative)
-  (let ((zero (coerce 0 (ecase (char-downcase marker)
-                          (#\e *read-default-float-format*)
-                          (#\s 'short-float)
-                          (#\f 'single-float)
-                          (#\d 'double-float)
-                          (#\l 'long-float)))))
-    (if negative (- zero) zero)))
-
-(defmethod eclector.reader:interpret-token :around
-    ((client snapshot-client) stream token escape-ranges)
-  (declare (ignore stream))
-  (when (and (> (length token) +snapshot-max-number-chars+)
-             (null escape-ranges)
-             (find (char token 0) "+-.0123456789"))
-    (%snapshot-fail 'snapshot-malformed "number longer than ~D characters" +snapshot-max-number-chars+))
-  ;; Eclector computes 10^exponent eagerly, so 1d999999999 never returns.
-  (multiple-value-bind (negative zero marker exponent)
-      (if escape-ranges nil (%float-token-exponent token))
-    (cond ((null marker) (call-next-method))
-          ((or zero (< exponent (- (+ 324 (length token)))))
-           (%signed-zero marker negative))
-          ((> exponent (+ 324 (length token)))
-           (%snapshot-fail 'snapshot-malformed "float exponent out of range"))
-          (t (call-next-method)))))
-
-(defmethod eclector.reader:read-common :around ((client snapshot-client) stream eof-error-p eof-value)
-  (when (> (incf (client-depth client)) +snapshot-max-depth+)
-    (%snapshot-fail 'snapshot-malformed "nested deeper than ~D" +snapshot-max-depth+))
-  (unwind-protect (call-next-method)
-    (decf (client-depth client))))
-
-(defvar *snapshot-readtable* nil)
-
-(defun %snapshot-readtable ()
-  (or *snapshot-readtable*
-      (let ((table (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))
-        (dotimes (code 128)
-          (let ((char (code-char code)))
-            (unless (or (digit-char-p char) (member char '(#\\ #\( #\:)))
-              (eclector.readtable:set-dispatch-macro-character
-               table #\# char
-               (lambda (stream char parameter)
-                 (declare (ignore parameter))
-                 (%snapshot-fail 'snapshot-malformed "#~A is not allowed in a snapshot at ~D"
-                                 char (file-position stream)))))))
-        (dolist (char '(#\' #\` #\,))
-          (eclector.readtable:set-macro-character
-           table char
-           (lambda (stream char)
-             (%snapshot-fail 'snapshot-malformed "~A is not allowed in a snapshot at ~D"
-                             char (file-position stream)))))
-        (setf *snapshot-readtable* table))))
-
 (defun %read-snapshot-form (stream path)
   "The single form on STREAM, read without interning symbols, evaluating or
 building shared structure. Anything unreadable signals SNAPSHOT-MALFORMED."
-  (handler-case
-      (with-standard-io-syntax
-        (let ((eclector.reader:*client* (make-instance 'snapshot-client))
-              (eclector.readtable:*readtable* (%snapshot-readtable))
-              (*read-eval* nil))
-          (let ((form (eclector.reader:read stream nil :eof)))
-            (unless (eq (eclector.reader:read stream nil :eof) :eof)
-              (%snapshot-fail 'snapshot-malformed "trailing data"))
-            form)))
-    (snapshot-error (e) (error e))
-    (storage-condition () (%snapshot-fail 'snapshot-malformed "~A: nested too deeply" path))
-    (error (e) (%snapshot-fail 'snapshot-malformed "~A: unreadable (~A)" path e))))
+  (read-restricted-form stream
+                        (lambda (control &rest args)
+                          (apply #'%snapshot-fail 'snapshot-malformed control args))
+                        path))
 
 ;;; Binary files
 
@@ -610,7 +495,7 @@ building shared structure. Anything unreadable signals SNAPSHOT-MALFORMED."
 
 (defconstant +binary-snapshot-format+ 1)
 
-(defconstant +snapshot-max-depth+ 1000
+(defconstant +snapshot-max-depth+ +reader-max-depth+
   "Deepest list nesting either snapshot reader accepts.")
 
 (defconstant +binary-max-varint+ 1024

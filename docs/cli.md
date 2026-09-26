@@ -1,25 +1,41 @@
 # Command line
 
 `lasm` assembles, runs, debugs, disassembles and lists programs from the shell. A
-machine is defined in a `.lasm` file; the program is ordinary assembly source
-(`.asm` or `.s`).
+machine is defined in a `.lisp` machine file; the program is assembly source
+(`.asm` or `.s`) or an [items program](#items-programs) (`.lasm`).
 
 ```sh
-lasm assemble counter.asm -m sixtyfoo.lasm -o counter.bin
-lasm run counter.asm -m sixtyfoo.lasm
+lasm assemble counter.asm -m sixtyfoo.lisp -o counter.bin
+lasm run counter.asm -m sixtyfoo.lisp
 ```
 
-See [`examples/cli/`](../examples/cli/sixtyfoo.lasm) for a runnable pair.
+See [`examples/cli/`](../examples/cli/sixtyfoo.lisp) for a runnable pair, and
+[`callfoo.lisp`](../examples/cli/callfoo.lisp) with
+[`double.lasm`](../examples/cli/double.lasm) for an items program.
 
 ## Machine files
 
-A `.lasm` file holds the DSL forms — `deflexer`, `defmachine`, `defmode`,
-`definstruction`, `defdirective` — read in the `lasm` package, so no
+A `.lisp` machine file holds the DSL forms — `deflexer`, `defmachine`, `defmode`,
+`definstruction`, `defdirective`, `defbackend` — read in the `lasm` package, so no
 `in-package` line is needed. Definitions live only for one command.
 
 The file's sole machine and sole lexer are used. A file defining several
 machines needs `--machine-name`; several lexers need `--lexer`. With no lexer
 defined, the default lexer is used.
+
+## Items programs
+
+A `.lasm` file is an [items program](items.md#lasm-files). Every command that
+takes a program accepts one; the machine file also defines its
+[backend](backends.md).
+
+```sh
+lasm run double.lasm -m callfoo.lisp
+```
+
+The program names its backend, or `--backend NAME` does. `--origin` and
+`--memory` override the program's own options. A file that defines several
+machines needs `--machine-name`.
 
 ## Commands
 
@@ -62,7 +78,7 @@ input until `quit` or end of input, printing responses to standard output.
 It exits 0.
 
 ```sh
-lasm debug counter.asm -m sixtyfoo.lasm --break .loop --history 100
+lasm debug counter.asm -m sixtyfoo.lisp --break .loop --history 100
 ```
 
 ```
@@ -92,8 +108,8 @@ Both work on `run` and `debug`.
 (compact); loading detects either.
 
 ```sh
-lasm run counter.asm -m sixtyfoo.lasm --max-steps 5 --save-snapshot s.snap
-lasm run -m sixtyfoo.lasm --load-snapshot s.snap
+lasm run counter.asm -m sixtyfoo.lisp --max-steps 5 --save-snapshot s.snap
+lasm run -m sixtyfoo.lisp --load-snapshot s.snap
 ```
 
 With `FILE` the program is assembled from it. Without `FILE` it is rebuilt
@@ -140,7 +156,7 @@ library, `trivial-high-precision-timer` — see
 [Getting started](getting-started.md#install).
 
 ```sh
-ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lasm
+ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lisp
 ros build lasm.ros    # standalone ./lasm
 ```
 

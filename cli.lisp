@@ -13,7 +13,7 @@
   (error 'cli-usage-error :message (apply #'format nil control args)))
 
 (defparameter *cli-usage*
-  "usage: lasm COMMAND FILE -m MACHINE.lasm [options]
+  "usage: lasm COMMAND FILE -m MACHINE.lisp [options]
 
 commands:
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
@@ -26,14 +26,17 @@ commands:
   debug [FILE]      assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
                     [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
 
-FILE may be left out of run and debug with --load-snapshot when the snapshot
-was saved from a file: the program is rebuilt from the source it holds.
+FILE is assembly source (.asm, .s) or, with the .lasm extension, an items
+program (see docs/items.md). FILE may be left out of run and debug with
+--load-snapshot when the snapshot was saved from a file: the program is rebuilt
+from the source it holds.
 
 options:
-  -m, --machine FILE     machine definition (.lasm), required
+  -m, --machine FILE     machine definition (.lisp), required
   --machine-name NAME    machine to use when FILE defines several
   --quiet                suppress assembly warnings
   --lexer NAME           lexer to use when FILE defines several
+  --backend NAME         backend for a .lasm program that names none
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
@@ -54,6 +57,7 @@ options:
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
+    ("--backend" . :backend)
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)
     ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)
@@ -154,8 +158,9 @@ options:
   "Load OPTIONS' machine file into a private machine table and call FUNCTION
 with the chosen machine and lexer names. Loaded definitions never leak into
 the calling image."
-  (let ((file (or (getf options :machine-file) (%usage-error "-m MACHINE.lasm is required"))))
+  (let ((file (or (getf options :machine-file) (%usage-error "-m MACHINE.lisp is required"))))
     (let* ((*machines* (make-hash-table :test 'eq))
+           (*backends* (make-hash-table :test 'equal))
            (*lexers* (%copy-table *lexers*))
            (*modes* (%copy-table *modes*))
            (*machine-modes* (make-hash-table :test 'eq))
@@ -172,8 +177,12 @@ the calling image."
 ;;; Commands
 
 (defun %cli-assemble (file machine lexer options)
-  (assemble-file file :machine machine :lexer lexer :memory (%cli-memory options)
-                      :origin (or (%cli-option-integer options :origin "--origin") 0)))
+  (let ((origin (%cli-option-integer options :origin "--origin")))
+    (if (string-equal "lasm" (pathname-type file))
+        (assemble-items-file file :machine machine :lexer lexer :memory (%cli-memory options)
+                                  :origin origin :backend (getf options :backend))
+        (assemble-file file :machine machine :lexer lexer :memory (%cli-memory options)
+                            :origin (or origin 0)))))
 
 (defun %cli-memory (options)
   (let ((name (getf options :memory)))

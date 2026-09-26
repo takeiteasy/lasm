@@ -1,8 +1,8 @@
-;;;; examples/cli/twelve.lasm
+;;;; examples/cli/twelve.lisp
 ;;;; A 12-bit-cell machine for trying non-byte cell packing (see
 ;;;; docs/binary-output.md):
 ;;;;
-;;;;   lasm assemble twelve.asm -m twelve.lasm --packing bits
+;;;;   lasm assemble twelve.asm -m twelve.lisp --packing bits
 
 (deflexer twelve-syntax
   (comment-styles (";" :line))

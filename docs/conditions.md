@@ -5,7 +5,7 @@ LASM condition types and their public readers. Catch a condition with
 
 For context, see [Machine model](machine-model.md#conditions),
 [Diagnostics](diagnostics.md), [Assembler](assembler.md), and
-[Macros](macros.md).
+[Macros](macros.md), [Backends](backends.md) and [Items](items.md).
 
 | Condition | Parent | Readers |
 |---|---|---|
@@ -31,6 +31,9 @@ For context, see [Machine model](machine-model.md#conditions),
 | `snapshot-malformed` | `snapshot-error` | — |
 | `snapshot-device-unknown` | `snapshot-error` | — |
 | `snapshot-unwritable` | `snapshot-error` | — |
+| `items-error` | `lasm-error` | `items-error-detail`, `items-error-item` |
+| `items-malformed` | `items-error` | — |
+| `items-operand-mismatch` | `items-error` | — |
 | `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-file`, `lasm-syntax-error-source`, `lasm-syntax-error-definition-line`, `lasm-syntax-error-definition-file`, `lasm-syntax-error-definition-source` |
 | `lex-error` | `lasm-syntax-error` | — |
 | `parse-failure` | `lasm-syntax-error` | — |
@@ -44,6 +47,7 @@ For context, see [Machine model](machine-model.md#conditions),
 | `mode-definition-error` | `definition-error` | — |
 | `lexer-definition-error` | `definition-error` | — |
 | `directive-definition-error` | `definition-error` | — |
+| `backend-definition-error` | `definition-error` | — |
 | `usage-error` | `lasm-error` | `usage-error-message` |
 | `debugger-usage-error` | `usage-error` | — |
 | `disassembler-usage-error` | `usage-error` | — |
@@ -52,6 +56,7 @@ For context, see [Machine model](machine-model.md#conditions),
 | `lookup-error` | `usage-error` | `lookup-error-name` |
 | `unknown-machine` | `lookup-error` | — |
 | `unknown-mode` | `lookup-error` | — |
+| `unknown-backend` | `lookup-error` | — |
 | `unknown-lexer` | `lookup-error` | — |
 | `opcode-conflict` | `instruction-definition-error` | `opcode-conflict-machine`, `opcode-conflict-opcode`, `opcode-conflict-mnemonic`, `opcode-conflict-other-mnemonic`, `opcode-conflict-reason` |
 | `macro-error` | `lasm-syntax-error` | — |
