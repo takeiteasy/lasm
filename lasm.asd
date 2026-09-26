@@ -57,7 +57,7 @@
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
   ;; #171: closer-mop walks condition-class-precedence-lists to check
-  ;; every slot reader is exported -- test-only, #:lasm stays dependency-free.
+  ;; every slot reader is exported -- test-only.
   :depends-on (#:lasm #:fiveam #:closer-mop)
   :pathname "tests/"
   :around-compile "asdf-user::lasm-quiet-compile"
