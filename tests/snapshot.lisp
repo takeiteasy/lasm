@@ -608,9 +608,26 @@ twice
                                         (make-string 5000 :initial-element #\()
                                         (make-string 5000 :initial-element #\))))))
 
-(fiveam:test text-snapshot-rejects-huge-float-exponents
-  (fiveam:is (%text-malformed-p "(:lasm-snapshot 1d999999999)"))
-  (fiveam:is (not (%text-malformed-p "(:lasm-snapshot 1.5d10)"))))
+(defun %read-text-datum (datum)
+  (with-input-from-string (in (format nil "(:lasm-snapshot ~A)" datum))
+    (second (%read-snapshot-form in "test"))))
+
+(fiveam:test text-snapshot-float-exponents
+  (dolist (text '("A1E12345" ".E12345" "1E12345A" "|1e99999999|"))
+    (fiveam:is (search "unknown symbol"
+                       (handler-case (%read-text-datum text)
+                         (snapshot-malformed (e) (snapshot-error-detail e))))
+               "~A is a symbol, not a float" text))
+  (loop for (text value) in '(("1d0000000000005" 1d5) ("1.5d10" 1.5d10) ("1.d2" 1d2)
+                              (".5d1" 5d0) ("+1.5d+10" 1.5d10))
+        do (fiveam:is (eql value (%read-text-datum text)) "~A" text))
+  (dolist (text (list "1d999999999" "-1.5d+999999999"
+                      (format nil "1d~A" (make-string 1000000 :initial-element #\9))))
+    (fiveam:is (%text-malformed-p (format nil "(:lasm-snapshot ~A)" text))))
+  (fiveam:is (eql 0d0 (%read-text-datum "1d-999999999")))
+  (fiveam:is (eql -0d0 (%read-text-datum "-1d-999999999")))
+  (fiveam:is (eql 0d0 (%read-text-datum "0d999999999")))
+  (fiveam:is (eql 0f0 (%read-text-datum "1e-999999999"))))
 
 (fiveam:test binary-snapshot-never-interns
   (flet ((malformed (&rest parts)
@@ -620,6 +637,7 @@ twice
     (fiveam:is (malformed #x05 "LASM" "NO-SUCH-XYZ"))
     (fiveam:is (malformed #x09 "#(LASM::NO-SUCH-XYZ)"))
     (fiveam:is (malformed #x09 "#1=(1 . #1#)"))
+    (fiveam:is (malformed #x09 "1d999999999"))
     (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :lasm)))
     (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :keyword)))))
 

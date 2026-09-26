@@ -110,8 +110,9 @@ All four are `snapshot-error`s; `snapshot-error-detail` gives the message.
 `read-snapshot` treats the file as untrusted. It never evaluates, never
 interns a symbol, and accepts no `#` syntax beyond `#\`, `#(` and `#:`, so `#.`,
 `#S`, `#P` and `#n=` are rejected. A symbol that does not exist,
-lists nested deeper than 1000, or a float exponent longer than four digits
-signals `snapshot-malformed`, as does anything unreadable. A binary file that is
+lists nested deeper than 1000, or a float too large to represent (`1d999999999`)
+signals `snapshot-malformed`, as does anything unreadable. A float too small to
+represent (`1d-999999999`) reads as a signed zero.[^float-bound] A binary file that is
 truncated, mis-tagged, nested too deeply or names an unknown package or symbol
 is malformed too, and a binary format this lasm does not read signals
 `snapshot-version-mismatch`. A binding to a missing
@@ -160,3 +161,5 @@ be written to a file.
     with symbol lookup by `find-symbol` only. A snapshot naming a symbol from a
     system that is not loaded is malformed. Load the machine's system before
     reading its snapshot.
+
+[^float-bound]: Only whole tokens shaped like a float with an exponent marker are checked; `A1E12345` is a symbol. An exponent beyond 324 plus the token length is out of range.
