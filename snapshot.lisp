@@ -428,6 +428,14 @@ fit, and whatever assembling signals for a program that no longer assembles."
 
 ;;; Data check and restricted reader
 
+;; Eclector reads digits in quadratic time: 200k digits take about 3 s.
+(defconstant +snapshot-max-number-chars+ 20000
+  "Longest numeric token the text reader accepts.")
+
+(defconstant +snapshot-max-number-bits+ 66000
+  "Most bits an integer, or a ratio's numerator and denominator together, may
+have and still print within +SNAPSHOT-MAX-NUMBER-CHARS+.")
+
 (defun %check-snapshot-data (data)
   "Signal SNAPSHOT-UNWRITABLE unless DATA is finite, acyclic snapshot data."
   (let ((path (make-hash-table :test 'eq))
@@ -436,7 +444,11 @@ fit, and whatever assembling signals for a program that no longer assembles."
                (%snapshot-fail 'snapshot-unwritable "~?" control args))
              (walk (node)
                (typecase node
-                 ((or null symbol integer ratio character string) nil)
+                 ((or null symbol character string) nil)
+                 ((or integer ratio)
+                  (when (> (+ (integer-length (numerator node)) (integer-length (denominator node)))
+                           +snapshot-max-number-bits+)
+                    (fail "number too large for a snapshot")))
                  (float (when (or (sb-ext:float-infinity-p node) (sb-ext:float-nan-p node))
                           (fail "non-finite float ~S" node)))
                  (cons (walk-list node))
@@ -531,6 +543,10 @@ marker and exponent (capped at 10^12); NIL for anything else."
 (defmethod eclector.reader:interpret-token :around
     ((client snapshot-client) stream token escape-ranges)
   (declare (ignore stream))
+  (when (and (> (length token) +snapshot-max-number-chars+)
+             (null escape-ranges)
+             (find (char token 0) "+-.0123456789"))
+    (%snapshot-fail 'snapshot-malformed "number longer than ~D characters" +snapshot-max-number-chars+))
   ;; Eclector computes 10^exponent eagerly, so 1d999999999 never returns.
   (multiple-value-bind (negative zero marker exponent)
       (if escape-ranges nil (%float-token-exponent token))

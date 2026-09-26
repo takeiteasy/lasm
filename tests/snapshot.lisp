@@ -629,6 +629,22 @@ twice
   (fiveam:is (eql 0d0 (%read-text-datum "0d999999999")))
   (fiveam:is (eql 0f0 (%read-text-datum "1e-999999999"))))
 
+(fiveam:test text-snapshot-bounds-number-length
+  (flet ((digits (n) (make-string n :initial-element #\7)))
+    (fiveam:is (integerp (%read-text-datum (digits +snapshot-max-number-chars+))))
+    (dolist (text (list (digits (1+ +snapshot-max-number-chars+))
+                        (format nil "-~A" (digits +snapshot-max-number-chars+))
+                        (format nil "1.~A" (digits +snapshot-max-number-chars+))
+                        (format nil "~A/3" (digits +snapshot-max-number-chars+))))
+      (fiveam:is (%text-malformed-p (format nil "(:lasm-snapshot ~A)" text))))))
+
+(fiveam:test write-snapshot-rejects-numbers-too-large-to-read-back
+  (let ((big (ash 1 (1+ +snapshot-max-number-bits+))))
+    (dolist (format '(:sexp :binary))
+      (fiveam:is (%unwritable-p big format) "integer, ~S" format)
+      (fiveam:is (%unwritable-p (list (/ 1 (1+ big))) format) "ratio, ~S" format)
+      (fiveam:is (not (%unwritable-p (ash 1 60000) format)) "large but readable, ~S" format))))
+
 (fiveam:test binary-snapshot-never-interns
   (flet ((malformed (&rest parts)
            (handler-case (progn (%read-binary-snapshot (apply #'%binary-octets parts) "test") nil)

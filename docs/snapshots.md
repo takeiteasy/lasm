@@ -61,7 +61,7 @@ device `:save` state and interrupt signal data, before opening the file.
 
 | Allowed | Notes |
 |---|---|
-| `nil`, `t`, integers, ratios, finite floats | Infinities and NaN are rejected. |
+| `nil`, `t`, integers, ratios, finite floats | Infinities and NaN are rejected, as is a number that needs more than 66000 bits.[^number-size] |
 | characters, strings | |
 | symbols | Read back only when the symbol already exists in the reading image.[^symbols] |
 | conses, simple vectors | Shared structure is written as copies. |
@@ -112,7 +112,8 @@ interns a symbol, and accepts no `#` syntax beyond `#\`, `#(` and `#:`, so `#.`,
 `#S`, `#P` and `#n=` are rejected. A symbol that does not exist,
 lists nested deeper than 1000, or a float too large to represent (`1d999999999`)
 signals `snapshot-malformed`, as does anything unreadable. A float too small to
-represent (`1d-999999999`) reads as a signed zero.[^float-bound] A binary file that is
+represent (`1d-999999999`) reads as a signed zero.[^float-bound] A numeric token
+longer than 20000 characters is malformed too. A binary file that is
 truncated, mis-tagged, nested too deeply or names an unknown package or symbol
 is malformed too, and a binary format this lasm does not read signals
 `snapshot-version-mismatch`. A binding to a missing
@@ -163,3 +164,5 @@ be written to a file.
     reading its snapshot.
 
 [^float-bound]: Only whole tokens shaped like a float with an exponent marker are checked; `A1E12345` is a symbol. An exponent beyond 324 plus the token length is out of range.
+
+[^number-size]: The text reader accepts numeric tokens up to 20000 characters, so `write-snapshot` rejects an integer, or a ratio's numerator and denominator together, above 66000 bits (about 19900 digits).
