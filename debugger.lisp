@@ -80,7 +80,7 @@
 
 (defstruct (debug-session (:constructor %make-debug-session))
   (machine nil :type machine)
-  (assembly nil)                ; optional ASSEMBLY -- symbols + source context
+  (assemblies nil :type list)   ; ASSEMBLYs, newest first -- symbols + source context
   (pc nil :type symbol)         ; resolved once, not re-resolved per command (#70's shape)
   (memory nil :type symbol)
   (cell-width nil :type (integer 1))
@@ -107,10 +107,16 @@
   (last-x-address nil)          ; so a bare `x` without an address continues from the last one
   (qualified-names nil))        ; readable name -> SYMBOL-INFO, built on first use
 
+(defun debug-session-assembly (session)
+  "SESSION's newest attached ASSEMBLY, or NIL."
+  (first (debug-session-assemblies session)))
+
 (defun make-debug-session (machine &key assembly pc memory (lexer 'default) history)
   "Create a DEBUG-SESSION wrapping MACHINE (a live MACHINE instance,
-storage.lisp), optionally with the ASSEMBLY that produced its program for
-label breakpoints, symbol listing, and source-line context. PC/MEMORY
+storage.lisp), optionally with the ASSEMBLY (or list of them, newest first) that produced its
+programs for label breakpoints, symbol listing, and source-line context. It
+defaults to every program retained on MACHINE (MACHINE-PROGRAMS); a label
+several assemblies define resolves to the newest. PC/MEMORY
 override the usual by-convention resolution (%RESOLVE-PC/%RESOLVE-MEMORY,
 emulator.lisp), same as STEP-MACHINE's own keywords -- resolved once here,
 not on every command. LEXER tokenizes breakpoint conditions. HISTORY, a step
@@ -122,7 +128,11 @@ default) records nothing."
          (cell-width (%machine-cell-width machine-name memory)))
     (%make-debug-session
      :dirty (and history (setf (machine-dirty machine) (make-dirty-pages)))
-     :machine machine :assembly (or assembly (machine-program machine)) :pc pc :memory memory :lexer lexer :history history
+     :machine machine :assemblies (if assembly
+                                (if (listp assembly) assembly (list assembly))
+                                (remove-duplicates (mapcar #'loaded-program-assembly (machine-programs machine))
+                                                   :from-end t))
+     :pc pc :memory memory :lexer lexer :history history
      :cell-width cell-width :hex-digits (%listing-hex-digits cell-width))))
 
 ;;; Breakpoints
@@ -132,20 +142,24 @@ default) records nothing."
 line order when spellings collide."
   (or (debug-session-qualified-names session)
       (let ((table (make-hash-table :test 'equal)))
-        (dolist (info (assembly-symbols-list (debug-session-assembly session)))
-          (let ((name (symbol-info-qualified-name info)))
-            (unless (nth-value 1 (gethash name table))
-              (setf (gethash name table) info))))
+        (dolist (assembly (debug-session-assemblies session))
+          (dolist (info (assembly-symbols-list assembly))
+            (let ((name (symbol-info-qualified-name info)))
+              (unless (nth-value 1 (gethash name table))
+                (setf (gethash name table) info)))))
         (setf (debug-session-qualified-names session) table))))
 
 (defun %session-symbol (session name scope)
-  "The SYMBOL-INFO for NAME in SESSION's assembly: a local under SCOPE, a
-global, or a local by its qualified spelling (\"count.loop\"). NIL if none."
-  (let ((assembly (debug-session-assembly session)))
-    (or (and scope (assembly-symbol assembly name :scope scope))
-        (assembly-symbol assembly name)
-        (gethash name (%qualified-names session)))))
+  "The SYMBOL-INFO for NAME in SESSION's assemblies, the newest defining it
+first: a local under SCOPE, a global, or a local by its qualified spelling
+(\"count.loop\"). NIL if none."
+  (or (some (lambda (assembly)
+              (or (and scope (assembly-symbol assembly name :scope scope))
+                  (assembly-symbol assembly name)))
+            (debug-session-assemblies session))
+      (gethash name (%qualified-names session))))
 
+;; TODO: the label's value is its assembled address; a program loaded at another origin needs its load offset (#370)
 (defun %resolve-breakpoint-address (session where &key scope bank)
   "WHERE as (VALUES ADDRESS REGION BANK): an integer as-is, or a label string
 resolved through %SESSION-SYMBOL against SESSION's attached ASSEMBLY. A label defined under .BANK carries its region and bank; BANK
@@ -165,8 +179,8 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
            (values where (memory-region-name region) bank))
          (values where nil nil)))
     (string
-     (let ((assembly (debug-session-assembly session)))
-       (unless assembly
+     (progn
+       (unless (debug-session-assemblies session)
          (%debugger-usage-error "no assembly attached to this session -- cannot resolve label ~S" where))
        (let ((info (%session-symbol session where scope)))
          (unless info
@@ -303,8 +317,7 @@ on a syntax error or an unknown name."
         (dolist (node indexed) (%check-indexed session node))
         (dolist (name names)
           (multiple-value-bind (storage index) (%resolve-storage session name)
-            (let* ((assembly (and (null storage) (debug-session-assembly session)))
-                   (info (and assembly (%session-symbol session name scope))))
+            (let ((info (and (null storage) (%session-symbol session name scope))))
               (cond
                 (storage
                  (let ((machine (debug-session-machine session)))
@@ -1282,6 +1295,26 @@ banked region or the range runs past its end."
     (setf (debug-session-last-x-address session) (+ address count))
     (if stream (progn (write-string body stream) nil) body)))
 
+(defun %session-symbols-text (session)
+  "SESSION's symbol tables: one block per assembly, headed by its origin when
+there are several."
+  (let ((assemblies (debug-session-assemblies session)))
+    (cond ((null assemblies) (format nil "No assembly attached to this session.~%"))
+          ((null (rest assemblies)) (symbols-text (first assemblies)))
+          (t (with-output-to-string (s)
+               (loop for assembly in assemblies
+                     for n from 1
+                     do (format s "Image ~D (origin $~V,'0X):~%~A" n (debug-session-addr-digits session)
+                                (assembly-origin assembly) (symbols-text assembly))))))))
+
+(defun %assembly-at-pc (session machine)
+  "The session assembly holding the PC: the loaded program there when SESSION
+has it, else the newest."
+  (let ((loaded (machine-program-at machine (%pc session) :memory (debug-session-memory session))))
+    (if (member loaded (debug-session-assemblies session))
+        loaded
+        (debug-session-assembly session))))
+
 (defun debug-where-text (session &key (context 4) (stream nil))
   "Render SESSION's current stop point: the PC, its disassembled instruction
 via DISASSEMBLE-MEMORY (disassembler.lisp, passing the attached ASSEMBLY so
@@ -1290,8 +1323,8 @@ attached -- the originating source line via LISTING-LINE-AT/ASSEMBLY-SOURCE.
 CONTEXT bounds how many disassembled instructions are shown. Returns a
 string when STREAM is NIL (default); otherwise writes to STREAM and returns
 NIL."
-  (let* ((session-assembly (debug-session-assembly session))
-         (machine (debug-session-machine session))
+  (let* ((machine (debug-session-machine session))
+         (session-assembly (%assembly-at-pc session machine))
          (pc (%pc session))
          (lines (disassemble-memory machine :memory (debug-session-memory session)
                                              :start pc :count context
@@ -1601,9 +1634,7 @@ this call."
                      ((string-equal rest "reg") (debug-state-text session))
                      ((string-equal rest "banks") (debug-banks-text session))
                      ((string-equal rest "sym")
-                      (if (debug-session-assembly session)
-                          (symbols-text (debug-session-assembly session))
-                          (format nil "No assembly attached to this session.~%")))
+                      (%session-symbols-text session))
                      (t (format nil "info: unknown subcommand ~S (try break/reg/banks/sym)" rest))))
                   ((string-equal cmd "step")
                    (multiple-value-bind (n cycles-p) (%count-arg rest "step")

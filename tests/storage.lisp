@@ -718,3 +718,13 @@ nop" :machine 'rom-program-test-machine)))
                                         (name-at #x6F) (name-at #x70))))
       (fiveam:is (equal '(nil d d) (list (name-at #xEF) (name-at #xF0) (name-at #xFF))))
       (fiveam:is (equal '(c a d b e) (mapcar #'memory-region-name (storage-element-regions element)))))))
+
+(fiveam:test reset-keeps-only-the-programs-loaded-into-rom
+  (let ((m (make-machine 'rom-program-test-machine))
+        (bios (assemble "nop" :machine 'rom-program-test-machine))
+        (program (assemble "nop" :machine 'rom-program-test-machine :origin #x100)))
+    (load-program m bios)
+    (load-program m program)
+    (fiveam:is (= 2 (length (machine-programs m))))
+    (reset m)
+    (fiveam:is (equal (list bios) (mapcar #'loaded-program-assembly (machine-programs m))))))

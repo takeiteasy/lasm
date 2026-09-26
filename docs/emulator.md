@@ -28,10 +28,18 @@ directly, including into ROM, and sets PC to its origin. For an `assembly`,
 the origin comes from `assembly-origin` and its cell width must match the
 target memory. A plain sequence starts at `0` unless `:origin` is supplied.
 
-An assembly loaded without `:bank` is kept as `machine-program`, with the
-memory it went into and its load offset. Loading raw cells clears it;
-snapshots do not save it. `reset` clears it unless the whole image (including
-bank images) lies in `:rom` regions, which `reset` keeps.
+An assembly loaded without `:bank` is kept as a `loaded-program` (its
+`loaded-program-assembly`, `-memory` and `-origin`), newest first in
+`machine-programs`. `machine-program` is the newest one's assembly, and
+`machine-program-at` returns the newest holding an address.[^images]
+
+| Load | Retained programs |
+|---|---|
+| An assembly | Added; older ones in the same memory it covers wholly are dropped. |
+| Raw cells | Those they overlap are dropped. |
+| `reset` | Only programs wholly in `:rom` regions (including bank images) stay. |
+
+Snapshots do not save them.
 
 An assembly's [bank images](banked-output.md) load without changing the
 current mapping. `:bank n` loads a selected bank without changing the
@@ -127,8 +135,8 @@ does not count. An idle step counts. Direct stepping still signals faults.
 ### Error locations
 
 A trap or storage fault raised while an instruction runs records that
-instruction's address in `runtime-location-pc`. With a retained
-`machine-program` it also records `runtime-location-listing-line` and
+instruction's address in `runtime-location-pc`. With a retained program
+holding that address it also records `runtime-location-listing-line` and
 `runtime-location-source-text`, and the report ends with the location:
 
 ```text
@@ -195,9 +203,8 @@ marks such instructions with `+` in its cycles column.
 - A unified trap/interrupt model is outside this execution model.
   [Privilege violations](privilege.md#violations-as-interrupts) can queue an
   interrupt, but traps stay separate.
-- `machine-program` holds one assembly, so a machine that loads several
-  images names source lines only for the last; see
-  [ticket 261](https://todo.sr.ht/~takeiteasy/lasm/261).
+- Snapshots carry no retained programs, and the debugger's `save` embeds only
+  the newest assembly; see [ticket 369](https://todo.sr.ht/~takeiteasy/lasm/369).
 
 [^decode]: Decode returns the selected `one-of` choices to semantics so
   `choice-case` can dispatch on the form actually encoded. Trailing cells
@@ -209,5 +216,7 @@ marks such instructions with `+` in its cycles column.
 [^relocation]: The offset is the load origin minus `assembly-origin`. The
   lookup matches only the memory the program was loaded into, and the report
   is only right when the code is position-independent or was assembled for
-  its load address. A second `load-program` replaces the retained program; a
-  bank-only load leaves it alone.
+  its load address. A bank-only load leaves the retained programs alone.
+[^images]: Where two programs overlap, the newest wins for that address; the
+  older one still answers outside the overlap. A bank image counts only while
+  its bank is mapped.

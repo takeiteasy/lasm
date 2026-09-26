@@ -22,9 +22,12 @@ See [`debugger.lisp`](../examples/debugger.lisp).
 (make-debug-session machine &key assembly pc memory lexer history)
 ```
 
-`machine` is already running or loaded. `assembly` supplies label, `.equ`,
-and source information; it defaults to the machine's retained
-`machine-program`. `:pc` and `:memory` override the machine defaults;
+`machine` is already running or loaded. `assembly` (one, or a list newest
+first) supplies label, `.equ`, and source information; it defaults to every
+program the machine retains (`machine-programs`), read back with
+`debug-session-assemblies`. A name several assemblies define resolves to the
+newest. `where` uses the assembly holding the PC, `info sym` prints one block
+per assembly, and `save` embeds the newest. `:pc` and `:memory` override the machine defaults;
 `:lexer` parses breakpoint expressions. `:history` enables
 [step back](#step-back); it is off by default.
 

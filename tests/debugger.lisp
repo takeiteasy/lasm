@@ -1817,3 +1817,37 @@ loop:   sta $10
       (fiveam:is (equal '("binary" :sexp) (list path format))))
     (multiple-value-bind (path format) (%split-save-arguments "a b.snap  BINARY")
       (fiveam:is (equal '("a b.snap" :binary) (list path format))))))
+
+(fiveam:test session-defaults-to-every-retained-program
+  (multiple-value-bind (m bios program) (%bios-and-program)
+    (let ((session (make-debug-session m)))
+      (fiveam:is (equal (list program bios) (debug-session-assemblies session)))
+      (fiveam:is (eq program (debug-session-assembly session))))))
+
+(fiveam:test session-accepts-a-list-of-assemblies
+  (multiple-value-bind (m bios program) (%bios-and-program)
+    (fiveam:is (equal (list bios program)
+                      (debug-session-assemblies (make-debug-session m :assembly (list bios program)))))))
+
+(fiveam:test label-breakpoints-resolve-in-every-program
+  (multiple-value-bind (m) (%bios-and-program)
+    (let ((session (make-debug-session m)))
+      (fiveam:is (= 0 (nth-value 0 (%resolve-breakpoint-address session "boot"))))
+      (fiveam:is (= 1 (nth-value 0 (%resolve-breakpoint-address session "nop2")))))))
+
+(fiveam:test where-in-the-bios-shows-the-bios-line
+  (multiple-value-bind (m) (%bios-and-program)
+    (let ((session (make-debug-session m)))
+      (setf (sref m 'pc) 0)
+      (let ((text (debug-where-text session)))
+        (fiveam:is (search "<boot>" text))
+        (fiveam:is (search "boot: add" text)))
+      (setf (sref m 'pc) #x40)
+      (fiveam:is (search "psh #1" (debug-where-text session))))))
+
+(fiveam:test info-sym-lists-each-program
+  (multiple-value-bind (m) (%bios-and-program)
+    (let ((text (debug-command (make-debug-session m) "info sym")))
+      (fiveam:is (search "Image 1 (origin $0040)" text))
+      (fiveam:is (search "Image 2 (origin $0000)" text))
+      (fiveam:is (search "boot" text)))))

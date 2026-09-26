@@ -51,37 +51,72 @@ structure if that ever matters."
                                 (1- (+ (listing-line-address l) (listing-line-size l))))))
             (assembly-listing assembly)))
 
-(defun %machine-image-address (machine address memory assembly)
-  "ADDRESS translated into ASSEMBLY's address space, and the banked region name
-and bank mapped there (NIL for the main image), as (VALUES LISTED REGION BANK).
-NIL when ASSEMBLY is not the program MEMORY holds."
+(defun %loaded-program-covers-p (machine program address)
+  "True when PROGRAM's main image, or a .BANK image mapped in on MACHINE,
+holds ADDRESS."
+  (or (<= (loaded-program-origin program) address (1- (%loaded-program-end program)))
+      (some (lambda (image)
+              (and (eql (current-bank machine (bank-image-region image)) (bank-image-bank image))
+                   (<= (bank-image-origin image) address
+                       (+ (bank-image-origin image) (length (bank-image-cells image)) -1))))
+            (assembly-banks (loaded-program-assembly program)))))
+
+(defun %loaded-program-at (machine address memory)
+  "The newest of MACHINE's LOADED-PROGRAMs holding ADDRESS of MEMORY, any
+memory when MEMORY is NIL."
+  (find-if (lambda (program)
+             (and (or (null memory) (eq memory (loaded-program-memory program)))
+                  (%loaded-program-covers-p machine program address)))
+           (machine-programs machine)))
+
+(defun machine-program-at (machine address &key memory)
+  "The ASSEMBLY of the newest program loaded into MACHINE that holds ADDRESS,
+in MEMORY when given, or NIL."
+  (let ((program (%loaded-program-at machine address memory)))
+    (and program (loaded-program-assembly program))))
+
+(defun %machine-image (machine address memory assembly)
+  "As (VALUES ASSEMBLY PROGRAM): the assembly to look ADDRESS up in and the
+LOADED-PROGRAM giving its load offset and memory, NIL for an assembly the
+machine never loaded. NIL when ASSEMBLY is not the program MEMORY holds.
+Without ASSEMBLY, the program holding ADDRESS."
+  (if assembly
+      (let ((loaded (remove-if-not (lambda (p) (eq assembly (loaded-program-assembly p))) (machine-programs machine))))
+        (if loaded
+            (let ((program (find-if (lambda (p) (or (null memory) (eq memory (loaded-program-memory p))))
+                                    loaded)))
+              (and program (values assembly program)))
+            (values assembly nil)))
+      (let ((program (%loaded-program-at machine address memory)))
+        (and program (values (loaded-program-assembly program) program)))))
+
+(defun %machine-image-address (machine address memory program)
+  "ADDRESS translated into PROGRAM's address space (unchanged without one),
+and the banked region name and bank mapped there (NIL for the main image), as
+(VALUES LISTED REGION BANK)."
   (let* ((descriptor (machine-descriptor machine))
-         (retainedp (eq assembly (machine-program machine)))
          (memory (or memory
-                     (and retainedp (machine-program-memory machine))
+                     (and program (loaded-program-memory program))
                      (%resolve-memory (machine-descriptor-name descriptor) nil)))
          (element (descriptor-element descriptor memory))
          (region (find-if (lambda (r) (and (memory-region-banks r)
                                            (<= (memory-region-start r) address
                                                (memory-region-end r))))
-                          (storage-element-regions element))))
-    (when (or (not retainedp) (eq memory (machine-program-memory machine)))
-      (let ((name (and region (memory-region-name region))))
-        (values (if retainedp (- address (machine-program-offset machine)) address)
-                name
-                (and name (current-bank machine name)))))))
+                          (storage-element-regions element)))
+         (name (and region (memory-region-name region))))
+    (values (if program (- address (%loaded-program-offset program)) address)
+            name
+            (and name (current-bank machine name)))))
 
-(defun machine-listing-line (machine address &key memory (assembly (machine-program machine)))
+(defun machine-listing-line (machine address &key memory assembly)
   "The LISTING-LINE for ADDRESS in MACHINE's MEMORY, or NIL: the entry in the
 bank mapped at ADDRESS when it lies in a banked region, else (or failing
-that) the main image's. ASSEMBLY defaults to the program LOAD-PROGRAM
-retained. For that program only MEMORY must be the memory it was loaded
-into (the default is that one), and ADDRESS is translated by its load
-offset."
-  (when assembly
-    (multiple-value-bind (listed region bank)
-        (%machine-image-address machine address memory assembly)
-      (when listed
+that) the main image's. ASSEMBLY defaults to the newest program LOAD-PROGRAM
+retained that holds ADDRESS. For a loaded ASSEMBLY, MEMORY must be a memory
+it was loaded into, and ADDRESS is translated by its load offset."
+  (multiple-value-bind (assembly program) (%machine-image machine address memory assembly)
+    (when assembly
+      (multiple-value-bind (listed region bank) (%machine-image-address machine address memory program)
         (or (and region (listing-line-at assembly listed :region region :bank bank))
             (listing-line-at assembly listed))))))
 
@@ -415,14 +450,13 @@ tie with its global, then the later binding."
         (setf best info)))
     (and best (values best (- address (symbol-info-value best))))))
 
-(defun machine-label-at (machine address &key memory (assembly (machine-program machine)))
+(defun machine-label-at (machine address &key memory assembly)
   "The nearest label at or before ADDRESS in MACHINE's MEMORY, as
 ASSEMBLY-LABEL-AT's (VALUES SYMBOL-INFO OFFSET) -- the banked image first, then
-the main one, resolving ADDRESS as MACHINE-LISTING-LINE does."
-  (when assembly
-    (multiple-value-bind (listed region bank)
-        (%machine-image-address machine address memory assembly)
-      (when listed
+the main one, resolving ADDRESS and ASSEMBLY as MACHINE-LISTING-LINE does."
+  (multiple-value-bind (assembly program) (%machine-image machine address memory assembly)
+    (when assembly
+      (multiple-value-bind (listed region bank) (%machine-image-address machine address memory program)
         (multiple-value-bind (info offset)
             (and region (assembly-label-at assembly listed :region region :bank bank))
           (if info

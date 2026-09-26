@@ -610,6 +610,7 @@ kept only if the main image was loaded into that bank."
                                                                      :bank bank))))
     regions))
 
+;; TODO: labels and data regions ignore a relocated program's load offset (#370)
 (defun %live-symbol-info (assembly machine memory)
   "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's
 outside banked windows, and inside each window those of its mapped bank or

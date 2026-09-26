@@ -529,3 +529,12 @@ nop" :machine 'instr-test-machine)))
       (fiveam:is (string= "start" (symbol-info-name info)))
       (fiveam:is (= 1 offset)))
     (fiveam:is (null (machine-label-at m 0)))))
+
+(fiveam:test machine-listing-lookups-pick-the-program-holding-the-address
+  (multiple-value-bind (m) (%bios-and-program)
+    (fiveam:is (= 1 (listing-line-line (machine-listing-line m 0))))
+    (fiveam:is (= 2 (listing-line-line (machine-listing-line m #x42))))
+    (fiveam:is (null (machine-listing-line m #x30)))
+    (fiveam:is (string= "nop2" (symbol-info-name (machine-label-at m 1))))
+    (fiveam:is (null (machine-label-at m #x30)))
+    (fiveam:is (null (machine-program-at m #x30)))))

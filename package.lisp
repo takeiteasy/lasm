@@ -564,6 +564,13 @@
    #:machine-listing-line
    #:listing-line-source-text
    #:machine-program
+   #:machine-programs
+   #:machine-program-at
+   #:loaded-program
+   #:loaded-program-p
+   #:loaded-program-assembly
+   #:loaded-program-memory
+   #:loaded-program-origin
    #:listing-lines-for-source-line
    #:*listing-max-cells-shown*
 
@@ -591,6 +598,7 @@
    #:debug-session-p
    #:debug-session-machine
    #:debug-session-assembly
+   #:debug-session-assemblies
    #:breakpoint
    #:breakpoint-p
    #:breakpoint-id

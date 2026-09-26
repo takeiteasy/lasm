@@ -250,7 +250,7 @@
 
 (fiveam:test snapshot-covers-every-machine-slot
   (let ((covered '(cycles idle devices interrupt-buckets interrupt-count interrupt-sequence interrupt-active banks loaded-banks region-bindings))
-        (host-only '(descriptor slots interrupt-hook access-hook dirty program program-memory program-offset privilege-violation)))
+        (host-only '(descriptor slots interrupt-hook access-hook dirty programs privilege-violation)))
     (dolist (slot (closer-mop:class-slots (find-class 'machine)))
       (let ((name (closer-mop:slot-definition-name slot)))
         (fiveam:is (or (member (symbol-name name) covered :test #'string=)

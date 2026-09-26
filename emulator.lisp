@@ -90,10 +90,11 @@ BANK loads CELLS into that bank of the banked region containing ORIGIN,
 whether or not it is mapped in, leaving the mapping and PC untouched.
 Signals if ORIGIN is not in a banked region or CELLS run past its end.
 
-An ASSEMBLY loaded without BANK is retained as MACHINE-PROGRAM, with its
-memory and load offset, so runtime conditions can name the source line; a
-load of raw cells clears it, and RESET does too unless the assembly was
-loaded wholly into :ROM regions (#157).
+An ASSEMBLY loaded without BANK is retained as a LOADED-PROGRAM, newest first
+in MACHINE-PROGRAMS, so runtime conditions can name the source line; where
+images overlap the newest wins. A load drops the retained programs in that
+memory it covers wholly, and a load of raw cells the ones it overlaps. RESET
+keeps those loaded wholly into :ROM regions (#157).
 
 An ASSEMBLY that placed output in banks with .BANK also has each of those
 banks filled, without changing the mapping, when BANK is not given. Signals
@@ -113,9 +114,10 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
     (when (and assembly-p (not bank))
       (%check-main-image-banks machine memory cells))
     (unless bank
-      (setf (machine-program machine) (and assembly-p cells)
-            (machine-program-memory machine) memory
-            (machine-program-offset machine) (if assembly-p (- origin (assembly-origin cells)) 0)))
+      (%forget-programs machine memory origin (+ origin (length data)) assembly-p)
+      (when assembly-p
+        (cl:push (make-loaded-program :assembly cells :memory memory :origin origin)
+              (machine-programs machine))))
     (if bank
         (%load-into-bank machine memory origin data bank)
         (let ((address origin))
@@ -130,6 +132,19 @@ match memory ~S's cell width (~D)" machine-name source-width memory target-width
               (%load-into-bank machine memory (bank-image-origin image)
                                (bank-image-cells image) (bank-image-bank image))))))
     machine))
+
+(defun %forget-programs (machine memory start end coveredp)
+  "Drop MACHINE's retained programs in MEMORY lying wholly inside [START, END)
+when COVEREDP, else those overlapping it."
+  (setf (machine-programs machine)
+        (remove-if (lambda (program)
+                     (and (eq (loaded-program-memory program) memory)
+                          (let ((from (loaded-program-origin program))
+                                (to (%loaded-program-end program)))
+                            (if coveredp
+                                (and (<= start from) (<= to end))
+                                (and (< from end) (< start to))))))
+                   (machine-programs machine))))
 
 (defun %check-main-image-banks (machine memory assembly)
   "Signal if ASSEMBLY's main-image output lies in a banked window of MEMORY
@@ -208,13 +223,14 @@ cost)."
 
 (defun %locate-runtime-condition (condition machine address memory)
   "Record on CONDITION the instruction at ADDRESS that raised it, and its
-source line and nearest label when MACHINE retained its program."
+source line and nearest label when MACHINE retained a program covering it."
   (unless (runtime-location-pc condition)
-    (let* ((line (machine-listing-line machine address :memory memory))
-           (assembly (machine-program machine)))
+    (let* ((assembly (machine-program-at machine address :memory memory))
+           (line (and assembly (machine-listing-line machine address :memory memory :assembly assembly))))
       (setf (runtime-location-pc condition) address
             (runtime-location-label condition)
-            (multiple-value-bind (info offset) (machine-label-at machine address :memory memory)
+            (multiple-value-bind (info offset)
+                (and assembly (machine-label-at machine address :memory memory :assembly assembly))
               (and info (label-offset-text info offset)))
             (runtime-location-listing-line condition) line
             (runtime-location-source-text condition)

@@ -1627,16 +1627,72 @@ hlt" :machine 'stack-test-machine))
         (a (assemble "hlt" :machine 'emu-test-machine)))
     (load-program m a)
     (fiveam:is (eq a (machine-program m)))
-    (fiveam:is (= 0 (machine-program-offset m)))
+    (fiveam:is (= 0 (loaded-program-origin (first (machine-programs m)))))
     (load-program m a :origin 8)
     (fiveam:is (eq a (machine-program m)))
-    (fiveam:is (= 8 (machine-program-offset m)))
+    (fiveam:is (= 8 (loaded-program-origin (first (machine-programs m)))))
+    (load-program m (assembly-cells a) :origin 8)
+    (fiveam:is (= 0 (loaded-program-origin (first (machine-programs m)))))
     (load-program m (assembly-cells a))
     (fiveam:is (null (machine-program m)))
     (load-program m a)
     (reset m)
-    (fiveam:is (null (machine-program m)))
-    (fiveam:is (= 0 (machine-program-offset m)))))
+    (fiveam:is (null (machine-programs m)))))
+
+(defun %bios-and-program ()
+  "A stack machine with a BIOS at 0 and a program at #x40, each with source of its own."
+  (let ((m (make-machine 'stack-test-machine))
+        (bios (assemble "boot: add
+nop2: hlt" :machine 'stack-test-machine))
+        (program (assemble "psh #1
+hlt" :machine 'stack-test-machine :origin #x40)))
+    (load-program m bios)
+    (load-program m program)
+    (values m bios program)))
+
+(fiveam:test several-loaded-programs-are-retained-newest-first
+  (multiple-value-bind (m bios program) (%bios-and-program)
+    (fiveam:is (equal (list program bios) (mapcar #'loaded-program-assembly (machine-programs m))))
+    (fiveam:is (eq program (machine-program m)))
+    (fiveam:is (eq bios (machine-program-at m 0)))
+    (fiveam:is (eq program (machine-program-at m #x41)))
+    (fiveam:is (null (machine-program-at m #x30)))))
+
+(fiveam:test runtime-error-in-the-bios-names-the-bios-line
+  (multiple-value-bind (m bios) (%bios-and-program)
+    (declare (ignore bios))
+    (setf (sref m 'pc) 0)
+    (multiple-value-bind (reason steps condition) (run m)
+      (declare (ignore steps))
+      (fiveam:is (eq :fault reason))
+      (fiveam:is (= 1 (listing-line-line (runtime-location-listing-line condition))))
+      (fiveam:is (string= "boot" (runtime-location-label condition)))
+      (fiveam:is (string= "boot: add" (runtime-location-source-text condition))))))
+
+(fiveam:test reloading-the-same-program-keeps-one-record
+  (multiple-value-bind (m bios program) (%bios-and-program)
+    (declare (ignore bios))
+    (load-program m program)
+    (load-program m program)
+    (fiveam:is (= 2 (length (machine-programs m))))))
+
+(fiveam:test raw-cells-drop-only-the-programs-they-overlap
+  (multiple-value-bind (m bios program) (%bios-and-program)
+    (load-program m #(0 0) :origin #x41)
+    (fiveam:is (equal (list bios) (mapcar #'loaded-program-assembly (machine-programs m))))
+    (fiveam:is (not (member program (machine-programs m) :key #'loaded-program-assembly)))))
+
+(fiveam:test newest-program-wins-where-images-overlap
+  (let ((m (make-machine 'stack-test-machine))
+        (old (assemble "psh #1
+psh #2
+psh #3" :machine 'stack-test-machine))
+        (new (assemble "add" :machine 'stack-test-machine :origin 2)))
+    (load-program m old)
+    (load-program m new)
+    (fiveam:is (eq new (machine-program-at m 2)))
+    (fiveam:is (eq old (machine-program-at m 1)))
+    (fiveam:is (eq old (machine-program-at m 4)))))
 
 (fiveam:test relocated-program-names-lines-at-the-shifted-address
   (let ((m (make-machine 'stack-test-machine))
@@ -1658,7 +1714,7 @@ hlt" :machine 'stack-test-machine)))
         (a (assemble ".byte 1
 .byte 2" :machine 'two-memory-test-machine :memory 'rom)))
     (load-program m a :memory 'rom)
-    (fiveam:is (eq 'rom (machine-program-memory m)))
+    (fiveam:is (eq 'rom (loaded-program-memory (first (machine-programs m)))))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1 :memory 'rom))))
     (fiveam:is (null (machine-listing-line m 1 :memory 'ram)))))

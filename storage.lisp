@@ -10,7 +10,7 @@
 ;; Where a runtime condition arose: PC is the faulting instruction's own
 ;; address, LISTING-LINE its ASSEMBLY entry, SOURCE-TEXT that line's text and
 ;; LABEL its nearest preceding label as NAME+OFFSET, the last three only when
-;; the machine retained its program (MACHINE-PROGRAM).
+;; the machine retained a program covering the address (MACHINE-PROGRAMS).
 ;; %STEP-MACHINE-RESOLVED fills the unset slots.
 (define-condition runtime-location ()
   ((pc :initarg :pc :initform nil :accessor runtime-location-pc)
@@ -676,6 +676,21 @@ machine's default layout -- callers hold no other kind (#64)."
   (queue nil :type list)
   (all nil :type boolean))
 
+;; An ASSEMBLY LOAD-PROGRAM placed in MEMORY at ORIGIN, retained so runtime
+;; errors and listings can name its source lines.
+(defstruct loaded-program
+  (assembly nil)
+  (memory nil)
+  (origin 0 :type integer))
+
+(defun %loaded-program-offset (program)
+  "PROGRAM's load origin minus its assembly's own."
+  (- (loaded-program-origin program) (assembly-origin (loaded-program-assembly program))))
+
+(defun %loaded-program-end (program)
+  "The address just past PROGRAM's main image."
+  (+ (loaded-program-origin program) (length (assembly-cells (loaded-program-assembly program)))))
+
 (defstruct (machine (:constructor %make-machine (descriptor)))
   (descriptor nil :type machine-descriptor)
   (slots (make-hash-table :test 'eq))     ; name -> slot representation
@@ -746,12 +761,15 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; binding. Cleared by RESET, like every runtime-attached device; saved by
   ;; snapshots.
   (region-bindings (make-hash-table :test 'eq))
-  ;; The ASSEMBLY LOAD-PROGRAM last loaded, for naming source lines in
-  ;; runtime errors, with the memory element it went into and its load
-  ;; origin minus the assembly's own. Cleared by RESET; not snapshotted.
-  (program nil)
-  (program-memory nil)
-  (program-offset 0 :type integer))
+  ;; The LOADED-PROGRAMs LOAD-PROGRAM placed, newest first, for naming
+  ;; source lines in runtime errors. RESET keeps those wholly in ROM; not
+  ;; snapshotted.
+  (programs nil :type list))
+
+(defun machine-program (machine)
+  "The ASSEMBLY of MACHINE's newest LOADED-PROGRAM, or NIL."
+  (let ((program (first (machine-programs machine))))
+    (and program (loaded-program-assembly program))))
 
 ;;; Access notification
 
@@ -1093,18 +1111,16 @@ ELEMENT lies in a :ROM region."
                   (setf address (1+ (memory-region-end region))))
              finally (return t))))
 
-(defun %program-in-rom-p (machine)
-  "True when MACHINE's retained assembly (MACHINE-PROGRAM) was loaded wholly
-into :ROM regions -- its main image and every .BANK image."
-  (let ((assembly (machine-program machine)))
-    (and assembly
-         (let* ((element (descriptor-element (machine-descriptor machine) (machine-program-memory machine)))
-                (origin (+ (assembly-origin assembly) (machine-program-offset machine))))
-           (and (%rom-covered-p element origin (+ origin (length (assembly-cells assembly)) -1))
-                (every (lambda (image)
-                         (%rom-covered-p element (bank-image-origin image)
-                                         (+ (bank-image-origin image) (length (bank-image-cells image)) -1)))
-                       (assembly-banks assembly)))))))
+(defun %program-in-rom-p (machine program)
+  "True when PROGRAM was loaded wholly into :ROM regions of MACHINE -- its
+main image and every .BANK image."
+  (let ((element (descriptor-element (machine-descriptor machine) (loaded-program-memory program)))
+        (assembly (loaded-program-assembly program)))
+    (and (%rom-covered-p element (loaded-program-origin program) (1- (%loaded-program-end program)))
+         (every (lambda (image)
+                  (%rom-covered-p element (bank-image-origin image)
+                                  (+ (bank-image-origin image) (length (bank-image-cells image)) -1)))
+                (assembly-banks assembly)))))
 
 (defun reset (machine)
   "Zero all storage on MACHINE, including the #75 cycle counter -- which
@@ -1114,7 +1130,7 @@ be told separately.
 
 #157: the cells of every :ROM region -- every bank of a banked one -- survive,
 as a burned-in image does on hardware; bank selection still returns to 0.
-The retained MACHINE-PROGRAM survives too when it was loaded wholly into ROM,
+Each retained LOADED-PROGRAM survives too when it was loaded wholly into ROM,
 so runtime errors in ROM code keep naming source lines.
 
 #108: also restores the device bus to its *declared* shape -- any runtime-
@@ -1142,10 +1158,9 @@ rather than left at zero."
   (let ((rom-banks (loop for (nil . region) in (%banked-regions (machine-descriptor machine))
                          when (eq (memory-region-kind region) :rom)
                            collect (memory-region-name region))))
-    (unless (%program-in-rom-p machine)
-      (setf (machine-program machine) nil
-            (machine-program-memory machine) nil
-            (machine-program-offset machine) 0))
+    (setf (machine-programs machine)
+          (remove-if-not (lambda (program) (%program-in-rom-p machine program))
+                         (machine-programs machine)))
     (loop for name being the hash-keys of (machine-loaded-banks machine)
           unless (member name rom-banks)
             do (remhash name (machine-loaded-banks machine)))
