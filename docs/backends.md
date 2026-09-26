@@ -141,6 +141,14 @@ emits may define labels too.
 [call lowering](conventions.md#backend-operations) emits; each has a fixed
 number of parameters.
 
+### Language operations
+
+The [source language](language.md) emits `:const :get :set :peek :poke :jump
+:branch-zero :halt`, the arithmetic operations `:add :sub :mul :div :mod :and :or
+:xor :shl :shr` and the comparisons `:eq :ne :lt :gt :le :ge`. Each has a fixed
+number of parameters, checked at definition, and a backend defines those its
+programs use.
+
 ## Branches
 
 `(branches call jz br)` lists the instructions whose operands are branch

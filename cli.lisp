@@ -16,6 +16,8 @@
   "usage: lasm COMMAND FILE -m MACHINE.lisp [options]
 
 commands:
+  compile FILE      compile a .lsp program to a .lasm items program
+                    [-o OUT] [--backend NAME]
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
                     [--bank N] [--region NAME] [--packing pad|bits]
   run [FILE]        assemble and run          [--max-steps N] [--cycles N]
@@ -26,8 +28,9 @@ commands:
   debug [FILE]      assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
                     [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
 
-FILE is assembly source (.asm, .s) or, with the .lasm extension, an items
-program (see docs/items.md). FILE may be left out of run and debug with
+FILE is assembly source (.asm, .s), with the .lasm extension an items
+program (see docs/items.md), or with .lsp a program in the small source
+language (see docs/language.md). FILE may be left out of run and debug with
 --load-snapshot when the snapshot was saved from a file: the program is rebuilt
 from the source it holds.
 
@@ -36,7 +39,7 @@ options:
   --machine-name NAME    machine to use when FILE defines several
   --quiet                suppress assembly warnings
   --lexer NAME           lexer to use when FILE defines several
-  --backend NAME         backend for a .lasm program that names none
+  --backend NAME         backend for a .lasm or .lsp program that names none
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
@@ -178,11 +181,24 @@ the calling image."
 
 (defun %cli-assemble (file machine lexer options)
   (let ((origin (%cli-option-integer options :origin "--origin")))
-    (if (string-equal "lasm" (pathname-type file))
-        (assemble-items-file file :machine machine :lexer lexer :memory (%cli-memory options)
-                                  :origin origin :backend (getf options :backend))
-        (assemble-file file :machine machine :lexer lexer :memory (%cli-memory options)
-                            :origin (or origin 0)))))
+    (cond ((string-equal "lsp" (pathname-type file))
+           (assemble-source-file file :machine machine :lexer lexer :memory (%cli-memory options)
+                                      :origin origin :backend (getf options :backend)))
+          ((string-equal "lasm" (pathname-type file))
+           (assemble-items-file file :machine machine :lexer lexer :memory (%cli-memory options)
+                                     :origin origin :backend (getf options :backend)))
+          (t (assemble-file file :machine machine :lexer lexer :memory (%cli-memory options)
+                                 :origin (or origin 0))))))
+
+(defun %cli-command-compile (file machine lexer options out)
+  (declare (ignore machine lexer))
+  (let ((program (compile-source-file file :backend (getf options :backend)))
+        (path (or (getf options :output)
+                  (namestring (make-pathname :type "lasm" :defaults file)))))
+    (with-open-file (stream path :direction :output :if-exists :supersede)
+      (write-items-program program stream))
+    (format out "wrote ~A~%" path)
+    0))
 
 (defun %cli-memory (options)
   (let ((name (getf options :memory)))
@@ -370,7 +386,8 @@ to OUT, diagnostics to ERR."
                (if (getf options :help) 0 2))
               (t
                (let ((handler (cdr (assoc command
-                                          '(("assemble" . %cli-command-assemble)
+                                          '(("compile" . %cli-command-compile)
+                                            ("assemble" . %cli-command-assemble)
                                             ("run" . %cli-command-run)
                                             ("disassemble" . %cli-command-disassemble)
                                             ("listing" . %cli-command-listing)

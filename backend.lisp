@@ -267,6 +267,14 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
     ("ENTER" . 0) ("LEAVE" . 0))
   "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 
+(defparameter +backend-language-op-arities+
+  '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
+    ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0)
+    ("ADD" . 2) ("SUB" . 2) ("MUL" . 2) ("DIV" . 2) ("MOD" . 2)
+    ("AND" . 2) ("OR" . 2) ("XOR" . 2) ("SHL" . 2) ("SHR" . 2)
+    ("EQ" . 2) ("NE" . 2) ("LT" . 2) ("GT" . 2) ("LE" . 2) ("GE" . 2))
+  "Operations that the language compiler (compiler.lisp) emits, with their parameter counts.")
+
 (defun %parse-op-effects (key names forms)
   "The (:PUSHES X :POPS Y) leading FORMS, and the forms after them."
   (let ((effects '()))
@@ -362,10 +370,10 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
 ;;; Checks run once every clause is known
 
 (defun %check-backend-hooks (descriptor)
-  (loop for (name . arity) in +backend-hook-arities+
+  (loop for (name . arity) in (append +backend-hook-arities+ +backend-language-op-arities+)
         for entry = (assoc name (backend-descriptor-ops descriptor) :test #'string=)
         when (and entry (/= arity (length (second entry))))
-          do (%backend-error "ops: ~A is used by call lowering and takes ~D parameter~:P, not ~D"
+          do (%backend-error "ops: ~A is used by call lowering or the language compiler and takes ~D parameter~:P, not ~D"
                              name arity (length (second entry)))))
 
 (defun %check-backend-kinds (descriptor)

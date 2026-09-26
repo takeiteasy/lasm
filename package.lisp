@@ -283,6 +283,20 @@
    #:items-malformed
    #:items-operand-mismatch
    #:read-restricted-form
+   #:read-restricted-forms
+
+   ;; Language compiler (#319)
+   #:compile-program
+   #:read-source
+   #:read-source-from-string
+   #:compile-source
+   #:compile-source-file
+   #:assemble-source-file
+   #:write-items-program
+   #:program-compile-error
+   #:program-compile-error-detail
+   #:program-compile-error-form
+   #:program-compile-error-function
 
    ;; Interrupts (#109)
    #:signal-interrupt

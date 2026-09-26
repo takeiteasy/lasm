@@ -1231,11 +1231,9 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
                                 (apply #'%program-fail control args))
                            "items" :bare :uninterned))))
 
-(defun assemble-items-file (path &key backend machine lexer origin memory)
-  "Read the items program at PATH and assemble it. The keys override the
-program's own options."
-  (let* ((program (read-items path))
-         (truename (truename path))
+(defun %assemble-items-program (program path &key backend machine lexer origin memory)
+  "Assemble the ITEMS-PROGRAM read from PATH; the keys override its options."
+  (let* ((truename (truename path))
          (*include-directory* (%file-directory truename))
          (*include-chain* (list truename))
          (assembly (assemble-items (items-program-items program)
@@ -1247,3 +1245,9 @@ program's own options."
                                    :file path)))
     (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
     assembly))
+
+(defun assemble-items-file (path &key backend machine lexer origin memory)
+  "Read the items program at PATH and assemble it. The keys override the
+program's own options."
+  (%assemble-items-program (read-items path) path
+                           :backend backend :machine machine :lexer lexer :origin origin :memory memory))

@@ -175,11 +175,7 @@ bounded. Anything else signals `items-malformed`.
 
 The [command line](cli.md#items-programs) assembles `.lasm` files.
 
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
+A [source language](language.md) compiles to items.
 
 [^check]: The assembler records each `one-of` pick as a token span, exposed as
   [`listing-line-choices`](listing.md#chosen-alternatives). A whole operand

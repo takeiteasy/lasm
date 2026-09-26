@@ -2,7 +2,8 @@
 
 `lasm` assembles, runs, debugs, disassembles and lists programs from the shell. A
 machine is defined in a `.lisp` machine file; the program is assembly source
-(`.asm` or `.s`) or an [items program](#items-programs) (`.lasm`).
+(`.asm` or `.s`), an [items program](#items-programs) (`.lasm`) or a
+[source program](#source-programs) (`.lsp`).
 
 ```sh
 lasm assemble counter.asm -m sixtyfoo.lisp -o counter.bin
@@ -43,10 +44,23 @@ The program names its backend, or `--backend NAME` does. `--origin` and
 `--memory` override the program's own options. A file that defines several
 machines needs `--machine-name`.
 
+## Source programs
+
+A `.lsp` file is a program in the [source language](language.md). Every command
+that takes a program accepts one; it compiles in memory through its backend,
+named by `(:program (:backend NAME))` or `--backend NAME`.
+[`fact.lsp`](../examples/cli/fact.lsp) runs on [`callfoo.lisp`](../examples/cli/callfoo.lisp).
+
+```sh
+lasm run fact.lsp -m callfoo.lisp
+lasm compile fact.lsp -m callfoo.lisp -o fact.lasm
+```
+
 ## Commands
 
 | Command | Does | Options |
 | --- | --- | --- |
+| `compile FILE` | writes a `.lsp` program as a `.lasm` items program | `-o OUT`, `--backend NAME` |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
 | `run [FILE]` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
 | `debug [FILE]` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |

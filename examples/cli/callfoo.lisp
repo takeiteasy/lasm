@@ -72,7 +72,9 @@
     (call-rr (opcode 12) (operand dst :width 1) (operand src :width 1)
              (semantics (set! (r dst) (r src))))
     (call-ri (opcode 13) (operand dst :width 1) (operand value :width 1)
-             (semantics (set! (r dst) value)))))
+             (semantics (set! (r dst) value)))
+    (call-rs (opcode 68) (operand dst :width 1) (operand offset :width 1)
+             (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ sp offset) 16)))))))
 
 (definstruction callfoo xchg (modes call-rr)
   (encoding (opcode 25) (operand lhs :width 1) (operand rhs :width 1))
@@ -98,6 +100,57 @@
 (definstruction callfoo retn (modes call-imm)
   (encoding (opcode 16) (operand :mode))
   (semantics (set! pc (pop sp)) (set! sp (wrap-value (+ sp operand) 16))))
+
+;; What the language compiler (docs/language.md) emits: memory access through
+;; a register, jumps, and arithmetic and comparisons that leave their result in
+;; the first register. Values are signed where it matters.
+(defmode call-ind "[" (expr :register r) "]")
+(defmode call-rind (expr :register r) "," "[" (expr :register r) "]")
+(defmode call-indr "[" (expr :register r) "]" "," (expr :register r))
+(defmode call-rt (expr :register r) "," expr)
+
+(definstruction callfoo ldx (modes call-rind)
+  (encoding (opcode 64) (operand dst :width 1) (operand addr :width 1))
+  (semantics (set! (r dst) (mref machine 'ram (r addr)))))
+
+(definstruction callfoo stx (modes call-indr)
+  (encoding (opcode 65) (operand addr :width 1) (operand src :width 1))
+  (semantics (set! (mref machine 'ram (r addr)) (r src))))
+
+(definstruction callfoo jmp (modes absolute)
+  (encoding (opcode 66) (operand :mode))
+  (semantics (set! pc operand)))
+
+(definstruction callfoo jz (modes call-rt)
+  (encoding (opcode 67) (operand src :width 1) (operand target :width 1))
+  (semantics (when (zerop (r src)) (set! pc target))))
+
+(defmacro defarith (mnemonic opcode expression)
+  "MNEMONIC dst, src sets dst to EXPRESSION of the signed values x and y."
+  `(definstruction callfoo ,mnemonic (modes call-rr)
+     (encoding (opcode ,opcode) (operand dst :width 1) (operand src :width 1))
+     (semantics
+       (let* ((x (r dst)) (y (r src))
+              (sx (if (>= x 32768) (- x 65536) x))
+              (sy (if (>= y 32768) (- y 65536) y)))
+         (declare (ignorable sx sy))
+         (set! (r dst) (wrap-value ,expression 16))))))
+
+(defarith subr 69 (- x y))
+(defarith mulr 70 (* sx sy))
+(defarith divr 71 (if (zerop sy) 0 (truncate sx sy)))
+(defarith modr 72 (if (zerop sy) 0 (rem sx sy)))
+(defarith andr 73 (logand x y))
+(defarith orr 74 (logior x y))
+(defarith xorr 75 (logxor x y))
+(defarith shlr 76 (ash x y))
+(defarith shrr 77 (ash x (- y)))
+(defarith seq 78 (if (= x y) 1 0))
+(defarith sne 79 (if (/= x y) 1 0))
+(defarith slt 80 (if (< sx sy) 1 0))
+(defarith sgt 81 (if (> sx sy) 1 0))
+(defarith sle 82 (if (<= sx sy) 1 0))
+(defarith sge 83 (if (>= sx sy) 1 0))
 
 ;; Arguments go on the stack right to left and the caller removes them; a
 ;; function finds its first argument above the return address.
@@ -132,3 +185,31 @@
        (:free (n) (adds (sp) (imm n)))
        (:call (f) (call f))
        (:return () (ret))))
+
+;; callfoo-abi with what the language compiler needs. :peek and :poke take
+;; register names, which the templates put inside a bracket operand.
+(defbackend callfoo-lang-abi (:extends callfoo-abi)
+  (operands (ind call-ind))
+  (ops (:const (r v) (ldi r (imm v)))
+       (:get (r slot) (lds r slot))
+       (:set (slot r) (sts slot r))
+       (:peek (d a) (ldx (reg d) (ind a)))
+       (:poke (a s) (stx (ind a) (reg s)))
+       (:jump (target) (jmp target))
+       (:branch-zero (r target) (jz r target))
+       (:halt () (hlt))
+       (:sub (d s) (subr d s))
+       (:mul (d s) (mulr d s))
+       (:div (d s) (divr d s))
+       (:mod (d s) (modr d s))
+       (:and (d s) (andr d s))
+       (:or (d s) (orr d s))
+       (:xor (d s) (xorr d s))
+       (:shl (d s) (shlr d s))
+       (:shr (d s) (shrr d s))
+       (:eq (d s) (seq d s))
+       (:ne (d s) (sne d s))
+       (:lt (d s) (slt d s))
+       (:gt (d s) (sgt d s))
+       (:le (d s) (sle d s))
+       (:ge (d s) (sge d s))))

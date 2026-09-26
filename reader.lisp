@@ -125,6 +125,20 @@ marker and exponent (capped at 10^12); NIL for anything else."
              (%reader-fail "~A is not allowed at ~D" char (file-position stream)))))
         (setf *restricted-readtable* table))))
 
+(defun %read-restricted (stream fail path bare function)
+  "Call FUNCTION with a thunk that reads the next form of STREAM, or returns
+its second argument's unique end marker, under the restricted reader's limits."
+  (handler-case
+      (with-standard-io-syntax
+        (let ((eclector.reader:*client* (make-instance 'restricted-client :fail fail :bare bare))
+              (eclector.readtable:*readtable* (%restricted-readtable))
+              (*read-eval* nil)
+              (eof (list nil)))
+          (funcall function (lambda () (eclector.reader:read stream nil eof)) eof)))
+    (lasm-error (e) (error e))
+    (storage-condition () (funcall fail "~A: nested too deeply" path))
+    (error (e) (funcall fail "~A: unreadable (~A)" path e))))
+
 (defun read-restricted-form (stream fail path &key (bare :keyword))
   "The single form on STREAM, read without interning symbols, evaluating or
 building shared structure. FAIL, called with a format control and arguments,
@@ -132,15 +146,17 @@ signals the caller's own condition for anything unreadable; conditions it
 signals pass through, and PATH names STREAM in messages. A symbol with no
 package prefix must already exist as a keyword, or with BARE :UNINTERNED is
 made fresh; a prefixed one must already exist."
-  (handler-case
-      (with-standard-io-syntax
-        (let ((eclector.reader:*client* (make-instance 'restricted-client :fail fail :bare bare))
-              (eclector.readtable:*readtable* (%restricted-readtable))
-              (*read-eval* nil))
-          (let ((form (eclector.reader:read stream nil :eof)))
-            (unless (eq (eclector.reader:read stream nil :eof) :eof)
-              (funcall fail "trailing data"))
-            form)))
-    (lasm-error (e) (error e))
-    (storage-condition () (funcall fail "~A: nested too deeply" path))
-    (error (e) (funcall fail "~A: unreadable (~A)" path e))))
+  (%read-restricted stream fail path bare
+                    (lambda (next eof)
+                      (let ((form (funcall next)))
+                        (unless (eq (funcall next) eof)
+                          (funcall fail "trailing data"))
+                        (if (eq form eof) :eof form)))))
+
+(defun read-restricted-forms (stream fail path &key (bare :keyword))
+  "Every form on STREAM, read as READ-RESTRICTED-FORM reads one."
+  (%read-restricted stream fail path bare
+                    (lambda (next eof)
+                      (loop for form = (funcall next)
+                            until (eq form eof)
+                            collect form))))
