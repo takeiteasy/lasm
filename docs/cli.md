@@ -11,7 +11,9 @@ lasm run counter.asm -m sixtyfoo.lisp
 
 See [`examples/cli/`](../examples/cli/sixtyfoo.lisp) for a runnable pair, and
 [`callfoo.lisp`](../examples/cli/callfoo.lisp) with
-[`double.lasm`](../examples/cli/double.lasm) for an items program.
+[`double.lasm`](../examples/cli/double.lasm) for an items program, and
+[`calls.lasm`](../examples/cli/calls.lasm) for one that lowers a
+[calling convention](conventions.md).
 
 ## Machine files
 

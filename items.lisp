@@ -8,8 +8,10 @@
 ;;;; so listings, diagnostics and snapshots work unchanged.
 ;;;;
 ;;;; Items:  (:label NAME)  (:directive NAME expr...)  (:op NAME arg...)
-;;;;         (MNEMONIC operand...)
-;;;; Operands: an expression, (KIND value...) or (:mode MODE value...).
+;;;;         (MNEMONIC operand...)  and the lowered (:function ...) (:call ...)
+;;;;         (:return) (:push X) (:pop X)
+;;;; Operands: an expression, (KIND value...), (:mode MODE value...) or the
+;;;;           frame slots (:arg i) and (:local i).
 ;;;; Expressions: an integer, a name, or (OPERATOR expr...).
 ;;;; A symbol names by its downcased name, a string by itself.
 
@@ -35,6 +37,7 @@
 (defvar *items-lexer* 'default)
 (defvar *items-lexer-descriptor* nil)
 (defvar *items-machine* nil)
+(defvar *items-frame* nil "The ITEMS-FRAME of the function being lowered, or NIL.")
 (defvar *items-backend* nil)
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
 (defvar *items-pickables* nil "Mnemonic -> its (VARIANT-MODE-NAMES . ALTERNATIVE-NAMES), for the assembly in progress.")
@@ -170,6 +173,8 @@ counted in tokens from the pattern's start."
 (defun %operand-tokens (operand item)
   "The tokens of OPERAND, the addressing mode it names, if any, and its claims
 (MODE START END): the named mode over the whole operand, then its alternatives."
+  (when (%frame-operand-p operand)
+    (setf operand (%frame-operand operand item)))
   (if (and (consp operand) (not (%expression-head-p (first operand))))
       (let* ((head (first operand))
              (mode (cond ((and (keywordp head) (string= (symbol-name head) "MODE"))
@@ -300,6 +305,233 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
                         (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))
                 forms)))))
 
+;;; Convention lowering (#320, #322)
+;;;
+;;; (:function NAME (:args n :locals n :save (reg...)) ITEM...), (:call F ARG... [:keep (reg...)]),
+;;; (:return), (:push X), (:pop X) and the operands (:arg i) and (:local i) lower to
+;;; the backend's reserved operations (+BACKEND-HOOK-ARITIES+), following its
+;;; call and frame clauses. A frame slot is addressed by its distance from the
+;;; top of the stack; a function body must keep the stack balanced between items,
+;;; or use (:push) and (:pop), for those distances to hold.
+;;; TODO: depth is tracked item by item, not across labels or branches (#329).
+
+(defstruct items-frame
+  nargs     ; declared arguments
+  nlocals   ; declared locals
+  locals    ; cells allocated for locals, padded to the frame alignment
+  saves     ; registers saved on entry
+  (depth 0)); cells pushed since the prologue
+
+(defun %keyword-named-p (x name)
+  (and (keywordp x) (string= (symbol-name x) name)))
+
+(defun %backend-call-option (key)
+  (getf (backend-descriptor-call *items-backend*) key))
+
+(defun %arg-registers ()
+  (let ((args (%backend-call-option :args)))
+    (if (eq args :stack) '() args)))
+
+(defun %hook-lines (name args item)
+  "The lines of the backend operation NAME, which lowering ITEM needs."
+  (unless (and *items-backend*
+               (assoc (%designator-name name) (backend-descriptor-ops *items-backend*) :test #'equal))
+    (%items-fail 'items-malformed item "~A needs the backend operation ~(~S~)~@[ (backend ~A)~]"
+                 (first item) name (and *items-backend* (backend-descriptor-name *items-backend*))))
+  (mapcar (lambda (form) (%instruction-line form item))
+          (backend-expand-op *items-backend* name args)))
+
+(defun %register-operand (register item)
+  (let ((kind (and *items-backend* (backend-register *items-backend* :operand))))
+    (unless kind
+      (%items-fail 'items-malformed item "~A needs (registers :operand KIND) in the backend" (first item)))
+    (list kind (string-downcase (string register)))))
+
+(defun %slot-operand (distance item)
+  (let ((kind (getf (backend-descriptor-frame *items-backend*) :slot)))
+    (unless kind
+      (%items-fail 'items-malformed item "~A needs (frame :slot KIND) in the backend" (first item)))
+    (list kind (if (eq (getf (backend-descriptor-frame *items-backend*) :grows) :up)
+                   (- -1 distance)
+                   distance))))
+
+(defun %bump-depth (n)
+  (when *items-frame*
+    (incf (items-frame-depth *items-frame*) n)))
+
+(defun %frame-operand-p (operand)
+  (and (consp operand) (or (%keyword-named-p (first operand) "ARG") (%keyword-named-p (first operand) "LOCAL"))))
+
+(defun %frame-operand (operand item)
+  "The operand (:arg i) or (:local i) addresses in the current function."
+  (let ((frame *items-frame*) (index (second operand)))
+    (unless frame
+      (%items-fail 'items-malformed item "~S is only valid inside (:function ...)" operand))
+    (unless (and (= (length operand) 2) (typep index '(integer 0)))
+      (%items-fail 'items-malformed item "expected (~(~A~) INDEX), got ~S" (symbol-name (first operand)) operand))
+    (if (%keyword-named-p (first operand) "LOCAL")
+        (progn
+          (unless (< index (items-frame-nlocals frame))
+            (%items-fail 'items-malformed item "~S: the function has ~D local~:P" operand (items-frame-nlocals frame)))
+          (%slot-operand (+ (items-frame-depth frame) index) item))
+        (let* ((registers (%arg-registers))
+               (nstack (max 0 (- (items-frame-nargs frame) (length registers))))
+               (stack-index (- index (length registers))))
+          (unless (< index (items-frame-nargs frame))
+            (%items-fail 'items-malformed item "~S: the function has ~D argument~:P" operand (items-frame-nargs frame)))
+          (if (minusp stack-index)
+              (%register-operand (nth index registers) item)
+              (%slot-operand (+ (items-frame-depth frame) (items-frame-locals frame)
+                                (length (items-frame-saves frame))
+                                (%backend-call-option :return-address-slots)
+                                (if (eq (%backend-call-option :order) :right-to-left)
+                                    stack-index
+                                    (- nstack 1 stack-index)))
+                             item))))))
+
+(defun %resolve-operand (operand item)
+  (if (%frame-operand-p operand) (%frame-operand operand item) operand))
+
+(defun %frame-register (designator role item)
+  "The upcased name of DESIGNATOR, checked to be a register of ROLE."
+  (let ((name (%designator-name designator)))
+    (unless (and name (member name (backend-register *items-backend* role) :test #'string=))
+      (%items-fail 'items-malformed item "~S is not a ~(~A~) register of backend ~A"
+                   designator role (backend-descriptor-name *items-backend*)))
+    name))
+
+(defun %function-lines (item)
+  (unless (and (>= (length item) 3) (listp (third item)) (evenp (length (third item))))
+    (%items-fail 'items-malformed item "expected (:function NAME (:args n :locals n :save (reg...)) ITEM...)"))
+  (when *items-frame*
+    (%items-fail 'items-malformed item "functions cannot nest"))
+  (destructuring-bind (name options &rest body) (rest item)
+    (loop for (key nil) on options by #'cddr
+          do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE"))
+               (%items-fail 'items-malformed item "unknown function option ~S" key)))
+    (flet ((option (name default)
+             (loop for (key value) on options by #'cddr
+                   when (%keyword-named-p key name) return value
+                   finally (return default))))
+      (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '())))
+        (unless (and (typep nlocals '(integer 0)) (or (null nargs) (typep nargs '(integer 0))) (listp saves))
+          (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
+        (when (and (null nargs)
+                   (or (eq (%backend-call-option :cleanup) :callee)
+                       (eq (%backend-call-option :order) :left-to-right)))
+          (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
+        (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
+               (alignment (getf (backend-descriptor-frame *items-backend*) :alignment))
+               (locals (+ nlocals (mod (- (+ nlocals (length saves))) alignment)))
+               (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals locals :saves saves))
+               (lines (append (%item-lines (list :label name))
+                              (loop for register in saves
+                                    append (%hook-lines :push (list (%register-operand register item)) item))
+                              (and (plusp locals) (%hook-lines :alloc (list locals) item)))))
+          (let ((*items-frame* frame))
+            (append lines (loop for element in body append (%item-lines element)))))))))
+
+(defun %return-lines (item)
+  (let ((frame *items-frame*))
+    (unless (and frame (null (rest item)))
+      (%items-fail 'items-malformed item "expected (:return) inside (:function ...)"))
+    (unless (zerop (items-frame-depth frame))
+      (%items-fail 'items-malformed item "the stack is ~D cell~:P deeper than at the function's entry"
+                   (items-frame-depth frame)))
+    (let ((nstack (max 0 (- (items-frame-nargs frame) (length (%arg-registers))))))
+      (append (and (plusp (items-frame-locals frame)) (%hook-lines :free (list (items-frame-locals frame)) item))
+              (loop for register in (reverse (items-frame-saves frame))
+                    append (%hook-lines :pop (list (%register-operand register item)) item))
+              (if (and (eq (%backend-call-option :cleanup) :callee) (plusp nstack))
+                  (%hook-lines :return-pop (list nstack) item)
+                  (%hook-lines :return '() item))))))
+
+(defun %push-pop-lines (item)
+  (unless (= (length item) 2)
+    (%items-fail 'items-malformed item "expected (~(~A~) OPERAND)" (symbol-name (first item))))
+  (let ((pushp (%keyword-named-p (first item) "PUSH")))
+    (when (and (not pushp) *items-frame* (zerop (items-frame-depth *items-frame*)))
+      (%items-fail 'items-malformed item "(:pop) has nothing pushed to pop"))
+    (prog1 (%hook-lines (if pushp :push :pop) (list (second item)) item)
+      (%bump-depth (if pushp 1 -1)))))
+
+(defun %reads-register-p (tree register)
+  (typecase tree
+    (cons (or (%reads-register-p (car tree) register) (%reads-register-p (cdr tree) register)))
+    (t (%same-name-p tree register))))
+
+(defun %order-moves (moves item)
+  "MOVES, (REGISTER DESTINATION SOURCE) entries, ordered so no move overwrites a
+register another still to run reads. TODO: a cycle is an error; break it through a
+:scratch register (#328)."
+  (let ((pending (remove-if (lambda (move)
+                              (string-equal (princ-to-string (second move)) (princ-to-string (third move))))
+                            moves))
+        (ordered '()))
+    (loop while pending
+          do (let ((ready (find-if (lambda (move)
+                                     (notany (lambda (other)
+                                               (and (not (eq other move))
+                                                    (%reads-register-p (third other) (first move))))
+                                             pending))
+                                   pending)))
+               (unless ready
+                 (%items-fail 'items-malformed item "register arguments ~{~A~^, ~} form a cycle"
+                              (mapcar #'first pending)))
+               (cl:push ready ordered)
+               (setf pending (remove ready pending))))
+    (nreverse ordered)))
+
+(defun %keep-registers (keeps item)
+  "The upcased names of the :caller-saved registers in KEEPS; :callee-saved ones
+survive a call, and any other register cannot be kept."
+  (loop for register in keeps
+        for name = (%designator-name register)
+        do (when (member name (backend-register *items-backend* :return) :test #'equal)
+             (%items-fail 'items-malformed item "~A is a return register; a call overwrites it" register))
+           (unless (or (member name (backend-register *items-backend* :caller-saved) :test #'equal)
+                       (member name (backend-register *items-backend* :callee-saved) :test #'equal))
+             (%items-fail 'items-malformed item "~A is neither a :caller-saved nor a :callee-saved register" register))
+        when (member name (backend-register *items-backend* :caller-saved) :test #'equal)
+          collect name))
+
+(defun %call-lines (item)
+  (unless (rest item)
+    (%items-fail 'items-malformed item "expected (:call TARGET ARG... [:keep (reg...)])"))
+  (destructuring-bind (target &rest all) (rest item)
+    (let ((keep-position (position-if (lambda (x) (%keyword-named-p x "KEEP")) all)))
+      (when (and keep-position
+                 (not (and (= (+ keep-position 2) (length all)) (listp (nth (1+ keep-position) all)))))
+        (%items-fail 'items-malformed item ":keep must end the call and take a list of registers"))
+      (let* ((keeps (and keep-position (%keep-registers (nth (1+ keep-position) all) item)))
+             (arguments (subseq all 0 keep-position))
+             (registers (%arg-registers))
+             (on-stack (nthcdr (length registers) arguments))
+             (lines '()))
+        (labels ((emit (new) (setf lines (append lines new)))
+                 (push-cell (operand)
+                   (emit (%hook-lines :push (list operand) item))
+                   (%bump-depth 1)))
+          (dolist (name keeps)
+            (push-cell (%register-operand name item)))
+          (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
+            (push-cell argument))
+          (dolist (move (%order-moves (loop for register in registers
+                                            for argument in arguments
+                                            collect (list register
+                                                          (%register-operand register item)
+                                                          (%resolve-operand argument item)))
+                                      item))
+            (emit (%hook-lines :move (list (second move) (third move)) item)))
+          (emit (%hook-lines :call (list target) item))
+          (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
+            (emit (%hook-lines :free (list (length on-stack)) item)))
+          (%bump-depth (- (length on-stack)))
+          (dolist (name (reverse keeps))
+            (emit (%hook-lines :pop (list (%register-operand name item)) item))
+            (%bump-depth -1)))
+        lines))))
+
 ;;; Items to lines
 
 (defstruct item-line
@@ -354,6 +586,10 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
          (%items-fail 'items-malformed item "(:op NAME arg...) needs a backend"))
        (mapcar (lambda (form) (%instruction-line form item))
                (backend-expand-op *items-backend* (second item) (cddr item))))
+      ((%keyword-named-p head "FUNCTION") (%function-lines item))
+      ((%keyword-named-p head "CALL") (%call-lines item))
+      ((%keyword-named-p head "RETURN") (%return-lines item))
+      ((or (%keyword-named-p head "PUSH") (%keyword-named-p head "POP")) (%push-pop-lines item))
       ((keywordp head)
        (%items-fail 'items-malformed item "unknown item ~S" head))
       (t (list (%instruction-line item item))))))

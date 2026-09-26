@@ -1,0 +1,14 @@
+;;;; examples/cli/calls.lasm
+;;;; The same double(21), lowered from callfoo-abi's calling convention
+;;;; (docs/conventions.md):
+;;;;
+;;;;   lasm run calls.lasm -m callfoo.lisp
+
+(:program (:backend callfoo-abi)
+  (:call double (imm 21))
+  (hlt)
+
+  (:function double (:args 1)
+    (lds (reg a) (:arg 0))
+    (:op :add (reg a) (reg a))
+    (:return)))

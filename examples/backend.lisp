@@ -54,6 +54,20 @@
                   (assembly-cells (assemble (render-items *items* :backend 'callfoo-abi)
                                             :machine 'callfoo)))))
 
+;; The convention lowers the call: the pushes, call and clean-up come from
+;; callfoo-abi's call and frame clauses (docs/conventions.md).
+(let* ((lowered '((:call double (imm 21))
+                  (hlt)
+                  (:function double (:args 1)
+                    (lds (reg a) (:arg 0))
+                    (:op :add (reg a) (reg a))
+                    (:return))))
+       (machine (make-machine 'callfoo)))
+  (format t "~%Lowered from a call and a function:~%~A" (render-items lowered :backend 'callfoo-abi))
+  (load-program machine (assemble-items lowered :backend 'callfoo-abi))
+  (run machine)
+  (assert (= 42 (regref machine 'r 0))))
+
 ;; The same program read from data: symbols are never interned.
 (let ((program (read-items-from-string
                 "(:program (:backend callfoo-abi) (:label start) (:op :load (reg b) 7) (hlt))")))

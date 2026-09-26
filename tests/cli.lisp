@@ -519,6 +519,11 @@
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 7 steps" out))))
 
+(fiveam:test cli-run-executes-a-lowered-items-program
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "examples/cli/calls.lasm"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped: trap after 7 steps" out))))
+
 (fiveam:test cli-assemble-writes-an-items-program
   (uiop:with-temporary-file (:pathname path :type "bin")
     (fiveam:is (= 0 (%run-cli (append (%items-cli-args "assemble" "examples/cli/double.lasm")

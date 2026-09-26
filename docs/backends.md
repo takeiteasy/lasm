@@ -41,6 +41,7 @@ Every name is a register or register alias of the machine.
 | --- | --- |
 | `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. |
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
+| `:operand` | The [operand kind](#operand-kinds) that writes a register. |
 
 A register cannot be both `:caller-saved` and `:callee-saved`. When the
 machine declares a [`stack-pointer`](machine-model.md#stacks), `:stack-pointer`
@@ -57,8 +58,8 @@ names that register.
 | `:cleanup` | `:caller`, `:callee` | `:caller` |
 | `:return-address-slots` | Cells a call pushes | `1` |
 
-The values are stored and readable with `backend-descriptor-call`. Calls are
-not lowered.[^lowering]
+The values are stored and readable with `backend-descriptor-call`. Items lower
+calls from them; see [Calling conventions](conventions.md).
 
 ## Frame
 
@@ -66,6 +67,7 @@ not lowered.[^lowering]
 | --- | --- | --- |
 | `:grows` | `:down`, `:up` | The machine's stack-pointer direction, else `:down` |
 | `:alignment` | Positive integer, in cells | `1` |
+| `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer | None |
 
 `:grows` must agree with the machine's `(stack-pointer ... :grows ...)` for the
 backend's `:stack-pointer`.
@@ -97,6 +99,10 @@ be a whole operand or one value inside one.
 `(backend-expand-op backend name args)` returns the forms. A form's mnemonic
 must exist on the machine, and its operand kinds must be declared.
 
+`:push` `:pop` `:alloc` `:free` `:move` `:call` `:return` and `:return-pop`
+are the operations [call lowering](conventions.md#backend-operations) emits;
+each has a fixed number of parameters.
+
 ## Lookup
 
 | Function | Returns |
@@ -110,11 +116,6 @@ The command line loads backends from its machine file; see [Command line](cli.md
 
 | Limitation | Ticket |
 | --- | --- |
-| Calls and frames are described, not lowered. | [#320](https://todo.sr.ht/~takeiteasy/lasm/320) |
 | Frames are stack-pointer relative only. | [#321](https://todo.sr.ht/~takeiteasy/lasm/321) |
-| Register-passed arguments are not lowered. | [#322](https://todo.sr.ht/~takeiteasy/lasm/322) |
 | A backend cannot extend another. | [#323](https://todo.sr.ht/~takeiteasy/lasm/323) |
 | An operation cannot define labels of its own. | [#325](https://todo.sr.ht/~takeiteasy/lasm/325) |
-
-[^lowering]: A front end emits the argument pushes, call and clean-up itself,
-  as [items](items.md).

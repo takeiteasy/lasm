@@ -19,9 +19,9 @@
 (defstruct backend-descriptor
   name        ; symbol
   machine     ; name of the machine described
-  registers   ; plist of role -> upcased name, or list of names (see +BACKEND-REGISTER-ROLES+)
+  registers   ; plist of role -> upcased name, or list of names (see +BACKEND-REGISTER-ROLES+); :OPERAND -> kind name
   call        ; plist :ARGS :ORDER :CLEANUP :RETURN-ADDRESS-SLOTS
-  frame       ; plist :GROWS :ALIGNMENT
+  frame       ; plist :GROWS :ALIGNMENT, and :SLOT (a kind name) when given
   operands    ; alist of (KIND-NAME . MODE-NAME)
   ops)        ; alist of (OP-NAME PARAMS FORM...), names upcased
 
@@ -111,20 +111,23 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
              (cl:push key seen))))
 
 (defun %parse-registers-clause (descriptor args)
-  (%check-plist "registers" args (append +backend-register-roles+ +backend-register-singles+))
+  (%check-plist "registers" args (append +backend-register-roles+ +backend-register-singles+ '(:operand)))
   (let (result)
     (loop for (role value) on args by #'cddr
           do (setf (getf result role)
-                   (if (member role +backend-register-roles+)
-                       (progn
-                         (unless (listp value)
-                           (%backend-error "registers ~S: expected a list of registers, got ~S" role value))
-                         (let ((names (mapcar (lambda (register) (%backend-register-name descriptor register))
-                                              value)))
-                           (unless (= (length names) (length (remove-duplicates names :test #'string=)))
-                             (%backend-error "registers ~S lists a register twice" role))
-                           names))
-                       (%backend-register-name descriptor value))))
+                   (cond
+                     ((eq role :operand)
+                      (or (%designator-name value)
+                          (%backend-error "registers :operand: ~S is not a kind name" value)))
+                     ((member role +backend-register-roles+)
+                      (unless (listp value)
+                        (%backend-error "registers ~S: expected a list of registers, got ~S" role value))
+                      (let ((names (mapcar (lambda (register) (%backend-register-name descriptor register))
+                                           value)))
+                        (unless (= (length names) (length (remove-duplicates names :test #'string=)))
+                          (%backend-error "registers ~S lists a register twice" role))
+                        names))
+                     (t (%backend-register-name descriptor value)))))
     (let ((both (intersection (getf result :caller-saved) (getf result :callee-saved) :test #'string=)))
       (when both
         (%backend-error "registers ~A cannot be both :caller-saved and :callee-saved" (first both))))
@@ -150,13 +153,16 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
           :order order :cleanup cleanup :return-address-slots slots)))
 
 (defun %parse-frame-clause (args)
-  (%check-plist "frame" args '(:grows :alignment))
-  (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)))
+  (%check-plist "frame" args '(:grows :alignment :slot))
+  (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot)))
     (unless (member grows '(nil :down :up))
       (%backend-error "frame :grows must be :down or :up, got ~S" grows))
     (unless (typep alignment '(integer 1))
       (%backend-error "frame :alignment must be a positive integer, got ~S" alignment))
-    (list :grows grows :alignment alignment)))
+    (when (and slot (not (%designator-name slot)))
+      (%backend-error "frame :slot: ~S is not a kind name" slot))
+    (append (list :grows grows :alignment alignment)
+            (and slot (list :slot (%designator-name slot))))))
 
 (defun %parse-operands-clause (machine entries)
   (let (result)
@@ -195,7 +201,24 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
             (cl:push (list* key names forms) result)))))
     (nreverse result)))
 
-;;; Op template checks, run once every clause is known
+;;; Checks run once every clause is known
+
+(defparameter +backend-hook-arities+
+  '(("PUSH" . 1) ("POP" . 1) ("ALLOC" . 1) ("FREE" . 1) ("MOVE" . 2) ("CALL" . 1) ("RETURN" . 0) ("RETURN-POP" . 1))
+  "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
+
+(defun %check-backend-hooks (descriptor)
+  (loop for (name . arity) in +backend-hook-arities+
+        for entry = (assoc name (backend-descriptor-ops descriptor) :test #'string=)
+        when (and entry (/= arity (length (second entry))))
+          do (%backend-error "ops: ~A is used by call lowering and takes ~D parameter~:P, not ~D"
+                             name arity (length (second entry)))))
+
+(defun %check-backend-kinds (descriptor)
+  (loop for (what kind) in `(("registers :operand" ,(getf (backend-descriptor-registers descriptor) :operand))
+                             ("frame :slot" ,(getf (backend-descriptor-frame descriptor) :slot)))
+        when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
+          do (%backend-error "~A: ~A is not a declared operand kind" what kind)))
 
 (defun %check-hole-value (op value params)
   (typecase value
@@ -310,7 +333,9 @@ declared (stack-pointer ...), and default the frame direction from it."
                 (t (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands or ops"
                                    name clause)))))
       (%finish-backend-stack descriptor machine-descriptor)
+      (%check-backend-kinds descriptor)
       (%check-backend-ops descriptor)
+      (%check-backend-hooks descriptor)
       (setf (gethash (%designator-name name) *backends*) descriptor))))
 
 (defmacro defbackend (name options &body clauses)
@@ -318,15 +343,17 @@ declared (stack-pointer ...), and default the frame direction from it."
 OPTIONS, (:machine MACHINE), and CLAUSES, each one of:
      (registers [:return (reg...)] [:arguments (reg...)] [:scratch (reg...)]
                 [:caller-saved (reg...)] [:callee-saved (reg...)]
-                [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg])
+                [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg]
+                [:operand kind])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
-     (frame [:grows :down/:up] [:alignment n])
+     (frame [:grows :down/:up] [:alignment n] [:slot kind])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) (mnemonic operand...)...)...)
 An operand kind names an addressing mode; an operation expands to instruction
 forms whose operands are (KIND value...) items, parameters, or expressions.
 Registers, modes and mnemonics are checked against the machine, and clause
-heads are matched by name, so DEFBACKEND works from any package. See
-docs/backends.md."
+heads are matched by name, so DEFBACKEND works from any package. Operations
+named :push :pop :alloc :free :move :call :return and :return-pop are the ones
+call lowering emits. See docs/backends.md and docs/conventions.md."
   (%definition-toplevel-form `(%define-backend ',name ',options ',clauses) `',name))

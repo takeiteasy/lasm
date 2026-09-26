@@ -72,7 +72,7 @@ ret
     (fiveam:is (equal "SP" (backend-register backend :stack-pointer)))
     (fiveam:is (equal '(:args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
                       (backend-descriptor-call backend)))
-    (fiveam:is (equal '(:grows :down :alignment 1) (backend-descriptor-frame backend)))
+    (fiveam:is (equal '(:grows :down :alignment 1 :slot "SP-IDX") (backend-descriptor-frame backend)))
     (fiveam:is (equal '("REG" . call-reg) (first (backend-descriptor-operands backend))))
     (fiveam:is (eq backend (find-backend backend)))))
 

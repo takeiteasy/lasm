@@ -91,6 +91,7 @@
                (:file "output")
                (:file "snapshot")
                (:file "backend")
+               (:file "convention")
                (:file "cli")
                (:file "debugger")
                (:file "banks")

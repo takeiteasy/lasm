@@ -28,6 +28,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | `(:directive NAME EXPR...)` | A directive; the `.` is optional. A string argument is a string literal. |
 | `(:op NAME ARG...)` | A backend [operation](backends.md#operations), expanded to instructions. |
 | `(MNEMONIC OPERAND...)` | An instruction. |
+| `(:function ...)` `(:call ...)` `(:return)` `(:push X)` `(:pop X)` | Lowered from the backend's [calling convention](conventions.md). |
 
 ## Operands
 
@@ -36,6 +37,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | `(KIND value...)` | A backend [operand kind](backends.md#operand-kinds). |
 | `(:mode MODE value...)` | A mode named directly; works without a backend. |
 | An expression | A bare value, as in `call 6`. |
+| `(:arg i)` `(:local i)` | A [frame slot](conventions.md#functions) of the enclosing function. |
 
 The values fill the mode's `expr` holes in order. A mode with a `one-of`
 takes the chosen alternative's name before that alternative's values:

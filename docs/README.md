@@ -29,6 +29,7 @@
 - [Banked output](banked-output.md) — `.bank`, `bank(label)`, bank images, banked listings and loading
 - [Backends](backends.md) — `defbackend`: register roles, calling convention, frame, operand kinds, operations
 - [Items](items.md) — programs as data, `assemble-items`, `.lasm` files
+- [Calling conventions](conventions.md) — functions, calls and frame slots lowered from a backend
 - [Command line](cli.md) — `lasm assemble`/`run`/`disassemble`/`listing`
 - [Diagnostics](diagnostics.md) — source-excerpt rendering, mode-mismatch/ambiguity reporting, strict operand range, definition errors
 - [Debugger](debugger.md) — breakpoints, step/continue/back, cycle budgets, register/memory inspection and editing, a reference REPL
