@@ -31,6 +31,7 @@ package. A mistake signals `backend-definition-error`.
 | `(operands (KIND MODE)...)` | [Operand kinds](#operand-kinds). |
 | `(ops (NAME (PARAM...) FORM...)...)` | [Operations](#operations). |
 | `(branches MNEMONIC...)` | The instructions whose operands are [branch targets](#branches). |
+| `(stack-writers MNEMONIC...)` | The instructions that write the [stack pointer](#stack-writers). |
 | `(without-ops NAME...)` | Drops [inherited](#inheritance) operations. |
 
 Each clause is optional and may appear once.
@@ -147,6 +148,15 @@ targets. In a function without a frame pointer, only their operands are checked
 against [label depths](conventions.md#stack-depth). Without the clause every
 instruction is checked.
 
+## Stack writers
+
+`(stack-writers push retn)` lists the instructions that write the stack pointer
+other than through `:push`, `:pop`, `:alloc` or `:free`. In a function without a
+frame pointer, a raw instruction or undeclared `(:op)` expansion using one is
+`items-malformed`: the [stack depth](conventions.md#stack-depth) cannot follow
+it. Use `(:push)`/`(:pop)`, an `(:op)` that declares `:pushes`/`:pops`, or a
+frame pointer. Without the clause no instruction is checked.
+
 ## Inheritance
 
 `(defbackend CHILD (:extends PARENT) clause...)` starts from the parent's
@@ -166,7 +176,7 @@ the child's machine.
 | `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
 | `operands` | By kind. |
 | `ops` | By operation name. |
-| `branches` | The child's list replaces the parent's. |
+| `branches` `stack-writers` | The child's list replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 
 `:machine` defaults to the parent's machine. When given, it must be that machine
@@ -184,6 +194,6 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | Function | Returns |
 | --- | --- |
 | `(find-backend name)` | The `backend-descriptor`; `unknown-backend` if none. |
-| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` | The stored clauses. |
+| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).

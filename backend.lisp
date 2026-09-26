@@ -30,10 +30,11 @@
   ops         ; alist of (OP-NAME PARAMS FORM...), names upcased
   op-effects  ; alist of (OP-NAME :PUSHES X :POPS Y) for the ops that declare a stack effect
   (branches t) ; upcased mnemonics that branch, or T when the backend does not say
+  stack-writers ; upcased mnemonics that write the stack pointer
   parent      ; name of the backend extended, or NIL
   options     ; the DEFBACKEND options as given
   own-clauses ; the DEFBACKEND clauses as given, before merging with the parent's
-  clauses)    ; the registers, call, frame, operands, ops and branches clauses after merging with the parent's
+  clauses)    ; the registers, call, frame, operands, ops, branches and stack-writers clauses after merging with the parent's
 
 (defvar *backends* (make-hash-table :test 'equal)
   "Defined backends, keyed by upcased name.")
@@ -250,18 +251,18 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
               (cl:push (list* key names forms) result))))))
     (values (nreverse result) (nreverse effects))))
 
-(defun %parse-branches-clause (machine entries)
-  "The upcased mnemonics ENTRIES name, each an instruction of MACHINE."
+(defun %parse-mnemonics-clause (head machine entries)
+  "The upcased mnemonics ENTRIES name, each an instruction of MACHINE; HEAD names the clause in errors."
   (let (result)
     (dolist (entry entries)
       (let ((key (%designator-name entry)))
         (unless key
-          (%backend-error "branches: ~S is not a mnemonic" entry))
+          (%backend-error "~A: ~S is not a mnemonic" head entry))
         (when (member key result :test #'string=)
-          (%backend-error "branches: ~A is listed twice" key))
+          (%backend-error "~A: ~A is listed twice" head key))
         (handler-case (find-instruction-variants machine key)
           (unknown-instruction ()
-            (%backend-error "branches: machine ~S has no instruction ~A" machine key)))
+            (%backend-error "~A: machine ~S has no instruction ~A" head machine key)))
         (cl:push key result)))
     (nreverse result)))
 
@@ -420,7 +421,7 @@ not another register the convention uses."
   "The clause HEAD, CHILD's over PARENT's; either may be NIL."
   (cond ((null child) parent)
         ((null parent) child)
-        ((string= head "BRANCHES") child)
+        ((member head '("BRANCHES" "STACK-WRITERS") :test #'string=) child)
         ((member head '("OPERANDS" "OPS") :test #'string=)
          (cons (first child) (%merge-entries (rest parent) (rest child))))
         (t (let ((result (copy-list (rest parent))))
@@ -452,7 +453,7 @@ not another register the convention uses."
                        when (equal (%clause-head-name clause) "WITHOUT-OPS") append (rest clause)))
         (own (remove "WITHOUT-OPS" clauses :test #'equal :key #'%clause-head-name)))
     (flet ((find-clause (head list) (find head list :test #'equal :key #'%clause-head-name)))
-      (let ((merged (loop for head in '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES")
+      (let ((merged (loop for head in '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES" "STACK-WRITERS")
                           for clause = (%merge-clause head (find-clause head parent) (find-clause head own))
                           when clause collect clause)))
         (if (and without (find-clause "OPS" merged))
@@ -514,9 +515,9 @@ not another register the convention uses."
         (when (member head seen :test #'equal)
           (%backend-error "DEFBACKEND ~S: more than one ~(~A~) clause" name head))
         (cl:push head seen)
-        (unless (or (member head '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES") :test #'equal)
+        (unless (or (member head '("REGISTERS" "CALL" "FRAME" "OPERANDS" "OPS" "BRANCHES" "STACK-WRITERS") :test #'equal)
                     (and extendsp (equal head "WITHOUT-OPS")))
-          (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands, ops, branches~:[~; or without-ops~]"
+          (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands, ops, branches, stack-writers~:[~; or without-ops~]"
                           name clause extendsp))))))
 
 (defun %build-backend (name options clauses)
@@ -551,7 +552,10 @@ not another register the convention uses."
                    (setf (backend-descriptor-ops descriptor) ops
                          (backend-descriptor-op-effects descriptor) effects)))
                 ((equal head "BRANCHES")
-                 (setf (backend-descriptor-branches descriptor) (%parse-branches-clause machine (rest clause)))))))
+                 (setf (backend-descriptor-branches descriptor) (%parse-mnemonics-clause "branches" machine (rest clause))))
+                ((equal head "STACK-WRITERS")
+                 (setf (backend-descriptor-stack-writers descriptor)
+                       (%parse-mnemonics-clause "stack-writers" machine (rest clause)))))))
       (%finish-backend-stack descriptor machine-descriptor)
       (%finish-backend-pointer descriptor)
       (%check-backend-kinds descriptor)
@@ -594,6 +598,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
      (branches mnemonic...)
+     (stack-writers mnemonic...)
      (without-ops NAME...)                    ; with :extends only
 :extends merges PARENT's clauses under these by key, for the same machine or one
 extending it. An operand kind names an addressing mode; an operation expands to instruction
@@ -601,7 +606,9 @@ forms whose operands are (KIND value...) items, parameters, or expressions. A
 (:label NAME) form defines a label unique to each expansion. :pushes and :pops
 declare the cells (an integer or a parameter) an operation puts on or takes off
 the stack. The instructions in branches are the ones whose operands are
-branch targets; without the clause every instruction is taken to branch.
+branch targets; without the clause every instruction is taken to branch. The
+instructions in stack-writers are the ones that write the stack pointer, which
+call lowering rejects in a function whose stack depth it tracks.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

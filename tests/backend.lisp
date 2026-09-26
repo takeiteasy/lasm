@@ -300,6 +300,22 @@ call .inner" :machine 'callfoo))
     (fiveam:is (search "no mode suffix" (detail '((lda (:force (:mode absolute 5))))
                                                 :lexer 'bk-no-underscore-syntax)))))
 
+(fiveam:test a-forced-mode-rejects-a-value-that-does-not-fit
+  (flet ((detail (items)
+           (let ((c (%items-error-of items :machine 'instr-test-machine)))
+             (and (typep c 'items-operand-mismatch) (items-error-detail c)))))
+    (fiveam:is (search "300 does not fit the forced mode ZERO-PAGE" (detail '((lda (:force (:mode zero-page 300)))))))
+    (fiveam:is (search "300 does not fit" (detail '((lda (:force (:mode zero-page (+ 200 100))))))))
+    (fiveam:is (null (detail '((lda (:force (:mode zero-page 255)))))))
+    (fiveam:is (null (detail '((lda (:force (:mode absolute 300)))))))
+    (fiveam:signals items-operand-mismatch
+      (render-items '((lda (:force (:mode zero-page 300)))) :machine 'instr-test-machine))))
+
+(fiveam:test a-forced-mode-checks-a-label-value-when-assembling
+  (fiveam:signals assembly-error
+    (assemble-items '((:directive equ big 300) (lda (:force (:mode zero-page big))))
+                    :machine 'instr-test-machine)))
+
 (fiveam:test assembler-errors-point-into-the-rendered-source
   (let ((c (handler-case (assemble-items '((:label x) (call missing)) :machine 'callfoo)
              (lasm-error (c) c))))
@@ -662,6 +678,17 @@ call .inner" :machine 'callfoo))
   (fiveam:is (equal '("CALL" "RET") (backend-descriptor-branches (find-backend 'bk-br-p))))
   (fiveam:is (equal '("CALL") (backend-descriptor-branches (find-backend 'bk-br-c))))
   (fiveam:is (eq t (backend-descriptor-branches (find-backend 'callfoo-abi)))))
+
+(fiveam:test stack-writers-are-checked-and-replaced-by-a-child
+  (dolist (form '((defbackend bk-sw-e1 (:machine callfoo) (stack-writers nope))
+                  (defbackend bk-sw-e2 (:machine callfoo) (stack-writers push push))
+                  (defbackend bk-sw-e3 (:machine callfoo) (stack-writers 3))))
+    (fiveam:is (typep (%backend-error-of form) 'backend-definition-error) "~S" form))
+  (eval '(defbackend bk-sw-p (:machine callfoo) (stack-writers push retn)))
+  (eval '(defbackend bk-sw-c (:extends bk-sw-p) (stack-writers push)))
+  (fiveam:is (equal '("PUSH" "RETN") (backend-descriptor-stack-writers (find-backend 'bk-sw-p))))
+  (fiveam:is (equal '("PUSH") (backend-descriptor-stack-writers (find-backend 'bk-sw-c))))
+  (fiveam:is (null (backend-descriptor-stack-writers (find-backend 'callfoo-abi)))))
 
 (fiveam:test a-child-without-op-the-parent-dropped-still-rebuilds
   (eval '(defbackend bk-wo-parent (:machine callfoo)

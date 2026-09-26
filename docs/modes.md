@@ -115,8 +115,9 @@ lda.w target   ; force absolute
 
 The assembler restricts selection to that mode. An unknown suffix, an
 unsupported mode for the instruction, or mismatched syntax signals
-`assembly-error`. An ordinary forced mode wraps an out-of-range value by
-default; a relative mode still checks its offset. The suffix separator is a
+`assembly-error`. A forced mode signals `assembly-error` for an operand that
+does not fit its field, as a `:strict` mode does; a relative mode checks its
+offset. The suffix separator is a
 [lexer](lexer.md) setting. See [`complete.lisp`](../examples/complete.lisp).
 
 ## Forcing one hole with a prefix

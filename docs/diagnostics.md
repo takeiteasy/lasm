@@ -87,6 +87,7 @@ or bind the global switch to turn an overflow into `assembly-error`:
 | --- | --- |
 | Mode `:strict t` | Operands selected through that mode. |
 | Alternative `:strict t` | The holes of the matching `one-of` alternative, including an inner alternative of a varying nested `one-of`. |
+| Mode suffix (`lda.z`) | The operand of the forced mode. |
 | `*strict-operand-range*` | Every operand, including modes without `:strict`. |
 
 Checks use each selected field's signed or unsigned range. Relative

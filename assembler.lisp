@@ -1245,7 +1245,7 @@ table (#37), built and keyed the same way, carrying the scope/kind metadata
 SYMBOLS itself cannot. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
-  (:instruction address descriptor asts line choices picks definition-line unit definition-unit)
+  (:instruction address descriptor asts line choices picks forcedp definition-line unit definition-unit)
   (:emit        address width endian asts line definition-line unit definition-unit)
   (:reserve     address count line definition-line unit definition-unit)
 CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
@@ -1421,7 +1421,8 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                            ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
                            ;; RANGE!) once a value exists to check it against.
                            (cl:push (list :instruction address descriptor asts
-                                          line choices picks *current-definition-line*
+                                          line choices picks (and (statement-mode-suffix statement) t)
+                                          *current-definition-line*
                                           *current-source-unit* *current-definition-unit*)
                                     sized)
                            (let* ((size (instruction-descriptor-size descriptor))
@@ -1555,32 +1556,39 @@ entries splits into whole alternatives of %OPTION-HOLE-COUNT holes each."
         (or (nth (mod (- i start) (%option-hole-count key)) (%option-hole-attributes key :strict))
             (mode-descriptor-strictp (%choice-key-descriptor key)))))))
 
-(defun %check-strict-operand-range! (descriptor mode values line cell-width choices)
+(defun %operand-hole-bounds (descriptor i cell-width)
+  "(VALUES lo hi) of the field operand I of DESCRIPTOR is encoded into."
+  (let ((word-fields (instruction-descriptor-word-fields descriptor)))
+    (if word-fields
+        (%word-field-bounds (nth i word-fields) cell-width)
+        (%operand-range (nth i (instruction-descriptor-operand-widths descriptor)) cell-width
+                        (nth i (instruction-descriptor-operand-signedness descriptor))))))
+
+(defun %check-strict-operand-range! (descriptor mode values line cell-width choices forcedp)
   "Check ordinary strict fields against the bounds of the field each is
-encoded into. Relative fields are checked by %RELATIVE-OFFSET."
+encoded into. Relative fields are checked by %RELATIVE-OFFSET. FORCEDP is true
+for an operand its mnemonic suffix forced into MODE."
   (let ((relative-holes (instruction-descriptor-relative-holes descriptor))
         (word-fields (instruction-descriptor-word-fields descriptor)))
     (loop for value in values
           for i from 0
           when (and (not (nth i relative-holes))
                     (or *strict-operand-range*
+                        forcedp
                         (and mode (mode-descriptor-strictp mode))
                         (%hole-choice-strict-p choices i)))
-            do (if word-fields
-                   (multiple-value-bind (lo hi) (%word-field-bounds (nth i word-fields) cell-width)
-                     (unless (<= lo value hi)
+            do (multiple-value-bind (lo hi) (%operand-hole-bounds descriptor i cell-width)
+                 (unless (<= lo value hi)
+                   (if word-fields
                        (%assembly-error line
-                                         "~A: operand value ~D out of range for its instruction-word ~
+                                        "~A: operand value ~D out of range for its instruction-word ~
 field (must be between ~D and ~D)"
-                                         (instruction-descriptor-name descriptor) value lo hi)))
-                   (let ((width (nth i (instruction-descriptor-operand-widths descriptor)))
-                         (signedp (nth i (instruction-descriptor-operand-signedness descriptor))))
-                     (multiple-value-bind (lo hi) (%operand-range width cell-width signedp)
-                       (unless (<= lo value hi)
-                         (%assembly-error line
-                                           "~A: operand value ~D out of range for ~D-cell operand ~
+                                        (instruction-descriptor-name descriptor) value lo hi)
+                       (%assembly-error line
+                                        "~A: operand value ~D out of range for ~D-cell operand ~
 (must be between ~D and ~D)"
-                                           (instruction-descriptor-name descriptor) value width lo hi))))))))
+                                        (instruction-descriptor-name descriptor) value
+                                        (nth i (instruction-descriptor-operand-widths descriptor)) lo hi)))))))
 
 (defun %check-register-operand-range! (descriptor values line)
   "Signal an assembly error for a :REGISTER hole whose value indexes outside its bank."
@@ -1680,7 +1688,7 @@ ordered by region then bank; overlapping output in one bank is an error."
                (when (zerop (eval-expr ast :symbols symbols :pc address))
                  (error 'assertion-error :message (or message "assertion failed") :line line))))
             (:instruction
-             (destructuring-bind (kind address descriptor asts line choices picks definition-line unit definition-unit) entry
+             (destructuring-bind (kind address descriptor asts line choices picks forcedp definition-line unit definition-unit) entry
                (declare (ignore kind definition-line unit definition-unit picks))
                (let* ((mode (instruction-descriptor-mode descriptor))
                       (relative-holes (instruction-descriptor-relative-holes descriptor))
@@ -1692,7 +1700,7 @@ ordered by region then bank; overlapping output in one bank is an error."
                          do (setf (nth i values)
                                   (%relative-offset address descriptor i value line cell-width)))
                  (%check-register-operand-range! descriptor values line)
-                 (%check-strict-operand-range! descriptor mode values line cell-width choices)
+                 (%check-strict-operand-range! descriptor mode values line cell-width choices forcedp)
                  (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
                         (shadow nil)
                         (removedp nil))
@@ -1745,8 +1753,8 @@ separate from it (rather than folded into the same walk) since %ENCODE
 needs SYMBOLS to evaluate operand values and this doesn't, only sizes."
   (ecase (first entry)
     (:instruction
-     (destructuring-bind (kind address descriptor asts line choices picks definition-line unit definition-unit) entry
-       (declare (ignore asts choices definition-unit))
+     (destructuring-bind (kind address descriptor asts line choices picks forcedp definition-line unit definition-unit) entry
+       (declare (ignore asts choices forcedp definition-unit))
        (make-listing-line :address address :size (instruction-descriptor-size descriptor)
                             :line line :definition-line definition-line
                             :source-unit unit :file (and unit (source-unit-file unit))

@@ -668,3 +668,39 @@ ret
 (fiveam:test a-declared-effect-needs-a-numeric-argument
   (fiveam:is (search "non-negative integer"
                      (%cv-malformed '((:function f () (:op :grab (reg a)) (:return))) 'cv-effects-abi))))
+
+;;; Register names spelled by labels (#336)
+
+(fiveam:test a-label-named-like-a-register-is-not-a-register-read
+  (let ((text (render-items '((:call f (imm c) (imm b))) :backend 'cv-scratch-abi)))
+    (fiveam:is (= 2 (%cv-count text "movv")))
+    (fiveam:is (search "movv b, # c" text))
+    (fiveam:is (search "movv c, # b" text))))
+
+(fiveam:test a-call-target-label-named-like-a-register-is-not-copied
+  (let ((text (render-items '((:call (imm b) (imm 1) (imm 2))) :backend 'cv-indirect-abi)))
+    (fiveam:is (= 2 (%cv-count text "movv")))
+    (fiveam:is (search "callr # b" text))))
+
+(fiveam:test a-register-argument-cycle-is-still-broken
+  (let ((text (render-items '((:call f (reg c) (reg b))) :backend 'cv-scratch-abi)))
+    (fiveam:is (= 3 (%cv-count text "movv")))))
+
+;;; Stack writers (#340)
+
+(defbackend cv-writers-abi (:extends callfoo-abi)
+  (stack-writers push)
+  (ops (:stash (x) (push x))
+       (:stash1 (x) :pushes 1 (push x))))
+
+(fiveam:test a-raw-stack-writer-is-rejected-in-a-tracked-function
+  (fiveam:is (null (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'callfoo-abi)))
+  (fiveam:is (search "writes the stack pointer"
+                     (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'cv-writers-abi)))
+  (fiveam:is (search "writes the stack pointer"
+                     (%cv-malformed '((:function f () (:op :stash (imm 1)) (:return))) 'cv-writers-abi))))
+
+(fiveam:test a-stack-writer-with-a-declared-effect-or-outside-tracking-is-accepted
+  (fiveam:is (null (%cv-malformed '((:function f () (:op :stash1 (imm 1)) (:pop (reg a)) (:return))) 'cv-writers-abi)))
+  (fiveam:is (null (%cv-malformed '((push (imm 1))) 'cv-writers-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f () (:depth 0) (:return))) 'cv-writers-abi))))

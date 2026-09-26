@@ -65,12 +65,13 @@ overwrites it: copy it first or `:keep` it.
 
 Without a frame pointer, `(:arg i)` and `(:local i)` are addressed from the
 stack pointer, so the lowering counts the cells the body has pushed. A function
-without a frame pointer is checked three ways:
+without a frame pointer is checked four ways:
 
 | Check | Error when |
 | --- | --- |
 | Labels | A label is defined at one depth and a [branch](backends.md#branches) instruction that names it is at another. |
 | Raw stack instructions | An instruction, or an `(:op)` expansion form, is a backend's `:push`, `:pop`, `:alloc` or `:free` template: the same mnemonic, the parameters matching anything, the rest equal. `(:op :push ...)` is rejected too. |
+| Stack writers | An instruction, or an `(:op)` expansion form, has a mnemonic in the backend's [`stack-writers`](backends.md#stack-writers). |
 | `(:depth n)` | `n` is negative, or it is outside a `:function`. |
 
 An `(:op)` that declares [`:pushes` and `:pops`](backends.md#operations) is
@@ -242,7 +243,6 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| A symbol spelled like a register is read as that register in an argument or the call target. | [#336](https://todo.sr.ht/~takeiteasy/lasm/336) |
-| A raw instruction that writes the stack pointer, and matches no stack template or declared effect, is not seen. | [#340](https://todo.sr.ht/~takeiteasy/lasm/340) |
+| A backend lists its `stack-writers` by hand. | [#342](https://todo.sr.ht/~takeiteasy/lasm/342) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

@@ -550,11 +550,17 @@ to the enclosing label when one has been defined and the lexer has local labels.
   "Reject a raw FORM in a function without a frame pointer that changes the depth."
   (when (and (%depth-tracked-p) *items-backend*)
     (dolist (form forms)
-      (let ((hook (and (consp form) (not (%label-form-p form)) (%stack-operation-of form))))
-        (when hook
-          (%items-fail 'items-malformed item
-                       "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
-                       form (intern hook :keyword)))))))
+      (when (and (consp form) (not (%label-form-p form)))
+        (let ((hook (%stack-operation-of form)))
+          (cond (hook
+                 (%items-fail 'items-malformed item
+                              "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
+                              form (intern hook :keyword)))
+                ((member (%designator-name (first form)) (backend-descriptor-stack-writers *items-backend*)
+                         :test #'equal)
+                 (%items-fail 'items-malformed item
+                              "~S writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
+                              form))))))))
 
 (defun %op-stack-effect (name args item)
   "The net cells the backend's operation NAME puts on the stack, and true, when it declares an effect."
@@ -651,17 +657,53 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (prog1 (%hook-lines (if pushp :push :pop) (list (second item)) item)
       (%bump-depth (if pushp 1 -1)))))
 
-;; TODO: matches any atom named like REGISTER, a label included (#336).
-(defun %reads-register-p (tree register)
-  (typecase tree
-    (cons (or (%reads-register-p (car tree) register) (%reads-register-p (cdr tree) register)))
-    (t (%same-name-p tree register))))
+;;; Register holes
 
-(defun %substitute-register (tree register replacement)
-  (typecase tree
-    (cons (cons (%substitute-register (car tree) register replacement)
-                (%substitute-register (cdr tree) register replacement)))
-    (t (if (%same-name-p tree register) replacement tree))))
+(defun %operand-shape (operand)
+  "The addressing mode OPERAND names and the values it gives it, or NIL for an expression."
+  (when (and (consp operand) (not (%expression-head-p (first operand))))
+    (let ((head (first operand)))
+      (cond ((%keyword-named-p head "MODE")
+             (values (%find-mode-by-name (second operand) *items-machine*) (cddr operand) t))
+            ((keywordp head) nil)
+            (t (let ((entry (and *items-backend*
+                                 (assoc (%designator-name head) (backend-descriptor-operands *items-backend*)
+                                        :test #'equal))))
+                 (and entry (values (find-mode-descriptor (cdr entry) *items-machine*) (rest operand)))))))))
+
+(defun %map-register-holes (operand function)
+  "OPERAND with FUNCTION applied to each value in a register hole of its mode."
+  (multiple-value-bind (mode values namedp) (%operand-shape operand)
+    (if (null mode)
+        operand
+        (let ((elements (copy-list (mode-descriptor-pattern mode)))
+              (mapped '()))
+          (loop while (and elements values)
+                do (let ((element (cl:pop elements)))
+                     (case (first element)
+                       (:expr (let ((value (cl:pop values)))
+                                (cl:push (if (and (second element) (atom value)) (funcall function value) value)
+                                         mapped)))
+                       (:one-of (let* ((name (cl:pop values))
+                                       (alternative (find-if (lambda (candidate) (%same-name-p candidate name))
+                                                             (%one-of-alternatives element))))
+                                  (cl:push name mapped)
+                                  (when alternative
+                                    (setf elements (append (mode-descriptor-pattern
+                                                            (find-mode-descriptor alternative *items-machine*))
+                                                           elements))))))))
+          (append (subseq operand 0 (if namedp 2 1)) (nreverse mapped) values)))))
+
+(defun %reads-register-p (operand register)
+  (let ((found nil))
+    (%map-register-holes operand (lambda (value)
+                                   (when (%same-name-p value register)
+                                     (setf found t))
+                                   value))
+    found))
+
+(defun %substitute-register (operand register replacement)
+  (%map-register-holes operand (lambda (value) (if (%same-name-p value register) replacement value))))
 
 (defun %free-scratch (moves pending target)
   "A :scratch register no move writes, no PENDING move reads and TARGET does not read."
@@ -671,13 +713,12 @@ to the enclosing label when one has been defined and the lexer has local labels.
                   (not (%reads-register-p target register))))
            (backend-register *items-backend* :scratch)))
 
-(defun %swap-registers (tree a b)
-  "TREE with a read of register A turned into one of B and the reverse, in one pass."
-  (typecase tree
-    (cons (cons (%swap-registers (car tree) a b) (%swap-registers (cdr tree) a b)))
-    (t (cond ((%same-name-p tree a) (string-downcase (string b)))
-             ((%same-name-p tree b) (string-downcase (string a)))
-             (t tree)))))
+(defun %swap-registers (operand a b)
+  "OPERAND with a read of register A turned into one of B and the reverse, in one pass."
+  (%map-register-holes operand (lambda (value)
+                                 (cond ((%same-name-p value a) (string-downcase (string b)))
+                                       ((%same-name-p value b) (string-downcase (string a)))
+                                       (t value)))))
 
 (defun %self-move-p (move)
   (string-equal (princ-to-string (second move)) (princ-to-string (third move))))
@@ -824,6 +865,24 @@ survive a call, and any other register cannot be kept."
       (%items-fail 'items-malformed item "~A is not a mode of ~A" (mode-descriptor-name mode) mnemonic))
     (concatenate 'string separator (mode-descriptor-suffix mode))))
 
+(defun %check-forced-range (mode tokens mnemonic item)
+  "Signal ITEMS-OPERAND-MISMATCH for a constant in TOKENS, the operand forced into MODE, that does not fit its field.
+A value that depends on a label is checked when the assembler encodes it."
+  ;; TODO: the default memory's cell width, not :memory's (#341).
+  (let ((variant (find mode (find-instruction-variants *items-machine* mnemonic)
+                       :key #'instruction-descriptor-mode))
+        (cell-width (%machine-cell-width *items-machine*)))
+    (when variant
+      (loop for ast in (try-match-operand-mode (coerce tokens 'simple-vector) mode)
+            for i from 0
+            for value = (handler-case (eval-expr-constant ast) (error () nil))
+            do (when (and value (not (nth i (instruction-descriptor-relative-holes variant))))
+                 (multiple-value-bind (low high) (%operand-hole-bounds variant i cell-width)
+                   (unless (<= low value high)
+                     (%items-fail 'items-operand-mismatch item
+                                  "~D does not fit the forced mode ~A, which takes ~D to ~D"
+                                  value (mode-descriptor-name mode) low high))))))))
+
 (defun %instruction-line (form item)
   (unless (and (consp form) (or (stringp (first form)) (and (symbolp (first form)) (not (keywordp (first form))))))
     (%items-fail 'items-malformed item "~S is not an instruction" form))
@@ -838,9 +897,11 @@ survive a call, and any other register cannot be kept."
           (cl:push (list (first claim) (+ offset (second claim)) (+ offset (third claim))) claims))
         (cl:push tokens operands)
         (incf offset (1+ (length tokens)))))
-    (let ((mnemonic (%source-name (first form) item)))
-      (make-item-line :mnemonic mnemonic :operands (nreverse operands)
-                      :suffix (and forced (%forced-suffix forced mnemonic form item))
+    (let* ((mnemonic (%source-name (first form) item))
+           (suffix (and forced (%forced-suffix forced mnemonic form item))))
+      (when forced
+        (%check-forced-range forced (first operands) mnemonic item))
+      (make-item-line :mnemonic mnemonic :operands (nreverse operands) :suffix suffix
                       :item item :claims (nreverse claims)))))
 
 (defun %directive-line (item)

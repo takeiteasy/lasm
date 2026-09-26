@@ -926,13 +926,12 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
   (let ((a (assemble "lda.w $05" :machine 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 5 0) (assembly-cells a)))))
 
-(fiveam:test mode-suffix-z-bypasses-value-filter-and-wraps-silently
-  ;; $1000 doesn't fit a zero-page byte at all -- forced ZERO-PAGE skips the
-  ;; value filter entirely and ENCODE-INSTRUCTION's WRAP-VALUE truncates to
-  ;; the low byte, exactly like a single-mode M1 instruction always did
-  ;; (#28 tracks diagnosing this class of silent wrap generally).
-  (let ((a (assemble "lda.z $1000" :machine 'instr-test-machine)))
-    (fiveam:is (equalp #(#x11 #x00) (assembly-cells a)))))
+(fiveam:test mode-suffix-z-range-checks-its-operand
+  ;; $1000 doesn't fit a zero-page byte; a forced mode skips the value filter,
+  ;; so the encoder rejects it as a strict mode does instead of wrapping.
+  (fiveam:signals assembly-error
+    (assemble "lda.z $1000" :machine 'instr-test-machine))
+  (fiveam:is (equalp #(#x11 #xff) (assembly-cells (assemble "lda.z $ff" :machine 'instr-test-machine)))))
 
 (fiveam:test unknown-mode-suffix-signals-assembly-error
   (fiveam:signals assembly-error

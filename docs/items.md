@@ -98,7 +98,9 @@ exactly that mode.
 `items-malformed` is signalled when the `(:force)` is not the instruction's
 only operand, its mode has no `:suffix`, the mode is not one of the mnemonic's
 variants (a `one-of` alternative, for example), or the lexer has no mode suffix
-separator. A forced value that does not fit the mode wraps as in source.[^wrap]
+separator. `items-operand-mismatch` is signalled for a constant that does not fit the
+forced mode's field, as `(:force (:mode zero-page 300))` does; a value that
+depends on a label signals `assembly-error` when it is encoded.
 
 ## Sizing
 
@@ -172,7 +174,7 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| A forced mode wraps a value that does not fit it, silently. | [#334](https://todo.sr.ht/~takeiteasy/lasm/334) |
+| The render-time range check of a forced mode uses the default memory's cell width. | [#341](https://todo.sr.ht/~takeiteasy/lasm/341) |
 | There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
 
 [^check]: The assembler records each `one-of` pick as a token span, exposed as
@@ -180,5 +182,3 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
   also loses to a variant of the mnemonic that matches its syntax more
   specifically. Instructions from macros, `.rept` and `.include` are not
   checked.
-
-[^wrap]: `(:force (:mode zero-page 300))` assembles the byte 44.
