@@ -26,6 +26,7 @@
    #:privilege-violation-access
    #:privilege-violation-address
    #:privilege-violation-kind
+   #:privilege-violation-mask
    #:privilege-violation-info
    #:privilege-violation-required
    #:privilege-violation-current

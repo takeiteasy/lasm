@@ -181,10 +181,11 @@ violation leaves the PC on the instruction and charges no cycles.[^inherit]
 
 `privilege-violation-kind` and the trap's `:kind` are `:memory`,
 `:instruction`, `:register`, `:flag` or `:stack`. The trap's data is
-`(:kind KIND :name NAME :address ADDRESS :required LEVEL :access ACCESS)`.
+`(:kind KIND :name NAME :address ADDRESS :required LEVEL :access ACCESS :mask MASK)`.
 `NAME` is the element, or the mnemonic for an instruction. `ADDRESS` is set
 only for `:memory`. `ACCESS` is `:read`, `:write` or `:execute`, and `nil` for
-an instruction. `lasm run` prints either outcome and exits `1`. See
+an instruction. `MASK` is the declared mask of a [`:fields`](#gating-bits-of-a-register)
+gate, otherwise `nil`; `privilege-violation-mask` reads it from the condition. `lasm run` prints either outcome and exits `1`. See
 [Conditions](conditions.md).
 
 ### Violations as interrupts
@@ -209,15 +210,13 @@ machine still delivers it instead of repeating the violation each step.
 
 Cycles spent before the violation stay counted. `(privilege-violation-info
 machine)` returns `(:pc PC :kind KIND :name NAME :address ADDRESS :required
-LEVEL :current LEVEL :access ACCESS)` for the last such violation. `reset` clears it and
+LEVEL :current LEVEL :access ACCESS :mask MASK)` for the last such violation. `reset` clears it and
 snapshots do not save it. With `:deliver-level` and a saved level register,
 `interrupt-return` resumes the violating instruction at the original level.
 See `examples/privilege.lisp`.
 
 ## Limitations
 
-- A `:fields` violation does not report which mask failed. See
-  [ticket 315](https://todo.sr.ht/~takeiteasy/lasm/315).
 - A helper function called from semantics, or `(funcall 'sref ...)`, is not
   gated. See [ticket 310](https://todo.sr.ht/~takeiteasy/lasm/310).
 - A violation interrupt does not undo effects an instruction had before it

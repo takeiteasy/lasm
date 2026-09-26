@@ -73,6 +73,7 @@ memory ~S on machine ~S"
    (access :initarg :access :initform nil :reader privilege-violation-access)
    (address :initarg :address :initform nil :reader privilege-violation-address)
    (required :initarg :required :reader privilege-violation-required)
+   (mask :initarg :mask :initform nil :reader privilege-violation-mask)
    (current :initarg :current :initform nil :reader privilege-violation-current))
   (:report (lambda (c s) (%with-location-suffix (c s)
              (let ((name (storage-error-name c))
@@ -1317,7 +1318,7 @@ declares no NAMES or INDEX is outside them."
     (destructuring-bind (mask required policy) field
       (when (and (eq policy :violate)
                  (/= (logand old mask) (logand new mask)))
-        (%check-privilege machine required name nil :register :write))))
+        (%check-privilege machine required name nil :register :write mask))))
   (let ((privilege (machine-descriptor-privilege (machine-descriptor machine))))
     (when (and privilege *privilege-checks*)
       (let ((current (%privilege-rank privilege (%level-value machine privilege))))
@@ -1328,12 +1329,12 @@ declares no NAMES or INDEX is outside them."
               (setf new (logior (logandc2 new mask) (logand old mask)))))))))
   new)
 
-(defun %check-privilege (machine required name address &optional kind access)
+(defun %check-privilege (machine required name address &optional kind access mask)
   "Signal, per the machine's :ON-VIOLATION policy, unless the current level
 ranks at least as high as REQUIRED. NAME is the memory element accessed at
 ADDRESS, an instruction's mnemonic with ADDRESS NIL, or a register, flag or
 stack (#300) named by KIND. KIND defaults to :MEMORY with an ADDRESS and
-:INSTRUCTION without. ACCESS (#303) is :READ, :WRITE or :EXECUTE. Checked
+:INSTRUCTION without. ACCESS (#303) is :READ, :WRITE or :EXECUTE. MASK (#315) is the gated field of a register. Checked
 before any access-hook notification, so a rejected access is not reported as one."
   (let* ((descriptor (machine-descriptor machine))
          (privilege (machine-descriptor-privilege descriptor))
@@ -1345,7 +1346,7 @@ before any access-hook notification, so a rejected access is not reported as one
                    (error 'privilege-violation
                           :machine (machine-descriptor-name descriptor) :name name
                           :kind kind :address address :required required
-                          :current (privilege-level machine) :access access)))
+                          :current (privilege-level machine) :access access :mask mask)))
            (ecase (privilege-descriptor-on-violation privilege)
             (:fault (fault))
             (:interrupt
@@ -1357,15 +1358,15 @@ before any access-hook notification, so a rejected access is not reported as one
                  (progn
                    (setf (machine-privilege-violation machine)
                          (list :kind kind :name name :address address :required required
-                               :current (privilege-level machine) :access access))
+                               :current (privilege-level machine) :access access :mask mask))
                    (signal '%privilege-exception))
                  (fault)))
             (:trap (error 'lasm-trap :tag :privilege-violation
                                      :data (list :kind kind :name name :address address
-                                                 :required required :access access))))))))))
+                                                 :required required :access access :mask mask))))))))))
 
 (defun privilege-violation-info (machine)
-  "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT :ACCESS) of MACHINE's last
+  "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT :ACCESS :MASK) of MACHINE's last
 privilege violation raised as an interrupt (#302), or NIL."
   (machine-privilege-violation machine))
 

@@ -15,7 +15,7 @@ For context, see [Machine model](machine-model.md#conditions),
 | `unknown-storage` | `storage-error` | — |
 | `address-out-of-range` | `storage-error` | `address-out-of-range-address` |
 | `memory-write-protected` | `storage-error` | `memory-write-protected-address` |
-| `privilege-violation` | `storage-error` | `privilege-violation-kind`, `privilege-violation-access`, `privilege-violation-address`, `privilege-violation-required`, `privilege-violation-current` |
+| `privilege-violation` | `storage-error` | `privilege-violation-kind`, `privilege-violation-access`, `privilege-violation-mask`, `privilege-violation-address`, `privilege-violation-required`, `privilege-violation-current` |
 | `stack-overflow` | `storage-error` | — |
 | `stack-underflow` | `storage-error` | — |
 | `stack-index-out-of-range` | `storage-error` | `stack-index-out-of-range-index` |

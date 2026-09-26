@@ -211,7 +211,7 @@ rte")))
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 1 steps))
       (fiveam:is (eq :privilege-violation (lasm-trap-tag condition)))
-      (fiveam:is (equal '(:kind :instruction :name "RTE" :address nil :required supervisor :access nil)
+      (fiveam:is (equal '(:kind :instruction :name "RTE" :address nil :required supervisor :access nil :mask nil)
                         (lasm-trap-data condition)))
       (fiveam:is (= #x200 (sref m 'pc))))))
 
@@ -433,7 +433,7 @@ rte")))
     (multiple-value-bind (result steps condition) (run m :max-steps 1)
       (declare (ignore steps))
       (fiveam:is (eq :trap result))
-      (fiveam:is (equal '(:kind :register :name cr :address nil :required supervisor :access :read)
+      (fiveam:is (equal '(:kind :register :name cr :address nil :required supervisor :access :read :mask nil)
                         (lasm-trap-data condition))))))
 
 (fiveam:test debugger-write-bypasses-element-gates
@@ -528,7 +528,7 @@ rte")))
   (let ((m (%priv-irq-machine (list #x00 #x02))))
     (step-machine m)
     (step-machine m)
-    (fiveam:is (equal '(:pc 1 :kind :register :name cr :address nil :required supervisor :current user :access :read)
+    (fiveam:is (equal '(:pc 1 :kind :register :name cr :address nil :required supervisor :current user :access :read :mask nil)
                       (privilege-violation-info m)))))
 
 (fiveam:test violation-interrupt-covers-instruction-gates-without-cost
@@ -904,6 +904,7 @@ rte")))
 
 (%def-priv-fields-machine priv-fields-machine)
 (%def-priv-fields-machine priv-fields-irq-machine :on-violation (:interrupt 7))
+(%def-priv-fields-machine priv-fields-trap-machine :on-violation :trap)
 
 (defun %priv-fields-step (opcode sr &key (name 'priv-fields-machine))
   (let ((m (make-machine name)))
@@ -1005,3 +1006,24 @@ rte")))
   (fiveam:signals machine-definition-error
     (eval '(defmachine (priv-fields-bad-child (:extends priv-fields-machine))
             (register sr :width 16 :privilege (:fields ((#x2000 supervisor))))))))
+
+;;; #315: a field violation reports the gated mask
+
+(fiveam:test field-violation-reports-the-gated-mask
+  (let ((c (nth-value 1 (%priv-fields-step #x03 #x0005))))
+    (fiveam:is (= #x2000 (privilege-violation-mask c))))
+  (fiveam:is (null (privilege-violation-mask (nth-value 1 (%priv-gate-step 'priv-gate-machine #x02 0))))))
+
+(fiveam:test field-violation-interrupt-info-carries-the-mask
+  (let ((m (make-machine 'priv-fields-irq-machine)))
+    (load-program m (list #x03))
+    (setf (sref m 'pc) 0 (sref m 'ia) 32 (sref m 'sr) #x0005)
+    (step-machine m)
+    (fiveam:is (= #x2000 (getf (privilege-violation-info m) :mask)))))
+
+(fiveam:test field-violation-trap-data-carries-the-mask
+  (let ((m (make-machine 'priv-fields-trap-machine)))
+    (load-program m (list #x03))
+    (setf (sref m 'sr) #x0005)
+    (let ((c (handler-case (progn (step-machine m) nil) (lasm-trap (c) c))))
+      (fiveam:is (= #x2000 (getf (lasm-trap-data c) :mask))))))
