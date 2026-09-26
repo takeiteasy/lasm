@@ -210,6 +210,10 @@
           (visit (instruction-descriptor-mode variant)))))
     leaves))
 
+;; TODO: compares each operand alone with every reachable leaf mode, not the slot
+;; it fills, and re-derives the leaf modes for every instruction; use the
+;; assembler's recorded choice (#326), and cache the leaves per mnemonic in the
+;; per-assembly context.
 (defun %check-alternatives (mnemonic operands item)
   "Signal ITEMS-OPERAND-MISMATCH when an operand's tokens do not match the mode
 it names, or match another alternative of MNEMONIC's modes more specifically,

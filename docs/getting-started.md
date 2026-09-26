@@ -87,7 +87,7 @@ Start with [Machine model](machine-model.md), [Instructions](instructions.md),
 or the [documentation index](README.md).
 
 [^dependencies]: LASM and `trivial-high-precision-timer` are not on Quicklisp.
-  Eclector, which reads [snapshot](snapshots.md) files, is. Without Quicklisp,
+  Eclector, which reads [snapshot](snapshots.md) and [items](items.md) files, is. Without Quicklisp,
   make their system files, Eclector's and CFFI's available to ASDF, then run
   `(asdf:load-system :lasm)`.
 [^scripts]: Each script loads `examples/boot.lisp` to find its dependencies

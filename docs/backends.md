@@ -57,8 +57,8 @@ names that register.
 | `:cleanup` | `:caller`, `:callee` | `:caller` |
 | `:return-address-slots` | Cells a call pushes | `1` |
 
-The values are stored and readable with `backend-descriptor-call`; nothing
-lowers calls yet.[^lowering]
+The values are stored and readable with `backend-descriptor-call`. Calls are
+not lowered.[^lowering]
 
 ## Frame
 
