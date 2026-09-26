@@ -280,11 +280,11 @@ whose syntax matches more specifically."
                 (%score> (%score-of mode nil tokens) (%score-of nil name tokens)))
            (mode-descriptor-name mode)))))))
 
-(defun %check-assembled-stack-lines (assembly lines unit)
+(defun %check-assembled-stack-lines (listing lines unit)
   "Signal ITEMS-MALFORMED for a line whose operands left variants that differ in writing the stack
-pointer (see %CHECK-STACK-LINES) when the variant the assembler chose writes it."
+pointer (see %CHECK-STACK-LINES) when the variant the LISTING shows was chosen writes it."
   (let ((lines (coerce lines 'simple-vector)))
-    (dolist (entry (assembly-listing assembly))
+    (dolist (entry listing)
       (when (and (eq (listing-line-kind entry) :instruction)
                  (eq (listing-line-source-unit entry) unit)
                  (null (listing-line-definition-line entry)))
@@ -1127,11 +1127,28 @@ A value that depends on a label is checked when the assembler encodes it."
                                token-lines)))
       (values statements text unit lines))))
 
-(defun render-items (items &key backend machine (lexer 'default) memory)
+(defun %check-laid-out-stack-lines (statements text unit lines origin assume)
+  "Run %CHECK-ASSEMBLED-STACK-LINES on the layout of STATEMENTS, an operand with no value sized
+as ASSUME says, and return that layout's size."
+  (let ((*unresolved-width* assume))
+    (with-source-unit unit
+      (%with-laid-out-statements (statements *items-machine* *items-lexer* origin *items-memory* text)
+          (symbols sized final-address asm-origin info label-banks cell-width endian)
+        (%check-assembled-stack-lines (%build-listing sized) lines unit)
+        (- final-address asm-origin)))))
+
+(defun render-items (items &key backend machine (lexer 'default) (origin 0) memory)
   "The assembly source text ITEMS render as. Assembling it gives the cells
-ASSEMBLE-ITEMS gives. MEMORY sizes the range check of a forced mode's operand."
+ASSEMBLE-ITEMS gives. MEMORY sizes the range check of a forced mode's operand. A line
+whose operands leave variants that differ in writing the stack pointer is judged by the
+layout ORIGIN gives, an operand with no value taking its :WIDEST variant; an error of that
+layout is left to ASSEMBLE-ITEMS."
   (%with-items-context (backend machine lexer memory)
-    (nth-value 1 (%items-source items))))
+    (multiple-value-bind (statements text unit lines) (%items-source items)
+      (when (some #'item-line-stack-check lines)
+        (handler-case (%check-laid-out-stack-lines statements text unit lines origin :widest)
+          (lasm-syntax-error () nil)))
+      text)))
 
 (defun assemble-items (items &key backend machine (lexer 'default) (origin 0) memory file)
   "Assemble ITEMS, a list of items, for the machine of BACKEND (a name or
@@ -1150,7 +1167,7 @@ instruction's modes; the assembler's own conditions otherwise."
                                              :memory *items-memory*
                                              :source text :source-unit unit))))
         (%check-choices assembly lines statements unit)
-        (%check-assembled-stack-lines assembly lines unit)
+        (%check-assembled-stack-lines (assembly-listing assembly) lines unit)
         assembly))))
 
 (defun items-size (items &key backend machine (lexer 'default) (origin 0) memory (assume :widest))
@@ -1162,12 +1179,8 @@ ASSEMBLE-ITEMS's."
   (unless (member assume '(:widest :narrowest))
     (%signal-usage-error 'usage-error ":assume must be :widest or :narrowest, not ~S" assume))
   (%with-items-context (backend machine lexer memory)
-    (multiple-value-bind (statements text unit) (%items-source items)
-      (let ((*unresolved-width* assume))
-        (with-source-unit unit
-          (%with-laid-out-statements (statements *items-machine* *items-lexer* origin *items-memory* text)
-              (symbols sized final-address asm-origin info label-banks cell-width endian)
-            (- final-address asm-origin)))))))
+    (multiple-value-bind (statements text unit lines) (%items-source items)
+      (%check-laid-out-stack-lines statements text unit lines origin assume))))
 
 (defun %find-element-name (machine designator)
   (let ((element (find-if (lambda (element) (%same-name-p (storage-element-name element) designator))

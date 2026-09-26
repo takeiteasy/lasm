@@ -4200,8 +4200,43 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
   "An alist of macro name to expander function, for the MACROLET forms enclosing the walk,
 innermost first. An expander is called with the form and *DEFINSTRUCTION-ENVIRONMENT*.")
 
+(defun %expand-enclosing (form)
+  "The expansion of the macro FORM, local macros first. Signals when it fails."
+  (let ((local (cdr (assoc (car form) *local-macros*))))
+    (if local
+        (funcall local form *definstruction-environment*)
+        (macroexpand-1 form *definstruction-environment*))))
+
+(defun %enclosing-macro-p (symbol)
+  "True when SYMBOL names a macro bound around the walk, not a global one."
+  (and symbol
+       (symbolp symbol)
+       (not (eq (symbol-package symbol) (find-package :common-lisp)))
+       (or (assoc symbol *local-macros*)
+           (let ((local (macro-function symbol *definstruction-environment*)))
+             (and local (not (eq local (macro-function symbol))))))
+       t))
+
+(defun %enclosing-macro-delegates (tree)
+  "MACROLET bindings that expand, through %EXPAND-ENCLOSING, each enclosing macro TREE names."
+  (let ((symbols '()))
+    (labels ((collect (node)
+               (typecase node
+                 (cons (collect (car node)) (collect (cdr node)))
+                 (symbol (when (%enclosing-macro-p node) (pushnew node symbols)))
+                 ;; SBCL reads a comma in a backquote as a structure
+                 #+sbcl (sb-impl::comma (collect (sb-int:comma-expr node))))))
+      (collect tree))
+    (loop for symbol in symbols
+          for whole = (gensym "WHOLE")
+          for rest = (gensym "REST")
+          collect `(,symbol (&whole ,whole &rest ,rest)
+                            (declare (ignore ,rest))
+                            (%expand-enclosing ,whole)))))
+
 (defun %local-expander (binding)
-  "The expander function of the MACROLET BINDING, or NIL when it cannot be built."
+  "The expander function of the MACROLET BINDING, or NIL when it cannot be built. Its body can use
+the macros bound around it, as they stand while it is built."
   (ignore-errors
    (destructuring-bind (name lambda-list &rest body) binding
      (declare (ignore name))
@@ -4221,17 +4256,19 @@ innermost first. An expander is called with the form and *DEFINSTRUCTION-ENVIRON
                          (declare (ignorable ,form ,env))
                          (let ,bindings
                            (declare (ignorable ,@(mapcar #'first bindings)))
-                           (destructuring-bind ,lambda-list (cdr ,form) ,@body)))))))))
+                           (macrolet ,(%enclosing-macro-delegates (cons lambda-list body))
+                             (destructuring-bind ,lambda-list (cdr ,form) ,@body))))))))))
 
 (defun %call-with-macrolet (bindings function)
   "FUNCTION's value, called with the macros of the MACROLET BINDINGS in *LOCAL-MACROS*. A macro
 whose expander cannot be built is left out, so its uses are walked as written."
-  (let ((*local-macros* *local-macros*))
+  (let ((built '()))
     (dolist (binding bindings)
       (let ((expander (and (consp binding) (symbolp (car binding)) (%local-expander binding))))
         (when expander
-          (cl:push (cons (car binding) expander) *local-macros*))))
-    (funcall function)))
+          (cl:push (cons (car binding) expander) built))))
+    (let ((*local-macros* (append built *local-macros*)))
+      (funcall function))))
 
 (defun %macro-form-p (form)
   "True when FORM's operator is a macro, local to the walk or in *DEFINSTRUCTION-ENVIRONMENT*."
@@ -4244,10 +4281,7 @@ whose expander cannot be built is left out, so its uses are walked as written."
 
 (defun %expand-macro-form (form)
   "The expansion of the macro FORM, local macros first, or NIL when it fails."
-  (handler-case (let ((local (cdr (assoc (car form) *local-macros*))))
-                  (if local
-                      (funcall local form *definstruction-environment*)
-                      (macroexpand-1 form *definstruction-environment*)))
+  (handler-case (%expand-enclosing form)
     (error () nil)))
 
 (defun %uses-dynamic-cycles-p (form)
@@ -4265,10 +4299,6 @@ whose expansion fails is walked as written."
                (%uses-dynamic-cycles-p expansion)
                (some #'%uses-dynamic-cycles-p (rest form)))))
         (t (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))))
-
-(defun %negate-write-condition (condition)
-  (destructuring-bind (name steps polarity keys) condition
-    (list name steps (if (eq polarity :in) :not-in :in) keys)))
 
 (defun %literal-truth (form)
   "For a clause body FORM, :TRUE or :FALSE when it is a literal, else NIL."
@@ -4301,8 +4331,9 @@ the upcased place of a set!, setf, setq, incf or decf, or the stack a push, pop 
 interrupt-return moves, with the CHOICE-CASE clauses around it, outermost first, each
 (OPERAND STEPS :IN|:NOT-IN KEYS). Macros expand in *DEFINSTRUCTION-ENVIRONMENT* and
 MACROLET; a CHOICE-CASE is read before any expansion. A LET or LET* variable bound to a
-CHOICE-CASE whose clauses all return literals carries that choice into the branches of an
-IF, or of a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL."
+CHOICE-CASE carries the clauses that return non-nil, or nil, into the branches of an IF, or of
+a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL; a clause whose result is not a
+literal may return either."
   (let* ((descriptor (find-machine-descriptor machine))
          (writes '()))
     (labels ((note (symbol conditions)
@@ -4332,30 +4363,38 @@ IF, or of a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL."
              (walk-choice-case (spec clauses conditions vars)
                (loop for (clause . condition) in (clause-conditions spec clauses)
                      do (walk-list (rest clause) (cons condition conditions) vars)))
-             (truthy-condition (form)
-               ;; The condition under which a CHOICE-CASE FORM returns non-nil, when its clauses
-               ;; all return literals; an unmatched key signals, so the clauses cover every case.
+             (branch-conditions (form)
+               ;; The conditions under which a CHOICE-CASE FORM returns non-nil and nil, as two
+               ;; values, each NIL when no set of clauses tells them apart. A clause whose result
+               ;; is not a literal may return either; an unmatched key signals, so the clauses
+               ;; cover every case.
                (when (and (consp form) (eq (first form) 'choice-case) (consp (rest form)) (cddr form))
-                 (let ((truthy '()) (falsy '()))
+                 (let ((truthy '()) (falsy '()) (unknown '()) (all '()))
                    (loop for (clause . condition) in (clause-conditions (second form) (cddr form))
                          do (let ((truth (if (rest clause)
                                              (and (null (cddr clause)) (%literal-truth (second clause)))
                                              :false)))
-                              (unless truth (return-from truthy-condition nil))
-                              (if (eq truth :true) (cl:push condition truthy) (cl:push condition falsy))))
-                   (flet ((union-of (conditions polarity)
+                              (cl:push condition all)
+                              (case truth
+                                (:true (cl:push condition truthy))
+                                (:false (cl:push condition falsy))
+                                (t (cl:push condition unknown)))))
+                   (labels ((union-of (conditions polarity)
                             (when (every (lambda (condition) (eq (third condition) :in)) conditions)
-                              (list (first (first (or truthy falsy))) (second (first (or truthy falsy)))
-                                    polarity (remove-duplicates (reduce #'append conditions :key #'fourth))))))
-                     (or (union-of falsy :not-in)
-                         (union-of truthy :in))))))
+                              (list (first (first all)) (second (first all))
+                                    polarity (remove-duplicates (reduce #'append conditions :key #'fourth)))))
+                          (side (excluded included)
+                            (or (union-of excluded :not-in) (union-of included :in))))
+                     (if (and (null truthy) (null falsy))
+                         (values nil nil)
+                         (values (side falsy (append truthy unknown))
+                                 (side truthy (append falsy unknown))))))))
              (test-conditions (test vars)
                ;; The conditions holding in an IF's then branch and in its else branch.
-               (flet ((single (condition)
-                        (if condition
-                            (values (list condition) (list (%negate-write-condition condition)))
-                            (values nil nil))))
-                 (cond ((symbolp test) (single (cdr (assoc test vars))))
+               (flet ((pair (then else)
+                        (values (and then (list then)) (and else (list else)))))
+                 (cond ((symbolp test) (let ((entry (cdr (assoc test vars))))
+                                         (pair (first entry) (second entry))))
                        ((not (consp test)) (values nil nil))
                        ((and (%named-p (first test) "NOT" "NULL") (consp (rest test)))
                         (multiple-value-bind (then else) (test-conditions (second test) vars)
@@ -4365,19 +4404,21 @@ IF, or of a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL."
                        ((%named-p (first test) "OR")
                         (values nil (loop for part in (rest test)
                                           append (nth-value 1 (test-conditions part vars)))))
-                       (t (single (truthy-condition test))))))
+                       (t (multiple-value-bind (then else) (branch-conditions test)
+                            (pair then else))))))
              (walk-let (form conditions vars)
                (let ((sequential (eq (first form) 'let*))
                      (inner vars))
                  (dolist (binding (second form))
                    (let* ((variable (if (consp binding) (first binding) binding))
-                          (init (and (consp binding) (second binding)))
-                          (condition (and (consp binding)
-                                          (not (%assigns-variable-p variable (cddr form)))
-                                          (truthy-condition init))))
-                     (walk init conditions (if sequential inner vars))
-                     (setf inner (append (and condition (list (cons variable condition)))
-                                         (remove variable inner :key #'first)))))
+                          (init (and (consp binding) (second binding))))
+                     (multiple-value-bind (then else)
+                         (and (consp binding)
+                              (not (%assigns-variable-p variable (cddr form)))
+                              (branch-conditions init))
+                       (walk init conditions (if sequential inner vars))
+                       (setf inner (append (and (or then else) (list (list variable then else)))
+                                           (remove variable inner :key #'first))))))
                  (walk-list (cddr form) conditions inner)))
              (walk (form conditions vars)
                (cond ((atom form))

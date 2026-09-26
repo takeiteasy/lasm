@@ -243,8 +243,6 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| A stack pointer write under a condition other than a `choice-case` variable tested by `if`, `when`, `unless`, `and`, `or`, `cond`, `not` or `null` counts as unconditional; so does one under a variable bound to a computed `choice-case` result. | [#353](https://todo.sr.ht/~takeiteasy/lasm/353) |
-| A macro used inside another local macro's expander body is not expanded when looking for stack writes. | [#354](https://todo.sr.ht/~takeiteasy/lasm/354) |
-| `render-items` and `items-size` accept a width-tied line whose operand has no value until assembly, even when a tied variant writes the stack pointer; `assemble-items` checks the variant chosen. | [#352](https://todo.sr.ht/~takeiteasy/lasm/352) |
+| A stack pointer write under a condition other than a `choice-case`, or a variable bound to one, tested by `if`, `when`, `unless`, `and`, `or`, `cond`, `not` or `null` counts as unconditional. | [#357](https://todo.sr.ht/~takeiteasy/lasm/357) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

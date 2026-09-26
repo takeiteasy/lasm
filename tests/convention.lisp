@@ -769,9 +769,28 @@ ret
   (fiveam:is (null (%cv-drop-label 5 :forward t)))
   (fiveam:is (search "writes the stack pointer" (%cv-drop-label 70000 :forward t))))
 
-(fiveam:test rendering-accepts-a-width-tie-that-only-assembly-resolves
-  (fiveam:finishes (render-items '((:function f () (drop lowpage) (:return))) :backend 'cv-addx-abi))
-  (fiveam:finishes (items-size '((:function f () (drop lowpage) (:return))) :backend 'cv-addx-abi)))
+(defun %cv-sized-drop (value entry)
+  "The message ENTRY (:render, :size-widest or :size-narrowest) gives for a DROP of a label
+defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts."
+  (let ((items `(,@(and value `((:directive equ lowpage ,value)))
+                 (:function f () (drop lowpage) (:return)))))
+    (handler-case
+        (progn (ecase entry
+                 (:render (render-items items :backend 'cv-addx-abi))
+                 (:size-widest (items-size items :backend 'cv-addx-abi :assume :widest))
+                 (:size-narrowest (items-size items :backend 'cv-addx-abi :assume :narrowest)))
+               nil)
+      (items-malformed (condition) (princ-to-string condition)))))
+
+(fiveam:test rendering-and-sizing-judge-a-label-operand-by-the-laid-out-variant
+  (dolist (entry '(:render :size-widest :size-narrowest))
+    (fiveam:is (null (%cv-sized-drop 5 entry)))
+    (fiveam:is (search "writes the stack pointer" (%cv-sized-drop 70000 entry)))))
+
+(fiveam:test an-undefined-label-is-sized-by-the-assumption
+  (fiveam:is (search "writes the stack pointer" (%cv-sized-drop nil :render)))
+  (fiveam:is (search "writes the stack pointer" (%cv-sized-drop nil :size-widest)))
+  (fiveam:is (null (%cv-sized-drop nil :size-narrowest))))
 
 (fiveam:test an-operand-matching-no-variant-is-left-to-the-assembler
   (let ((items '((:function f () (addx (reg a) (imm 2)) (:return)))))
@@ -943,6 +962,14 @@ ret
     (let ((p nil))
       (when p (set! sp 0)))))
 
+(cv-definstruction-kind vallcomputed #x17
+  (let ((p (choice-case kind (cv-sel-sp (> a 0)) (otherwise (< a 1)))))
+    (when p (set! sp 0))))
+
+(cv-definstruction-kind vmixed #x18
+  (let ((p (choice-case kind (cv-sel-sp t) (cv-sel-pc nil) (otherwise (> a 0)))))
+    (if p (set! sp 0) (set! a 1))))
+
 (cv-definstruction-kind vand #x07
   (let ((p (choice-case kind (cv-sel-sp t) (otherwise nil)))
         (q (choice-case kind (cv-sel-pc t) (otherwise nil))))
@@ -1001,6 +1028,21 @@ ret
     (encoding (opcode #x16))
     (semantics (macrolet ((cv-outer-wipe () '(set! a 0))) (cv-outer-wipe)))))
 
+(macrolet ((cv-target () ''sp))
+  (definstruction cv-var vexpander
+    (encoding (opcode #x19))
+    (semantics (macrolet ((wipe () `(set! ,(cv-target) 0))) (wipe))))
+  (definstruction cv-var vexpander-sibling
+    (encoding (opcode #x1a))
+    (semantics (macrolet ((cv-target () ''a)
+                          (wipe () `(set! ,(cv-target) 0)))
+                 (wipe)))))
+
+(definstruction cv-var vexpander-nested
+  (encoding (opcode #x1b))
+  (semantics (macrolet ((cv-nested-target () ''sp))
+               (macrolet ((wipe () `(set! ,(cv-nested-target) 0))) (wipe)))))
+
 (defun %cv-var-writes (name)
   (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-var name))))
 
@@ -1030,8 +1072,16 @@ ret
   (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vhidden) :test #'string=)))
   (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vpsetq) :test #'string=))))
 
+(fiveam:test a-computed-clause-may-return-either-value
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)))) (%cv-var-writes 'vcomputed))
+             "the then branch keeps the clause that computes its result")
+  (fiveam:is (equal '(("SP" (kind nil :not-in (cv-sel-pc))) ("A" (kind nil :not-in (cv-sel-sp))))
+                    (%cv-var-writes 'vmixed))
+             "each branch excludes only the clauses that return the other value")
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vallcomputed))
+             "no clause tells the branches apart"))
+
 (fiveam:test a-variable-that-is-not-a-constant-choice-stays-unconditional
-  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vcomputed)))
   (fiveam:is (equal '("SP") (assoc "SP" (%cv-var-writes 'vassigned) :test #'string=)))
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vshadowed))))
 
@@ -1044,6 +1094,12 @@ ret
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vouter)))
   (fiveam:is (equal '(("A") ("SP")) (%cv-var-writes 'vouter-inner)))
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vouter-shadowed))))
+
+(fiveam:test an-expander-body-can-use-the-macros-bound-around-it
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander)))
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander-nested)))
+  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander-sibling))
+             "a sibling macro is not visible to an expander"))
 
 (fiveam:test a-local-macro-shadows-a-global-one-of-the-same-name
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vshadow))))

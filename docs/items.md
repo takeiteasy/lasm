@@ -122,10 +122,15 @@ A label the items define is sized as `assemble-items` sizes it, so a branch that
 reaches its target stays short. `.res` space and `.org` gaps count. `:origin`
 and `:memory` are `assemble-items`'s.
 
+A line in a function without a frame pointer whose operand has no value yet, and
+whose width-tied variants differ in writing the stack pointer, is rejected when the
+variant `:assume` picks writes it. See [stack writers](backends.md#stack-writers).
+
 ## Rendering
 
 `(render-items items :backend b)` returns the source text. Assembling it gives
-the same cells as `assemble-items`.
+the same cells as `assemble-items`. A width-tied stack-writer line is judged as
+`items-size` judges it at `:widest`.
 
 ```
 main:
@@ -166,7 +171,7 @@ bounded. Anything else signals `items-malformed`.
 | `(assemble-items-file path &key backend machine lexer origin memory)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
 | `(assemble-items items &key backend machine lexer origin memory file)` | Assembles a list of items. |
 | `(items-size items &key backend machine lexer origin memory assume)` | Returns the [size](#sizing) in cells. |
-| `(render-items items &key backend machine lexer memory)` | Returns the source text. |
+| `(render-items items &key backend machine lexer origin memory)` | Returns the source text. |
 
 The [command line](cli.md#items-programs) assembles `.lasm` files.
 
