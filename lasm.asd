@@ -49,7 +49,7 @@
 ;; Tests leave variables unused on purpose; muffle the compiler's style warnings
 ;; while building them.
 (defun lasm-quiet-compile (thunk)
-  (proclaim '(sb-ext:muffle-conditions style-warning))
+  #+sbcl (proclaim '(sb-ext:muffle-conditions style-warning))
   (funcall thunk))
 
 (asdf:defsystem #:lasm/test

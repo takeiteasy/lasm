@@ -435,6 +435,11 @@ fit, and whatever assembling signals for a program that no longer assembles."
   "Most bits an integer, or a ratio's numerator and denominator together, may
 have and still print within +SNAPSHOT-MAX-NUMBER-CHARS+.")
 
+(defun %non-finite-float-p (x)
+  #+sbcl (or (sb-ext:float-infinity-p x) (sb-ext:float-nan-p x))
+  #+ecl (or (ext:float-infinity-p x) (ext:float-nan-p x))
+  #-(or sbcl ecl) (or (/= x x) (> (abs x) most-positive-double-float)))
+
 (defun %check-snapshot-data (data)
   "Signal SNAPSHOT-UNWRITABLE unless DATA is finite, acyclic snapshot data."
   (let ((path (make-hash-table :test 'eq))
@@ -448,7 +453,7 @@ have and still print within +SNAPSHOT-MAX-NUMBER-CHARS+.")
                   (when (> (+ (integer-length (numerator node)) (integer-length (denominator node)))
                            +snapshot-max-number-bits+)
                     (fail "number too large for a snapshot")))
-                 (float (when (or (sb-ext:float-infinity-p node) (sb-ext:float-nan-p node))
+                 (float (when (%non-finite-float-p node)
                           (fail "non-finite float ~S" node)))
                  (cons (walk-list node))
                  (simple-vector (walk-vector node))

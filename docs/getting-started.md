@@ -12,11 +12,13 @@ git clone https://git.sr.ht/~takeiteasy/lasm ~/quicklisp/local-projects/lasm
 git clone https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
 ```
 
-Load LASM in SBCL:
+Load LASM in SBCL or ECL:
 
 ```lisp
 (ql:quickload :lasm)
 ```
+
+The test suite and the example runner need SBCL.
 
 For the [command line](cli.md), link both projects into Roswell's local
 projects directory:
