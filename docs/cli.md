@@ -116,7 +116,8 @@ Breakpoint 1 at $0002
 
 Commands from a pipe work the same way: `echo "continue" | lasm debug ...`.
 The [command list](debugger.md#command-dispatcher-and-repl) includes `save
-PATH` and `load PATH` for snapshots.
+[--binary] PATH` and `load PATH` for snapshots. Breakpoint conditions use the
+lexer the program was assembled with.
 
 ## Snapshots
 

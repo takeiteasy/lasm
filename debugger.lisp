@@ -105,7 +105,7 @@
   (shadow nil :type list)                   ; (array-key . copy) as of the newest checkpoint; NIL forces an anchor
   (next-id 1 :type (integer 1))
   (last-x-address nil)          ; so a bare `x` without an address continues from the last one
-  (qualified-names nil))        ; readable name -> SYMBOL-INFO, built on first use
+  (qualified-names nil))        ; readable name -> (SYMBOL-INFO . ASSEMBLY), built on first use
 
 (defun debug-session-assembly (session)
   "SESSION's newest attached ASSEMBLY, or NIL."
@@ -138,28 +138,38 @@ default) records nothing."
 ;;; Breakpoints
 
 (defun %qualified-names (session)
-  "SESSION's table from readable qualified name to SYMBOL-INFO, the first in
-line order when spellings collide."
+  "SESSION's table from readable qualified name to (SYMBOL-INFO . ASSEMBLY),
+the first in line order when spellings collide."
   (or (debug-session-qualified-names session)
       (let ((table (make-hash-table :test 'equal)))
         (dolist (assembly (debug-session-assemblies session))
           (dolist (info (assembly-symbols-list assembly))
             (let ((name (symbol-info-qualified-name info)))
               (unless (nth-value 1 (gethash name table))
-                (setf (gethash name table) info)))))
+                (setf (gethash name table) (cons info assembly))))))
         (setf (debug-session-qualified-names session) table))))
 
 (defun %session-symbol (session name scope)
   "The SYMBOL-INFO for NAME in SESSION's assemblies, the newest defining it
 first: a local under SCOPE, a global, or a local by its qualified spelling
-(\"count.loop\"). NIL if none."
-  (or (some (lambda (assembly)
-              (or (and scope (assembly-symbol assembly name :scope scope))
-                  (assembly-symbol assembly name)))
-            (debug-session-assemblies session))
-      (gethash name (%qualified-names session))))
+(\"count.loop\"), and the ASSEMBLY defining it, as (VALUES INFO ASSEMBLY). NIL
+if none."
+  (dolist (assembly (debug-session-assemblies session))
+    (let ((info (or (and scope (assembly-symbol assembly name :scope scope))
+                    (assembly-symbol assembly name))))
+      (when info
+        (return-from %session-symbol (values info assembly)))))
+  (let ((entry (gethash name (%qualified-names session))))
+    (and entry (values (car entry) (cdr entry)))))
 
-;; TODO: the label's value is its assembled address; a program loaded at another origin needs its load offset (#370)
+(defun %label-address (session info assembly)
+  "INFO's value as an address in SESSION's machine: a main-image label moves
+with its program's load offset, an assignment or banked label does not."
+  (if (and (eq (symbol-info-kind info) :label) (null (symbol-info-region info)))
+      (+ (symbol-info-value info)
+         (%assembly-load-offset (debug-session-machine session) assembly (debug-session-memory session)))
+      (symbol-info-value info)))
+
 (defun %resolve-breakpoint-address (session where &key scope bank)
   "WHERE as (VALUES ADDRESS REGION BANK): an integer as-is, or a label string
 resolved through %SESSION-SYMBOL against SESSION's attached ASSEMBLY. A label defined under .BANK carries its region and bank; BANK
@@ -182,7 +192,7 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
      (progn
        (unless (debug-session-assemblies session)
          (%debugger-usage-error "no assembly attached to this session -- cannot resolve label ~S" where))
-       (let ((info (%session-symbol session where scope)))
+       (multiple-value-bind (info assembly) (%session-symbol session where scope)
          (unless info
            (%debugger-usage-error "no symbol named ~S~@[ in scope ~S~]" where scope))
          (unless (eq (symbol-info-kind info) :label)
@@ -190,7 +200,7 @@ bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
                   where (symbol-info-kind info)))
          (when (and bank (not (eql bank (symbol-info-bank info))))
            (%debugger-usage-error "~S is not in bank ~D" where bank))
-         (values (symbol-info-value info) (symbol-info-region info) (symbol-info-bank info)))))))
+         (values (%label-address session info assembly) (symbol-info-region info) (symbol-info-bank info)))))))
 
 ;;; Conditions
 
@@ -317,12 +327,12 @@ on a syntax error or an unknown name."
         (dolist (node indexed) (%check-indexed session node))
         (dolist (name names)
           (multiple-value-bind (storage index) (%resolve-storage session name)
-            (let ((info (and (null storage) (%session-symbol session name scope))))
+            (multiple-value-bind (info assembly) (and (null storage) (%session-symbol session name scope))
               (cond
                 (storage
                  (let ((machine (debug-session-machine session)))
                    (cl:push (cons name (lambda () (%read-storage machine storage index))) readers)))
-                (info (setf (gethash name values) (symbol-info-value info)))
+                (info (setf (gethash name values) (%label-address session info assembly)))
                 (t (%debugger-usage-error "unknown name ~S in condition" name)))))))
       (values ast values readers))))
 
@@ -1556,7 +1566,7 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
-  save PATH [binary] write the machine's state to a snapshot file (binary: compact)
+  save [--binary] PATH write the machine's state to a snapshot file (--binary: compact)
   load PATH          restore the machine's state from a snapshot file
   where              show pc, current instruction, and source context
   help               this text
@@ -1717,13 +1727,13 @@ this call."
                            "bank: usage: bank REGION N"))))
                   ((string-equal cmd "where") (debug-where-text session))
                   ((string-equal cmd "save")
-                   (if (zerop (length rest))
-                       "save: missing path"
-                       (multiple-value-bind (path format) (%split-save-arguments rest)
-                         (write-snapshot (machine-snapshot (debug-session-machine session)
-                                                           :assembly (debug-session-assembly session))
-                                         path :format format)
-                         (format nil "saved ~A~%" path))))
+                   (multiple-value-bind (path format) (%split-save-arguments rest)
+                     (if (zerop (length path))
+                         "save: missing path"
+                         (progn (write-snapshot (machine-snapshot (debug-session-machine session)
+                                                                  :assembly (debug-session-assembly session))
+                                                path :format format)
+                                (format nil "saved ~A~%" path)))))
                   ((string-equal cmd "load")
                    (if (zerop (length rest))
                        "load: missing path"
@@ -1740,13 +1750,17 @@ this call."
       (values (if stream (progn (write-string text stream) nil) text) quit-p))))
 
 (defun %split-save-arguments (rest)
-  "(VALUES PATH FORMAT) for the arguments of the save command: PATH, then an
-optional trailing word `binary`."
+  "(VALUES PATH FORMAT) for the arguments of the save command: an optional
+leading `--binary`, then PATH."
   (let* ((line (string-trim '(#\Space #\Tab) rest))
-         (space (position-if (lambda (char) (member char '(#\Space #\Tab))) line :from-end t)))
-    (if (and space (plusp space) (string-equal "binary" line :start2 (1+ space)))
-        (values (string-trim '(#\Space #\Tab) (subseq line 0 space)) :binary)
-        (values rest :sexp))))
+         (flag "--binary")
+         (flagged (and (>= (length line) (length flag))
+                       (string= flag line :end2 (length flag))
+                       (or (= (length line) (length flag))
+                           (member (char line (length flag)) '(#\Space #\Tab))))))
+    (if flagged
+        (values (string-trim '(#\Space #\Tab) (subseq line (length flag))) :binary)
+        (values line :sexp))))
 
 (defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-dbg) "))
   "A thin read/dispatch/print loop over DEBUG-COMMAND -- the ticket's

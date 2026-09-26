@@ -40,7 +40,9 @@ per assembly, and `save` embeds the newest. `:pc` and `:memory` override the mac
 ```
 
 `where` is an address or label. Use `:scope` for a local label. An attached
-assembly is required for label lookup; `.equ` names are not addresses.
+assembly is required for label lookup; `.equ` names are not addresses. A label
+resolves to its address where the program was loaded, so a program assembled at 0
+and loaded at `$40` breaks at `here` = `$41`. Labels in conditions do the same.
 Setting a breakpoint at the same address and bank replaces the existing
 one. A bank-qualified breakpoint stops only while that bank is mapped.
 
@@ -158,8 +160,8 @@ cell of a banked register, `print ds[1]` a live stack slot (bottom first), and
 (`print v[3] + 1`); an out-of-range index or dead slot is an error message. Memory inspection uses
 `mpeek`, avoiding device read effects. `where` shows PC with its nearest label (`pc = 0103 <count.loop+1>`),
 nearby decoded instructions, and an attached source line (`file:line:text` inside an included file). With an attached assembly,
-declared data renders as `.byte` and labels come from the main image and
-the mapped bank.
+declared data renders as `.byte` and labels come from the main image (at its
+load address) and the mapped bank.
 
 ## Writing state
 
@@ -247,7 +249,7 @@ and prints until `quit` or end of input. `lasm debug` runs it from the
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |
 | `bank REGION N` | Map a bank. |
-| `save PATH [binary]`, `load PATH` | Write the machine's [snapshot](snapshots.md) to a file (`binary` for the compact format; the session's program source is embedded), or restore it from either format. `load` rebuilds device objects and drops recorded hits; step-back history continues from the restored state. A bad or missing file is an error message. |
+| `save [--binary] PATH`, `load PATH` | Write the machine's [snapshot](snapshots.md) to a file (`--binary` for the compact format; the session's program source is embedded), or restore it from either format. `load` rebuilds device objects and drops recorded hits; step-back history continues from the restored state. A bad or missing file is an error message. |
 | `help`, `quit` | Show commands or end the session. |
 
 `set` evaluates `EXPR` like a breakpoint condition, so `set x = x + 1` and

@@ -339,10 +339,10 @@ there is one."
       (%usage-error "--history needs a positive integer, got ~D" history))
     (%cli-snapshot-format options)
     (multiple-value-bind (assembly snapshot) (%cli-program file machine lexer options)
-     ;; TODO: :lexer is not passed, so breakpoint conditions use the default lexer (#285)
      (let ((session (make-debug-session (%cli-loaded-machine assembly machine snapshot)
                                         :assembly assembly
                                         :memory (getf (assembly-parameters assembly) :memory)
+                                        :lexer (getf (assembly-parameters assembly) :lexer)
                                         :history history)))
       (dolist (where (getf options :breaks))
         (write-string (debug-command session (format nil "break ~A" where)) out))

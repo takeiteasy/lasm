@@ -605,6 +605,17 @@ hlt" :machine 'disasm-test-machine)))
             for l2 in from-cells
             do (fiveam:is (string= (disassembly-line-text l1) (disassembly-line-text l2)))))))
 
+(fiveam:test disassemble-memory-follows-a-relocated-program
+  (let* ((m (make-machine 'disasm-test-machine))
+         (a (assemble "start: ldx #10
+loop: hlt
+        .byte $A2, $0A" :machine 'disasm-test-machine)))
+    (load-program m a :origin #x40)
+    (let ((lines (disassemble-memory m :start #x40 :count 5 :assembly a)))
+      (fiveam:is (equal "start" (disassembly-line-label (first lines))))
+      (fiveam:is (equal "loop" (disassembly-line-label (second lines))))
+      (fiveam:is (search ".byte" (disassembly-line-text (third lines)))))))
+
 ;;; Round trip
 
 (fiveam:test round-trip-assemble-disassemble-assemble

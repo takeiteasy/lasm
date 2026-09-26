@@ -766,6 +766,14 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; snapshotted.
   (programs nil :type list))
 
+(defun %assembly-load-offset (machine assembly memory)
+  "The load offset of the newest program of ASSEMBLY loaded into MACHINE's
+MEMORY, 0 when it was never loaded there."
+  (let ((program (find-if (lambda (p) (and (eq assembly (loaded-program-assembly p))
+                                           (or (null memory) (eq memory (loaded-program-memory p)))))
+                          (machine-programs machine))))
+    (if program (%loaded-program-offset program) 0)))
+
 (defun machine-program (machine)
   "The ASSEMBLY of MACHINE's newest LOADED-PROGRAM, or NIL."
   (let ((program (first (machine-programs machine))))

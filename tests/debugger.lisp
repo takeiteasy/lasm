@@ -1328,6 +1328,29 @@ count: ldx #3
       (setf (sref m 'pc) #x302)
       (fiveam:is (search "2:.loop:  dex" (debug-where-text session))))))
 
+(defun %dbg-relocated-session ()
+  (let ((m (make-machine 'emu-test-machine))
+        (a (%dbg-assembly)))
+    (load-program m a :origin #x300)
+    (make-debug-session m)))
+
+(fiveam:test debug-break-by-label-follows-a-relocated-program
+  (let ((session (%dbg-relocated-session)))
+    (fiveam:is (= #x302 (breakpoint-address (debug-break session "count.loop"))))
+    (fiveam:is (= #x302 (breakpoint-address (debug-break session ".loop" :scope "count"))))))
+
+(fiveam:test debug-condition-label-follows-a-relocated-program
+  (let ((session (%dbg-relocated-session)))
+    (debug-break session #x302 :condition "pc == count.loop")
+    (fiveam:is (eq :breakpoint (debug-continue session)))
+    (fiveam:is (= #x302 (%pc session)))))
+
+(fiveam:test where-disassembles-a-relocated-program-with-its-labels
+  (let ((session (%dbg-relocated-session)))
+    (setf (sref (debug-session-machine session) 'pc) #x302)
+    (fiveam:is (search "pc = 0302 <count.loop>" (debug-where-text session)))
+    (fiveam:is (search "0302:" (debug-where-text session)))))
+
 (fiveam:test where-names-the-nearest-label-and-offset
   (let ((m (make-machine 'emu-test-machine))
         (a (%dbg-assembly)))
@@ -1805,7 +1828,7 @@ loop:   sta $10
           (name (namestring path)))
       (fiveam:is (search "saved" (debug-command session (format nil "save ~A" name))))
       (fiveam:is (not (%binary-snapshot-file-p path)))
-      (fiveam:is (search "saved" (debug-command session (format nil "save ~A binary" name))))
+      (fiveam:is (search "saved" (debug-command session (format nil "save --binary ~A" name))))
       (fiveam:is (%binary-snapshot-file-p path))
       (fiveam:is (getf (cdr (read-snapshot path)) :program))
       (fiveam:is (search "loaded" (debug-command session (format nil "load ~A" name)))))))
@@ -1813,10 +1836,14 @@ loop:   sta $10
 (fiveam:test debug-save-binary-needs-a-path
   (let ((session (%dbg-file-session)))
     (fiveam:is (search "missing path" (debug-command session "save")))
-    (multiple-value-bind (path format) (%split-save-arguments "binary")
-      (fiveam:is (equal '("binary" :sexp) (list path format))))
-    (multiple-value-bind (path format) (%split-save-arguments "a b.snap  BINARY")
-      (fiveam:is (equal '("a b.snap" :binary) (list path format))))))
+    (fiveam:is (search "missing path" (debug-command session "save --binary")))
+    (dolist (case '(("binary" "binary" :sexp)
+                    ("my binary" "my binary" :sexp)
+                    ("--binary a b.snap" "a b.snap" :binary)
+                    ("--binary my binary" "my binary" :binary)
+                    ("--binaryx" "--binaryx" :sexp)))
+      (multiple-value-bind (path format) (%split-save-arguments (first case))
+        (fiveam:is (equal (rest case) (list path format)))))))
 
 (fiveam:test session-defaults-to-every-retained-program
   (multiple-value-bind (m bios program) (%bios-and-program)

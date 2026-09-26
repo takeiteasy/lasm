@@ -357,6 +357,14 @@
     (fiveam:is (search "breakpoint" out))
     (fiveam:is (search "Bye." out))))
 
+(fiveam:test cli-debug-conditions-use-the-assemblys-lexer
+  (multiple-value-bind (status out)
+      (%run-cli (%cli-args "debug" "examples/cli/counter.asm")
+                (%debug-lines "break count.loop if x == %1010" "quit"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "Breakpoint 1" out))
+    (fiveam:is (not (search "Error" out)))))
+
 (fiveam:test cli-debug-ends-at-end-of-input
   (multiple-value-bind (status out) (%run-cli (%cli-args "debug" "examples/cli/counter.asm") "step")
     (fiveam:is (= 0 status))

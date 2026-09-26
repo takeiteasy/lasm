@@ -593,11 +593,12 @@ image was loaded into it, else NIL."
         when (< lo (min hi start)) collect (cons lo (min hi start))
         when (< (max lo end) hi) collect (cons (max lo end) hi)))
 
-(defun %live-data-regions (assembly machine memory)
+(defun %live-data-regions (assembly machine memory offset)
   "ASSEMBLY's data regions as laid out in MACHINE's MEMORY: the main image's,
-with each banked region's window replaced by its mapped bank's image, or
-kept only if the main image was loaded into that bank."
-  (let ((regions (assembly-data-regions assembly))
+moved by the load OFFSET, with each banked region's window replaced by its
+mapped bank's image, or kept only if the main image was loaded into that bank."
+  (let ((regions (loop for (start . end) in (assembly-data-regions assembly)
+                       collect (cons (+ start offset) (+ end offset))))
         (windows (%banked-windows assembly machine memory)))
     (loop for (region nil source) in windows
           unless (eq source :main)
@@ -610,12 +611,22 @@ kept only if the main image was loaded into that bank."
                                                                      :bank bank))))
     regions))
 
-;; TODO: labels and data regions ignore a relocated program's load offset (#370)
-(defun %live-symbol-info (assembly machine memory)
-  "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's
-outside banked windows, and inside each window those of its mapped bank or
-of the main image when that was loaded into it."
-  (let ((result (%image-symbol-info assembly nil nil))
+(defun %main-image-symbol-info (assembly offset)
+  "ASSEMBLY's main-image label entries, their values moved by the load OFFSET."
+  (let ((result (%image-symbol-info assembly nil nil)))
+    (unless (zerop offset)
+      (maphash (lambda (name info)
+                 (let ((moved (copy-symbol-info info)))
+                   (incf (symbol-info-value moved) offset)
+                   (setf (gethash name result) moved)))
+               result))
+    result))
+
+(defun %live-symbol-info (assembly machine memory offset)
+  "ASSEMBLY's label entries visible in MACHINE's MEMORY: the main image's,
+moved by the load OFFSET, outside banked windows, and inside each window those
+of its mapped bank or of the main image when that was loaded into it."
+  (let ((result (%main-image-symbol-info assembly offset))
         (windows (%banked-windows assembly machine memory)))
     (loop for (region nil source) in windows
           unless (eq source :main)
@@ -623,7 +634,7 @@ of the main image when that was loaded into it."
                           (when (<= (memory-region-start region) (symbol-info-value info)
                                     (memory-region-end region))
                             (remhash name result)))
-                        (%image-symbol-info assembly nil nil)))
+                        (%main-image-symbol-info assembly offset)))
     (loop for (region bank source) in windows
           when (eq source :own)
             do (maphash (lambda (name info) (setf (gethash name result) info))
@@ -719,7 +730,7 @@ memory's contents), resolves the label/.EQU ambiguity and works standalone,
 without SYMBOLS -- see DISASSEMBLE-CELLS.
 
 ASSEMBLY (#181) supplies SYMBOL-INFO and DATA-REGIONS (#82) when those are
-not given: the main image's, except that inside a banked region whose mapped
+not given: the main image's, at the address ASSEMBLY was loaded to, except that inside a banked region whose mapped
 bank has an image in ASSEMBLY, that bank's (#234). DATA-REGIONS defaults to
 :AUTO, which is NIL without ASSEMBLY; pass NIL to decode everything.
 
@@ -733,11 +744,12 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))
+         (offset (if assembly (%assembly-load-offset machine assembly memory) 0))
          (data-regions (if (eq data-regions :auto)
-                           (and assembly (%live-data-regions assembly machine memory))
+                           (and assembly (%live-data-regions assembly machine memory offset))
                            data-regions))
          (symbol-info (or symbol-info
-                          (and assembly (%live-symbol-info assembly machine memory))))
+                          (and assembly (%live-symbol-info assembly machine memory offset))))
          (lines (%disassemble-raw-lines read-cell start end machine-name memory
                                         (%machine-cell-width machine-name memory) data-regions)))
     (%render-lines! lines lexer labels suffixes symbols symbol-info)))
