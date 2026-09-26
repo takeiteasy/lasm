@@ -709,21 +709,53 @@ call .inner" :machine 'callfoo))
   (fiveam:is (null (backend-descriptor-stack-writers (find-backend 'callfoo-abi)))))
 
 (fiveam:test stack-writers-are-derived-from-instruction-semantics
-  (fiveam:is (equal '("ADDS" "POPR" "PUSH" "PUSHV" "SUBS") (backend-stack-writers 'callfoo-abi)))
+  (fiveam:is (equal '(("ADDS" "CALL-SPI") ("POPR" "CALL-REG") ("PUSH" "CALL-IMM")
+                      ("PUSHV" "CALL-IMM" "CALL-REG" "CALL-SP-IDX") ("SUBS" "CALL-SPI"))
+                    (backend-stack-writers 'callfoo-abi)))
+  (fiveam:is (equal '(("ADDS" "CALL-SPI") ("MOVSF") ("POPFP") ("POPR" "CALL-REG") ("PUSH" "CALL-IMM")
+                      ("PUSHFP") ("PUSHV" "CALL-IMM" "CALL-REG" "CALL-SP-IDX") ("SUBS" "CALL-SPI"))
+                    (backend-stack-writers 'callfoo-fp-abi)))
   (flet ((written (mnemonic)
            (mapcar #'instruction-descriptor-written-registers (find-instruction-variants 'callfoo mnemonic))))
-    (fiveam:is (equal '(("SP")) (written "PUSH")))
-    (fiveam:is (equal '(("SP" "PC")) (written "CALL")))
-    (fiveam:is (equal '((nil nil)) (list (written "MOVV"))))
+    (fiveam:is (equal '((("SP"))) (written "PUSH")))
+    (fiveam:is (equal '((("SP") ("PC"))) (written "CALL")))
+    (fiveam:is (equal '(nil nil) (written "MOVV")))
     (fiveam:is (equal '(nil) (written "HLT")))))
 
 (fiveam:test a-stack-writers-clause-adds-and-excepts
   (eval '(defbackend bk-sw-x (:extends callfoo-abi) (stack-writers movv :except push pushv)))
-  (fiveam:is (equal '("ADDS" "MOVV" "POPR" "SUBS") (backend-stack-writers 'bk-sw-x)))
+  (fiveam:is (equal '(("ADDS" "CALL-SPI") ("MOVV" "CALL-RI" "CALL-RR") ("POPR" "CALL-REG") ("SUBS" "CALL-SPI"))
+                    (backend-stack-writers 'bk-sw-x)))
   (fiveam:is (equal '("MOVV") (backend-descriptor-stack-writers (find-backend 'bk-sw-x))))
   (fiveam:is (equal '("PUSH" "PUSHV") (backend-descriptor-stack-writer-exceptions (find-backend 'bk-sw-x))))
   (fiveam:signals backend-definition-error
     (eval '(defbackend bk-sw-x2 (:extends callfoo-abi) (stack-writers push :except push)))))
+
+(fiveam:test a-stack-writers-entry-names-a-mode
+  (eval '(defbackend bk-sw-m (:extends callfoo-abi)
+          (stack-writers (movv call-rr) pushv :except (pushv call-reg) (subs "call-spi"))))
+  (fiveam:is (equal '(("ADDS" "CALL-SPI") ("MOVV" "CALL-RR") ("POPR" "CALL-REG") ("PUSH" "CALL-IMM")
+                      ("PUSHV" "CALL-IMM" "CALL-SP-IDX"))
+                    (backend-stack-writers 'bk-sw-m)))
+  (fiveam:is (equal '(("MOVV" "CALL-RR") "PUSHV") (backend-descriptor-stack-writers (find-backend 'bk-sw-m))))
+  (fiveam:is (equal '(("PUSHV" "CALL-REG") ("SUBS" "CALL-SPI"))
+                    (backend-descriptor-stack-writer-exceptions (find-backend 'bk-sw-m)))))
+
+(fiveam:test a-bad-stack-writers-entry-is-rejected
+  (dolist (clause '((stack-writers (movv call-imm))
+                    (stack-writers (movv nope))
+                    (stack-writers (movv))
+                    (stack-writers (movv call-rr call-ri))
+                    (stack-writers (ret call-reg))
+                    (stack-writers (nope call-rr))
+                    (stack-writers (movv call-rr) (movv call-rr))
+                    (stack-writers movv (movv call-rr))
+                    (stack-writers (pushv call-reg) :except pushv)
+                    (stack-writers (pushv call-reg) :except (pushv call-reg))))
+    (fiveam:signals backend-definition-error
+      (eval `(defbackend bk-sw-bad (:extends callfoo-abi) ,clause))))
+  (fiveam:finishes
+    (eval '(defbackend bk-sw-ok (:extends callfoo-abi) (stack-writers pushv :except (pushv call-reg))))))
 
 (fiveam:test a-child-without-op-the-parent-dropped-still-rebuilds
   (eval '(defbackend bk-wo-parent (:machine callfoo)

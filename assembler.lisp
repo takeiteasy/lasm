@@ -421,6 +421,13 @@ STATEMENT while *OPERAND-CACHE* is bound. A COMPUTE that signals is not cached."
               (cl:push (cons key values) (gethash statement *operand-cache*))
               (values-list values))))))
 
+(defun %variants-in-mode (variants mode)
+  "The VARIANTS whose addressing mode is MODE's."
+  (remove-if-not (lambda (v)
+                   (let ((m (instruction-descriptor-mode v)))
+                     (and m (eq (mode-descriptor-name m) (mode-descriptor-name mode)))))
+                 variants))
+
 (defun %narrow-to-forced-mode (statement variants)
   "STATEMENT carries a mnemonic mode suffix (e.g. \"w\" from \"lda.w\"). Return
 (VALUES narrowed-variants mode): the VARIANTS using the suffix's mode -- more
@@ -430,12 +437,7 @@ ASSEMBLY-ERROR if no mode has the suffix or the mnemonic has no variant using
 it."
   (let* ((suffix (statement-mode-suffix statement))
          (mode (find-mode-by-suffix suffix))
-         (narrowed (and mode
-                        (remove-if-not (lambda (v)
-                                         (and (instruction-descriptor-mode v)
-                                              (eq (mode-descriptor-name (instruction-descriptor-mode v))
-                                                  (mode-descriptor-name mode))))
-                                       variants))))
+         (narrowed (and mode (%variants-in-mode variants mode))))
     (unless mode
       (%assembly-error (statement-line statement)
                        "~A: no addressing mode has suffix ~S"
@@ -473,6 +475,30 @@ STATEMENT's mnemonic declares as a :SUFFIX for that hole."
                         "~A: operand ~S: no variant has forcing prefix ~S -- ~:[byte-encoded ~
 operands are forced with a mnemonic suffix~;accepted prefixes: ~:*~{~A~^, ~}~]"
                         (statement-mnemonic statement) (%operand-text tokens) prefix accepted)))
+
+(defun %syntax-candidates (variants tokens &key (floor 0)
+                                                 (match (lambda (mode) (try-match-operand-mode tokens mode))))
+  "(VARIANT ASTS CHOICES SELECTIONS HOLE-PREFIXES TIES SCORE PICKS) for each of VARIANTS whose
+mode matches TOKENS, is at least FLOOR cells, and is eligible for the ONE-OF alternatives
+matched (#104/#126) and the forcing prefixes written. MATCH maps a mode to
+TRY-MATCH-OPERAND-MODE's values."
+  (loop for v in variants
+        for mode = (instruction-descriptor-mode v)
+        for (asts okp choices selections hole-prefixes ties score picks)
+          = (multiple-value-list
+             (if mode
+                 (funcall match mode)
+                 (values nil (zerop (length tokens)) nil nil nil nil (cons 0 0) nil)))
+        when (and okp (>= (instruction-descriptor-size v) floor)
+                  (%choices-eligible-p v choices selections)
+                  (%hole-prefixes-eligible-p v hole-prefixes))
+          collect (list v asts choices selections hole-prefixes ties score picks)))
+
+(defun %best-scored (candidates)
+  "The %SYNTAX-CANDIDATES whose match score is best."
+  (when candidates
+    (let ((best (reduce (lambda (a b) (if (%score> b a) b a)) candidates :key #'seventh)))
+      (remove-if-not (lambda (c) (equal (seventh c) best)) candidates))))
 
 (defvar *unresolved-width* :narrowest
   "The width an operand naming a label the assembly never defines is sized at:
@@ -592,28 +618,18 @@ alternative's :STRICT once a value exists to check it against."
          (tokens (statement-operand-tokens statement))
          (anchor (and (plusp (length tokens)) (aref tokens 0)))
          (candidates
-           (loop for v in variants
-                 for mode = (instruction-descriptor-mode v)
-                 for (asts okp choices selections hole-prefixes ties score picks)
-                   = (multiple-value-list
-                      (if mode
-                          (%cached-operands statement mode
-                                            (lambda () (try-match-operand-mode tokens mode)))
-                          (values nil (zerop (length tokens)) nil nil nil nil (cons 0 0) nil)))
-                 when (and okp (>= (instruction-descriptor-size v) floor)
-                           ;; #104/#126: drop a candidate whose CHOICE-
-                           ;; selected word field(s) or hole-selected
-                           ;; sub-opcode don't match what this operand's
-                           ;; ONE-OF hole(s) actually chose -- vacuously T
-                           ;; for a candidate with no such selector at all.
-                           (%choices-eligible-p v choices selections)
-                           (%hole-prefixes-eligible-p v hole-prefixes))
-                   ;; #115: CHOICES rides along with each candidate (not just
-                   ;; used to filter, above) so %CHECK-STRICT-OPERAND-RANGE!
-                   ;; can read a hole's own matched ONE-OF alternative's
-                   ;; :STRICT once ENCODE has a value to check it against.
-                   collect (list v (%qualify-locals-in-asts! asts scope (statement-line statement))
-                                 choices selections hole-prefixes ties score picks))))
+           (mapcar (lambda (c)
+                     (destructuring-bind (v asts &rest more) c
+                       ;; #115: CHOICES rides along with each candidate (not just
+                       ;; used to filter) so %CHECK-STRICT-OPERAND-RANGE! can read
+                       ;; a hole's own matched ONE-OF alternative's :STRICT once
+                       ;; ENCODE has a value to check it against.
+                       (list* v (%qualify-locals-in-asts! asts scope (statement-line statement)) more)))
+                   (%syntax-candidates variants tokens
+                                       :floor floor
+                                       :match (lambda (mode)
+                                                (%cached-operands statement mode
+                                                                  (lambda () (try-match-operand-mode tokens mode))))))))
     (when (null candidates)
       (let ((prefixes (loop for v in variants
                             for mode = (instruction-descriptor-mode v)
@@ -634,8 +650,7 @@ alternative's :STRICT once a value exists to check it against."
 accepts ~A"
                            (statement-mnemonic statement) (%operand-text tokens)
                            (%accepted-modes-text variants)))
-    (let ((best (reduce (lambda (a b) (if (%score> b a) b a)) candidates :key #'seventh)))
-      (setf candidates (remove-if-not (lambda (c) (equal (seventh c) best)) candidates)))
+    (setf candidates (%best-scored candidates))
     (let* ((width-key (lambda (c) (instruction-descriptor-size (first c))))
            ;; STABLE-SORT twice, not once-and-REVERSE: reversing a stable
            ;; descending sort breaks ties in the *wrong* order (last

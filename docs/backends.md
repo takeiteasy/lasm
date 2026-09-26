@@ -31,7 +31,7 @@ package. A mistake signals `backend-definition-error`.
 | `(operands (KIND MODE)...)` | [Operand kinds](#operand-kinds). |
 | `(ops (NAME (PARAM...) FORM...)...)` | [Operations](#operations). |
 | `(branches MNEMONIC...)` | The instructions whose operands are [branch targets](#branches). |
-| `(stack-writers [MNEMONIC...] [:except MNEMONIC...])` | Adds to and removes from the [instructions that write the stack pointer](#stack-writers). |
+| `(stack-writers [ENTRY...] [:except ENTRY...])` | Adds to and removes from the [variants that write the stack pointer](#stack-writers). An entry is `MNEMONIC` or `(MNEMONIC MODE)`. |
 | `(without-ops NAME...)` | Drops [inherited](#inheritance) operations. |
 
 Each clause is optional and may appear once.
@@ -150,21 +150,37 @@ instruction is checked.
 
 ## Stack writers
 
-An instruction is a stack writer when its `semantics` set the stack pointer and
-not the program counter, so `call`, `ret` and `rti` are not.[^writers] In a
-function without a frame pointer, a raw instruction or undeclared `(:op)`
-expansion using one is `items-malformed`: the
+An instruction variant is a stack writer when its `semantics` set the stack
+pointer and not the program counter, so `call`, `ret` and `rti` are
+not.[^writers] In a function without a frame pointer, a raw instruction or
+undeclared `(:op)` expansion using one is `items-malformed`: the
 [stack depth](conventions.md#stack-depth) cannot follow it. Use
 `(:push)`/`(:pop)`, an `(:op)` that declares `:pushes`/`:pops`, or a frame
 pointer.
 
-`(stack-writers movv :except push)` adds `movv` to the derived instructions and
-removes `push` from them. `(backend-stack-writers backend)` returns the
-resulting mnemonics.
+The variant the operands select decides, as the assembler selects it. With
+`addx` taking `a, b` in one mode and `sp, #n` in another, `addx a, b` is
+accepted and `addx sp, #2` is rejected. A write under a `choice-case` clause
+counts for that alternative only.
+
+`(stack-writers ENTRY... :except ENTRY...)` adds to and removes from those
+variants. An entry is a mnemonic, covering every mode, or `(MNEMONIC MODE)`:
+
+| Clause | Effect |
+| --- | --- |
+| `(stack-writers movv)` | Every `movv` variant is a stack writer. |
+| `(stack-writers (movv call-rr))` | Only the `call-rr` variant is. |
+| `(stack-writers pushv :except (pushv call-reg))` | Every `pushv` variant but `call-reg`. |
+| `(stack-writers (pushv call-reg) :except pushv)` | Error: an `:except` entry covers an added one. |
+
+`(backend-stack-writers backend)` returns one `(MNEMONIC MODE...)` per
+instruction with a stack-writing variant, sorted; `(MNEMONIC)` stands for a
+variant without a mode.
 
 ```lisp
 (backend-stack-writers 'callfoo-abi)
-;; => ("ADDS" "POPR" "PUSH" "PUSHV" "SUBS")
+;; => (("ADDS" "CALL-SPI") ("POPR" "CALL-REG") ("PUSH" "CALL-IMM")
+;;     ("PUSHV" "CALL-IMM" "CALL-REG" "CALL-SP-IDX") ("SUBS" "CALL-SPI"))
 ```
 
 ## Inheritance
@@ -204,9 +220,9 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | Function | Returns |
 | --- | --- |
 | `(find-backend name)` | The `backend-descriptor`; `unknown-backend` if none. |
-| `(backend-stack-writers name)` | The [stack writers](#stack-writers), upcased and sorted. |
+| `(backend-stack-writers name)` | The [stack writers](#stack-writers) as `(MNEMONIC MODE...)`, upcased and sorted. |
 | `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
 
-[^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros. A mnemonic counts when any of its variants writes the stack pointer. A write through an operand place is not seen; list the mnemonic in `stack-writers`. See the [limitations](conventions.md#limitations).
+[^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros, with the `choice-case` clauses around each. A write under `if`, `when` or a variable is unconditional. When the operand syntax leaves several variants, such as modes told apart only by value width, the instruction is a stack writer if any of them is. See the [limitations](conventions.md#limitations).

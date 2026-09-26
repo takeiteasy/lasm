@@ -269,9 +269,10 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; through a macro, so its declared cost is only a lower bound. See
   ;; %USES-DYNAMIC-CYCLES-P.
   (variable-cycles nil :type boolean)
-  ;; Upcased names of the registers this mode's (semantics ...) sets, pushes
-  ;; to or pops from. Only what the definition's own forms show: a write
-  ;; through an operand place is not seen. See %WRITTEN-REGISTERS.
+  ;; Each (NAME CONDITION...) for a register this mode's (semantics ...) sets,
+  ;; pushes to or pops from: its upcased name and the CHOICE-CASE clauses
+  ;; around the write, outermost first, each (OPERAND STEPS :IN|:NOT-IN KEYS).
+  ;; See %WRITTEN-REGISTERS and %WRITE-CONDITIONS-HOLD-P.
   (written-registers nil :type list)
   ;; Named ONE-OF selections that do not have an operand hole, such as a
   ;; literal-only alternative.  This is separate from the hole-aligned
@@ -2298,6 +2299,27 @@ next step continues in. A slot in PREFIX names one of several."
   "The head name of the subkey INDEX's hole matched at STEPS, or NIL."
   (%key-component-at (%matched-choice-key choices index mapping) steps))
 
+(defun %choice-case-key (variant name steps)
+  "The key a (CHOICE-CASE NAME ...) in VARIANT's semantics dispatches on when VARIANT runs;
+STEPS (%PREFIX-STEPS) selects a nested component."
+  (let* ((choices (or (instruction-descriptor-word-fields variant)
+                      (instruction-descriptor-sub-choices variant)))
+         (names (instruction-descriptor-operand-names variant))
+         (index (position name names))
+         (key (cond (index (%matched-choice-key choices index))
+                    ((and (eq name 'operand) names)
+                     (%matched-choice-key choices 0 (instruction-descriptor-semantics-operand-map variant)))
+                    (t (cdr (assoc name (instruction-descriptor-choice-selections variant)))))))
+    (if steps (%key-component-at key steps) (%key-head key))))
+
+(defun %write-conditions-hold-p (conditions variant)
+  "True when every CHOICE-CASE condition of a %WRITTEN-REGISTERS entry holds for VARIANT."
+  (every (lambda (condition)
+           (destructuring-bind (name steps polarity keys) condition
+             (let ((in (member (%choice-case-key variant name steps) keys)))
+               (if (eq polarity :in) in (not in)))))
+         conditions))
+
 (defun %word-machine-p (machine-name)
   "T if MACHINE-NAME's DEFMACHINE declared an (instruction-word ...) clause
 (machine.lisp, #20) -- DEFINSTRUCTION branches on this to pick the
@@ -4192,54 +4214,70 @@ is walked as written."
         (t (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))))
 
 (defun %written-registers (forms machine)
-  "The upcased names of the registers FORMS, semantics forms for MACHINE, write:
-the places of set!, setf, setq, incf and decf, and the stack pointer a push,
-pop or interrupt-return moves. Macros expand in *DEFINSTRUCTION-ENVIRONMENT*."
-  ;; TODO: a write through an operand place, such as (set! (r dst) ...) with
-  ;; dst naming the stack pointer, is not seen (#343).
+  "Each (NAME CONDITION...) for a register FORMS, semantics forms for MACHINE, write:
+the upcased place of a set!, setf, setq, incf or decf, or the stack a push, pop or
+interrupt-return moves, with the CHOICE-CASE clauses around it, outermost first, each
+(OPERAND STEPS :IN|:NOT-IN KEYS). Macros expand in *DEFINSTRUCTION-ENVIRONMENT*; a
+CHOICE-CASE is read before any expansion."
   (let* ((descriptor (find-machine-descriptor machine))
-         (names '()))
-    (labels ((note (symbol)
+         (writes '()))
+    (labels ((note (symbol conditions)
                (when (and symbol (symbolp symbol))
-                 (pushnew (%designator-name symbol) names :test #'string=)))
-             (note-place (place)
-               (cond ((symbolp place) (note place))
+                 (pushnew (cons (%designator-name symbol) (reverse conditions)) writes :test #'equal)))
+             (note-place (place conditions)
+               (cond ((symbolp place) (note place conditions))
                      ((and (consp place) (%named-p (first place) "SREF") (consp (third place))
                            (eq (first (third place)) 'quote))
-                      (note (second (third place))))))
-             (note-stack (target)
-               (note (or target (%sole-stack-target descriptor))))
-             (walk (form)
+                      (note (second (third place)) conditions))))
+             (note-stack (target conditions)
+               (note (or target (%sole-stack-target descriptor)) conditions))
+             (walk-choice-case (spec clauses conditions)
+               (let ((name (if (consp spec) (first spec) spec))
+                     (steps (and (consp spec) (rest spec) (ignore-errors (%prefix-steps (rest spec)))))
+                     (seen '()))
+                 (dolist (clause clauses)
+                   (when (consp clause)
+                     (let ((head (first clause)))
+                       (if (member head '(otherwise t))
+                           (walk-list (rest clause) (cons (list name steps :not-in seen) conditions))
+                           (let ((keys (if (listp head) head (list head))))
+                             (walk-list (rest clause)
+                                        (cons (list name steps :in (remove-if (lambda (key) (member key seen)) keys))
+                                              conditions))
+                             (setf seen (append seen keys)))))))))
+             (walk (form conditions)
                (cond ((atom form))
-                     ((not (symbolp (first form))) (walk-list form))
+                     ((not (symbolp (first form))) (walk-list form conditions))
                      ((%named-p (first form) "QUOTE"))
+                     ((and (eq (first form) 'choice-case) (consp (rest form)))
+                      (walk-choice-case (second form) (cddr form) conditions))
                      ((%named-p (first form) "SET!" "SETF" "SETQ")
                       (loop for (place value) on (rest form) by #'cddr
-                            do (note-place place) (walk value)))
+                            do (note-place place conditions) (walk value conditions)))
                      ((%named-p (first form) "INCF" "DECF")
-                      (note-place (second form))
-                      (walk-list (cddr form)))
+                      (note-place (second form) conditions)
+                      (walk-list (cddr form) conditions))
                      ((%named-p (first form) "PUSH")
-                      (note-stack (third form))
-                      (walk (second form)))
+                      (note-stack (third form) conditions)
+                      (walk (second form) conditions))
                      ((%named-p (first form) "POP")
-                      (note-stack (second form)))
+                      (note-stack (second form) conditions))
                      ((%named-p (first form) "INTERRUPT-RETURN")
                       (let ((interrupts (machine-descriptor-interrupts descriptor)))
                         (when (and interrupts (eq (interrupt-descriptor-stack-kind interrupts) :pointer))
-                          (note (interrupt-descriptor-stack-name interrupts)))))
+                          (note (interrupt-descriptor-stack-name interrupts) conditions))))
                      ((and (not (eq (first form) 'lambda))
                            (macro-function (first form) *definstruction-environment*))
                       (let ((expansion (handler-case (macroexpand-1 form *definstruction-environment*)
                                          (error () nil))))
-                        (if expansion (walk expansion) (walk-list (rest form)))))
-                     (t (walk-list (rest form)))))
-             (walk-list (forms)
+                        (if expansion (walk expansion conditions) (walk-list (rest form) conditions))))
+                     (t (walk-list (rest form) conditions))))
+             (walk-list (forms conditions)
                (loop for tail = forms then (cdr tail)
                      while (consp tail)
-                     do (walk (car tail)))))
-      (walk-list forms))
-    (nreverse names)))
+                     do (walk (car tail) conditions))))
+      (walk-list forms '()))
+    (nreverse writes)))
 
 (defun %named-p (symbol &rest names)
   (and (symbolp symbol) (member (symbol-name symbol) names :test #'string=)))

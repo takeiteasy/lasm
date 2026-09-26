@@ -71,7 +71,7 @@ without a frame pointer is checked four ways:
 | --- | --- |
 | Labels | A label is defined at one depth and a [branch](backends.md#branches) instruction that names it is at another. |
 | Raw stack instructions | An instruction, or an `(:op)` expansion form, is a backend's `:push`, `:pop`, `:alloc` or `:free` template: the same mnemonic, the parameters matching anything, the rest equal. `(:op :push ...)` is rejected too. |
-| Stack writers | An instruction, or an `(:op)` expansion form, is a [stack writer](backends.md#stack-writers). |
+| Stack writers | An instruction, or an `(:op)` expansion form, is a [stack writer](backends.md#stack-writers) for the variant its operands select. |
 | `(:depth n)` | `n` is negative, or it is outside a `:function`. |
 
 An `(:op)` that declares [`:pushes` and `:pops`](backends.md#operations) is
@@ -243,7 +243,8 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| Stack writers are derived from the instruction's own semantics, so a write through an operand place is missed. | [#343](https://todo.sr.ht/~takeiteasy/lasm/343) |
-| A mnemonic is a stack writer when any variant writes the stack pointer. | [#344](https://todo.sr.ht/~takeiteasy/lasm/344) |
+| A stack pointer write under a condition held in a variable, not directly under `choice-case`, counts as unconditional. | [#345](https://todo.sr.ht/~takeiteasy/lasm/345) |
+| A macro defined by `macrolet` inside `semantics` is not expanded when looking for stack writes. | [#347](https://todo.sr.ht/~takeiteasy/lasm/347) |
+| Operand variants tied on width are all checked, so the instruction is a stack writer if any writes the stack pointer. | [#348](https://todo.sr.ht/~takeiteasy/lasm/348) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

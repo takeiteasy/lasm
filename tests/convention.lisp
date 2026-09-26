@@ -716,3 +716,158 @@ ret
   (fiveam:is (null (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'cv-except-abi)))
   (fiveam:is (search "writes the stack pointer"
                      (%cv-malformed '((:function f () (movv (reg a) (reg b)) (:return))) 'cv-except-abi))))
+
+;;; Stack writers by variant (#343, #344)
+
+(defmachine (cv-addx (:extends callfoo))
+  (register cvx :width 16))
+
+(definstruction cv-addx addx
+  (modes
+    (call-rr (opcode 30) (operand dst :width 1) (operand src :width 1)
+             (semantics (set! (r dst) (wrap-value (+ (r dst) (r src)) 16))))
+    (call-spi (opcode 31) (operand :mode)
+              (semantics (set! sp (wrap-value (+ sp operand) 16))))))
+
+(definstruction cv-addx drop
+  (modes
+    (zero-page (opcode 32) (operand v :width 1) (semantics nil))
+    (absolute (opcode 33) (operand v :width 2) (semantics (set! sp v)))))
+
+(defbackend cv-addx-abi (:extends callfoo-abi :machine cv-addx)
+  (ops (:plus (d s) (addx d s))
+       (:bump (n) (addx (sp) (imm n)))))
+
+(defun %cv-in-function (form backend)
+  (%cv-malformed `((:function f () ,form (:return))) backend))
+
+(fiveam:test only-the-variant-the-operands-select-is-a-stack-writer
+  (fiveam:is (null (%cv-in-function '(addx (reg a) (reg b)) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(addx (sp) (imm 2)) 'cv-addx-abi)))
+  (fiveam:is (null (%cv-in-function '(:op :plus (reg a) (reg b)) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(:op :bump 2) 'cv-addx-abi))))
+
+(fiveam:test a-forced-mode-selects-the-variant-checked
+  (fiveam:is (null (%cv-in-function '(drop (:force (:mode zero-page 5))) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer"
+                     (%cv-in-function '(drop (:force (:mode absolute 5))) 'cv-addx-abi)))
+  (fiveam:is (search "writes the stack pointer" (%cv-in-function '(drop 5) 'cv-addx-abi))))
+
+(fiveam:test an-operand-matching-no-variant-is-left-to-the-assembler
+  (let ((items '((:function f () (addx (reg a) (imm 2)) (:return)))))
+    (fiveam:finishes (render-items items :backend 'cv-addx-abi))
+    (fiveam:is (eq :assembler (handler-case (assemble-items items :backend 'cv-addx-abi)
+                                (items-malformed () :items)
+                                (error () :assembler))))))
+
+(fiveam:test stack-writers-are-listed-per-mode
+  (fiveam:is (equal '("ADDS" "ADDX" "DROP" "POPR" "PUSH" "PUSHV" "SUBS")
+                    (mapcar #'first (backend-stack-writers 'cv-addx-abi))))
+  (fiveam:is (equal '("CALL-SPI") (rest (assoc "ADDX" (backend-stack-writers 'cv-addx-abi) :test #'string=))))
+  (fiveam:is (equal '("ABSOLUTE") (rest (assoc "DROP" (backend-stack-writers 'cv-addx-abi) :test #'string=)))))
+
+;;; A write under a CHOICE-CASE clause counts for that alternative only.
+
+(defmachine cv-sel
+  (register pc :width 16)
+  (register sp :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :grows :down))
+
+(defmode cv-sel-sp "SP")
+(defmode cv-sel-pc "PC")
+(defmode cv-sel-reg expr)
+(defmode cv-sel-imm "#" expr)
+(defmode cv-sel-pop "POP")
+(defmode cv-sel-idx "[" expr "," expr "]")
+(defmode cv-sel-stk (one-of cv-sel-pop cv-sel-idx))
+(defmode cv-sel-kind (one-of (kind cv-sel-sp cv-sel-pc cv-sel-reg)))
+(defmode cv-sel-nested (one-of (nest cv-sel-reg cv-sel-stk)))
+(defmode cv-sel-src (one-of cv-sel-reg cv-sel-imm))
+
+(definstruction cv-sel ret
+  (encoding (opcode #x00))
+  (semantics (set! pc (pop sp))))
+
+(definstruction cv-sel zap
+  (modes cv-sel-kind)
+  (encoding (opcode #x01)
+            (sub-opcode (holes kind)
+                        (variant (choice cv-sel-sp) (sub 0))
+                        (variant (choice cv-sel-pc) (sub 1))
+                        (variant (choice cv-sel-reg) (sub 2)))
+            (for-choice (kind cv-sel-reg) (operand v :width 1)))
+  (semantics (choice-case kind
+               (cv-sel-sp (set! sp 0))
+               (cv-sel-pc (push pc sp) (set! pc 0))
+               (otherwise (set! a v)))))
+
+(definstruction cv-sel bump
+  (modes cv-sel-kind)
+  (encoding (opcode #x02)
+            (sub-opcode (holes kind)
+                        (variant (choice cv-sel-sp) (sub 0))
+                        (variant (choice cv-sel-pc) (sub 1))
+                        (variant (choice cv-sel-reg) (sub 2)))
+            (for-choice (kind cv-sel-reg) (operand v :width 1)))
+  (semantics (choice-case kind
+               (cv-sel-pc (set! pc 0))
+               (otherwise (set! sp (+ sp 1))))))
+
+(definstruction cv-sel nst
+  (modes cv-sel-nested)
+  (encoding (opcode #x03)
+            (sub-opcode (holes nest)
+                        (variant (choice cv-sel-reg) (sub 0))
+                        (variant (choice (cv-sel-stk cv-sel-pop)) (sub 1))
+                        (variant (choice (cv-sel-stk cv-sel-idx)) (sub 2)))
+            (for-choice (nest cv-sel-reg) (operand v :width 1))
+            (for-choice (nest cv-sel-stk cv-sel-idx) (operand base :width 1) (operand off :width 1)))
+  (semantics (choice-case (nest cv-sel-stk)
+               (cv-sel-pop (pop sp))
+               (otherwise (set! a 1)))))
+
+(definstruction cv-sel hs
+  (modes cv-sel-src)
+  (encoding (opcode #x04)
+            (operand src :width 1
+              (variant (choice cv-sel-reg) (sub 0))
+              (variant (choice cv-sel-imm) (sub 1))))
+  (semantics (choice-case src
+               (cv-sel-reg (set! a src))
+               (cv-sel-imm (set! sp src)))))
+
+(defbackend cv-sel-abi (:machine cv-sel)
+  (registers :stack-pointer sp :program-counter pc)
+  (ops (:return () (ret))))
+
+(fiveam:test a-write-under-a-choice-case-clause-counts-for-that-alternative
+  (flet ((writes (source)
+           (and (search "writes the stack pointer" (%cv-in-function source 'cv-sel-abi)) t)))
+    (fiveam:is-true (writes '(zap "SP")))
+    (fiveam:is-false (writes '(zap "PC")))
+    (fiveam:is-false (writes '(zap 5)))
+    (fiveam:is-true (writes '(bump 5)))
+    (fiveam:is-true (writes '(bump "SP")))
+    (fiveam:is-false (writes '(bump "PC")))
+    (fiveam:is-true (writes '(nst "POP")))
+    (fiveam:is-false (writes '(nst 5)))
+    (fiveam:is-false (writes '(nst (:mode cv-sel-idx 1 2))))
+    (fiveam:is-true (writes '(hs (:mode cv-sel-imm 5))))
+    (fiveam:is-false (writes '(hs 5)))))
+
+(fiveam:test choice-case-writes-carry-their-conditions
+  (fiveam:is (equal '(("SP" (kind nil :in (cv-sel-sp)))
+                      ("SP" (kind nil :in (cv-sel-pc)))
+                      ("PC" (kind nil :in (cv-sel-pc)))
+                      ("A" (kind nil :not-in (cv-sel-sp cv-sel-pc))))
+                    (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-sel 'zap)))))
+  (fiveam:is (equal '(("PC" (kind nil :in (cv-sel-pc)))
+                      ("SP" (kind nil :not-in (cv-sel-pc))))
+                    (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-sel 'bump)))))
+  (fiveam:is (equal '(("SP" (nest ((cv-sel-stk . 0)) :in (cv-sel-pop)))
+                      ("A" (nest ((cv-sel-stk . 0)) :not-in (cv-sel-pop))))
+                    (instruction-descriptor-written-registers (first (find-instruction-variants 'cv-sel 'nst)))))
+  (fiveam:is (equal '(("BUMP" "CV-SEL-KIND") ("HS" "CV-SEL-SRC") ("NST" "CV-SEL-NESTED") ("ZAP" "CV-SEL-KIND"))
+                    (backend-stack-writers 'cv-sel-abi))))

@@ -548,19 +548,39 @@ to the enclosing label when one has been defined and the lexer has local labels.
              (return hook))))
 
 (defun %check-stack-forms (forms item)
-  "Reject a raw FORM in a function without a frame pointer that changes the depth."
+  "Reject a raw FORM in a function without a frame pointer that does what the backend's stack operation does."
   (when (and (%depth-tracked-p) *items-backend*)
     (dolist (form forms)
       (when (and (consp form) (not (%label-form-p form)))
         (let ((hook (%stack-operation-of form)))
-          (cond (hook
-                 (%items-fail 'items-malformed item
-                              "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
-                              form (intern hook :keyword)))
-                ((%stack-writer-p *items-backend* (first form))
-                 (%items-fail 'items-malformed item
-                              "~S writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
-                              form))))))))
+          (when hook
+            (%items-fail 'items-malformed item
+                         "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
+                         form (intern hook :keyword))))))))
+
+(defun %line-operand-tokens (line)
+  (coerce (loop for (operand . more) on (item-line-operands line)
+                append operand
+                when more collect (%punct-token :comma))
+          'simple-vector))
+
+(defun %line-variants (line)
+  "The variants of LINE's instruction that its operands select best, as the assembler picks them."
+  (let ((variants (handler-case (find-instruction-variants *items-machine* (item-line-mnemonic line))
+                    (unknown-instruction () nil))))
+    (when (item-line-forced line)
+      (setf variants (%variants-in-mode variants (item-line-forced line))))
+    (mapcar #'first (%best-scored (%syntax-candidates variants (%line-operand-tokens line))))))
+
+(defun %check-stack-lines (lines item)
+  "Reject, in a function without a frame pointer, an instruction line whose selected variant writes the stack pointer."
+  (when (and (%depth-tracked-p) *items-backend*)
+    (dolist (line lines)
+      (when (and (item-line-mnemonic line)
+                 (some (lambda (variant) (%stack-writer-p *items-backend* variant)) (%line-variants line)))
+        (%items-fail 'items-malformed item
+                     "~A writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
+                     (nth-value 1 (%layout-line line 0)))))))
 
 (defun %op-stack-effect (name args item)
   "The net cells the backend's operation NAME puts on the stack, and true, when it declares an effect."
@@ -848,6 +868,7 @@ survive a call, and any other register cannot be kept."
   label       ; string, or NIL
   mnemonic    ; string, or NIL
   suffix      ; the forced mode's suffix with its separator, or NIL
+  forced      ; the forced mode descriptor, or NIL
   operands    ; list of token lists
   item        ; the item it came from
   claims)     ; (MODE START END) per named mode, as token indices into the operands
@@ -900,7 +921,7 @@ A value that depends on a label is checked when the assembler encodes it."
            (suffix (and forced (%forced-suffix forced mnemonic form item))))
       (when forced
         (%check-forced-range forced (first operands) mnemonic item))
-      (make-item-line :mnemonic mnemonic :operands (nreverse operands) :suffix suffix
+      (make-item-line :mnemonic mnemonic :operands (nreverse operands) :suffix suffix :forced forced
                       :item item :claims (nreverse claims)))))
 
 (defun %directive-line (item)
@@ -944,9 +965,11 @@ A value that depends on a label is checked when the assembler encodes it."
              (%check-stack-forms forms item))
            (dolist (form forms)
              (%record-references form item))
-           (prog1 (%op-lines (second item) (cddr item) item)
-             (when declaredp
-               (%bump-depth effect))))))
+           (let ((lines (%op-lines (second item) (cddr item) item)))
+             (if declaredp
+                 (%bump-depth effect)
+                 (%check-stack-lines lines item))
+             lines))))
       ((%keyword-named-p head "FUNCTION") (%function-lines item))
       ((%keyword-named-p head "CALL") (%call-lines item))
       ((%keyword-named-p head "RETURN") (%return-lines item))
@@ -956,7 +979,9 @@ A value that depends on a label is checked when the assembler encodes it."
        (%items-fail 'items-malformed item "unknown item ~S" head))
       (t (%check-stack-forms (list item) item)
          (%record-references item item)
-         (list (%instruction-line item item))))))
+         (let ((lines (list (%instruction-line item item))))
+           (%check-stack-lines lines item)
+           lines)))))
 
 (defun %layout-line (line number)
   "The tokens of LINE, placed on source line NUMBER, and that line's text."

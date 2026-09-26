@@ -5665,6 +5665,13 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
                                     variants)
                             #'<)))))
 
+(fiveam:test a-descriptors-choice-case-key-follows-its-own-alternative
+  (let* ((steps (%prefix-steps '(nw-ind)))
+         (keys (sort (mapcar (lambda (v) (list (%choice-case-key v 'src nil) (%choice-case-key v 'src steps)))
+                             (find-instruction-variants 'varying-hole-test-machine 'nwl))
+                     #'string< :key #'princ-to-string)))
+    (fiveam:is (equal '((nw-ind vh-idx) (nw-ind vh-reg) (nw-lit nil)) keys))))
+
 (fiveam:test nested-varying-word-assemble-decode-round-trip
   (dolist (case '(("nwl 1, 5" 1) ("nwl 1, [3, 100]" 2) ("nwl 1, #4" 1)))
     (destructuring-bind (source length) case
