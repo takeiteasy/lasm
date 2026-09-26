@@ -374,9 +374,10 @@ than each caller assuming a byte opcode."
     (error 'assembly-error :message "bank() takes a label or *"))
   (let ((name (expr-label-name operand)))
     (flet ((fail (condition fmt &rest args)
-             (error condition :name name
-                              :message (apply #'format nil fmt (%display-symbol-key name) args)
-                              :line (expr-label-line operand) :column (expr-label-column operand))))
+             (apply #'error condition
+                    :message (apply #'format nil fmt (%display-symbol-key name) args)
+                    :line (expr-label-line operand) :column (expr-label-column operand)
+                    (and (eq condition 'unresolved-label) (list :name name)))))
       (multiple-value-bind (bank foundp) (and *label-banks* (gethash name *label-banks*))
         (cond
           ((and foundp bank) bank)
@@ -478,14 +479,20 @@ target machine's :CELL-WIDTH (#67), not an encoding-width-relative split."
          (:plus (+ l r))
          (:minus (- l r))
          (:star (* l r))
-         (:slash (truncate l r))
-         (:percent (rem l r))
+         (:slash (truncate l (%nonzero-divisor '/ l r)))
+         (:percent (rem l (%nonzero-divisor 'rem l r)))
          (:lt (if (< l r) 1 0))
          (:gt (if (> l r) 1 0))
          (:le (if (<= l r) 1 0))
          (:ge (if (>= l r) 1 0))
          (:eq (if (= l r) 1 0))
          (:ne (if (/= l r) 1 0)))))))
+
+(defun %nonzero-divisor (operation dividend divisor)
+  "DIVISOR, signalling DIVISION-BY-ZERO for zero: ECL on aarch64 does not trap integer division."
+  (if (zerop divisor)
+      (error 'division-by-zero :operation operation :operands (list dividend divisor))
+      divisor))
 
 (defun eval-expr-constant (ast &key pc)
   "Fold AST to an integer with no symbol table -- the constant-only case of
@@ -594,6 +601,7 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
              additions)
     additions))
 
+(declaim (notinline %check-opcode-decodable!)) ; the tests wrap it, which ECL bypasses for a call in the same file
 (defun %check-registration (md name descriptors &key evict)
   "Signal OPCODE-CONFLICT if DESCRIPTORS (mnemonic NAME) cannot join MD's
 opcode buckets. With EVICT, a conflict against an inherited mnemonic (one MD
@@ -772,7 +780,7 @@ whose compatibility with its parent no longer holds, keeps its subtree as is."
                    ((gethash name (machine-descriptor-own-instructions child)))
                    ((not (handler-case (progn (%check-inheritance-compatible parent child) t)
                            (error (c)
-                             (warn 'style-warning :format-control "~A; re-evaluate its DEFMACHINE"
+                             (warn 'simple-style-warning :format-control "~A; re-evaluate its DEFMACHINE"
                                  :format-arguments (list c))
                              nil))))
                    (t
@@ -1634,17 +1642,16 @@ actually run for this descriptor."
     (and source (nth source operands))))
 
 (defvar *fast-compile-policy* nil
-  "When non-NIL, the OPTIMIZE policy %COMPILE-DEFINITION compiles under.")
+  "When non-NIL, the OPTIMIZE policy %COMPILE-DEFINITION compiles under, on SBCL.")
 
 (defun %compile-definition (form name)
   "COMPILE FORM, re-signalling a DEFINITION-ERROR raised while it expanded,
 which SBCL would otherwise defer to a COMPILED-PROGRAM-ERROR at call time."
   (let ((*definition-name* name))
     (with-definition-errors
-      (if *fast-compile-policy*
-          (with-compilation-unit (:policy *fast-compile-policy*)
-            (compile nil form))
-          (compile nil form)))))
+      (cond #+sbcl (*fast-compile-policy* (with-compilation-unit (:policy *fast-compile-policy*)
+                                            (compile nil form)))
+            (t (compile nil form))))))
 
 (defparameter *semantics-promotion-calls* 1000
   "Calls after which a quickly compiled word semantics is recompiled at the

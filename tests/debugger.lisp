@@ -1585,12 +1585,11 @@ HIT-P holds the first time, ending at step 0."
 
 (defmacro %counting-replayed-steps ((var) &body body)
   `(let ((,var 0))
-     (sb-int:encapsulate '%replay 'count-steps
-                         (lambda (function session checkpoint target &rest args)
-                           (incf ,var (- target (checkpoint-step checkpoint)))
-                           (apply function session checkpoint target args)))
-     (unwind-protect (progn ,@body)
-       (sb-int:unencapsulate '%replay 'count-steps))))
+     (%call-wrapped '%replay
+                    (lambda (function session checkpoint target &rest args)
+                      (incf ,var (- target (checkpoint-step checkpoint)))
+                      (apply function session checkpoint target args))
+                    (lambda () ,@body))))
 
 (fiveam:test debug-reverse-continue-jumps-to-a-recorded-hit
   (let ((*debug-checkpoint-interval* 8)
@@ -1705,12 +1704,11 @@ loop:   sta $10
   (let ((session (%dbg-loop-session :history history))
         (evaluations 0))
     (debug-break session "loop" :condition "x == 3")
-    (sb-int:encapsulate '%breakpoint-triggered-p 'count-evaluations
-                        (lambda (function &rest args)
-                          (incf evaluations)
-                          (apply function args)))
-    (unwind-protect (debug-continue session)
-      (sb-int:unencapsulate '%breakpoint-triggered-p 'count-evaluations))
+    (%call-wrapped '%breakpoint-triggered-p
+                   (lambda (function &rest args)
+                     (incf evaluations)
+                     (apply function args))
+                   (lambda () (debug-continue session)))
     evaluations))
 
 (fiveam:test debug-continue-evaluates-a-breakpoint-condition-once-per-step

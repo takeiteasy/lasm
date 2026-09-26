@@ -142,13 +142,13 @@
                                        (vector-cell-reader #(#x13))
                                        0 'decode-cache-machine))))))
 
-#+sb-thread
+#+(or sb-thread threads)
 (fiveam:test simultaneous-decodes-share-no-operand-scratch
   (setf (machine-descriptor-word-decode-table (find-machine-descriptor 'decode-cache-machine)) nil)
   (let ((threads
           (loop for value below 8
                 collect (let ((expected value))
-                          (sb-thread:make-thread
+                          (%make-thread
                            (lambda ()
                              (loop repeat 100
                                    always (equal (list expected)
@@ -156,7 +156,7 @@
                                                             (decode-instruction-at
                                                              (vector-cell-reader (vector #x1f expected))
                                                              0 'decode-cache-machine))))))))))
-    (fiveam:is (every #'identity (mapcar #'sb-thread:join-thread threads)))))
+    (fiveam:is (every #'identity (mapcar #'%join-thread threads)))))
 
 (fiveam:test shared-dispatch-observes-code-and-trailing-word-writes
   (let ((first (make-machine 'decode-cache-machine))

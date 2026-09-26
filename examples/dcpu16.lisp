@@ -162,7 +162,7 @@ result: .byte 0  ; one 16-bit cell -- .word would reserve two (#53)")
           (length (assembly-cells assembly)))
   (assert (= 16 (assembly-cell-width assembly)))
   (assert (= 9 (length (assembly-cells assembly))))
-  (assert (equal '(unsigned-byte 16) (array-element-type (assembly-cells assembly))))
+  (assert (= 16 (%array-element-width (assembly-cells assembly))))
 
   (format t "~%Running:~%")
   (let ((m (make-machine 'dcpu16foo)))

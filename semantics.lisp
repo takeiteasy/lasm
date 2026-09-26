@@ -9,7 +9,9 @@
 
 (in-package #:lasm)
 
-(declaim (inline %semantics-mref (setf %semantics-mref)))
+;; ECL expands an inline body in the caller's lexical environment, where the local MREF, SREF
+;; and REGREF macros below recurse through it, so ECL calls these instead.
+(declaim #-ecl (inline %semantics-mref (setf %semantics-mref)))
 
 (defun %semantics-mref (machine name address)
   (mref machine name address))
@@ -21,7 +23,7 @@
 ;; macros (WITH-MACHINE-BINDINGS) that expand to the %PLAIN-* accessors, or to
 ;; the %CHECKED-* ones when the named element may be gated. The macros' own
 ;; expansions call %PLAIN-* so they are never captured again.
-(declaim (inline %plain-sref (setf %plain-sref) %plain-regref (setf %plain-regref)
+(declaim #-ecl (inline %plain-sref (setf %plain-sref) %plain-regref (setf %plain-regref)
                  %plain-flag (setf %plain-flag) %plain-stack-push %plain-stack-pop
                  %plain-sp-push %plain-sp-pop))
 

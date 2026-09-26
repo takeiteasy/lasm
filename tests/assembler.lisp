@@ -1238,7 +1238,7 @@ target: whlt" :machine 'word-relative-test-machine)))
 (fiveam:test assembly-cells-element-type-matches-machine-cell-width
   (let ((a (assemble "nop" :machine 'wordaddr-test-machine)))
     (fiveam:is (= 16 (assembly-cell-width a)))
-    (fiveam:is (equal '(unsigned-byte 16) (array-element-type (assembly-cells a))))))
+    (fiveam:is (= 16 (%array-element-width (assembly-cells a))))))
 
 (fiveam:test label-bound-in-cells-not-bytes
   ;; NOP is 1 cell; JMP is 2 (opcode + one operand cell, ADDR-WIDTH 12

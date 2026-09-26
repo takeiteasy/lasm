@@ -572,6 +572,16 @@ to the enclosing label when one has been defined and the lexer has local labels.
                          "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
                          form (intern hook :keyword))))))))
 
+(defstruct item-line
+  label       ; string, or NIL
+  mnemonic    ; string, or NIL
+  suffix      ; the forced mode's suffix with its separator, or NIL
+  forced      ; the forced mode descriptor, or NIL
+  operands    ; list of token lists
+  item        ; the item it came from
+  claims      ; (MODE START END) per named mode, as token indices into the operands
+  stack-check) ; the line's text when only the assembled variant shows whether it writes the stack pointer
+
 (defun %line-operand-tokens (line)
   (coerce (loop for (operand . more) on (item-line-operands line)
                 append operand
@@ -902,16 +912,6 @@ survive a call, and any other register cannot be kept."
         lines))))
 
 ;;; Items to lines
-
-(defstruct item-line
-  label       ; string, or NIL
-  mnemonic    ; string, or NIL
-  suffix      ; the forced mode's suffix with its separator, or NIL
-  forced      ; the forced mode descriptor, or NIL
-  operands    ; list of token lists
-  item        ; the item it came from
-  claims      ; (MODE START END) per named mode, as token indices into the operands
-  stack-check) ; the line's text when only the assembled variant shows whether it writes the stack pointer
 
 (defun %forced-suffix (mode mnemonic form item)
   "The suffix text that makes the assembler use MODE for MNEMONIC."

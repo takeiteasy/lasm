@@ -6,6 +6,31 @@
 
 (fiveam:def-suite lasm)
 
+;; Threads, on the hosts the tests run on.
+(defun %make-thread (function &optional (name "thread"))
+  #+sbcl (sb-thread:make-thread function :name name)
+  #+ecl (mp:process-run-function name function))
+
+(defun %join-thread (thread)
+  #+sbcl (sb-thread:join-thread thread)
+  #+ecl (mp:process-join thread))
+
+(defun %make-lock ()
+  #+sbcl (sb-thread:make-mutex)
+  #+ecl (mp:make-lock))
+
+(defmacro %with-lock ((lock) &body body)
+  #+sbcl `(sb-thread:with-mutex (,lock) ,@body)
+  #+ecl `(mp:with-lock (,lock) ,@body))
+
+(defun %call-wrapped (name wrapper thunk)
+  "Call THUNK with the function NAME replaced by one that calls WRAPPER with the original
+function and its arguments."
+  (let ((original (fdefinition name)))
+    (setf (fdefinition name) (lambda (&rest args) (apply wrapper original args)))
+    (unwind-protect (funcall thunk)
+      (setf (fdefinition name) original))))
+
 (defun %pending (machine)
   "MACHINE's pending interrupts as (DEVICE DATA PRIORITY NON-MASKABLE) lists, in delivery order."
   (let (entries)

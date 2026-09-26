@@ -78,7 +78,7 @@ marker: .dat $BEEF")
           (length (assembly-cells assembly)))
   (assert (= 16 (assembly-cell-width assembly)))
   (assert (= 11 (length (assembly-cells assembly))))
-  (assert (equal '(unsigned-byte 16) (array-element-type (assembly-cells assembly))))
+  (assert (= 16 (%array-element-width (assembly-cells assembly))))
   (assert (= 10 (gethash "marker" (assembly-symbols assembly))))
   (assert (= #xBEEF (aref (assembly-cells assembly) 10)))
 

@@ -72,7 +72,7 @@ hlt" :machine 'disasm-test-machine)))
     (let* ((a (%cells-assembly 16 0 #x1234 #xABCD #x0001))
            (cells (bytes-to-cells (assembly-bytes a :endian endian) 16 :endian endian)))
       (fiveam:is (equalp (assembly-cells a) cells))
-      (fiveam:is (equal '(unsigned-byte 16) (array-element-type cells))))))
+      (fiveam:is (= 16 (%array-element-width cells))))))
 
 (fiveam:test bytes-to-cells-rejects-a-partial-cell
   (fiveam:signals error (bytes-to-cells #(1 2 3) 16)))

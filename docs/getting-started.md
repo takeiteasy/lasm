@@ -18,8 +18,6 @@ Load LASM in SBCL or ECL:
 (ql:quickload :lasm)
 ```
 
-The test suite and the example runner need SBCL.
-
 For the [command line](cli.md), link both projects into Roswell's local
 projects directory:
 
@@ -78,6 +76,7 @@ ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lisp
 
 ```sh
 sbcl --non-interactive --eval '(asdf:test-system :lasm)'
+ecl --eval '(asdf:test-system :lasm)' --eval '(ext:quit)'
 ```
 
 The suite runs the Lisp examples and reports failures with a nonzero exit
@@ -94,7 +93,8 @@ or the [documentation index](README.md).
   `(asdf:load-system :lasm)`.
 [^scripts]: Each script loads `examples/boot.lisp` to find its dependencies
   without relying on `~/.sbclrc`.
-[^tests]: The suite runs each `examples/**/*.lisp` script in its own SBCL
-  process. It caches a bootstrapped core as `examples.core` beside compiled
-  LASM files; delete that core after changing Quicklisp dependencies. Set
+[^tests]: The suite runs each `examples/**/*.lisp` script in its own Lisp
+  process. On SBCL it caches a bootstrapped core as `examples.core` beside
+  compiled LASM files; delete that core after changing Quicklisp dependencies.
+  ECL starts each script with `ecl --shell`. Set
   `LASM_BENCH=1` to run the external benchmarks with STAR at `../star`.

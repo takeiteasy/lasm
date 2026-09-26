@@ -25,7 +25,8 @@
       4))
 
 (defun %sbcl (&rest args)
-  (list* (namestring sb-ext:*runtime-pathname*) args))
+  #+sbcl (list* (namestring sb-ext:*runtime-pathname*) args)
+  #-sbcl (error "Not SBCL: ~S" args))
 
 (defun %save-example-core (core)
   (multiple-value-bind (out err status)
@@ -48,6 +49,9 @@
 ;; core that has already loaded boot.lisp. Quicklisp dependency updates don't
 ;; invalidate it; delete the core after one.
 (defun %example-core ()
+  "The core the scripts start from, or NIL on a host that cannot save one."
+  #-sbcl nil
+  #+sbcl
   (let ((core (merge-pathnames "examples.core"
                                (asdf:apply-output-translations (asdf:system-source-directory :lasm)))))
     (unless (and (probe-file core) (<= (%newest-lasm-source-date) (file-write-date core)))
@@ -59,26 +63,33 @@
           (uiop:delete-file-if-exists tmp))))
     core))
 
-;; Scripts are standalone and redefine globals, so each gets its own SBCL.
+(defun %script-command (core script args)
+  #+sbcl (apply #'%sbcl "--core" core "--script" (namestring script) args)
+  #+ecl (list* "ecl" "--norc" "--shell" (namestring script) args))
+
+;; Scripts are standalone and redefine globals, so each gets its own Lisp.
 (defun %run-scripts (runs)
   "RUNS is a list of (SCRIPT . ARGS). Returns a (SCRIPT EXIT-STATUS STDERR) list per run."
-  (let ((core (namestring (%example-core)))
+  (let ((core (let ((core (%example-core))) (and core (namestring core))))
         (queue runs)
         (results '())
-        (lock (sb-thread:make-mutex)))
+        (lock (%make-lock)))
     (flet ((worker ()
-             (loop for (script . args) = (sb-thread:with-mutex (lock) (cl:pop queue))
+             (loop for (script . args) = (%with-lock (lock) (cl:pop queue))
                    while script
                    do (multiple-value-bind (out err status)
                           (handler-case
-                              (uiop:run-program (apply #'%sbcl "--core" core "--script" (namestring script) args)
-                                                :output nil :error-output :string :ignore-error-status t)
+                              (uiop:with-temporary-file (:pathname err-file)
+                                (let ((status (nth-value 2 (uiop:run-program (%script-command core script args)
+                                                                             :output nil :error-output err-file
+                                                                             :ignore-error-status t))))
+                                  (values nil (uiop:read-file-string err-file) status)))
                             (error (e) (values nil (princ-to-string e) -1)))
                         (declare (ignore out))
-                        (sb-thread:with-mutex (lock)
+                        (%with-lock (lock)
                           (cl:push (list script status err) results))))))
-      (mapc #'sb-thread:join-thread
-            (loop repeat (%host-cores) collect (sb-thread:make-thread #'worker :name "script"))))
+      (mapc #'%join-thread
+            (loop repeat (%host-cores) collect (%make-thread #'worker "script"))))
     results))
 
 (defun %check-scripts (runs)

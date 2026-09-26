@@ -1547,12 +1547,19 @@ or not. Never touches the live mapping."
   (multiple-value-bind (cells index) (%bank-cell-index machine region bank address)
     (aref cells index)))
 
+(defun %array-element-width (array)
+  "The width in bits of the unsigned integers ARRAY stores, as its element type upgrades it."
+  (let ((type (array-element-type array)))
+    (if (consp type)
+        (second type)
+        (loop for width from 1 when (subtypep type `(unsigned-byte ,width)) return width))))
+
 (defun (setf bank-peek) (value machine region bank address)
   "Store VALUE, wrapped to the cell width, at absolute ADDRESS in bank BANK
 of banked region REGION, bypassing the region's write policy."
   (multiple-value-bind (cells index) (%bank-cell-index machine region bank address)
     (%mark-dirty machine cells index)
-    (setf (aref cells index) (wrap-value value (second (array-element-type cells))))))
+    (setf (aref cells index) (wrap-value value (%array-element-width cells)))))
 
 (defun stack-push (machine name value)
   (multiple-value-bind (slot element) (%slot machine name :stack)

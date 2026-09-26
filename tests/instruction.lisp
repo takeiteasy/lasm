@@ -707,7 +707,8 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (= 3 (value "13 % 5")))
     (fiveam:is (= -2 (value "-5 % 3")))
     (fiveam:is (= 2 (value "5 % -3")))
-    (fiveam:signals division-by-zero (value "5 % 0"))))
+    (fiveam:signals division-by-zero (value "5 % 0"))
+    (fiveam:signals division-by-zero (value "5 / 0"))))
 
 (fiveam:test eval-expr-constant-lo-hi
   (fiveam:is (= #x34 (eval-expr-constant (match-operand-mode (%single-operand "#<$1234") 'immediate))))
@@ -3662,7 +3663,7 @@ hlt
 result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 16 (assembly-cell-width a)))
     (fiveam:is (= 7 (length (assembly-cells a))))
-    (fiveam:is (equal '(unsigned-byte 16) (array-element-type (assembly-cells a))))
+    (fiveam:is (= 16 (%array-element-width (assembly-cells a))))
     (let ((m (make-machine 'dcpu16-test-machine)))
       (load-program m a)
       (multiple-value-bind (reason steps) (run m)

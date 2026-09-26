@@ -1310,7 +1310,7 @@ and the parent's instructions are copied in."
                                                       plain))))
             (dolist (key (append removals (mapcar #'car cycles)))
               (unless (gethash key (machine-descriptor-instructions parent-md))
-                (warn 'style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
+                (warn 'simple-style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
                    :format-arguments (list name key parent))))
             (dolist (entry cycles)
               (when (member (car entry) removals :test #'string=)

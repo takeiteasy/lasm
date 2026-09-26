@@ -327,6 +327,7 @@ on a syntax error or an unknown name."
         (*index-reader* (lambda (name index) (%read-indexed session name index))))
     (eval-expr test :symbols values :pc (%pc session))))
 
+(declaim (notinline %breakpoint-triggered-p)) ; the tests wrap it, which ECL bypasses for a call in the same file
 (defun %breakpoint-triggered-p (session bp)
   "True when BP has no condition or its condition is nonzero. An error in the
 condition counts as true and is left in SESSION's CONDITION-ERROR."
@@ -924,6 +925,7 @@ memory deltas up to it."
       (%restore-snapshot machine (checkpoint-snapshot checkpoint) nil))
     (setf (debug-session-shadow session) nil)))
 
+(declaim (notinline %replay)) ; the tests wrap it, which ECL bypasses for a call in the same file
 (defun %replay (session checkpoint target &key watch on-step)
   "Restore CHECKPOINT and step forward to step TARGET, ignoring traps and
 faults. ON-STEP is called with each step number after it runs; WATCH arms the
