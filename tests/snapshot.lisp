@@ -552,3 +552,123 @@ twice
     (signal-interrupt source 2)
     (restore-snapshot target (machine-snapshot source))
     (fiveam:is (equal '(t nil) (mapcar #'fourth (%pending target))))))
+
+;;; Untrusted text reading (#288) and unwritable data (#289)
+
+(defun %text-file (path text)
+  (with-open-file (out path :direction :output :if-exists :supersede)
+    (write-string text out)))
+
+(defun %text-malformed-p (text)
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (%text-file path text)
+    (handler-case (progn (read-snapshot path) nil)
+      (snapshot-malformed () t))))
+
+(fiveam:test text-snapshot-round-trips-every-node-type
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (dolist (node (list nil t 0 127 300 -1 (expt 2 70) (- (expt 2 70)) (expt 2 20000)
+                        :key 'lasm::pc 'cl:push '|lower| "" "a \"q\" \\ b"
+                        (coerce '(#\é #\λ #\日 #.(code-char #x1F600)) 'string)
+                        '(1) '(1 2 3) '(1 . 2) '(1 2 . 3) '((1 . 2) (3 (4 . 5)) "x" :k)
+                        #\a #\Space #\λ 1.5d0 -2.5f0 1/3 #(1 2 3) #(1 (2 #(3)) "x")))
+      (write-snapshot (list :lasm-snapshot node) path)
+      (let ((back (second (read-snapshot path))))
+        (fiveam:is (equalp node back) "~S came back as ~S" node back)))))
+
+(fiveam:test text-snapshot-reads-an-uninterned-symbol
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (write-snapshot (list :lasm-snapshot (make-symbol "U")) path)
+    (let ((back (second (read-snapshot path))))
+      (fiveam:is (and (null (symbol-package back)) (string= "U" back))))))
+
+(fiveam:test text-snapshot-never-interns
+  (dolist (text '("(:lasm-snapshot LASM::|NO-SUCH-XYZ|)" "(:lasm-snapshot :NO-SUCH-XYZ)"
+                  "(:lasm-snapshot NO-SUCH-XYZ)" "(:lasm-snapshot NOPKG::X)"
+                  "(:lasm-snapshot #(LASM::NO-SUCH-XYZ))" "(:lasm-snapshot COMMON-LISP:NO-SUCH-XYZ)"))
+    (fiveam:is (%text-malformed-p text) "~A" text))
+  (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :lasm)))
+  (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :keyword)))
+  (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :cl-user))))
+
+(fiveam:test text-snapshot-rejects-reader-macros
+  (dolist (text '("#1=(:lasm-snapshot . #1#)" "(:lasm-snapshot #1=(1) #1#)"
+                  "(:lasm-snapshot #.(error \"x\"))" "(:lasm-snapshot #S(foo))"
+                  "(:lasm-snapshot #P\"x\")" "(:lasm-snapshot #C(1 2))" "(:lasm-snapshot #b101)"
+                  "(:lasm-snapshot #+sbcl 1)" "(:lasm-snapshot #|x|# 1)" "(:lasm-snapshot 'x)"
+                  "(:lasm-snapshot #*101)" "(:lasm-snapshot #2A((1)))"))
+    (fiveam:is (%text-malformed-p text) "~A" text)))
+
+(fiveam:test text-snapshot-rejects-trailing-data-and-empty-files
+  (fiveam:is (%text-malformed-p "(:lasm-snapshot) (:lasm-snapshot)"))
+  (fiveam:is (%text-malformed-p "")))
+
+(fiveam:test text-snapshot-nesting-is-bounded
+  (fiveam:is (%text-malformed-p (format nil "~A:lasm-snapshot~A"
+                                        (make-string 5000 :initial-element #\()
+                                        (make-string 5000 :initial-element #\))))))
+
+(fiveam:test text-snapshot-rejects-huge-float-exponents
+  (fiveam:is (%text-malformed-p "(:lasm-snapshot 1d999999999)"))
+  (fiveam:is (not (%text-malformed-p "(:lasm-snapshot 1.5d10)"))))
+
+(fiveam:test binary-snapshot-never-interns
+  (flet ((malformed (&rest parts)
+           (handler-case (progn (%read-binary-snapshot (apply #'%binary-octets parts) "test") nil)
+             (snapshot-malformed () t))))
+    (fiveam:is (malformed #x04 "NO-SUCH-XYZ"))
+    (fiveam:is (malformed #x05 "LASM" "NO-SUCH-XYZ"))
+    (fiveam:is (malformed #x09 "#(LASM::NO-SUCH-XYZ)"))
+    (fiveam:is (malformed #x09 "#1=(1 . #1#)"))
+    (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :lasm)))
+    (fiveam:is (null (find-symbol "NO-SUCH-XYZ" :keyword)))))
+
+(defun %circular-list ()
+  (let ((list (list 1 2 3)))
+    (setf (cdr (last list)) list)
+    list))
+
+(defun %unwritable-p (data format)
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (%text-file path "keep")
+    (handler-case (progn (write-snapshot (list :lasm-snapshot data) path :format format) nil)
+      (snapshot-unwritable ()
+        (with-open-file (in path) (string= "keep" (read-line in)))))))
+
+(fiveam:test write-snapshot-rejects-unwritable-data-leaving-the-file
+  (let ((vector (vector 1 2)))
+    (setf (aref vector 1) vector)
+    (dolist (format '(:sexp :binary))
+      (fiveam:is (%unwritable-p (%circular-list) format) "circular list, ~S" format)
+      (fiveam:is (%unwritable-p (list 1 (%circular-list)) format) "nested circular list")
+      (fiveam:is (%unwritable-p vector format) "circular vector")
+      (fiveam:is (%unwritable-p (list (make-hash-table)) format) "hash table")
+      (fiveam:is (%unwritable-p (list (sb-kernel:make-double-float #x7FF00000 0)) format) "infinity")
+      (fiveam:is (%unwritable-p (list (make-array 2 :element-type 'bit)) format) "bit vector"))))
+
+(fiveam:test write-snapshot-rejects-circular-device-and-interrupt-data
+  (let ((m (%dirty)))
+    (setf (sref m 'pc) #x100)
+    (uiop:with-temporary-file (:pathname path :type "snap")
+      (fiveam:signals snapshot-unwritable
+        (write-snapshot (%with-field (machine-snapshot m) :devices
+                                     (list (list 'kept :state (%circular-list))))
+                        path)))
+    (signal-interrupt m (%circular-list))
+    (uiop:with-temporary-file (:pathname path :type "snap")
+      (fiveam:signals snapshot-unwritable (write-snapshot (machine-snapshot m) path :format :binary)))))
+
+(fiveam:test write-snapshot-writes-shared-structure-as-copies
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let* ((shared (list 1 2)) (data (list shared shared (vector shared))))
+      (dolist (format '(:sexp :binary))
+        (write-snapshot (list :lasm-snapshot data) path :format format)
+        (let ((back (second (read-snapshot path))))
+          (fiveam:is (equalp data back))
+          (fiveam:is (not (eq (first back) (second back)))))))))
+
+(fiveam:test write-snapshot-accepts-long-lists
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((data (loop for i below 200000 collect i)))
+      (write-snapshot (list :lasm-snapshot data) path :format :binary)
+      (fiveam:is (equal data (second (read-snapshot path)))))))

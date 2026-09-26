@@ -30,6 +30,7 @@ For context, see [Machine model](machine-model.md#conditions),
 | `snapshot-machine-mismatch` | `snapshot-error` | — |
 | `snapshot-malformed` | `snapshot-error` | — |
 | `snapshot-device-unknown` | `snapshot-error` | — |
+| `snapshot-unwritable` | `snapshot-error` | — |
 | `lasm-syntax-error` | `lasm-error` | `lasm-syntax-error-message`, `lasm-syntax-error-line`, `lasm-syntax-error-column`, `lasm-syntax-error-file`, `lasm-syntax-error-source`, `lasm-syntax-error-definition-line`, `lasm-syntax-error-definition-file`, `lasm-syntax-error-definition-source` |
 | `lex-error` | `lasm-syntax-error` | — |
 | `parse-failure` | `lasm-syntax-error` | — |

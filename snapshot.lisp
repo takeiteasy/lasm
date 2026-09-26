@@ -16,6 +16,7 @@
 (define-condition snapshot-machine-mismatch (snapshot-error) ())
 (define-condition snapshot-malformed (snapshot-error) ())
 (define-condition snapshot-device-unknown (snapshot-error) ())
+(define-condition snapshot-unwritable (snapshot-error) ())
 
 (defun %snapshot-fail (type control &rest args)
   (error type :detail (apply #'format nil control args)))
@@ -129,8 +130,8 @@ Such a partial snapshot only restores through %RESTORE-SNAPSHOT with CELLS NIL."
   "MACHINE's runtime state as a plain-data list tree: storage, cycle
 counters, idle flag, pending interrupts, banked regions, the device bus (holes and bus
 order included) and runtime BIND-REGION bindings. A device contributes state only when it declares a :SAVE
-hook, which must return data readable by READ. Interrupt signal data is
-stored as-is and must be readable too.
+hook, which must return snapshot data (see WRITE-SNAPSHOT). Interrupt signal
+data is stored as-is and must be snapshot data too to be written.
 
 ASSEMBLY, when it was assembled from a file (ASSEMBLE-FILE), adds a :PROGRAM
 entry holding the source text of that file and every file it includes, so
@@ -425,6 +426,125 @@ fit, and whatever assembling signals for a program that no longer assembles."
                             :machine name :lexer (getf program :lexer)
                             :origin (getf program :origin) :memory (getf program :memory)))))))
 
+;;; Data check and restricted reader
+
+(defun %check-snapshot-data (data)
+  "Signal SNAPSHOT-UNWRITABLE unless DATA is finite, acyclic snapshot data."
+  (let ((path (make-hash-table :test 'eq))
+        (done (make-hash-table :test 'eq)))
+    (labels ((fail (control &rest args)
+               (%snapshot-fail 'snapshot-unwritable "~?" control args))
+             (walk (node)
+               (typecase node
+                 ((or null symbol integer ratio character string) nil)
+                 (float (when (or (sb-ext:float-infinity-p node) (sb-ext:float-nan-p node))
+                          (fail "non-finite float ~S" node)))
+                 (cons (walk-list node))
+                 (simple-vector (walk-vector node))
+                 (t (fail "~S cannot be stored in a snapshot" node))))
+             (walk-list (node)
+               (let ((spine '()))
+                 (loop for tail = node then (cdr tail)
+                       while (consp tail)
+                       do (when (gethash tail path)
+                            (fail "circular data"))
+                          (when (gethash tail done)
+                            (return))
+                          (cl:push tail spine)
+                          (setf (gethash tail path) t)
+                          (walk (car tail))
+                       finally (walk tail))
+                 (dolist (cons spine)
+                   (remhash cons path)
+                   (setf (gethash cons done) t))))
+             (walk-vector (node)
+               (when (gethash node path)
+                 (fail "circular data"))
+               (unless (gethash node done)
+                 (setf (gethash node path) t)
+                 (map nil #'walk node)
+                 (remhash node path)
+                 (setf (gethash node done) t))))
+      (walk data))))
+
+(defclass snapshot-client () ((depth :initform 0 :accessor client-depth)))
+
+(defmethod eclector.reader:interpret-symbol
+    ((client snapshot-client) stream package-indicator name internp)
+  (declare (ignore stream internp))
+  (if (null package-indicator)
+      (make-symbol name)
+      (let ((package (case package-indicator
+                       ((:keyword :current) (find-package :keyword))
+                       (t (find-package package-indicator)))))
+        (unless package
+          (%snapshot-fail 'snapshot-malformed "no package ~A" package-indicator))
+        (multiple-value-bind (symbol status) (find-symbol name package)
+          (unless status
+            (%snapshot-fail 'snapshot-malformed "unknown symbol ~A in ~A" name (package-name package)))
+          symbol))))
+
+(defmethod eclector.reader:find-character ((client snapshot-client) (designator string))
+  (or (name-char designator)
+      (call-next-method)))
+
+(defmethod eclector.reader:interpret-token :around
+    ((client snapshot-client) stream token escape-ranges)
+  (declare (ignore stream))
+  ;; Eclector computes 10^exponent eagerly, so 1d999999999 never returns.
+  (when (and (null escape-ranges)
+             (let ((marker (position-if (lambda (c) (find c "dDeEfFsSlL")) token :from-end t)))
+               (and marker (plusp marker)
+                    (find (char token (1- marker)) "0123456789.")
+                    (> (- (length token) marker) 5)
+                    (every #'digit-char-p (string-left-trim "+-" (subseq token (1+ marker)))))))
+    (%snapshot-fail 'snapshot-malformed "float exponent too long"))
+  (call-next-method))
+
+(defmethod eclector.reader:read-common :around ((client snapshot-client) stream eof-error-p eof-value)
+  (when (> (incf (client-depth client)) +snapshot-max-depth+)
+    (%snapshot-fail 'snapshot-malformed "nested deeper than ~D" +snapshot-max-depth+))
+  (unwind-protect (call-next-method)
+    (decf (client-depth client))))
+
+(defvar *snapshot-readtable* nil)
+
+(defun %snapshot-readtable ()
+  (or *snapshot-readtable*
+      (let ((table (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))
+        (dotimes (code 128)
+          (let ((char (code-char code)))
+            (unless (or (digit-char-p char) (member char '(#\\ #\( #\:)))
+              (eclector.readtable:set-dispatch-macro-character
+               table #\# char
+               (lambda (stream char parameter)
+                 (declare (ignore parameter))
+                 (%snapshot-fail 'snapshot-malformed "#~A is not allowed in a snapshot at ~D"
+                                 char (file-position stream)))))))
+        (dolist (char '(#\' #\` #\,))
+          (eclector.readtable:set-macro-character
+           table char
+           (lambda (stream char)
+             (%snapshot-fail 'snapshot-malformed "~A is not allowed in a snapshot at ~D"
+                             char (file-position stream)))))
+        (setf *snapshot-readtable* table))))
+
+(defun %read-snapshot-form (stream path)
+  "The single form on STREAM, read without interning symbols, evaluating or
+building shared structure. Anything unreadable signals SNAPSHOT-MALFORMED."
+  (handler-case
+      (with-standard-io-syntax
+        (let ((eclector.reader:*client* (make-instance 'snapshot-client))
+              (eclector.readtable:*readtable* (%snapshot-readtable))
+              (*read-eval* nil))
+          (let ((form (eclector.reader:read stream nil :eof)))
+            (unless (eq (eclector.reader:read stream nil :eof) :eof)
+              (%snapshot-fail 'snapshot-malformed "trailing data"))
+            form)))
+    (snapshot-error (e) (error e))
+    (storage-condition () (%snapshot-fail 'snapshot-malformed "~A: nested too deeply" path))
+    (error (e) (%snapshot-fail 'snapshot-malformed "~A: unreadable (~A)" path e))))
+
 ;;; Binary files
 
 (defparameter *binary-snapshot-magic*
@@ -434,8 +554,8 @@ fit, and whatever assembling signals for a program that no longer assembles."
 
 (defconstant +binary-snapshot-format+ 1)
 
-(defconstant +binary-max-depth+ 1000
-  "Deepest list nesting the binary reader accepts.")
+(defconstant +snapshot-max-depth+ 1000
+  "Deepest list nesting either snapshot reader accepts.")
 
 (defconstant +binary-max-varint+ 1024
   "Longest varint, in bytes, the binary reader accepts.")
@@ -466,7 +586,8 @@ fit, and whatever assembling signals for a program that no longer assembles."
 (defun %put-fallback (node out)
   (vector-push-extend #x09 out)
   (%put-string (with-standard-io-syntax
-                 (let ((*package* (find-package :keyword)))
+                 (let ((*package* (find-package :keyword))
+                       (*print-readably* nil))
                    (prin1-to-string node)))
                out))
 
@@ -557,15 +678,18 @@ fit, and whatever assembling signals for a program that no longer assembles."
         (setf (bin-cursor-pos cursor) end)))))
 
 (defun %bin-fallback (cursor)
-  (let ((text (%bin-string cursor)))
-    (with-standard-io-syntax
-      (let ((*package* (find-package :keyword))
-            (*read-eval* nil))
-        (multiple-value-bind (form end) (read-from-string text)
-          (unless (every (lambda (char) (member char '(#\Space #\Tab #\Newline)))
-                         (subseq text end))
-            (%bin-fail cursor "trailing text in a fallback atom"))
-          form)))))
+  (with-input-from-string (in (%bin-string cursor))
+    (handler-case (%read-snapshot-form in (bin-cursor-path cursor))
+      (snapshot-error (e) (%bin-fail cursor "~A" (snapshot-error-detail e))))))
+
+(defun %bin-symbol (cursor package-name name)
+  (let ((package (find-package package-name)))
+    (unless package
+      (%bin-fail cursor "no package ~A" package-name))
+    (multiple-value-bind (symbol status) (find-symbol name package)
+      (unless status
+        (%bin-fail cursor "unknown symbol ~A in ~A" name package-name))
+      symbol)))
 
 (defun %bin-list (cursor depth dotted)
   (let ((count (%bin-uleb cursor)))
@@ -577,8 +701,8 @@ fit, and whatever assembling signals for a program that no longer assembles."
       items)))
 
 (defun %bin-node (cursor depth)
-  (when (> depth +binary-max-depth+)
-    (%bin-fail cursor "nested deeper than ~D" +binary-max-depth+))
+  (when (> depth +snapshot-max-depth+)
+    (%bin-fail cursor "nested deeper than ~D" +snapshot-max-depth+))
   (let ((tag (%bin-byte cursor)))
     (if (>= tag #x80)
         (- tag #x80)
@@ -587,12 +711,9 @@ fit, and whatever assembling signals for a program that no longer assembles."
           (#x01 t)
           (#x02 (%bin-uleb cursor))
           (#x03 (- -1 (%bin-uleb cursor)))
-          (#x04 (intern (%bin-string cursor) :keyword))
-          (#x05 (let* ((package-name (%bin-string cursor))
-                       (package (find-package package-name)))
-                  (unless package
-                    (%bin-fail cursor "no package ~A" package-name))
-                  (intern (%bin-string cursor) package)))
+          (#x04 (%bin-symbol cursor "KEYWORD" (%bin-string cursor)))
+          (#x05 (let ((package-name (%bin-string cursor)))
+                  (%bin-symbol cursor package-name (%bin-string cursor))))
           (#x06 (%bin-string cursor))
           (#x07 (%bin-list cursor depth nil))
           (#x08 (%bin-list cursor depth t))
@@ -634,13 +755,18 @@ fit, and whatever assembling signals for a program that no longer assembles."
 (defun write-snapshot (snapshot path &key (format :sexp))
   "Write SNAPSHOT to PATH, replacing any existing file: as a readable
 s-expression for FORMAT :SEXP, or as a compact binary encoding of the same
-data for :BINARY. Returns PATH."
+data for :BINARY. Returns PATH. Signals SNAPSHOT-UNWRITABLE, leaving PATH
+alone, when SNAPSHOT holds circular data or anything but nil, t, numbers
+(finite floats only), characters, strings, symbols, conses and simple vectors.
+Shared structure is written as copies."
   (check-type format (member :sexp :binary))
+  (%check-snapshot-data snapshot)
   (ecase format
     (:sexp
      (with-open-file (out path :direction :output :if-exists :supersede)
        (with-standard-io-syntax
-         (let ((*package* (find-package :keyword)))
+         (let ((*package* (find-package :keyword))
+               (*print-readably* nil))
            (prin1 snapshot out)
            (terpri out)))))
     (:binary (%write-binary-snapshot snapshot path)))
@@ -648,19 +774,14 @@ data for :BINARY. Returns PATH."
 
 (defun read-snapshot (path)
   "The snapshot stored at PATH, in either format WRITE-SNAPSHOT writes. The
-file is untrusted: it is read without reader evaluation and signals
+file is untrusted: it is read without reader evaluation, without interning
+symbols (each must already exist) and with no shared structure. It signals
 SNAPSHOT-MALFORMED if it is not a readable snapshot form, and
 SNAPSHOT-VERSION-MISMATCH for a binary format this lasm does not read."
   (when (%binary-snapshot-file-p path)
     (return-from read-snapshot (%read-binary-snapshot (%file-octets path) path)))
-  (with-open-file (in path)
-    (let ((form (handler-case
-                    (with-standard-io-syntax
-                      (let ((*package* (find-package :keyword))
-                            (*read-eval* nil))
-                        (read in nil :eof)))
-                  ((or reader-error end-of-file package-error) (e)
-                    (%snapshot-fail 'snapshot-malformed "~A: unreadable (~A)" path e)))))
-      (unless (and (consp form) (eq (car form) :lasm-snapshot))
-        (%snapshot-fail 'snapshot-malformed "~A: not a lasm snapshot" path))
-      form)))
+  (let ((form (with-open-file (in path)
+                (%read-snapshot-form in path))))
+    (unless (and (consp form) (eq (car form) :lasm-snapshot))
+      (%snapshot-fail 'snapshot-malformed "~A: not a lasm snapshot" path))
+    form))

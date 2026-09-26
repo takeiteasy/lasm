@@ -237,6 +237,7 @@
    #:snapshot-machine-mismatch
    #:snapshot-malformed
    #:snapshot-device-unknown
+   #:snapshot-unwritable
 
    ;; Interrupts (#109)
    #:signal-interrupt

@@ -12,7 +12,9 @@
   ;; execution against a declared CLOCK-SPEED. Resolves via
   ;; ~/quicklisp/local-projects, not the Quicklisp dist -- see
   ;; docs/getting-started.md.
-  :depends-on (#:trivial-high-precision-timer)
+  ;; #288: ECLECTOR reads untrusted snapshot files without interning symbols
+  ;; or running reader macros; from the Quicklisp dist.
+  :depends-on (#:trivial-high-precision-timer #:eclector)
   :serial t
   :components ((:file "package")
                (:file "storage")

@@ -8,7 +8,7 @@ from a file. Each `defmachine` provides these operations. Stateful devices can a
 |---|---|
 | `machine-snapshot machine &key assembly` | The snapshot, a list tree. `assembly` [embeds the program](#embedded-programs). |
 | `restore-snapshot machine snapshot` | Replaces `machine`'s state and returns it. |
-| `write-snapshot snapshot path &key format` | Writes the snapshot, replacing any existing file. `format` is `:sexp` (default) or `:binary`. Returns `path`. |
+| `write-snapshot snapshot path &key format` | Writes the snapshot, replacing any existing file. `format` is `:sexp` (default) or `:binary`. Returns `path`. Signals [`snapshot-unwritable`](#snapshot-data) before touching `path` for data it cannot store. |
 | `read-snapshot path` | The snapshot stored at `path`, in either format. |
 | `snapshot-assembly snapshot &key machine` | The assembly rebuilt from the [embedded program](#embedded-programs), or `nil` when there is none. |
 
@@ -52,8 +52,24 @@ address space stays small.
 
 Both encode the same data and carry the same snapshot version.
 `read-snapshot` tells them apart by the file's first bytes, so `restore-snapshot`
-and `load` take either. Device `:save` data is written in either format as
-readable data.
+and `load` take either.
+
+## Snapshot data
+
+Files hold only plain data. `write-snapshot` checks all of it, including
+device `:save` state and interrupt signal data, before opening the file.
+
+| Allowed | Notes |
+|---|---|
+| `nil`, `t`, integers, ratios, finite floats | Infinities and NaN are rejected. |
+| characters, strings | |
+| symbols | Read back only when the symbol already exists in the reading image.[^symbols] |
+| conses, simple vectors | Shared structure is written as copies. |
+
+Anything else, or a list or vector that contains itself, signals
+`snapshot-unwritable` and leaves an existing file at `path` as it was.
+`(let ((l (list 1))) (setf (cdr l) l) (write-snapshot l "x.snap"))` is
+rejected.
 
 ## Embedded programs
 
@@ -86,14 +102,18 @@ leaves the machine untouched.
 | `snapshot-version-mismatch` | The snapshot's version is not `+snapshot-version+`. |
 | `snapshot-machine-mismatch` | The snapshot is for another machine, or the storage or bank layout differs. |
 | `snapshot-malformed` | The payload is structurally invalid, a value does not fit its cell, or a file is not a readable snapshot. |
+| `snapshot-unwritable` | `write-snapshot` is given circular data or a value outside [the allowed data](#snapshot-data). |
 | `snapshot-device-unknown` | A saved device is neither declared on the machine nor already attached. |
 
 All four are `snapshot-error`s; `snapshot-error-detail` gives the message.
 
-`read-snapshot` treats the file as untrusted: reader evaluation is off, and
-anything unreadable signals `snapshot-malformed`. A binary file that is
-truncated, mis-tagged, nested too deeply or names an unknown package is
-malformed too, and a binary format this lasm does not read signals
+`read-snapshot` treats the file as untrusted. It never evaluates, never
+interns a symbol, and accepts no `#` syntax beyond `#\`, `#(` and `#:`, so `#.`,
+`#S`, `#P` and `#n=` are rejected. A symbol that does not exist,
+lists nested deeper than 1000, or a float exponent longer than four digits
+signals `snapshot-malformed`, as does anything unreadable. A binary file that is
+truncated, mis-tagged, nested too deeply or names an unknown package or symbol
+is malformed too, and a binary format this lasm does not read signals
 `snapshot-version-mismatch`. A binding to a missing
 device or an unbindable region is malformed too.
 `snapshot-assembly` signals `snapshot-malformed` for a damaged `:program` and
@@ -106,7 +126,7 @@ opts into snapshots with two more [`device`](devices.md) hooks:
 
 | Hook | Called as | When |
 |---|---|---|
-| `:save` | `(fn machine device)` | At `machine-snapshot`. Returns the device's state as readable data. |
+| `:save` | `(fn machine device)` | At `machine-snapshot`. Returns the device's state as [snapshot data](#snapshot-data). |
 | `:load` | `(fn machine device data)` | At `restore-snapshot`, on a freshly `:init`'d device, with what `:save` returned. |
 
 A device without both hooks is re-`:init`'d on restore and carries no saved
@@ -117,8 +137,8 @@ device keeps its index. A device attached at runtime with `attach-device`
 must already be on the target machine's bus to be restored.
 
 Interrupt signal data (the `data` given to `signal-interrupt` or
-`device-signal`) is stored as-is and must be readable by `read` to survive a
-file round trip.
+`device-signal`) is stored as-is and must be [snapshot data](#snapshot-data) to
+be written to a file.
 
 [^binary]: A binary file is the 8 bytes `89 4C 53 4E 50 0D 0A 1A`, a format
     byte (`1`), then one node. Each node starts with a tag byte:
@@ -132,6 +152,11 @@ file round trip.
     | `05` | any other symbol: package name, then symbol name |
     | `06` | a string: byte length, then UTF-8 |
     | `07`, `08` | a proper or dotted list: count, then that many nodes (and the tail for `08`) |
-    | `09` | any other atom: its printed form as a string, read back without evaluation |
+    | `09` | any other atom, such as a vector: its printed form as a string, read with the text reader |
 
     Names and strings are length-prefixed UTF-8. The reader rejects lists nested deeper than 1000.
+
+[^symbols]: The text reader is [Eclector](https://github.com/s-expressionists/Eclector)
+    with symbol lookup by `find-symbol` only. A snapshot naming a symbol from a
+    system that is not loaded is malformed. Load the machine's system before
+    reading its snapshot.
