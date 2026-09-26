@@ -166,7 +166,7 @@ bounded. Anything else signals `items-malformed`.
 | `(assemble-items-file path &key backend machine lexer origin memory)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
 | `(assemble-items items &key backend machine lexer origin memory file)` | Assembles a list of items. |
 | `(items-size items &key backend machine lexer origin memory assume)` | Returns the [size](#sizing) in cells. |
-| `(render-items items &key backend machine lexer)` | Returns the source text. |
+| `(render-items items &key backend machine lexer memory)` | Returns the source text. |
 
 The [command line](cli.md#items-programs) assembles `.lasm` files.
 
@@ -174,7 +174,6 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| The render-time range check of a forced mode uses the default memory's cell width. | [#341](https://todo.sr.ht/~takeiteasy/lasm/341) |
 | There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
 
 [^check]: The assembler records each `one-of` pick as a token span, exposed as

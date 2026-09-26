@@ -43,6 +43,7 @@
 (defvar *items-machine* nil)
 (defvar *items-frame* nil "The ITEMS-FRAME of the function being lowered, or NIL.")
 (defvar *items-backend* nil)
+(defvar *items-memory* nil "The memory element name items are assembled for, or NIL for the default.")
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
 (defvar *items-serial* 0 "Generated labels made so far, for the assembly in progress.")
 (defvar *items-used-names* nil "Names in the items, which generated labels avoid.")
@@ -556,8 +557,7 @@ to the enclosing label when one has been defined and the lexer has local labels.
                  (%items-fail 'items-malformed item
                               "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
                               form (intern hook :keyword)))
-                ((member (%designator-name (first form)) (backend-descriptor-stack-writers *items-backend*)
-                         :test #'equal)
+                ((%stack-writer-p *items-backend* (first form))
                  (%items-fail 'items-malformed item
                               "~S writes the stack pointer, which the lowering cannot see; use (:push)/(:pop), an (:op) that declares :pushes/:pops, or a frame pointer"
                               form))))))))
@@ -868,10 +868,9 @@ survive a call, and any other register cannot be kept."
 (defun %check-forced-range (mode tokens mnemonic item)
   "Signal ITEMS-OPERAND-MISMATCH for a constant in TOKENS, the operand forced into MODE, that does not fit its field.
 A value that depends on a label is checked when the assembler encodes it."
-  ;; TODO: the default memory's cell width, not :memory's (#341).
   (let ((variant (find mode (find-instruction-variants *items-machine* mnemonic)
                        :key #'instruction-descriptor-mode))
-        (cell-width (%machine-cell-width *items-machine*)))
+        (cell-width (%machine-cell-width *items-machine* *items-memory*)))
     (when variant
       (loop for ast in (try-match-operand-mode (coerce tokens 'simple-vector) mode)
             for i from 0
@@ -1012,10 +1011,13 @@ A value that depends on a label is checked when the assembler encodes it."
                     (%lookup-error 'unknown-lexer lexer "No lexer named ~S" lexer))))
     (values backend machine lexer)))
 
-(defmacro %with-items-context ((backend machine lexer) &body body)
+(defmacro %with-items-context ((backend machine lexer &optional memory) &body body)
   `(multiple-value-bind (backend* machine* lexer*) (%items-context ,backend ,machine ,lexer)
      (let* ((*items-backend* backend*)
             (*items-machine* machine*)
+            (*items-memory* (and ,memory
+                                 (or (%find-element-name machine* ,memory)
+                                     (%signal-usage-error 'usage-error "No memory named ~S" ,memory))))
             (*items-lexer* lexer*)
             (*items-lexer-descriptor* (find-lexer-descriptor lexer*))
             (*items-literals* (make-hash-table :test 'equal))
@@ -1060,10 +1062,10 @@ A value that depends on a label is checked when the assembler encodes it."
                                token-lines)))
       (values statements text unit lines))))
 
-(defun render-items (items &key backend machine (lexer 'default))
+(defun render-items (items &key backend machine (lexer 'default) memory)
   "The assembly source text ITEMS render as. Assembling it gives the cells
-ASSEMBLE-ITEMS gives."
-  (%with-items-context (backend machine lexer)
+ASSEMBLE-ITEMS gives. MEMORY sizes the range check of a forced mode's operand."
+  (%with-items-context (backend machine lexer memory)
     (nth-value 1 (%items-source items))))
 
 (defun assemble-items (items &key backend machine (lexer 'default) (origin 0) memory file)
@@ -1074,15 +1076,13 @@ FILE names the program in diagnostics. Signals ITEMS-MALFORMED for an item that
 is not well formed and ITEMS-OPERAND-MISMATCH for an operand that does not
 match its mode, or that the assembler read as another alternative of the
 instruction's modes; the assembler's own conditions otherwise."
-  (%with-items-context (backend machine lexer)
+  (%with-items-context (backend machine lexer memory)
     (multiple-value-bind (statements text unit lines) (%items-source items)
       (setf (source-unit-file unit) (and file (namestring (pathname file))))
       (let ((assembly (with-source-unit unit
                         (assemble-statements statements
                                              :machine *items-machine* :lexer *items-lexer* :origin origin
-                                             :memory (and memory
-                                                          (or (%find-element-name *items-machine* memory)
-                                                              (%signal-usage-error 'usage-error "No memory named ~S" memory)))
+                                             :memory *items-memory*
                                              :source text :source-unit unit))))
         (%check-choices assembly lines statements unit)
         assembly))))
@@ -1095,14 +1095,11 @@ variant, as ASSUME says; every other choice is the assembler's. The keys are
 ASSEMBLE-ITEMS's."
   (unless (member assume '(:widest :narrowest))
     (%signal-usage-error 'usage-error ":assume must be :widest or :narrowest, not ~S" assume))
-  (%with-items-context (backend machine lexer)
+  (%with-items-context (backend machine lexer memory)
     (multiple-value-bind (statements text unit) (%items-source items)
-      (let ((*unresolved-width* assume)
-            (memory (and memory
-                         (or (%find-element-name *items-machine* memory)
-                             (%signal-usage-error 'usage-error "No memory named ~S" memory)))))
+      (let ((*unresolved-width* assume))
         (with-source-unit unit
-          (%with-laid-out-statements (statements *items-machine* *items-lexer* origin memory text)
+          (%with-laid-out-statements (statements *items-machine* *items-lexer* origin *items-memory* text)
               (symbols sized final-address asm-origin info label-banks cell-width endian)
             (- final-address asm-origin)))))))
 

@@ -30,7 +30,8 @@
   ops         ; alist of (OP-NAME PARAMS FORM...), names upcased
   op-effects  ; alist of (OP-NAME :PUSHES X :POPS Y) for the ops that declare a stack effect
   (branches t) ; upcased mnemonics that branch, or T when the backend does not say
-  stack-writers ; upcased mnemonics that write the stack pointer
+  stack-writers ; upcased mnemonics listed as writing the stack pointer, on top of those their semantics show
+  stack-writer-exceptions ; upcased mnemonics never taken to write it
   parent      ; name of the backend extended, or NIL
   options     ; the DEFBACKEND options as given
   own-clauses ; the DEFBACKEND clauses as given, before merging with the parent's
@@ -53,6 +54,34 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
                (gethash (%designator-name designator) *backends*))
           (%lookup-error 'unknown-backend designator "No backend named ~S has been defined with DEFBACKEND"
                          designator))))
+
+(defun %role-register (backend role fallback)
+  (or (getf (backend-descriptor-registers backend) role) fallback))
+
+(defun %stack-writer-p (backend mnemonic)
+  "True when the instruction MNEMONIC of BACKEND's machine is a stack writer: listed by the backend, or
+its semantics write the stack pointer but not the program counter."
+  ;; TODO: any variant of the mnemonic counts, not the one an operand selects (#344).
+  (let* ((name (%designator-name mnemonic))
+         (descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
+         (pointers (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                         collect (%designator-name (stack-pointer-descriptor-register pointer))))
+         (sp (%role-register backend :stack-pointer (and (null (rest pointers)) (first pointers))))
+         (pc (%role-register backend :program-counter "PC")))
+    (cond ((member name (backend-descriptor-stack-writer-exceptions backend) :test #'equal) nil)
+          ((member name (backend-descriptor-stack-writers backend) :test #'equal) t)
+          (sp (some (lambda (variant)
+                      (let ((written (instruction-descriptor-written-registers variant)))
+                        (and (member sp written :test #'equal) (not (member pc written :test #'equal)))))
+                    (gethash name (machine-descriptor-instructions descriptor)))))))
+
+(defun backend-stack-writers (backend)
+  "The upcased mnemonics of BACKEND's machine that write the stack pointer, sorted."
+  (let* ((backend (find-backend backend))
+         (descriptor (find-machine-descriptor (backend-descriptor-machine backend))))
+    (sort (loop for name being the hash-keys of (machine-descriptor-instructions descriptor)
+                when (%stack-writer-p backend name) collect name)
+          #'string<)))
 
 (defun backend-register (backend role)
   "The register name (or list of names) BACKEND assigns to ROLE, or NIL."
@@ -250,6 +279,17 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
                 (cl:push (list* key declared) effects))
               (cl:push (list* key names forms) result))))))
     (values (nreverse result) (nreverse effects))))
+
+(defun %parse-stack-writers-clause (descriptor machine entries)
+  "Store the mnemonics ENTRIES add and, after :except, remove in DESCRIPTOR."
+  (let* ((split (position-if (lambda (entry) (and (keywordp entry) (string= (symbol-name entry) "EXCEPT"))) entries))
+         (added (%parse-mnemonics-clause "stack-writers" machine (subseq entries 0 split)))
+         (excepted (and split (%parse-mnemonics-clause "stack-writers :except" machine (subseq entries (1+ split)))))
+         (both (find-if (lambda (name) (member name excepted :test #'string=)) added)))
+    (when both
+      (%backend-error "stack-writers: ~A is both listed and excepted" both))
+    (setf (backend-descriptor-stack-writers descriptor) added
+          (backend-descriptor-stack-writer-exceptions descriptor) excepted)))
 
 (defun %parse-mnemonics-clause (head machine entries)
   "The upcased mnemonics ENTRIES name, each an instruction of MACHINE; HEAD names the clause in errors."
@@ -554,8 +594,7 @@ not another register the convention uses."
                 ((equal head "BRANCHES")
                  (setf (backend-descriptor-branches descriptor) (%parse-mnemonics-clause "branches" machine (rest clause))))
                 ((equal head "STACK-WRITERS")
-                 (setf (backend-descriptor-stack-writers descriptor)
-                       (%parse-mnemonics-clause "stack-writers" machine (rest clause)))))))
+                 (%parse-stack-writers-clause descriptor machine (rest clause))))))
       (%finish-backend-stack descriptor machine-descriptor)
       (%finish-backend-pointer descriptor)
       (%check-backend-kinds descriptor)
@@ -598,7 +637,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
      (branches mnemonic...)
-     (stack-writers mnemonic...)
+     (stack-writers [mnemonic...] [:except mnemonic...])
      (without-ops NAME...)                    ; with :extends only
 :extends merges PARENT's clauses under these by key, for the same machine or one
 extending it. An operand kind names an addressing mode; an operation expands to instruction
@@ -607,8 +646,9 @@ forms whose operands are (KIND value...) items, parameters, or expressions. A
 declare the cells (an integer or a parameter) an operation puts on or takes off
 the stack. The instructions in branches are the ones whose operands are
 branch targets; without the clause every instruction is taken to branch. The
-instructions in stack-writers are the ones that write the stack pointer, which
-call lowering rejects in a function whose stack depth it tracks.
+instructions whose semantics write the stack pointer but not the program counter
+are stack writers, which call lowering rejects in a function whose stack depth it
+tracks; stack-writers adds mnemonics to them and :except removes some.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

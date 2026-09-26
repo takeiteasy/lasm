@@ -31,7 +31,7 @@ package. A mistake signals `backend-definition-error`.
 | `(operands (KIND MODE)...)` | [Operand kinds](#operand-kinds). |
 | `(ops (NAME (PARAM...) FORM...)...)` | [Operations](#operations). |
 | `(branches MNEMONIC...)` | The instructions whose operands are [branch targets](#branches). |
-| `(stack-writers MNEMONIC...)` | The instructions that write the [stack pointer](#stack-writers). |
+| `(stack-writers [MNEMONIC...] [:except MNEMONIC...])` | Adds to and removes from the [instructions that write the stack pointer](#stack-writers). |
 | `(without-ops NAME...)` | Drops [inherited](#inheritance) operations. |
 
 Each clause is optional and may appear once.
@@ -150,12 +150,22 @@ instruction is checked.
 
 ## Stack writers
 
-`(stack-writers push retn)` lists the instructions that write the stack pointer
-other than through `:push`, `:pop`, `:alloc` or `:free`. In a function without a
-frame pointer, a raw instruction or undeclared `(:op)` expansion using one is
-`items-malformed`: the [stack depth](conventions.md#stack-depth) cannot follow
-it. Use `(:push)`/`(:pop)`, an `(:op)` that declares `:pushes`/`:pops`, or a
-frame pointer. Without the clause no instruction is checked.
+An instruction is a stack writer when its `semantics` set the stack pointer and
+not the program counter, so `call`, `ret` and `rti` are not.[^writers] In a
+function without a frame pointer, a raw instruction or undeclared `(:op)`
+expansion using one is `items-malformed`: the
+[stack depth](conventions.md#stack-depth) cannot follow it. Use
+`(:push)`/`(:pop)`, an `(:op)` that declares `:pushes`/`:pops`, or a frame
+pointer.
+
+`(stack-writers movv :except push)` adds `movv` to the derived instructions and
+removes `push` from them. `(backend-stack-writers backend)` returns the
+resulting mnemonics.
+
+```lisp
+(backend-stack-writers 'callfoo-abi)
+;; => ("ADDS" "POPR" "PUSH" "PUSHV" "SUBS")
+```
 
 ## Inheritance
 
@@ -176,7 +186,7 @@ the child's machine.
 | `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
 | `operands` | By kind. |
 | `ops` | By operation name. |
-| `branches` `stack-writers` | The child's list replaces the parent's. |
+| `branches` `stack-writers` | The child's clause replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 
 `:machine` defaults to the parent's machine. When given, it must be that machine
@@ -194,6 +204,9 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | Function | Returns |
 | --- | --- |
 | `(find-backend name)` | The `backend-descriptor`; `unknown-backend` if none. |
-| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` | The stored clauses. |
+| `(backend-stack-writers name)` | The [stack writers](#stack-writers), upcased and sorted. |
+| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
+
+[^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros. A mnemonic counts when any of its variants writes the stack pointer. A write through an operand place is not seen; list the mnemonic in `stack-writers`. See the [limitations](conventions.md#limitations).

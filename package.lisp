@@ -256,6 +256,7 @@
    #:backend-descriptor-ops
    #:backend-descriptor-op-effects
    #:backend-descriptor-branches
+   #:backend-stack-writers
    #:backend-register
    #:backend-expand-op
    #:assemble-items

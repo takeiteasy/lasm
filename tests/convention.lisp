@@ -694,7 +694,8 @@ ret
        (:stash1 (x) :pushes 1 (push x))))
 
 (fiveam:test a-raw-stack-writer-is-rejected-in-a-tracked-function
-  (fiveam:is (null (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'callfoo-abi)))
+  (fiveam:is (search "writes the stack pointer"
+                     (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'callfoo-abi)))
   (fiveam:is (search "writes the stack pointer"
                      (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'cv-writers-abi)))
   (fiveam:is (search "writes the stack pointer"
@@ -704,3 +705,14 @@ ret
   (fiveam:is (null (%cv-malformed '((:function f () (:op :stash1 (imm 1)) (:pop (reg a)) (:return))) 'cv-writers-abi)))
   (fiveam:is (null (%cv-malformed '((push (imm 1))) 'cv-writers-abi)))
   (fiveam:is (null (%cv-malformed '((:function f () (:depth 0) (:return))) 'cv-writers-abi))))
+
+(defbackend cv-except-abi (:extends callfoo-abi)
+  (stack-writers movv :except push))
+
+(fiveam:test a-control-transfer-is-not-a-stack-writer
+  (fiveam:is (null (%cv-malformed '((:function g () (:return)) (:function f () (call g) (:return))) 'callfoo-abi))))
+
+(fiveam:test a-stack-writers-clause-adds-to-and-excepts-from-the-derived-list
+  (fiveam:is (null (%cv-malformed '((:function f () (push (imm 1)) (:return))) 'cv-except-abi)))
+  (fiveam:is (search "writes the stack pointer"
+                     (%cv-malformed '((:function f () (movv (reg a) (reg b)) (:return))) 'cv-except-abi))))

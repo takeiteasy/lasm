@@ -269,6 +269,10 @@ under the same sub-opcode -- two co-tenants at one opcode need pairwise distinct
   ;; through a macro, so its declared cost is only a lower bound. See
   ;; %USES-DYNAMIC-CYCLES-P.
   (variable-cycles nil :type boolean)
+  ;; Upcased names of the registers this mode's (semantics ...) sets, pushes
+  ;; to or pops from. Only what the definition's own forms show: a write
+  ;; through an operand place is not seen. See %WRITTEN-REGISTERS.
+  (written-registers nil :type list)
   ;; Named ONE-OF selections that do not have an operand hole, such as a
   ;; literal-only alternative.  This is separate from the hole-aligned
   ;; CHOICES value so existing callers keep their shape.
@@ -1685,6 +1689,9 @@ macros bound by an enclosing MACROLET are visible to %USES-DYNAMIC-CYCLES-P.")
 (defvar *mode-variable-cycles* nil
   "True while descriptor forms are built for a mode whose semantics may elapse cycles.")
 
+(defvar *mode-written-registers* nil
+  "The registers the semantics of the mode whose descriptor forms are being built write.")
+
 (defun %semantics-fn-form (semantics-forms machine name operand-names hole-alternatives-list
                              &optional mode-operand-names named-slot-alternatives)
   "MODE-OPERAND-NAMES (#120), when given, is the union of every sibling
@@ -1762,6 +1769,7 @@ SUB-CHOICES or field-variant combo."
     :semantics-operand-map ',semantics-operand-map
     :cycles ,cycles
     :variable-cycles ,*mode-variable-cycles*
+    :written-registers ',*mode-written-registers*
     :semantics-fn ,semantics-fn-form))
 
 (defun %byte-operand-signedness (mode sub-choices &optional (sources (%mode-hole-sources mode)))
@@ -3208,7 +3216,7 @@ narrower extra word before one needing a wider one."
 (defun %make-word-instruction-descriptors (name machine mode opcode operand-names operand-registers
                                             semantics-operand-map alternatives relative-sources layout-name
                                             constants choice-selections cycles semantics-fn
-                                            &optional variable-cycles)
+                                            &optional variable-cycles written-registers)
   "Build concrete descriptor siblings from one compact field-alternative menu."
   (let* ((siblings
            (mapcar
@@ -3230,7 +3238,8 @@ narrower extra word before one needing a wider one."
                                                      (word-field-choice-choice choice)))
                :word-layout-name layout-name :word-constants constants
                :choice-selections choice-selections :cycles cycles
-               :variable-cycles variable-cycles :semantics-fn semantics-fn))
+               :variable-cycles variable-cycles :written-registers written-registers
+               :semantics-fn semantics-fn))
             (%expand-word-field-choice-combos alternatives)))
          (index (make-hash-table :test 'equal)))
     (dolist (descriptor siblings)
@@ -3247,7 +3256,8 @@ narrower extra word before one needing a wider one."
     ',(mapcar #'word-operand-spec-name specs)
     ',(mapcar #'word-operand-spec-register specs)
     ',semantics-operand-map ,alternatives-form ',hole-sources ',layout-name
-    ,constants-form ',choice-selections ,cycles ,semantics-fn-form ,*mode-variable-cycles*))
+    ,constants-form ',choice-selections ,cycles ,semantics-fn-form ,*mode-variable-cycles*
+    ',*mode-written-registers*))
 
 (defun %key-hole-roles (key min)
   "One role per hole of KEY's shape, in hole order: :BASE for the first MIN holes of
@@ -3661,6 +3671,7 @@ field to fall back to" machine name mode-name (%mode-hole-count mode)))
                         :word-constants ,constants-form
                         :cycles ,cycles
                         :variable-cycles ,*mode-variable-cycles*
+                        :written-registers ',*mode-written-registers*
                         :semantics-fn ,(%semantics-fn-form semantics-forms machine name nil nil))))
         ;; Keep each source operand subclause as the stable identity of one
         ;; semantics position. This includes unnamed holes, which cannot be
@@ -4138,7 +4149,8 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
 (semantics ...) of its own and no shared top-level (semantics ...) default"
                                             machine name mode-sym)))))
           (%check-word-opcode machine name opcode)
-          (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p semantics-forms)))
+          (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p semantics-forms))
+                (*mode-written-registers* (%written-registers semantics-forms machine)))
             (if (%word-machine-p machine)
                 (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)
                                               opcode operand-subclauses mode mode-sym machine
@@ -4178,6 +4190,59 @@ is walked as written."
                (%uses-dynamic-cycles-p expansion)
                (some #'%uses-dynamic-cycles-p (rest form)))))
         (t (or (%uses-dynamic-cycles-p (car form)) (%uses-dynamic-cycles-p (cdr form))))))
+
+(defun %written-registers (forms machine)
+  "The upcased names of the registers FORMS, semantics forms for MACHINE, write:
+the places of set!, setf, setq, incf and decf, and the stack pointer a push,
+pop or interrupt-return moves. Macros expand in *DEFINSTRUCTION-ENVIRONMENT*."
+  ;; TODO: a write through an operand place, such as (set! (r dst) ...) with
+  ;; dst naming the stack pointer, is not seen (#343).
+  (let* ((descriptor (find-machine-descriptor machine))
+         (names '()))
+    (labels ((note (symbol)
+               (when (and symbol (symbolp symbol))
+                 (pushnew (%designator-name symbol) names :test #'string=)))
+             (note-place (place)
+               (cond ((symbolp place) (note place))
+                     ((and (consp place) (%named-p (first place) "SREF") (consp (third place))
+                           (eq (first (third place)) 'quote))
+                      (note (second (third place))))))
+             (note-stack (target)
+               (note (or target (%sole-stack-target descriptor))))
+             (walk (form)
+               (cond ((atom form))
+                     ((not (symbolp (first form))) (walk-list form))
+                     ((%named-p (first form) "QUOTE"))
+                     ((%named-p (first form) "SET!" "SETF" "SETQ")
+                      (loop for (place value) on (rest form) by #'cddr
+                            do (note-place place) (walk value)))
+                     ((%named-p (first form) "INCF" "DECF")
+                      (note-place (second form))
+                      (walk-list (cddr form)))
+                     ((%named-p (first form) "PUSH")
+                      (note-stack (third form))
+                      (walk (second form)))
+                     ((%named-p (first form) "POP")
+                      (note-stack (second form)))
+                     ((%named-p (first form) "INTERRUPT-RETURN")
+                      (let ((interrupts (machine-descriptor-interrupts descriptor)))
+                        (when (and interrupts (eq (interrupt-descriptor-stack-kind interrupts) :pointer))
+                          (note (interrupt-descriptor-stack-name interrupts)))))
+                     ((and (not (eq (first form) 'lambda))
+                           (macro-function (first form) *definstruction-environment*))
+                      (let ((expansion (handler-case (macroexpand-1 form *definstruction-environment*)
+                                         (error () nil))))
+                        (if expansion (walk expansion) (walk-list (rest form)))))
+                     (t (walk-list (rest form)))))
+             (walk-list (forms)
+               (loop for tail = forms then (cdr tail)
+                     while (consp tail)
+                     do (walk (car tail)))))
+      (walk-list forms))
+    (nreverse names)))
+
+(defun %named-p (symbol &rest names)
+  (and (symbolp symbol) (member (symbol-name symbol) names :test #'string=)))
 
 (defun %instruction-registration-form (machine name descriptors-form)
   (let ((registration `(register-instruction-variants!
@@ -4451,7 +4516,8 @@ layout has no effect" machine name))
                         (constants (%parse-field-value-subclauses machine name nil layout layout-name
                                                                     field-value-subclauses nil))
                         (constants-form (%word-constants-form constants)))
-                   (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause))))
+                   (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause)))
+                     (*mode-written-registers* (%written-registers (rest semantics-clause) machine)))
                      (%instruction-registration-form
                       machine name
                       `(list ,(%descriptor-form machine name nil opcode nil nil
@@ -4534,7 +4600,8 @@ mechanism (#136), not supported on byte-encoded machine ~S -- see (opcode n :sub
              (let ((layout-name (%parse-layout-subclause machine name nil layout-subclause)))
              (multiple-value-bind (opcode sub) (%parse-opcode-subclause machine name opcode-subclause)
                (%check-word-opcode machine name opcode)
-               (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause))))
+               (let ((*mode-variable-cycles* (%uses-dynamic-cycles-p (rest semantics-clause)))
+                     (*mode-written-registers* (%written-registers (rest semantics-clause) machine)))
                  (if (%word-machine-p machine)
                      (multiple-value-bind (bindings forms)
                          (%word-mode-descriptor-forms machine name `(find-mode-descriptor ',mode-sym ',machine)

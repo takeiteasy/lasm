@@ -116,6 +116,17 @@ when TARGET (a stack or a stack-pointer register) is gated (#300)."
           `(progn ,@checks ,form)
           form))))
 
+(defun %sole-stack-target (descriptor)
+  "The stack a bare PUSH/POP names on DESCRIPTOR: the sole :stack element, or,
+when there is none, the sole (stack-pointer ...) register."
+  (let ((stacks (loop for element in (machine-descriptor-elements descriptor)
+                      when (eq (storage-element-kind element) :stack)
+                        collect (storage-element-name element)))
+        (pointers (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                        collect (stack-pointer-descriptor-register pointer))))
+    (cond ((= (length stacks) 1) (first stacks))
+          ((and (null stacks) (= (length pointers) 1)) (first pointers)))))
+
 (defmacro with-machine-bindings ((machine-var machine-name) &body body)
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
@@ -231,9 +242,7 @@ these for a run-time-computed index."
              (pointer-names (mapcar #'first pointer-alist))
              (bank-names (mapcar (lambda (entry) (memory-region-name (cdr entry)))
                                  (%banked-regions descriptor)))
-             (sole-stack (cond
-                           ((= (length stack-names) 1) (first stack-names))
-                           ((and (null stack-names) (= (length pointer-names) 1)) (first pointer-names))))
+             (sole-stack (%sole-stack-target descriptor))
              (sole-fixed-stack (and (= (length stack-names) 1) (first stack-names)))
              (fixed-stack-error
                (if stack-names
