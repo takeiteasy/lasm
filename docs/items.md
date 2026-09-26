@@ -82,6 +82,26 @@ operation or kind, a wrong argument count, a keyword where a value belongs.
 Both are `items-error`s; `items-error-detail` and `items-error-item` give the
 message and the item.
 
+## Sizing
+
+`(items-size items &key backend machine lexer origin memory assume)` returns the
+cells `items` occupy, from their first cell to the end of the last, without
+encoding. A label the items never define is allowed.
+
+```lisp
+(items-size '((br elsewhere) (nop)) :machine 'm)                    ; => 4
+(items-size '((br elsewhere) (nop)) :machine 'm :assume :narrowest) ; => 3
+```
+
+| `:assume` | An operand naming a label the items do not define is sized at |
+| --- | --- |
+| `:widest` (default) | Its widest variant: a fit is safe whatever the label's value. |
+| `:narrowest` | Its narrowest variant. |
+
+A label the items define is sized as `assemble-items` sizes it, so a branch that
+reaches its target stays short. `.res` space and `.org` gaps count. `:origin`
+and `:memory` are `assemble-items`'s.
+
 ## Rendering
 
 `(render-items items :backend b)` returns the source text. Assembling it gives
@@ -125,6 +145,7 @@ bounded. Anything else signals `items-malformed`.
 | `(read-items-from-string text)` | The same for a string. |
 | `(assemble-items-file path &key backend machine lexer origin memory)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
 | `(assemble-items items &key backend machine lexer origin memory file)` | Assembles a list of items. |
+| `(items-size items &key backend machine lexer origin memory assume)` | Returns the [size](#sizing) in cells. |
 | `(render-items items &key backend machine lexer)` | Returns the source text. |
 
 The [command line](cli.md#items-programs) assembles `.lasm` files.
@@ -134,7 +155,6 @@ The [command line](cli.md#items-programs) assembles `.lasm` files.
 | Limitation | Ticket |
 | --- | --- |
 | A named variant mode cannot be forced against width relaxation. | [#327](https://todo.sr.ht/~takeiteasy/lasm/327) |
-| There is no size query without assembling. | [#324](https://todo.sr.ht/~takeiteasy/lasm/324) |
 | There is no language above items. | [#319](https://todo.sr.ht/~takeiteasy/lasm/319) |
 
 [^check]: The assembler records each `one-of` pick as a token span, exposed as

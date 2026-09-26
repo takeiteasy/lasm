@@ -104,4 +104,33 @@ hlt" :machine 'callfoo))
   (assert (= 42 (regref machine 'r 0)))
   (assert (= #x100 (sref machine 'sp))))
 
+;; An operation may define labels, each unique to its expansion (#325), and
+;; ITEMS-SIZE measures items before they are assembled (#324).
+(defmachine branchy
+  (register pc :width 16)
+  (register r :width 16 :names (a b))
+  (memory ram :width 8 :addr-width 16))
+(defmode branchy-reg (expr :register r))
+(definstruction branchy tst (modes branchy-reg)
+  (encoding (opcode 1) (operand x :width 1))
+  (semantics nil))
+(definstruction branchy jz (modes relative)
+  (encoding (opcode 2) (operand :mode))
+  (semantics nil))
+(definstruction branchy br
+  (modes (relative (opcode 3) (semantics nil))
+         (absolute (opcode 4) (semantics nil))))
+(definstruction branchy nop (encoding (opcode 5)) (semantics nil))
+(defbackend branchy-abi (:machine branchy)
+  (operands (reg branchy-reg))
+  (ops (:cjz (r target) (tst r) (jz skip) (br target) (:label skip))))
+
+(let ((items '((:label top) (:op :cjz (reg a) top) (:op :cjz (reg b) top) (nop))))
+  (format t "~%Rendered with generated labels:~%~A" (render-items items :backend 'branchy-abi))
+  (assert (= 13 (items-size items :backend 'branchy-abi)))
+  (assert (= 13 (length (assembly-cells (assemble-items items :backend 'branchy-abi)))))
+  ;; A branch to a label defined elsewhere is sized by :assume.
+  (assert (= 3 (items-size '((br elsewhere)) :machine 'branchy :assume :widest)))
+  (assert (= 2 (items-size '((br elsewhere)) :machine 'branchy :assume :narrowest))))
+
 (format t "~%All assertions passed.~%")

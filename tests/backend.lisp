@@ -447,3 +447,135 @@ call .inner" :machine 'callfoo))
                   (defbackend bk-fp-e5 (:extends callfoo-abi :machine callfoo-fp)
                     (call :args (a b)) (frame :pointer b))))
     (fiveam:is (typep (%backend-error-of form) 'backend-definition-error) "~S" form)))
+
+;;; Sizing and labels in operations (#324, #325)
+
+(defmachine bk-br-machine
+  (register pc :width 16)
+  (register r :width 16 :names (a b))
+  (memory ram :width 8 :addr-width 16))
+
+(defmode bk-br-reg (expr :register r))
+
+(definstruction bk-br-machine tst
+  (modes bk-br-reg)
+  (encoding (opcode 1) (operand x :width 1))
+  (semantics nil))
+
+(definstruction bk-br-machine jz
+  (modes relative)
+  (encoding (opcode 2) (operand :mode))
+  (semantics nil))
+
+(definstruction bk-br-machine br
+  (modes
+    (relative (opcode 3) (semantics nil))
+    (absolute (opcode 4) (semantics nil))))
+
+(definstruction bk-br-machine nop
+  (encoding (opcode 5))
+  (semantics nil))
+
+(defbackend bk-br-abi (:machine bk-br-machine)
+  (operands (reg bk-br-reg))
+  (ops (:cjz (r target) (tst r) (jz skip) (br target) (:label skip))
+       (:twice () (br again) (:label again) (br again2) (:label again2))))
+
+(defbackend bk-br-child-abi (:extends bk-br-abi)
+  (ops (:nothing () (nop))))
+
+(defun %cell-count (items &rest keys)
+  (length (assembly-cells (apply #'assemble-items items keys))))
+
+(fiveam:test items-size-equals-the-assembled-size-of-a-closed-program
+  (let ((items '((br end) (nop) (:label end) (nop))))
+    (fiveam:is (= (%cell-count items :machine 'bk-br-machine)
+                  (items-size items :machine 'bk-br-machine)))
+    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine)))))
+
+(fiveam:test items-size-sizes-a-label-the-items-never-define-by-assume
+  (let ((items '((br elsewhere) (nop))))
+    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine)))
+    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine :assume :widest)))
+    (fiveam:is (= 3 (items-size items :machine 'bk-br-machine :assume :narrowest)))))
+
+(fiveam:test items-size-keeps-a-branch-to-a-label-the-items-define-short
+  (fiveam:is (= 3 (items-size '((br next) (:label next) (nop)) :machine 'bk-br-machine :assume :widest))))
+
+(fiveam:test items-size-counts-reserved-space-and-honours-the-origin
+  (fiveam:is (= 6 (items-size '((:directive res 5) (nop)) :machine 'bk-br-machine)))
+  (fiveam:is (= 2 (items-size '((nop) (nop)) :machine 'bk-br-machine :origin 300))))
+
+(fiveam:test items-size-rejects-an-unknown-assumption
+  (fiveam:signals usage-error (items-size '((nop)) :machine 'bk-br-machine :assume :middle)))
+
+(fiveam:test items-size-signals-items-errors
+  (fiveam:signals items-malformed (items-size '((:op :nosuch)) :backend 'bk-br-abi)))
+
+(fiveam:test items-size-of-a-backend-program-matches-assembling-it
+  (let ((items '((:op :cjz (reg a) done) (nop) (:label done) (nop))))
+    (fiveam:is (= (%cell-count items :backend 'bk-br-abi)
+                  (items-size items :backend 'bk-br-abi)))))
+
+(defun %cjz-items ()
+  '((:label start) (:op :cjz (reg a) start) (:op :cjz (reg b) start) (nop)))
+
+(fiveam:test an-operation-label-is-unique-to-each-expansion
+  (let* ((source (render-items (%cjz-items) :backend 'bk-br-abi))
+         (assembly (assemble-items (%cjz-items) :backend 'bk-br-abi)))
+    (fiveam:is (search ".skip__LASM_1:" source))
+    (fiveam:is (search ".skip__LASM_2:" source))
+    (fiveam:is (equalp (assembly-cells assembly)
+                       (assembly-cells (assemble source :machine 'bk-br-machine))))
+    (fiveam:is (equalp #(1 0 2 2 3 250 1 1 2 2 3 244 5) (assembly-cells assembly)))))
+
+(fiveam:test an-operation-label-is-global-before-any-global-label
+  (let ((source (render-items '((:op :cjz (reg a) end) (:label end) (nop)) :backend 'bk-br-abi)))
+    (fiveam:is (search "skip__LASM_1:" source))
+    (fiveam:is (not (search ".skip__LASM_1" source)))))
+
+(fiveam:test an-operation-label-leaves-a-users-local-label-in-scope
+  (let ((items '((:label main) (:label .again) (:op :cjz (reg a) main) (br .again))))
+    (fiveam:is (= (items-size items :backend 'bk-br-abi)
+                  (%cell-count items :backend 'bk-br-abi)))))
+
+(fiveam:test an-argument-named-like-an-operation-label-is-not-captured
+  (let* ((items '((:label skip) (:op :cjz (reg a) skip) (nop)))
+         (source (render-items items :backend 'bk-br-abi)))
+    (fiveam:is (search "br skip" source))
+    (fiveam:is (search "jz .skip__LASM_1" source))
+    (fiveam:is (= 7 (%cell-count items :backend 'bk-br-abi)))))
+
+(fiveam:test an-operation-with-several-labels-names-each
+  (let ((source (render-items '((:label f) (:op :twice)) :backend 'bk-br-abi)))
+    (fiveam:is (search ".again__LASM_1:" source))
+    (fiveam:is (search ".again2__LASM_2:" source))))
+
+(fiveam:test generated-labels-avoid-names-the-items-use
+  (let ((source (render-items '((:label f) (:label ".skip__LASM_1") (:op :cjz (reg a) f)) :backend 'bk-br-abi)))
+    (fiveam:is (search ".skip__LASM_2:" source))))
+
+(fiveam:test an-inherited-operation-keeps-its-labels
+  (let ((source (render-items '((:label f) (:op :cjz (reg a) f)) :backend 'bk-br-child-abi)))
+    (fiveam:is (search ".skip__LASM_1:" source))))
+
+(fiveam:test a-lowering-operation-may-define-a-label
+  (eval '(defbackend bk-br-hook-abi (:extends callfoo-abi)
+          (ops (:return () (:label done) (ret)))))
+  (let ((source (render-items '((:function f (:args 0) (:return))) :backend 'bk-br-hook-abi)))
+    (fiveam:is (search ".done__LASM_1:" source))))
+
+(fiveam:test backend-expand-op-returns-label-forms-unrenamed
+  (fiveam:is (equal '((tst (reg a)) (jz skip) (br (reg b)) (:label skip))
+                    (backend-expand-op 'bk-br-abi :cjz '((reg a) (reg b))))))
+
+(fiveam:test defbackend-checks-operation-labels
+  (dolist (ops '(((:op (r) (tst r) (:label x) (:label x)))
+                 ((:op (r) (tst r) (:label r)))
+                 ((:op (r) (tst r) (:label)))
+                 ((:op (r) (tst r) (:label :x)))
+                 ((:op (r) (jz nowhere)))))
+    (fiveam:is (typep (%backend-error-of `(defbackend bk-br-bad (:machine bk-br-machine)
+                                            (operands (reg bk-br-reg))
+                                            (ops ,@ops)))
+                      'backend-definition-error))))

@@ -7,6 +7,9 @@
 ;;;; The same tokens render as the ordinary source text an ASSEMBLY retains,
 ;;;; so listings, diagnostics and snapshots work unchanged.
 ;;;;
+;;;; ITEMS-SIZE sizes a run of items without encoding it. An operation's
+;;;; (:label NAME) forms are renamed per expansion (%FRESH-LABEL).
+;;;;
 ;;;; Items:  (:label NAME)  (:directive NAME expr...)  (:op NAME arg...)
 ;;;;         (MNEMONIC operand...)  and the lowered (:function ...) (:call ...)
 ;;;;         (:return) (:push X) (:pop X)
@@ -40,6 +43,9 @@
 (defvar *items-frame* nil "The ITEMS-FRAME of the function being lowered, or NIL.")
 (defvar *items-backend* nil)
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
+(defvar *items-serial* 0 "Generated labels made so far, for the assembly in progress.")
+(defvar *items-used-names* nil "Names in the items, which generated labels avoid.")
+(defvar *items-global-label-seen* nil "True once an item has defined a non-local label.")
 (defvar *items-pickables* nil "Mnemonic -> its (VARIANT-MODE-NAMES . ALTERNATIVE-NAMES), for the assembly in progress.")
 
 (defun %source-name (designator item)
@@ -287,9 +293,30 @@ alternative of the assembled instruction (see %CLAIM-RIVAL)."
                             (%substitute-params (cdr tree) bindings)))
         (t tree)))
 
-(defun backend-expand-op (backend name args)
-  "The instruction forms of BACKEND's operation NAME with ARGS in place of its
-parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument count."
+(defun %rename-labels (tree renames)
+  "TREE with each symbol RENAMES (an alist keyed by upcased name) maps replaced by
+its string, except an instruction's mnemonic."
+  (cond ((and (symbolp tree) tree (not (keywordp tree)))
+         (or (cdr (assoc (symbol-name tree) renames :test #'string-equal)) tree))
+        ((consp tree) (cons (%rename-labels (car tree) renames) (%rename-labels-tail (cdr tree) renames)))
+        (t tree)))
+
+(defun %rename-labels-tail (tree renames)
+  (if (consp tree)
+      (cons (%rename-labels (car tree) renames) (%rename-labels-tail (cdr tree) renames))
+      tree))
+
+(defun %rename-form-labels (form renames)
+  (cond ((%label-form-p form) (list (first form) (or (cdr (assoc (%designator-name (second form)) renames :test #'string=))
+                                                     (second form))))
+        ((consp form) (cons (first form) (%rename-labels-tail (rest form) renames)))
+        (t form)))
+
+(defun %expand-op (backend name args &optional rename)
+  "The forms of BACKEND's operation NAME with ARGS in place of its parameters.
+The forms may include the operation's (:label NAME) forms; RENAME, when given,
+maps each such NAME to the string that replaces it, before the arguments are
+substituted so an argument is never mistaken for a label."
   (let* ((backend (find-backend backend))
          (item (list* :op name args))
          (entry (assoc (%designator-name name) (backend-descriptor-ops backend) :test #'equal)))
@@ -299,11 +326,46 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
       (unless (= (length params) (length args))
         (%items-fail 'items-malformed item "operation ~A takes ~D argument~:P, got ~D"
                      name (length params) (length args)))
-      (let ((bindings (mapcar #'cons params args)))
+      (let ((bindings (mapcar #'cons params args))
+            (renames (and rename
+                          (loop for label in (%template-labels (first entry) params forms)
+                                collect (cons label (funcall rename label))))))
         (mapcar (lambda (form)
-                  (cons (first form)
-                        (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))
+                  (let ((form (%rename-form-labels form renames)))
+                    (if (%label-form-p form)
+                        form
+                        (cons (first form)
+                              (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))))
                 forms)))))
+
+(defun backend-expand-op (backend name args)
+  "The forms of BACKEND's operation NAME with ARGS in place of its parameters.
+A form (:label NAME) defines a label of the operation; it is not renamed here.
+Signals ITEMS-MALFORMED for an unknown operation or a wrong argument count."
+  (%expand-op backend name args))
+
+(defun %fresh-label (label)
+  "A name for the template LABEL, used by one expansion of an operation: local
+to the enclosing label when one has been defined and the lexer has local labels.
+TODO: the __LASM_ suffix needs \"_\" among the lexer's identifier characters to
+re-lex a rendering (#332)."
+  (let* ((base (string-downcase label))
+         (prefix (lexer-descriptor-local-label-prefix *items-lexer-descriptor*))
+         (local (and *items-global-label-seen* prefix (plusp (length prefix)))))
+    (loop for candidate = (format nil "~@[~A~]~A__LASM_~D" (and local prefix) base (incf *items-serial*))
+          unless (gethash candidate *items-used-names*)
+            do (setf (gethash candidate *items-used-names*) t)
+               (return candidate))))
+
+(defun %template-lines (forms item)
+  "The item lines of an operation's expanded FORMS, ITEM being the item that expanded it."
+  (loop for form in forms
+        append (if (%label-form-p form)
+                   (%item-lines form)
+                   (list (%instruction-line form item)))))
+
+(defun %op-lines (name args item)
+  (%template-lines (%expand-op *items-backend* name args #'%fresh-label) item))
 
 ;;; Convention lowering (#320, #322)
 ;;;
@@ -340,8 +402,7 @@ parameters. Signals ITEMS-MALFORMED for an unknown operation or a wrong argument
                (assoc (%designator-name name) (backend-descriptor-ops *items-backend*) :test #'equal))
     (%items-fail 'items-malformed item "~A needs the backend operation ~(~S~)~@[ (backend ~A)~]"
                  (first item) name (and *items-backend* (backend-descriptor-name *items-backend*))))
-  (mapcar (lambda (form) (%instruction-line form item))
-          (backend-expand-op *items-backend* name args)))
+  (%op-lines name args item))
 
 (defun %register-operand (register item)
   (let ((kind (and *items-backend* (backend-register *items-backend* :operand))))
@@ -593,7 +654,10 @@ survive a call, and any other register cannot be kept."
       ((and (keywordp head) (string= (symbol-name head) "LABEL"))
        (unless (and (= (length item) 2) (or (stringp (second item)) (symbolp (second item))))
          (%items-fail 'items-malformed item "expected (:label NAME)"))
-       (list (make-item-line :label (%source-name (second item) item))))
+       (let ((name (%source-name (second item) item)))
+         (unless (%local-name-p name)
+           (setf *items-global-label-seen* t))
+         (list (make-item-line :label name))))
       ((and (keywordp head) (string= (symbol-name head) "DIRECTIVE"))
        (unless (rest item)
          (%items-fail 'items-malformed item "expected (:directive NAME expr...)"))
@@ -601,8 +665,7 @@ survive a call, and any other register cannot be kept."
       ((and (keywordp head) (string= (symbol-name head) "OP"))
        (unless (and (rest item) *items-backend*)
          (%items-fail 'items-malformed item "(:op NAME arg...) needs a backend"))
-       (mapcar (lambda (form) (%instruction-line form item))
-               (backend-expand-op *items-backend* (second item) (cddr item))))
+       (%op-lines (second item) (cddr item) item))
       ((%keyword-named-p head "FUNCTION") (%function-lines item))
       ((%keyword-named-p head "CALL") (%call-lines item))
       ((%keyword-named-p head "RETURN") (%return-lines item))
@@ -672,13 +735,25 @@ survive a call, and any other register cannot be kept."
             (*items-lexer-descriptor* (find-lexer-descriptor lexer*))
             (*items-literals* (make-hash-table :test 'equal))
             (*items-pickables* (make-hash-table :test 'equal))
+            (*items-serial* 0)
+            (*items-used-names* (make-hash-table :test 'equal))
+            (*items-global-label-seen* nil)
             (*mode-scope* machine*)
             (*register-alias-elements*
               (machine-descriptor-register-alias-elements (find-machine-descriptor machine*))))
        ,@body)))
 
+(defun %seed-used-names (tree)
+  "Record every name TREE mentions, so generated labels differ from all of them."
+  (typecase tree
+    (cons (%seed-used-names (car tree)) (%seed-used-names (cdr tree)))
+    (string (setf (gethash tree *items-used-names*) t))
+    (symbol (when tree
+              (setf (gethash (%source-name tree nil) *items-used-names*) t)))))
+
 (defun %items-source (items)
   "The statements ITEMS make, the source text they render as, its unit and the item lines."
+  (%seed-used-names items)
   (let* ((lines (loop for item in items append (%item-lines item)))
          (descriptor *items-lexer-descriptor*)
          (text (make-string-output-stream))
@@ -726,6 +801,25 @@ instruction's modes; the assembler's own conditions otherwise."
                                              :source text :source-unit unit))))
         (%check-choices assembly lines statements unit)
         assembly))))
+
+(defun items-size (items &key backend machine (lexer 'default) (origin 0) memory (assume :widest))
+  "The cells ITEMS occupy, from their first cell to the end of their last, laid
+out as ASSEMBLE-ITEMS would but without encoding, so a label ITEMS never define
+is allowed. An operand naming such a label is sized at its :WIDEST or :NARROWEST
+variant, as ASSUME says; every other choice is the assembler's. The keys are
+ASSEMBLE-ITEMS's."
+  (unless (member assume '(:widest :narrowest))
+    (%signal-usage-error 'usage-error ":assume must be :widest or :narrowest, not ~S" assume))
+  (%with-items-context (backend machine lexer)
+    (multiple-value-bind (statements text unit) (%items-source items)
+      (let ((*unresolved-width* assume)
+            (memory (and memory
+                         (or (%find-element-name *items-machine* memory)
+                             (%signal-usage-error 'usage-error "No memory named ~S" memory)))))
+        (with-source-unit unit
+          (%with-laid-out-statements (statements *items-machine* *items-lexer* origin memory text)
+              (symbols sized final-address asm-origin info label-banks cell-width endian)
+            (- final-address asm-origin)))))))
 
 (defun %find-element-name (machine designator)
   (let ((element (find-if (lambda (element) (%same-name-p (storage-element-name element) designator))

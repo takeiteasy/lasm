@@ -474,6 +474,20 @@ STATEMENT's mnemonic declares as a :SUFFIX for that hole."
 operands are forced with a mnemonic suffix~;accepted prefixes: ~:*~{~A~^, ~}~]"
                         (statement-mnemonic statement) (%operand-text tokens) prefix accepted)))
 
+(defvar *unresolved-width* :narrowest
+  "The width an operand naming a label the assembly never defines is sized at:
+:NARROWEST, or :WIDEST (ITEMS-SIZE, #324).")
+
+(defvar *layout-defined-names* nil
+  "The label and assignment tables of the layout in progress, or NIL.")
+
+(defun %external-label-p (name)
+  "True when NAME is defined nowhere in the layout in progress and operands
+naming such labels are sized :WIDEST."
+  (and (eq *unresolved-width* :widest)
+       *layout-defined-names*
+       (notany (lambda (table) (nth-value 1 (gethash name table))) *layout-defined-names*)))
+
 (defun %choose-variant (statement variants address &key symbols scope (floor 0) (cell-width 8) finalp)
   "Pick which of a mnemonic's VARIANTS (instruction-descriptor list,
 instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
@@ -657,9 +671,13 @@ accepts ~A"
                                                         (if signedp
                                                             (%fits-signed-width-p v w cell-width)
                                                             (%fits-width-p v w cell-width))))))))
-                            (unresolved-label () :unresolved)))))
+                            (unresolved-label (c)
+                              (if (%external-label-p (unresolved-label-name c))
+                                  :external
+                                  :unresolved))))))
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
+           (any-externalp (some (lambda (c) (eq :external (funcall resolvedp c))) candidates))
            ;; #104: the first remaining CANDIDATE (if any) whose word-fields
            ;; include a CHOICE-selected one -- i.e. the eligibility filter
            ;; above actually narrowed by syntax for this statement, so a
@@ -677,6 +695,7 @@ accepts ~A"
            (chosen (cond
                      (fitting fitting)
                      (any-unresolvedp narrowest)
+                     (any-externalp widest)
                      ((and finalp choice-narrowed)
                       (%signal-word-choice-overflow statement choice-narrowed symbols address anchor cell-width))
                      (t widest))))
@@ -1433,7 +1452,8 @@ threaded through every pass. Operands parse once, into *OPERAND-CACHE* (#39)."
   "The relaxation loop of %LAYOUT."
   (multiple-value-bind (labels assignments scopes) (%layout-labels statements)
     (%check-layout-dependencies statements labels assignments scopes)
-    (let ((floors (make-array (length statements) :initial-element 0))
+    (let ((*layout-defined-names* (list labels assignments))
+          (floors (make-array (length statements) :initial-element 0))
           (widths :none)
           (effects nil)
           (banks nil)
@@ -1765,6 +1785,51 @@ with."
 
 ;;; Entry points
 
+(defun %locate-syntax-error (condition)
+  "Fill in the source position CONDITION lacks from the unit being assembled."
+  (when *current-source-unit*
+    (unless (lasm-syntax-error-source condition)
+      (setf (lasm-syntax-error-source condition)
+            (source-unit-text *current-source-unit*)))
+    (unless (lasm-syntax-error-file condition)
+      (setf (lasm-syntax-error-file condition)
+            (source-unit-file *current-source-unit*))))
+  (when *current-invocation-line*
+    (setf (lasm-syntax-error-line condition) *current-invocation-line*
+          (lasm-syntax-error-column condition) nil
+          (lasm-syntax-error-definition-line condition) *current-definition-line*)
+    (when *current-definition-unit*
+      (setf (lasm-syntax-error-definition-file condition)
+            (source-unit-file *current-definition-unit*)
+            (lasm-syntax-error-definition-source condition)
+            (source-unit-text *current-definition-unit*)))))
+
+(defmacro %with-laid-out-statements ((statements machine lexer origin memory source)
+                                     (&rest vars) &body body)
+  "Run BODY with VARS bound to %LAYOUT's values for STATEMENTS -- symbols, sized
+entries, final address, assembly origin, symbol info and label banks -- followed
+by the cell width and endianness, inside the context ASSEMBLE-STATEMENTS sets up."
+  `(with-source-context ,source
+     (let* ((cell-width (%machine-cell-width ,machine ,memory))
+            (*cell-width* cell-width)
+            (*mode-scope* ,machine)
+            (endian (%machine-endian ,machine ,memory))
+            (*banked-regions*
+              (let ((element (descriptor-element (find-machine-descriptor ,machine)
+                                                 (%resolve-memory ,machine ,memory))))
+                (remove-if-not #'memory-region-banks (storage-element-regions element))))
+            (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor ,machine)))
+            (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor ,machine))))
+       (declare (ignorable endian))
+       (handler-bind ((lasm-syntax-error #'%locate-syntax-error))
+         (multiple-value-bind ,(subseq vars 0 6)
+             (%layout (preprocess ,statements :machine ,machine :lexer ,lexer)
+                      ,machine ,origin cell-width)
+           (declare (ignorable ,@(subseq vars 0 6)))
+           (let ,(list (list (nth 6 vars) 'cell-width) (list (nth 7 vars) 'endian))
+             (declare (ignorable ,(nth 6 vars) ,(nth 7 vars)))
+             ,@body))))))
+
 (defun assemble-statements (statements &key machine (lexer 'default) (origin 0) memory source source-unit)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
 ASSEMBLY. Runs PREPROCESS (preprocess.lisp) first, so both this entry
@@ -1798,52 +1863,17 @@ renders without a source column. Retains the address<->statement mapping
 LISTING-LINE list in address order; see listing.lisp for how it's rendered
 and looked up. Also retains %LAYOUT's scope/kind metadata (#37) as
 ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
-  (with-source-context source
-    ;; #72: *REGISTER-ALIASES* (instruction.lisp) in scope for both EVAL-EXPR
-    ;; (operand/assignment folding) and %BIND-SYMBOL!'s alias-collision
-    ;; check, for the whole of this assembly.
-    (let* ((cell-width (%machine-cell-width machine memory))
-           (*cell-width* cell-width)
-           (*mode-scope* machine)
-           (endian (%machine-endian machine memory))
-           (*banked-regions*
-             (let ((element (descriptor-element (find-machine-descriptor machine)
-                                                (%resolve-memory machine memory))))
-               (remove-if-not #'memory-region-banks (storage-element-regions element))))
-            (*register-aliases* (machine-descriptor-register-aliases (find-machine-descriptor machine)))
-            (*register-alias-elements* (machine-descriptor-register-alias-elements (find-machine-descriptor machine))))
-      (handler-bind ((lasm-syntax-error
-                       (lambda (condition)
-                         (when *current-source-unit*
-                           (unless (lasm-syntax-error-source condition)
-                             (setf (lasm-syntax-error-source condition)
-                                   (source-unit-text *current-source-unit*)))
-                           (unless (lasm-syntax-error-file condition)
-                             (setf (lasm-syntax-error-file condition)
-                                   (source-unit-file *current-source-unit*))))
-                         (when *current-invocation-line*
-                           (setf (lasm-syntax-error-line condition)
-                                 *current-invocation-line*
-                                 (lasm-syntax-error-column condition) nil
-                                 (lasm-syntax-error-definition-line condition)
-                                 *current-definition-line*)
-                           (when *current-definition-unit*
-                             (setf (lasm-syntax-error-definition-file condition)
-                                   (source-unit-file *current-definition-unit*)
-                                   (lasm-syntax-error-definition-source condition)
-                                   (source-unit-text *current-definition-unit*)))))))
-        (multiple-value-bind (symbols sized final-address asm-origin info label-banks)
-            (%layout (preprocess statements :machine machine :lexer lexer)
-                     machine origin cell-width)
-          (multiple-value-bind (cells bank-images)
-              (let ((*label-banks* label-banks))
-                (%encode sized symbols asm-origin final-address cell-width endian))
-           (make-assembly :cells cells :banks bank-images
-                         :cell-width cell-width
-                         :origin asm-origin :symbols symbols :symbol-info info
-                         :listing (%build-listing sized) :source source
-                         :source-unit source-unit
-                         :parameters (list :origin origin :memory memory :lexer lexer))))))))
+  (%with-laid-out-statements (statements machine lexer origin memory source)
+      (symbols sized final-address asm-origin info label-banks cell-width endian)
+    (multiple-value-bind (cells bank-images)
+        (let ((*label-banks* label-banks))
+          (%encode sized symbols asm-origin final-address cell-width endian))
+      (make-assembly :cells cells :banks bank-images
+                     :cell-width cell-width
+                     :origin asm-origin :symbols symbols :symbol-info info
+                     :listing (%build-listing sized) :source source
+                     :source-unit source-unit
+                     :parameters (list :origin origin :memory memory :lexer lexer)))))
 
 (defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then

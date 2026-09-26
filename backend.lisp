@@ -248,12 +248,32 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
             (%check-hole-value op element params)))
     (t (%backend-error "ops: ~A: ~S cannot be an operand value" op value))))
 
-(defun %check-op-operand (op operand params kinds machine)
+(defun %label-form-p (form)
+  (and (consp form) (keywordp (first form)) (string= (symbol-name (first form)) "LABEL")))
+
+(defun %template-labels (op params forms)
+  "The upcased names of the labels FORMS define, each (:label NAME). A label is
+local to one expansion of the operation."
+  (let ((names '()))
+    (dolist (form forms)
+      (when (%label-form-p form)
+        (let ((name (and (= (length form) 2) (not (keywordp (second form))) (%designator-name (second form)))))
+          (unless name
+            (%backend-error "ops: ~A: expected (:label NAME), got ~S" op form))
+          (when (member name params :test #'equal)
+            (%backend-error "ops: ~A: label ~A is also a parameter" op name))
+          (when (member name names :test #'equal)
+            (%backend-error "ops: ~A: label ~A is defined twice" op name))
+          (cl:push name names))))
+    (nreverse names)))
+
+(defun %check-op-operand (op operand params kinds machine &optional labels)
   (flet ((param-p (name) (member (%designator-name name) params :test #'equal)))
     (typecase operand
       ((or integer string) t)
-      (symbol (unless (and (not (keywordp operand)) (param-p operand))
-                (%backend-error "ops: ~A: ~S is neither a parameter nor an operand; write (KIND value...)"
+      (symbol (unless (and (not (keywordp operand))
+                           (or (param-p operand) (member (%designator-name operand) labels :test #'equal)))
+                (%backend-error "ops: ~A: ~S is neither a parameter, a label nor an operand; write (KIND value...)"
                                 op operand)))
       (cons
        (let ((head (first operand)))
@@ -274,7 +294,9 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
                (t (%backend-error "ops: ~A: ~S is not a declared operand kind" op head)))))
       (t (%backend-error "ops: ~A: ~S cannot be an operand" op operand)))))
 
-(defun %check-op-form (op form params kinds machine)
+(defun %check-op-form (op form params kinds machine &optional labels)
+  (when (%label-form-p form)
+    (return-from %check-op-form nil))
   (unless (and (consp form) (or (stringp (first form)) (and (symbolp (first form)) (not (keywordp (first form))))))
     (%backend-error "ops: ~A: ~S is not an instruction form" op form))
   (let ((mnemonic (string (first form))))
@@ -283,14 +305,15 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
         (unknown-instruction ()
           (%backend-error "ops: ~A: machine ~S has no instruction ~A" op machine mnemonic)))))
   (dolist (operand (rest form))
-    (%check-op-operand op operand params kinds machine)))
+    (%check-op-operand op operand params kinds machine labels)))
 
 (defun %check-backend-ops (descriptor)
   (dolist (entry (backend-descriptor-ops descriptor))
     (destructuring-bind (op params &rest forms) entry
-      (dolist (form forms)
-        (%check-op-form op form params (backend-descriptor-operands descriptor)
-                        (backend-descriptor-machine descriptor))))))
+      (let ((labels (%template-labels op params forms)))
+        (dolist (form forms)
+          (%check-op-form op form params (backend-descriptor-operands descriptor)
+                          (backend-descriptor-machine descriptor) labels))))))
 
 (defun %finish-backend-stack (descriptor machine-descriptor)
   "Check the backend's stack pointer and frame direction against the machine's
@@ -473,7 +496,8 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (without-ops NAME...)                    ; with :extends only
 :extends merges PARENT's clauses under these by key, for the same machine or one
 extending it. An operand kind names an addressing mode; an operation expands to instruction
-forms whose operands are (KIND value...) items, parameters, or expressions.
+forms whose operands are (KIND value...) items, parameters, or expressions. A
+(:label NAME) form defines a label unique to each expansion.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

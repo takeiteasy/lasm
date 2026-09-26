@@ -101,8 +101,27 @@ be a whole operand or one value inside one.
 ;; (:op :load (reg a) 5)  ->  (ldi (reg a) (imm 5))
 ```
 
-`(backend-expand-op backend name args)` returns the forms. A form's mnemonic
+`(backend-expand-op backend name args)` returns the forms; a `(:label NAME)`
+form is returned as written. A form's mnemonic
 must exist on the machine, and its operand kinds must be declared.
+
+### Labels
+
+A `(:label NAME)` form in a template defines a label of that operation. Each
+expansion gets its own copy, so an operation can branch over its own
+instructions. A bare `NAME` in an operand refers to it, and a parameter cannot
+share its name.
+
+```lisp
+(ops (:cjz (r target) (tst r) (jz skip) (br target) (:label skip)))
+;; (:op :cjz (reg a) done) twice ->  tst a / jz .skip__LASM_1 / br done / .skip__LASM_1: ...
+```
+
+The generated name is `NAME__LASM_N`. It is local (the lexer's local-label
+prefix) once a non-local label precedes it, so labels of the surrounding code
+keep their scope; before any, it is global. An argument named like a template
+label is never captured. Operations that [call lowering](conventions.md#backend-operations)
+emits may define labels too.
 
 `:push` `:pop` `:alloc` `:free` `:move` `:call` `:return` `:return-pop`
 `:enter` and `:leave` are the operations
@@ -150,6 +169,6 @@ The command line loads backends from its machine file; see [Command line](cli.md
 | Limitation | Ticket |
 | --- | --- |
 | A child backend does not follow later changes to its parent. | [#330](https://todo.sr.ht/~takeiteasy/lasm/330) |
-| An operation cannot define labels of its own. | [#325](https://todo.sr.ht/~takeiteasy/lasm/325) |
+| Rendered text with generated labels does not re-lex under a lexer without `_` in identifiers. | [#332](https://todo.sr.ht/~takeiteasy/lasm/332) |
 
 [^copy]: Redefining the parent leaves its children as they were; redefine them too.

@@ -257,6 +257,7 @@
    #:backend-expand-op
    #:assemble-items
    #:assemble-items-file
+   #:items-size
    #:render-items
    #:read-items
    #:read-items-from-string
