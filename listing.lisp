@@ -486,12 +486,13 @@ address, so hex width has no natural meaning)."
         (format nil "~A (body ~A)" site (%symbol-site-text (symbol-info-definition-file info) body))
         site)))
 
-(defun symbols-text (assembly &key stream)
+(defun symbols-text (assembly &key stream (offset 0))
   "Render ASSEMBLY's symbol table (#37), grouped by scope
 (ASSEMBLY-SYMBOL-GROUPS): top-level symbols first, then each global label
 with its locals indented underneath, each row naming a symbol, its value
 (hex for a :LABEL, decimal for an assignment), its KIND, and its source
-location (file:line, plus the macro body site when expanded). Returns the text as a
+location (file:line, plus the macro body site when expanded). OFFSET moves
+main-image labels, for a program loaded at another origin. Returns the text as a
 string when STREAM is NIL (default); otherwise writes to STREAM and returns
 NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
   (let* ((digits (%listing-hex-digits (assembly-cell-width assembly)))
@@ -504,7 +505,14 @@ NIL. Empty string/no output when ASSEMBLY-SYMBOL-INFO is NIL."
                        (format s "~:[  ~;~]~A~24T~A~30T~(~A~)~40T~A~%"
                                (null (symbol-info-scope sym))
                                (symbol-info-name sym)
-                               (%symbol-value-text sym digits)
+                               (%symbol-value-text
+                                (if (and (/= offset 0) (eq (symbol-info-kind sym) :label)
+                                         (null (symbol-info-region sym)))
+                                    (let ((moved (copy-symbol-info sym)))
+                                      (incf (symbol-info-value moved) offset)
+                                      moved)
+                                    sym)
+                                digits)
                                (symbol-info-kind sym)
                                (%symbol-location-text sym))))))))
     (if stream (progn (write-string body stream) nil) body)))

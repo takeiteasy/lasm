@@ -1345,6 +1345,11 @@ count: ldx #3
     (fiveam:is (eq :breakpoint (debug-continue session)))
     (fiveam:is (= #x302 (%pc session)))))
 
+(fiveam:test symbols-command-follows-a-relocated-program
+  (let ((session (%dbg-relocated-session)))
+    (fiveam:is (search ".loop                 302" (debug-command session "info sym")))
+    (fiveam:is (not (search " 102 " (debug-command session "info sym"))))))
+
 (fiveam:test where-disassembles-a-relocated-program-with-its-labels
   (let ((session (%dbg-relocated-session)))
     (setf (sref (debug-session-machine session) 'pc) #x302)

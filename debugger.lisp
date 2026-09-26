@@ -1308,14 +1308,19 @@ banked region or the range runs past its end."
 (defun %session-symbols-text (session)
   "SESSION's symbol tables: one block per assembly, headed by its origin when
 there are several."
-  (let ((assemblies (debug-session-assemblies session)))
-    (cond ((null assemblies) (format nil "No assembly attached to this session.~%"))
-          ((null (rest assemblies)) (symbols-text (first assemblies)))
-          (t (with-output-to-string (s)
-               (loop for assembly in assemblies
-                     for n from 1
-                     do (format s "Image ~D (origin $~V,'0X):~%~A" n (debug-session-addr-digits session)
-                                (assembly-origin assembly) (symbols-text assembly))))))))
+  (let ((assemblies (debug-session-assemblies session))
+        (machine (debug-session-machine session))
+        (memory (debug-session-memory session)))
+    (flet ((offset (assembly) (%assembly-load-offset machine assembly memory)))
+      (cond ((null assemblies) (format nil "No assembly attached to this session.~%"))
+            ((null (rest assemblies))
+             (symbols-text (first assemblies) :offset (offset (first assemblies))))
+            (t (with-output-to-string (s)
+                 (loop for assembly in assemblies
+                       for n from 1
+                       do (format s "Image ~D (origin $~V,'0X):~%~A" n (debug-session-addr-digits session)
+                                  (+ (assembly-origin assembly) (offset assembly))
+                                  (symbols-text assembly :offset (offset assembly))))))))))
 
 (defun %assembly-at-pc (session machine)
   "The session assembly holding the PC: the loaded program there when SESSION

@@ -242,7 +242,7 @@ and prints until `quit` or end of input. `lasm debug` runs it from the
 | `continue`, `continue N cycles`, `until ADDR\|LABEL` | Run to a stop condition. |
 | `back [N]` | Undo steps. |
 | `reverse-continue`, `rc`, `reverse-until ADDR\|LABEL` | Run back to the previous hit or address. |
-| `info reg`, `info banks`, `info sym` | Inspect state and symbols. |
+| `info reg`, `info banks`, `info sym` | Inspect state and symbols; labels show their loaded addresses. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. Usable inside expressions and conditions. |
 | `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. `N` may be an expression. |
