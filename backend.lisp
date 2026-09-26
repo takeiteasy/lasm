@@ -9,7 +9,8 @@
 ;;;; backend can be written in any package.
 ;;;;
 ;;;; #323: (:extends PARENT) merges the parent's clauses under the child's, by
-;;;; key, and checks the result against the child's machine.
+;;;; key, and checks the result against the child's machine. Redefining a
+;;;; parent rebuilds its children, all or none (#330).
 
 (in-package #:lasm)
 
@@ -24,10 +25,12 @@
   machine     ; name of the machine described
   registers   ; plist of role -> upcased name, or list of names (see +BACKEND-REGISTER-ROLES+); :OPERAND -> kind name
   call        ; plist :ARGS :ORDER :CLEANUP :RETURN-ADDRESS-SLOTS
-  frame       ; plist :GROWS :ALIGNMENT, and :SLOT (a kind name) and :POINTER (a register name) when given
+  frame       ; plist :GROWS :ALIGNMENT, and :SLOT, :STACK-SLOT (kind names) and :POINTER (a register name) when given
   operands    ; alist of (KIND-NAME . MODE-NAME)
   ops         ; alist of (OP-NAME PARAMS FORM...), names upcased
   parent      ; name of the backend extended, or NIL
+  options     ; the DEFBACKEND options as given
+  own-clauses ; the DEFBACKEND clauses as given, before merging with the parent's
   clauses)    ; the registers, call, frame, operands and ops clauses after merging with the parent's
 
 (defvar *backends* (make-hash-table :test 'equal)
@@ -107,7 +110,7 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
 (defparameter +backend-clause-keys+
   `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand)
     ("CALL" :args :order :cleanup :return-address-slots)
-    ("FRAME" :grows :alignment :slot :pointer))
+    ("FRAME" :grows :alignment :slot :stack-slot :pointer))
   "The keys each plist clause takes, by clause head.")
 
 (defun %clause-keys (head)
@@ -169,15 +172,17 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
 (defun %parse-frame-clause (descriptor args)
   (%check-plist "frame" args (%clause-keys "FRAME"))
   (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot))
-        (pointer (getf args :pointer)))
+        (stack-slot (getf args :stack-slot)) (pointer (getf args :pointer)))
     (unless (member grows '(nil :down :up))
       (%backend-error "frame :grows must be :down or :up, got ~S" grows))
     (unless (typep alignment '(integer 1))
       (%backend-error "frame :alignment must be a positive integer, got ~S" alignment))
-    (when (and slot (not (%designator-name slot)))
-      (%backend-error "frame :slot: ~S is not a kind name" slot))
+    (loop for (what kind) in `((":slot" ,slot) (":stack-slot" ,stack-slot))
+          when (and kind (not (%designator-name kind)))
+            do (%backend-error "frame ~A: ~S is not a kind name" what kind))
     (append (list :grows grows :alignment alignment)
             (and slot (list :slot (%designator-name slot)))
+            (and stack-slot (list :stack-slot (%designator-name stack-slot)))
             (and pointer (list :pointer (%backend-register-name descriptor pointer))))))
 
 (defun %parse-operands-clause (machine entries)
@@ -233,7 +238,8 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
 
 (defun %check-backend-kinds (descriptor)
   (loop for (what kind) in `(("registers :operand" ,(getf (backend-descriptor-registers descriptor) :operand))
-                             ("frame :slot" ,(getf (backend-descriptor-frame descriptor) :slot)))
+                             ("frame :slot" ,(getf (backend-descriptor-frame descriptor) :slot))
+                             ("frame :stack-slot" ,(getf (backend-descriptor-frame descriptor) :stack-slot)))
         when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
           do (%backend-error "~A: ~A is not a declared operand kind" what kind)))
 
@@ -407,6 +413,24 @@ not another register the convention uses."
                                                  name (first without)))
                    merged))))))
 
+(defvar *pending-backends* nil
+  "Descriptors built for a redefinition and not yet registered, by upcased name.")
+
+(defun %backend-descendants (name)
+  "The upcased names of the backends extending NAME, directly or not, each after its parent."
+  (let ((found '()) (frontier (list (%designator-name name))))
+    (loop while frontier
+          do (let ((next (loop for descriptor being the hash-values of *backends*
+                               for key = (%designator-name (backend-descriptor-name descriptor))
+                               when (and (backend-descriptor-parent descriptor)
+                                         (member (%designator-name (backend-descriptor-parent descriptor)) frontier
+                                                 :test #'equal)
+                                         (not (member key found :test #'equal)))
+                                 collect key)))
+               (setf found (append found next)
+                     frontier next)))
+    found))
+
 (defun %backend-options (name options)
   "The machine name and the parent descriptor (or NIL) DEFBACKEND's OPTIONS give."
   (unless (and (consp options) (evenp (length options)))
@@ -416,7 +440,8 @@ not another register the convention uses."
   (let* ((parent-name (getf options :extends))
          (parent (and parent-name
                       (or (and (%designator-name parent-name)
-                               (gethash (%designator-name parent-name) *backends*))
+                               (or (cdr (assoc (%designator-name parent-name) *pending-backends* :test #'equal))
+                                   (gethash (%designator-name parent-name) *backends*)))
                           (%backend-error "DEFBACKEND ~S extends ~S, which has not been defined" name parent-name))))
          (given (getf options :machine))
          (machine (cond ((and given (%find-machine-name given)))
@@ -426,6 +451,8 @@ not another register the convention uses."
                                            name options)))))
     (when (and parent (equal (%designator-name name) (%designator-name (backend-descriptor-name parent))))
       (%backend-error "DEFBACKEND ~S cannot extend itself" name))
+    (when (and parent (member (%designator-name parent-name) (%backend-descendants name) :test #'equal))
+      (%backend-error "DEFBACKEND ~S extends ~S, which extends ~S" name parent-name name))
     (when (and parent (not (eq machine (backend-descriptor-machine parent)))
                (not (member (backend-descriptor-machine parent) (%machine-ancestors machine))))
       (%backend-error "DEFBACKEND ~S: machine ~S is not ~S or a machine extending it, which ~S targets"
@@ -444,42 +471,62 @@ not another register the convention uses."
           (%backend-error "DEFBACKEND ~S: unknown clause ~S; expected registers, call, frame, operands, ops~:[~; or without-ops~]"
                           name clause extendsp))))))
 
+(defun %build-backend (name options clauses)
+  "The descriptor DEFBACKEND's arguments describe, not yet registered."
+  (multiple-value-bind (machine parent) (%backend-options name options)
+    (%check-backend-clause-heads name clauses parent)
+    (let* ((machine-descriptor (find-machine-descriptor machine))
+           (own clauses)
+           (clauses (if parent
+                        (%merge-backend-clauses name (backend-descriptor-clauses parent) clauses)
+                        clauses))
+           (descriptor (make-backend-descriptor :name name :machine machine :frame (list :grows nil :alignment 1)
+                                                :call (list :args :stack :order :right-to-left :cleanup :caller
+                                                            :return-address-slots 1)
+                                                :parent (and parent (backend-descriptor-name parent))
+                                                :options options :own-clauses own :clauses clauses)))
+      (dolist (clause clauses)
+        (let ((head (%clause-head-name clause)))
+          (cond ((equal head "REGISTERS")
+                 (setf (backend-descriptor-registers descriptor)
+                       (%parse-registers-clause machine-descriptor (rest clause))))
+                ((equal head "CALL")
+                 (setf (backend-descriptor-call descriptor)
+                       (%parse-call-clause machine-descriptor (rest clause))))
+                ((equal head "FRAME")
+                 (setf (backend-descriptor-frame descriptor)
+                       (%parse-frame-clause machine-descriptor (rest clause))))
+                ((equal head "OPERANDS")
+                 (setf (backend-descriptor-operands descriptor) (%parse-operands-clause machine (rest clause))))
+                ((equal head "OPS")
+                 (setf (backend-descriptor-ops descriptor) (%parse-ops-clause (rest clause)))))))
+      (%finish-backend-stack descriptor machine-descriptor)
+      (%finish-backend-pointer descriptor)
+      (%check-backend-kinds descriptor)
+      (%check-backend-ops descriptor)
+      (%check-backend-hooks descriptor)
+      descriptor)))
+
 (defun %define-backend (name options clauses)
   (%with-definition (name backend-definition-error)
     (unless (and (symbolp name) name)
       (%backend-error "DEFBACKEND: ~S is not a valid backend name" name))
-    (multiple-value-bind (machine parent) (%backend-options name options)
-      (%check-backend-clause-heads name clauses parent)
-      (let* ((machine-descriptor (find-machine-descriptor machine))
-             (clauses (if parent
-                          (%merge-backend-clauses name (backend-descriptor-clauses parent) clauses)
-                          clauses))
-             (descriptor (make-backend-descriptor :name name :machine machine :frame (list :grows nil :alignment 1)
-                                                  :call (list :args :stack :order :right-to-left :cleanup :caller
-                                                              :return-address-slots 1)
-                                                  :parent (and parent (backend-descriptor-name parent))
-                                                  :clauses clauses)))
-        (dolist (clause clauses)
-          (let ((head (%clause-head-name clause)))
-            (cond ((equal head "REGISTERS")
-                   (setf (backend-descriptor-registers descriptor)
-                         (%parse-registers-clause machine-descriptor (rest clause))))
-                  ((equal head "CALL")
-                   (setf (backend-descriptor-call descriptor)
-                         (%parse-call-clause machine-descriptor (rest clause))))
-                  ((equal head "FRAME")
-                   (setf (backend-descriptor-frame descriptor)
-                         (%parse-frame-clause machine-descriptor (rest clause))))
-                  ((equal head "OPERANDS")
-                   (setf (backend-descriptor-operands descriptor) (%parse-operands-clause machine (rest clause))))
-                  ((equal head "OPS")
-                   (setf (backend-descriptor-ops descriptor) (%parse-ops-clause (rest clause)))))))
-        (%finish-backend-stack descriptor machine-descriptor)
-        (%finish-backend-pointer descriptor)
-        (%check-backend-kinds descriptor)
-        (%check-backend-ops descriptor)
-        (%check-backend-hooks descriptor)
-        (setf (gethash (%designator-name name) *backends*) descriptor)))))
+    (let ((*pending-backends* '()) (built '()))
+      (flet ((build (key name options clauses)
+               (let ((descriptor (%build-backend name options clauses)))
+                 (cl:push (cons key descriptor) *pending-backends*)
+                 (cl:push (cons key descriptor) built))))
+        (build (%designator-name name) name options clauses)
+        (dolist (key (%backend-descendants name))
+          (let ((old (gethash key *backends*)))
+            (handler-case (build key (backend-descriptor-name old)
+                                 (backend-descriptor-options old) (backend-descriptor-own-clauses old))
+              (backend-definition-error (c)
+                (%backend-error "DEFBACKEND ~S: child backend ~S no longer builds: ~A"
+                                name (backend-descriptor-name old) c))))))
+      (dolist (entry (reverse built))
+        (setf (gethash (car entry) *backends*) (cdr entry)))
+      (cdr (first (last built))))))
 
 (defmacro defbackend (name options &body clauses)
   "Define the compiler-target description NAME for a machine, from
@@ -490,7 +537,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
                 [:operand kind])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
-     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:pointer reg])
+     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) (mnemonic operand...)...)...)
      (without-ops NAME...)                    ; with :extends only

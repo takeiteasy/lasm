@@ -12,7 +12,7 @@
 ;;;;
 ;;;; Items:  (:label NAME)  (:directive NAME expr...)  (:op NAME arg...)
 ;;;;         (MNEMONIC operand...)  and the lowered (:function ...) (:call ...)
-;;;;         (:return) (:push X) (:pop X)
+;;;;         (:return) (:push X) (:pop X) (:depth n)
 ;;;; Operands: an expression, (KIND value...), (:mode MODE value...), the
 ;;;;           frame slots (:arg i) and (:local i), or (:force OPERAND), which
 ;;;;           writes OPERAND's mode as the mnemonic's suffix.
@@ -390,7 +390,9 @@ to the enclosing label when one has been defined and the lexer has local labels.
 ;;; top of the stack, or from the frame pointer when the frame has one (#321); a
 ;;; function body must keep the stack balanced between items, or use (:push)
 ;;; and (:pop), for a stack-pointer distance to hold.
-;;; TODO: depth is tracked item by item, not across labels or branches (#329).
+
+;;; Without a frame pointer a label must be reached at the depth it is defined
+;;; at, and a raw instruction that matches a stack operation is rejected.
 
 (defstruct items-frame
   nargs     ; declared arguments
@@ -398,7 +400,9 @@ to the enclosing label when one has been defined and the lexer has local labels.
   locals    ; cells allocated for locals, padded to the frame alignment
   saves     ; registers saved on entry
   pointer   ; the frame pointer register, or NIL
-  (depth 0)); cells pushed since the prologue
+  (depth 0) ; cells pushed since the prologue
+  labels    ; (NAME . DEPTH) for each label defined in the body
+  references) ; (NAME DEPTH ITEM) for each name an instruction of the body mentions
 
 (defun %keyword-named-p (x name)
   (and (keywordp x) (string= (symbol-name x) name)))
@@ -425,10 +429,13 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (list kind (string-downcase (string register)))))
 
 (defun %slot-operand (distance item)
-  (let ((kind (getf (backend-descriptor-frame *items-backend*) :slot)))
+  (let* ((frame (backend-descriptor-frame *items-backend*))
+         (stackp (and (getf frame :pointer) (null (items-frame-pointer *items-frame*))))
+         (key (if stackp :stack-slot :slot))
+         (kind (getf frame key)))
     (unless kind
-      (%items-fail 'items-malformed item "~A needs (frame :slot KIND) in the backend" (first item)))
-    (list kind (if (eq (getf (backend-descriptor-frame *items-backend*) :grows) :up)
+      (%items-fail 'items-malformed item "~A needs (frame ~(~S~) KIND) in the backend" (first item) key))
+    (list kind (if (eq (getf frame :grows) :up)
                    (- -1 distance)
                    distance))))
 
@@ -482,6 +489,63 @@ to the enclosing label when one has been defined and the lexer has local labels.
                    designator role (backend-descriptor-name *items-backend*)))
     name))
 
+(defun %depth-tracked-p ()
+  (and *items-frame* (null (items-frame-pointer *items-frame*))))
+
+(defun %record-label (name)
+  (when (%depth-tracked-p)
+    (cl:push (cons (%designator-name name) (items-frame-depth *items-frame*))
+             (items-frame-labels *items-frame*))))
+
+(defun %record-references (operands item)
+  "Note the names OPERANDS mention, at the current depth."
+  (when (%depth-tracked-p)
+    (labels ((walk (tree)
+               (typecase tree
+                 (cons (walk (car tree)) (walk (cdr tree)))
+                 (keyword nil)
+                 ((or string symbol)
+                  (when tree
+                    (cl:push (list (%designator-name tree) (items-frame-depth *items-frame*) item)
+                             (items-frame-references *items-frame*)))))))
+      (walk operands))))
+
+(defun %check-label-depths (frame)
+  (dolist (reference (reverse (items-frame-references frame)))
+    (destructuring-bind (name depth item) reference
+      (let ((label (assoc name (items-frame-labels frame) :test #'string=)))
+        (when (and label (/= depth (cdr label)))
+          (%items-fail 'items-malformed item
+                       "~A is reached at depth ~D but defined at depth ~D; use (:depth n) after a jump"
+                       name depth (cdr label)))))))
+
+(defun %template-matches-p (template form params)
+  "True when FORM is TEMPLATE with each of PARAMS replaced by anything."
+  (cond ((and (symbolp template) template (member (%designator-name template) params :test #'equal)) t)
+        ((and (consp template) (consp form))
+         (and (%template-matches-p (car template) (car form) params)
+              (%template-matches-p (cdr template) (cdr form) params)))
+        ((and (atom template) (atom form))
+         (or (eql template form) (and (%designator-name template) (%same-name-p template form))))))
+
+(defun %stack-operation-of (form)
+  "The name of the backend's :push, :pop, :alloc or :free that the single instruction FORM is."
+  (loop for hook in '("PUSH" "POP" "ALLOC" "FREE")
+        for entry = (assoc hook (backend-descriptor-ops *items-backend*) :test #'string=)
+        do (when (and entry (= (length entry) 3) (not (%label-form-p (third entry)))
+                      (%template-matches-p (third entry) form (second entry)))
+             (return hook))))
+
+(defun %check-stack-forms (forms item)
+  "Reject a raw FORM in a function without a frame pointer that changes the depth."
+  (when (and (%depth-tracked-p) *items-backend*)
+    (dolist (form forms)
+      (let ((hook (and (consp form) (not (%label-form-p form)) (%stack-operation-of form))))
+        (when hook
+          (%items-fail 'items-malformed item
+                       "~S does what the backend's ~(~S~) does, which the lowering cannot see; use (:push)/(:pop) or a frame pointer"
+                       form (intern hook :keyword)))))))
+
 (defun %function-lines (item)
   (unless (and (>= (length item) 3) (listp (third item)) (evenp (length (third item))))
     (%items-fail 'items-malformed item "expected (:function NAME (:args n :locals n :save (reg...)) ITEM...)"))
@@ -489,7 +553,8 @@ to the enclosing label when one has been defined and the lexer has local labels.
     (%items-fail 'items-malformed item "functions cannot nest"))
   (destructuring-bind (name options &rest body) (rest item)
     (loop for (key nil) on options by #'cddr
-          do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE"))
+          do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE")
+                   (%keyword-named-p key "FRAME"))
                (%items-fail 'items-malformed item "unknown function option ~S" key)))
     (flet ((option (name default)
              (loop for (key value) on options by #'cddr
@@ -498,15 +563,21 @@ to the enclosing label when one has been defined and the lexer has local labels.
       (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '())))
         (unless (and (typep nlocals '(integer 0)) (or (null nargs) (typep nargs '(integer 0))) (listp saves))
           (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
+        (unless (member (option "FRAME" t) '(t nil))
+          (%items-fail 'items-malformed item "expected :frame to be t or nil"))
+        (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
+          (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
         (when (and (null nargs)
                    (or (eq (%backend-call-option :cleanup) :callee)
                        (eq (%backend-call-option :order) :left-to-right)))
           (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
-        (let* ((pointer (getf (backend-descriptor-frame *items-backend*) :pointer))
+        (let* ((backend-pointer (getf (backend-descriptor-frame *items-backend*) :pointer))
+               (framep (option "FRAME" t))
+               (pointer (and framep backend-pointer))
                (saves (mapcar (lambda (register)
-                                (when (equal pointer (%designator-name register))
+                                (when (equal backend-pointer (%designator-name register))
                                   (%items-fail 'items-malformed item "~A is the frame pointer; the prologue already saves it"
-                                               pointer))
+                                               backend-pointer))
                                 (%frame-register register :callee-saved item))
                               saves))
                (alignment (getf (backend-descriptor-frame *items-backend*) :alignment))
@@ -519,7 +590,8 @@ to the enclosing label when one has been defined and the lexer has local labels.
                               (and pointer (%hook-lines :enter '() item))
                               (and (plusp locals) (%hook-lines :alloc (list locals) item)))))
           (let ((*items-frame* frame))
-            (append lines (loop for element in body append (%item-lines element)))))))))
+            (prog1 (append lines (loop for element in body append (%item-lines element)))
+              (%check-label-depths frame))))))))
 
 (defun %return-lines (item)
   (let ((frame *items-frame*))
@@ -537,6 +609,12 @@ to the enclosing label when one has been defined and the lexer has local labels.
               (if (and (eq (%backend-call-option :cleanup) :callee) (plusp nstack))
                   (%hook-lines :return-pop (list nstack) item)
                   (%hook-lines :return '() item))))))
+
+(defun %depth-lines (item)
+  (unless (and *items-frame* (= (length item) 2) (typep (second item) '(integer 0)))
+    (%items-fail 'items-malformed item "expected (:depth n), n a non-negative integer, inside (:function ...)"))
+  (setf (items-frame-depth *items-frame*) (second item))
+  '())
 
 (defun %push-pop-lines (item)
   (unless (= (length item) 2)
@@ -762,6 +840,7 @@ survive a call, and any other register cannot be kept."
        (let ((name (%source-name (second item) item)))
          (unless (%local-name-p name)
            (setf *items-global-label-seen* t))
+         (%record-label name)
          (list (make-item-line :label name))))
       ((and (keywordp head) (string= (symbol-name head) "DIRECTIVE"))
        (unless (rest item)
@@ -770,14 +849,22 @@ survive a call, and any other register cannot be kept."
       ((and (keywordp head) (string= (symbol-name head) "OP"))
        (unless (and (rest item) *items-backend*)
          (%items-fail 'items-malformed item "(:op NAME arg...) needs a backend"))
+       (when (and (%depth-tracked-p) (member (%designator-name (second item)) '("PUSH" "POP" "ALLOC" "FREE") :test #'equal))
+         (%items-fail 'items-malformed item "(:op ~(~S~) ...) changes the stack depth; use (:push)/(:pop) or a frame pointer"
+                      (second item)))
+       (%check-stack-forms (%expand-op *items-backend* (second item) (cddr item)) item)
+       (%record-references (cddr item) item)
        (%op-lines (second item) (cddr item) item))
       ((%keyword-named-p head "FUNCTION") (%function-lines item))
       ((%keyword-named-p head "CALL") (%call-lines item))
       ((%keyword-named-p head "RETURN") (%return-lines item))
       ((or (%keyword-named-p head "PUSH") (%keyword-named-p head "POP")) (%push-pop-lines item))
+      ((%keyword-named-p head "DEPTH") (%depth-lines item))
       ((keywordp head)
        (%items-fail 'items-malformed item "unknown item ~S" head))
-      (t (list (%instruction-line item item))))))
+      (t (%check-stack-forms (list item) item)
+         (%record-references (rest item) item)
+         (list (%instruction-line item item))))))
 
 (defun %layout-line (line number)
   "The tokens of LINE, placed on source line NUMBER, and that line's text."

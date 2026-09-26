@@ -31,10 +31,11 @@ ret
 
 | Item | Emits |
 | --- | --- |
-| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`. |
+| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`, `:frame nil`. |
 | `(:return)` | The epilogue and the return. |
 | `(:call TARGET ARG... [:keep (reg...)])` | The [call sequence](#calls). |
 | `(:push X)` `(:pop X)` | One push or pop, tracked in the frame. |
+| `(:depth n)` | Sets the [tracked depth](#stack-depth) to `n`. Emits nothing. |
 
 | Operand | Is |
 | --- | --- |
@@ -59,6 +60,35 @@ grows up.
 
 `(:arg i)` for a register argument names that register, so an inner `(:call)`
 overwrites it: copy it first or `:keep` it.
+
+## Stack depth
+
+Without a frame pointer, `(:arg i)` and `(:local i)` are addressed from the
+stack pointer, so the lowering counts the cells the body has pushed. A function
+without a frame pointer is checked three ways:
+
+| Check | Error when |
+| --- | --- |
+| Labels | A label is defined at one depth and an instruction that names it is at another. |
+| Raw stack instructions | An instruction, or an `(:op)` expansion form, is a backend's `:push`, `:pop`, `:alloc` or `:free` template: the same mnemonic, the parameters matching anything, the rest equal. `(:op :push ...)` is rejected too. |
+| `(:depth n)` | `n` is negative, or it is outside a `:function`. |
+
+`(:depth n)` states the depth where the tracking cannot know it, such as after
+a jump:
+
+```lisp
+(:function f ()
+  (:push (imm 1))
+  (call over)        ; at depth 1
+  (:pop (reg b))
+  (:depth 1)         ; `over` is reached from the call above
+  (:label over)
+  (:pop (reg b))
+  (:return))
+```
+
+A [frame pointer](#frame-pointer) function does not depend on the depth and is
+not checked.[^depth]
 
 ## Frame pointer
 
@@ -87,6 +117,24 @@ counts towards the frame's `:alignment`. The frame pointer cannot be a `:save`
 register. The backend's `:slot` kind takes an offset from the frame pointer, with
 the same signs as from the stack pointer: `+n` when the stack grows down,
 `-1-n` when it grows up.
+
+### Opting out
+
+`(:function f (:frame nil) ...)` skips `:enter` and `:leave` and the saved frame
+pointer cell, and addresses slots from the stack pointer through the backend's
+`(frame :stack-slot KIND)`, with the [stack depth](#stack-depth) tracked. Using a
+slot without a `:stack-slot` kind is `items-malformed`. `:frame t` on a backend
+with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
+
+```lisp
+(frame :pointer fp :slot fp-idx :stack-slot sp-idx)
+```
+
+```lisp
+(:function leaf (:args 1 :frame nil)
+  (lds (reg a) (:arg 0))    ; lds a, [ sp + 1 ]
+  (:return))                ; ret
+```
 
 ## Calls
 
@@ -183,5 +231,7 @@ frame pointer with one.
 | Limitation | Ticket |
 | --- | --- |
 | A symbol spelled like a register is read as that register in an argument or the call target. | [#336](https://todo.sr.ht/~takeiteasy/lasm/336) |
-| Without a frame pointer, the stack depth is tracked per item, not across labels or branches; a raw push in a body is not seen. | [#329](https://todo.sr.ht/~takeiteasy/lasm/329) |
-| Every function of a frame-pointer backend has a frame pointer, even a leaf. | [#331](https://todo.sr.ht/~takeiteasy/lasm/331) |
+| A data reference to a body label at another depth is rejected as a branch. | [#337](https://todo.sr.ht/~takeiteasy/lasm/337) |
+| Raw stack changes are found only for single-form `:push` `:pop` `:alloc` `:free` templates. | [#338](https://todo.sr.ht/~takeiteasy/lasm/338) |
+
+[^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

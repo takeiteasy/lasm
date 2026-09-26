@@ -69,6 +69,7 @@ calls from them; see [Calling conventions](conventions.md).
 | `:grows` | `:down`, `:up` | The machine's stack-pointer direction, else `:down` |
 | `:alignment` | Positive integer, in cells | `1` |
 | `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer, or from the frame pointer when there is one | None |
+| `:stack-slot` | With a `:pointer`, the operand kind that addresses a slot from the stack pointer, for a function with [`:frame nil`](conventions.md#opting-out) | None |
 | `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
 
 `:grows` must agree with the machine's `(stack-pointer ... :grows ...)` for the
@@ -136,7 +137,7 @@ the child's machine.
 
 ```lisp
 (defbackend callfoo-fp-abi (:extends callfoo-abi :machine callfoo-fp)
-  (frame :pointer fp :slot fp-idx)
+  (frame :pointer fp :slot fp-idx :stack-slot sp-idx)
   (operands (fp-idx call-fp-idx))
   (ops (:enter () (pushfp) (movfs))
        (:leave () (movsf) (popfp))))
@@ -153,7 +154,10 @@ the child's machine.
 or one that [extends it](machine-families.md). Every operation, register and mode
 is checked again on the child's machine, so an operation using an instruction the
 child machine removed is an error until the child overrides or drops it.
-The parent is copied when the child is defined.[^copy]
+Redefining a parent rebuilds its children, and their children, from their own
+clauses. If one no longer builds, the redefinition is a `backend-definition-error`
+naming it, and every backend stays as it was. A backend cannot extend one that
+extends it.
 
 ## Lookup
 
@@ -168,6 +172,4 @@ The command line loads backends from its machine file; see [Command line](cli.md
 
 | Limitation | Ticket |
 | --- | --- |
-| A child backend does not follow later changes to its parent. | [#330](https://todo.sr.ht/~takeiteasy/lasm/330) |
-
-[^copy]: Redefining the parent leaves its children as they were; redefine them too.
+| A child's `without-ops` naming an operation the new parent drops blocks redefining the parent. | [#339](https://todo.sr.ht/~takeiteasy/lasm/339) |

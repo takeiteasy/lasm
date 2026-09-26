@@ -535,3 +535,97 @@ ret
                                                   (ops (:enter (x) (pushfp)))))
                                           nil)
                        (backend-definition-error (c) (princ-to-string c))))))
+
+;;; Frame pointer opt-out (#331)
+
+(eval '(defbackend cv-fp-nostack-abi (:extends callfoo-abi :machine callfoo-fp)
+        (frame :pointer fp :slot fp-idx)
+        (operands (fp-idx call-fp-idx))
+        (ops (:enter () (pushfp) (movfs))
+             (:leave () (movsf) (popfp)))))
+
+(fiveam:test a-function-can-opt-out-of-the-frame-pointer
+  (let ((items '((:call f (imm 21)) (hlt)
+                 (:function f (:args 1 :frame nil)
+                   (lds (reg a) (:arg 0))
+                   (:return)))))
+    (fiveam:is (search "f:
+lds a, [ sp + 1 ]
+ret
+" (render-items items :backend 'callfoo-fp-abi)))
+    (let ((m (%cv-run items 'callfoo-fp-abi :machine 'callfoo-fp)))
+      (fiveam:is (= 21 (%cv-a m)))
+      (fiveam:is (= +cv-sp+ (sref m 'sp))))))
+
+(fiveam:test an-opted-out-function-is-aligned-without-the-frame-pointer-cell
+  (let ((items '((:function f (:locals 2 :save (c) :frame nil) (:return)))))
+    (fiveam:is (search "subs sp, # 3" (render-items items :backend 'cv-fp-aligned-abi)))
+    (fiveam:is (search "subs sp, # 2" (render-items '((:function f (:locals 2 :save (c)) (:return)))
+                                                    :backend 'cv-fp-aligned-abi)))))
+
+(fiveam:test an-opted-out-function-needs-the-stack-slot-kind
+  (fiveam:is (search ":stack-slot"
+                     (%cv-malformed '((:function f (:args 1 :frame nil) (lds (reg a) (:arg 0)) (:return)))
+                                    'cv-fp-nostack-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f (:frame nil) (:return))) 'cv-fp-nostack-abi))))
+
+(fiveam:test frame-option-checks
+  (fiveam:is (search ":frame t needs" (%cv-malformed '((:function f (:frame t) (:return))) 'callfoo-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f (:frame nil) (:return))) 'callfoo-abi)))
+  (fiveam:is (search ":frame" (%cv-malformed '((:function f (:frame 3) (:return))) 'callfoo-fp-abi)))
+  (fiveam:is (search ":stack-slot"
+                     (handler-case (progn (eval '(defbackend cv-bad-stack-slot-abi (:extends callfoo-abi)
+                                                  (frame :stack-slot nope)))
+                                          nil)
+                       (backend-definition-error (c) (princ-to-string c))))))
+
+;;; Stack depth across labels and branches (#329)
+
+(%cv-abi cv-grab-abi :extra-ops ((:grab (n) (adds (sp) (imm n)))))
+
+(fiveam:test a-label-must-be-reached-at-its-own-depth
+  (fiveam:is (null (%cv-malformed '((:function f () (call there) (:label there) (:return))) 'callfoo-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f () (:label back) (:push (imm 1)) (:pop (reg b)) (call back) (:return)))
+                                  'callfoo-abi)))
+  (let ((detail (%cv-malformed '((:function f ()
+                                   (call there) (:push (imm 1)) (:label there) (:pop (reg b)) (:return)))
+                               'callfoo-abi)))
+    (fiveam:is (search "reached at depth 0 but defined at depth 1" detail))))
+
+(fiveam:test depth-declares-the-depth-after-a-jump
+  (let ((items '((:function f ()
+                   (:push (imm 1)) (call over) (:pop (reg b)) (:depth 1)
+                   (:label over) (:pop (reg b)) (:return)))))
+    (fiveam:is (null (%cv-malformed items 'callfoo-abi)))
+    (fiveam:is (search "reached at depth 1 but defined at depth 0"
+                       (%cv-malformed '((:function f ()
+                                          (:push (imm 1)) (call over) (:pop (reg b)) (:label over) (:return)))
+                                      'callfoo-abi))))
+  (fiveam:is (search "(:depth n)" (%cv-malformed '((:depth 1)) 'callfoo-abi)))
+  (fiveam:is (search "(:depth n)" (%cv-malformed '((:function f () (:depth -1))) 'callfoo-abi))))
+
+(fiveam:test frame-pointer-functions-do-not-check-depth
+  (fiveam:is (null (%cv-malformed '((:function f ()
+                                      (call there) (:push (imm 1)) (:label there) (:pop (reg b)) (:return)))
+                                  'callfoo-fp-abi)))
+  (fiveam:is (search "reached at depth"
+                     (%cv-malformed '((:function f (:frame nil)
+                                        (call there) (:push (imm 1)) (:label there) (:pop (reg b)) (:return)))
+                                    'callfoo-fp-abi))))
+
+(fiveam:test a-raw-instruction-that-changes-the-depth-is-rejected
+  (dolist (item '((pushv (imm 1)) (popr (reg b)) (subs (sp) (imm 2)) (adds (sp) (imm 2))
+                  (:op :push (imm 1)) (:op :free 2)))
+    (fiveam:is (search "use (:push)/(:pop)"
+                       (%cv-malformed `((:function f () ,item (:return))) 'callfoo-abi))
+               "~S" item))
+  (fiveam:is (search "use (:push)/(:pop)"
+                     (%cv-malformed '((:function f () (:op :grab 2) (:return))) 'cv-grab-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f (:args 1) (:op :add (reg a) (reg b)) (lds (reg a) (:arg 0)) (:return)))
+                                  'callfoo-abi))))
+
+(fiveam:test raw-stack-instructions-are-fine-outside-a-tracked-function
+  (fiveam:is (null (%cv-malformed '((pushv (imm 1)) (:op :push (imm 1))) 'callfoo-abi)))
+  (fiveam:is (null (%cv-malformed '((:function f () (pushv (imm 1)) (:return))) 'callfoo-fp-abi)))
+  (fiveam:is (search "use (:push)/(:pop)"
+                     (%cv-malformed '((:function f (:frame nil) (pushv (imm 1)) (:return))) 'callfoo-fp-abi))))
