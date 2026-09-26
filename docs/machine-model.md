@@ -30,6 +30,7 @@ one namespace.
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
 | `(device NAME ...)` | Bus-addressed peripheral. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
+| `(reset-pc n)` | Value `make-machine` and `reset` give the `PC` register, default `0`. | [Runtime state](#runtime-state) |
 | `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
 | `(privilege :level NAME [:shift N] [:width N] :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
@@ -141,6 +142,15 @@ and [Emulator](emulator.md#load-program) for loading a bank.
 `(make-machine 'NAME)` creates a machine. `(reset machine)` clears non-ROM storage,
 cycles, pending interrupts, and idle state, drops runtime region bindings, and
 rebuilds the declared device bus. Host-installed access and interrupt hooks remain attached.
+
+`(reset-pc n)` makes both set the `PC` register to `n` instead of zero. The machine
+needs a single register named `PC` that `n` fits. `load-program` still sets PC to the
+load origin.
+
+```lisp
+(defmachine cpu (register pc :width 16) (reset-pc #x100))
+(sref (make-machine 'cpu) 'pc)   ; => 256
+```
 
 ## Width and signedness
 

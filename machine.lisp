@@ -320,6 +320,15 @@ function), got ~S" context name (car fn) (cdr fn))))
   (%definition-bind (hz) form
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
+;; #226: (reset-pc n) -- the value RESET (and MAKE-MACHINE) gives the PC
+;; register; n a non-negative integer that BUILD-MACHINE-DESCRIPTOR checks
+;; against PC's width once the elements are known.
+(defun parse-reset-pc-clause (form)
+  (%definition-bind (pc) form
+    (unless (and (integerp pc) (>= pc 0))
+      (%defmachine-error "reset-pc must be a non-negative integer, got ~S" pc))
+    pc))
+
 ;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
 ;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
 ;;   [:read fn] [:write fn]) -- a bus-addressed peripheral. A #107 :DEVICE
@@ -1003,7 +1012,7 @@ DESCRIPTOR's finished elements."
   (copy-list form))
 
 (defun parse-machine-clauses (clauses)
-  (let (elements instruction-word clock-speed devices interrupts stack-pointers privilege
+  (let (elements instruction-word clock-speed reset-pc devices interrupts stack-pointers privilege
         (idle-cycles 1) idle-seen (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
     (dolist (clause clauses)
       (case (first clause)
@@ -1019,6 +1028,10 @@ DESCRIPTOR's finished elements."
          (when clock-speed
            (%defmachine-error "DEFMACHINE: more than one clock-speed clause"))
          (setf clock-speed (parse-clock-speed-clause (rest clause))))
+        (reset-pc
+         (when reset-pc
+           (%defmachine-error "DEFMACHINE: more than one reset-pc clause"))
+         (setf reset-pc (parse-reset-pc-clause (rest clause))))
         (device (cl:push (parse-device-clause (rest clause)) devices))
         (interrupts
          (when interrupts
@@ -1044,19 +1057,20 @@ DESCRIPTOR's finished elements."
            (%defmachine-error "DEFMACHINE: more than one properties clause"))
          (setf properties-seen t
                properties (parse-properties-clause (rest clause))))
-        ((without-instructions instruction-cycles)
+        ((without-instructions instruction-cycles without-storage without-devices)
          (%defmachine-error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
                 (first clause)))
         (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
-            (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles)))
+            (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles reset-pc)))
 
 (defun build-machine-descriptor (name clauses)
   (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
-                        undefined-opcode properties privilege idle-cycles)
+                        undefined-opcode properties privilege idle-cycles reset-pc)
       (parse-machine-clauses clauses)
     (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
-                                                :clock-speed clock-speed :devices devices
+                                                :clock-speed clock-speed :reset-pc reset-pc
+                                                :devices devices
                                                 :interrupts interrupts :privilege privilege
                                                 :idle-cycles idle-cycles
                                                 :undefined-opcode undefined-opcode
@@ -1112,6 +1126,13 @@ DESCRIPTOR's finished elements."
                        (memory-region-name region) name (memory-region-device region)))
               (setf (memory-region-device-index region) index)))))
       (setf (machine-descriptor-elements descriptor) elements)
+      (when reset-pc
+        (let ((pc (gethash 'pc (machine-descriptor-table descriptor))))
+          (unless (and pc (eq (storage-element-kind pc) :register) (= (storage-element-count pc) 1))
+            (%defmachine-error "reset-pc on machine ~S: no single register named PC" name))
+          (unless (< reset-pc (ash 1 (storage-element-width pc)))
+            (%defmachine-error "reset-pc ~S on machine ~S does not fit PC's ~D-bit width"
+                   reset-pc name (storage-element-width pc)))))
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
       ;; now that every MEMORY element is known (#53, #66) -- see
       ;; PARSE-INSTRUCTION-WORD-CLAUSE and %FINISH-INSTRUCTION-WORD-LAYOUT.
@@ -1168,7 +1189,7 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
 (defun %merge-machine-clauses (parent-clauses child-clauses)
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
 existing register/stack/memory/device merges into the parent's in place, a new
-one is appended. Singletons replace (clock-speed, undefined-opcode) or merge
+one is appended. Singletons replace (clock-speed, reset-pc, undefined-opcode) or merge
 key by key (interrupts, properties, privilege, idle); flags are additive."
   (let ((merged (copy-list parent-clauses))
         (added '()))
@@ -1191,7 +1212,7 @@ instructions are compiled against the parent's" head))
                               append (mapcar #'%flag-entry-name (rest p)))))
              (let ((new (remove-if (lambda (f) (member (%flag-entry-name f) known)) (rest clause))))
                (when new (cl:push (cons 'flags new) added)))))
-          ((clock-speed undefined-opcode)
+          ((clock-speed reset-pc undefined-opcode)
            (let ((position (position head merged :key #'first)))
              (if position
                  (setf (nth position merged) clause)
@@ -1205,6 +1226,35 @@ instructions are compiled against the parent's" head))
           (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" head clause)))))
     (append merged (nreverse added))))
 
+(defun %clause-declares-p (clause head-names name)
+  "True when CLAUSE declares NAME: a keyed clause whose head is in HEAD-NAMES, or a flags entry."
+  (or (and (member (first clause) head-names) (eq (second clause) name))
+      (and (eq (first clause) 'flags) (member name (rest clause) :key #'%flag-entry-name))))
+
+(defun %remove-machine-clauses (machine-name merged child-clauses storage-names device-names)
+  "MERGED with the register/flag STORAGE-NAMES and the DEVICE-NAMES removed.
+Signals when CHILD-CLAUSES redeclare a removed name, and warns for a name MERGED lacks."
+  (flet ((check (names heads)
+           (dolist (name names)
+             (when (some (lambda (c) (%clause-declares-p c heads name)) child-clauses)
+               (%defmachine-error "Machine ~S: ~S is both removed and declared" machine-name name))
+             (unless (some (lambda (c) (%clause-declares-p c heads name)) merged)
+               (warn 'simple-style-warning
+                     :format-control "Machine ~S: ~S is not a removable ~A of its parent"
+                     :format-arguments (list machine-name name
+                                             (if (eq (first heads) 'device) "device" "register or flag")))))))
+    (check storage-names '(register stack memory))
+    (check device-names '(device)))
+  (loop for clause in merged
+        for kept = (case (first clause)
+                     ((register stack memory) (unless (member (second clause) storage-names) clause))
+                     (device (unless (member (second clause) device-names) clause))
+                     (flags (let ((entries (remove-if (lambda (e) (member (%flag-entry-name e) storage-names))
+                                                      (rest clause))))
+                              (when entries (cons 'flags entries))))
+                     (t clause))
+        when kept collect kept))
+
 (defun %element-operand-cells (element)
   (ceiling (storage-element-addr-width element) (storage-element-cell-width element)))
 
@@ -1217,7 +1267,9 @@ instructions are compiled against the parent's" head))
       (unless (equalp (machine-descriptor-instruction-word parent)
                       (machine-descriptor-instruction-word child))
         (fail "the instruction word differs"))
-      (dolist (pe (machine-descriptor-elements parent))
+      (dolist (pe (remove-if (lambda (e) (member (storage-element-name e)
+                                                 (machine-descriptor-removed-storage child)))
+                             (machine-descriptor-elements parent)))
         (let* ((name (storage-element-name pe))
                (ce (gethash name (machine-descriptor-table child))))
           (unless (and ce (eq (storage-element-kind ce) (storage-element-kind pe)))
@@ -1306,11 +1358,18 @@ and the parent's instructions are copied in."
                                                            mnemonic n))
                                                   (cons (%mnemonic-key mnemonic) n)))
                                               (rest c))))
-                 (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles)))
+                 (removed-storage (loop for c in clauses when (eq (first c) 'without-storage)
+                                        append (rest c)))
+                 (removed-devices (loop for c in clauses when (eq (first c) 'without-devices)
+                                        append (rest c)))
+                 (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles
+                                                                   without-storage without-devices)))
                                    clauses))
                  (child (build-machine-descriptor
-                         name (%merge-machine-clauses (machine-descriptor-source-clauses parent-md)
-                                                      plain))))
+                         name (%remove-machine-clauses
+                               name
+                               (%merge-machine-clauses (machine-descriptor-source-clauses parent-md) plain)
+                               plain removed-storage removed-devices))))
             (dolist (key (append removals (mapcar #'car cycles)))
               (unless (gethash key (machine-descriptor-instructions parent-md))
                 (warn 'simple-style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
@@ -1318,6 +1377,8 @@ and the parent's instructions are copied in."
             (dolist (entry cycles)
               (when (member (car entry) removals :test #'string=)
                 (%defmachine-error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
+            (setf (machine-descriptor-removed-storage child)
+                  (remove-duplicates (copy-list removed-storage)))
             (%check-inheritance-compatible parent-md child)
             (setf (machine-descriptor-parent child) parent
                   (machine-descriptor-removed-instructions child)
@@ -1354,6 +1415,7 @@ and the parent's instructions are copied in."
      (flags NAME...)
      (instruction-word :width n (field NAME width)...)
      (clock-speed n)
+     (reset-pc n)
      (device NAME [:id n] [:version n] [:manufacturer n]
              [:init fn] [:tick fn] [:receive fn] [:detach fn]
              [:priority n] [:non-maskable t/nil])
@@ -1370,10 +1432,12 @@ and the parent's instructions are copied in."
 NAME may be (NAME (:extends PARENT)): the machine then inherits PARENT's
 clauses and instructions. A clause naming an existing register, stack, memory
 or device merges its keywords over the parent's; interrupts and properties
-merge key by key; clock-speed and undefined-opcode replace; flags add. Two
-further clauses are valid only on an extending machine:
+merge key by key; clock-speed, reset-pc and undefined-opcode replace; flags
+add. Further clauses are valid only on an extending machine:
      (without-instructions MNEMONIC...)
      (instruction-cycles (MNEMONIC n)...)
+     (without-storage NAME...)    ; registers and flags
+     (without-devices NAME...)    ; later devices' bus indices shift down
 See docs/machine-families.md.
 
 A register's :names (#72) gives each bank cell of a banked (:count > 1)
@@ -1438,6 +1502,10 @@ CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
 RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to
 wall-time-equivalent seconds. Optional; a machine with no such clause can
 still use RUN-FOR-CYCLES and read MACHINE-CYCLES, just not RUN-FOR-DURATION.
+
+RESET-PC (#226) declares the value MAKE-MACHINE and RESET give the PC register
+instead of zero. Optional; the machine must have a single register named PC
+that the value fits. LOAD-PROGRAM still sets PC to the load origin.
 
 DEVICE (#108) declares a bus-addressed peripheral -- identity (an ID/
 VERSION/MANUFACTURER triple, an HWQ-style instruction's own semantics decide

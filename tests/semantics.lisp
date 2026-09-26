@@ -329,16 +329,16 @@
     (fiveam:signals stack-index-out-of-range (sp-ref m 'sp 1))
     (fiveam:signals stack-index-out-of-range (sp-ref m 'sp -1))))
 
+(defmachine sole-pointer-wrap-test-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (stack-pointer sp :memory ram))
+
 (fiveam:test unbounded-pointer-stack-still-wraps-silently
   (with-machine (m sole-pointer-wrap-test-machine)
     (push 1)
     (fiveam:is (= 255 (sref m 'sp)))
     (fiveam:is (= 1 (pop)))))
-
-(defmachine sole-pointer-wrap-test-machine
-  (register sp :width 8)
-  (memory ram :width 8 :addr-width 8)
-  (stack-pointer sp :memory ram))
 
 (fiveam:test stack-pointer-clause-validates-width-and-bounds
   (dolist (clause '((stack-pointer sp :memory ram :width 0)

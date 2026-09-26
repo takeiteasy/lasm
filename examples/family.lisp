@@ -46,6 +46,11 @@
   (memory ram :addr-width 12)
   (properties :model "tiny8-lite"))
 
+;; Loses the Z flag and starts execution at $100.
+(defmachine (tiny8-boot (:extends tiny8))
+  (without-storage z)
+  (reset-pc #x100))
+
 ;; Defined after the children; every child that still has it picks it up.
 (definstruction tiny8 sub
   (modes immediate)
@@ -77,6 +82,11 @@
   (assert (= 6 (machine-cycles base)))
   (assert (= 4 (machine-cycles turbo)))
   (assert (= 5 (machine-cycles lite))))   ; ADD's two cells are skipped at one cycle each
+
+(let ((m (make-machine 'tiny8-boot)))
+  (assert (= #x100 (sref m 'pc)))
+  (assert (null (find 'z (machine-descriptor-elements (machine-descriptor m))
+                      :key #'storage-element-name))))
 
 (assert (find-instruction 'tiny8-turbo "SUB"))
 (assert (find-instruction 'tiny8-lite "SUB"))

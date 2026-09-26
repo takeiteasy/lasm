@@ -40,7 +40,7 @@ A child clause is merged over the parent's clause of the same kind:
 | `memory` `(region ...)` forms | if the child gives any, they replace the parent's regions |
 | `flags` | added to the parent's |
 | `interrupts`, `properties`, `idle` | merged key by key |
-| `clock-speed`, `undefined-opcode` | replaced |
+| `clock-speed`, `reset-pc`, `undefined-opcode` | replaced |
 
 A clause naming something the parent does not have adds it. Element order and
 device bus indices of the parent are kept.
@@ -65,10 +65,12 @@ is rejected when it:
 - changes a memory's `:cell-width`, `:endian` or operand cell count
   (`ceiling(addr-width / cell-width)`)
 - adds or removes a memory or stack element
+- removes a register or flag that an `interrupts`, `stack-pointer`, `privilege`
+  or `reset-pc` clause names
 - changes an `interrupts` clause's `:save` list or stack
 
 Register and memory widths, `:addr-width` (within the operand cell count),
-`clock-speed`, interrupt queue depth and the other interrupt keys may change.
+`clock-speed`, `reset-pc`, interrupt queue depth and the other interrupt keys may change.
 
 ## Child-only clauses
 
@@ -77,6 +79,21 @@ Register and memory widths, `:addr-width` (within the operand cell count),
   descendants.
 - `(instruction-cycles (MNEMONIC n)...)` — overrides the cycle cost of every
   inherited variant of the mnemonic.
+- `(without-storage NAME...)` — removes registers and flags. Descendants
+  inherit the removal.[^removal]
+- `(without-devices NAME...)` — removes declared devices. Later devices move
+  down one bus index, and `device-count` shrinks.
+
+```lisp
+(defmachine (mote (:extends anima16))
+  (without-storage ex)
+  (without-devices keyboard)
+  (reset-pc #x100))
+```
+
+A name the parent lacks gives a style-warning. Removing and redeclaring a name in
+the same clause list is an error, as is removing a device a region's `:device`
+names.
 
 ## Undefined opcodes
 
@@ -122,4 +139,10 @@ looked up through the parent at run time.
 - A mnemonic dropped from a parent stays on its children until they are
   re-evaluated.
 - Removal is per mnemonic, not per addressing mode.
-- Storage elements and devices cannot be removed in a child.
+- Memory and stack elements cannot be removed in a child.
+  [#361](https://todo.sr.ht/~takeiteasy/lasm/361)
+- A child that removes a register an inherited instruction uses is not
+  rejected. [#360](https://todo.sr.ht/~takeiteasy/lasm/360)
+
+[^removal]: An inherited instruction that still uses a removed register fails
+    with `unknown-storage` when it runs. Remove it with `without-instructions`.

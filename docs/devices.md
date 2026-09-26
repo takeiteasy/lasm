@@ -61,6 +61,10 @@ same keywords as the clause, including `:read`/`:write`.
 `reset` restores the declared bus and reruns each declared device's
 `:init`; runtime attachments disappear.
 
+A child machine can drop an inherited device with
+[`(without-devices NAME...)`](machine-families.md#child-only-clauses). The
+devices after it move down one bus index.
+
 ## Memory-mapped devices
 
 A `:device` region with `:device NAME` routes `mref` through that declared

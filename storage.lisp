@@ -543,6 +543,9 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
   ;; MACHINE-CYCLES below need no clock speed at all.
   (clock-speed nil :type (or null (integer 1)))
+  ;; #226: NIL unless DEFMACHINE declares (reset-pc n) -- the value MAKE-MACHINE
+  ;; and RESET give the PC register instead of zero.
+  (reset-pc nil :type (or null (integer 0)))
   ;; #108: DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
   ;; order -- that order is a runtime MACHINE's initial bus index order (see
   ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
@@ -603,6 +606,9 @@ machine's default layout -- callers hold no other kind (#64)."
   (own-instructions (make-hash-table :test 'equal))
   ;; Upcased mnemonics removed from this machine, including inherited removals.
   (removed-instructions nil :type list)
+  ;; #223: names of the registers and flags this machine removed from its
+  ;; parent, kept so %CHECK-INHERITANCE-COMPATIBLE can re-run against the parent.
+  (removed-storage nil :type list)
   ;; Alist of upcased mnemonic -> cycle cost overriding inherited variants.
   (instruction-cycles nil :type list)
   ;; opcode -> descriptors of removed mnemonics, kept only so an undefined-
@@ -1056,7 +1062,13 @@ machine descriptor or a machine name -- or DEFAULT."
       ;; declaring no such clause gets no hook, exactly as #108 left it.
       (when (machine-descriptor-interrupts descriptor)
         (setf (machine-interrupt-hook m) #'%default-interrupt-hook))
+      (%apply-reset-pc m)
       m)))
+
+(defun %apply-reset-pc (machine)
+  (let ((pc (machine-descriptor-reset-pc (machine-descriptor machine))))
+    (when pc
+      (setf (sref machine 'pc) pc))))
 
 (defun %fill-outside-rom (element slot)
   "Zero SLOT, the backing array of memory ELEMENT, except the cells of its
@@ -1116,7 +1128,10 @@ auto-installed #'%DEFAULT-INTERRUPT-HOOK exactly as for a host's own hook,
 so a host that replaced it (including with NIL, to disable delivery) keeps
 that choice across a RESET. #109's pending INTERRUPT-QUEUE, unlike the
 hook, *is* machine state and is cleared unconditionally below -- and so is
-#110's IDLE flag."
+#110's IDLE flag.
+
+#226: PC is set to the machine's (reset-pc n) value, when it declares one,
+rather than left at zero."
   (%mark-all-dirty machine)
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
     (let ((slot (gethash (storage-element-name element) (machine-slots machine))))
@@ -1151,6 +1166,7 @@ hook, *is* machine state and is cleared unconditionally below -- and so is
   (setf (machine-interrupt-active machine) nil
         (machine-privilege-violation machine) nil)
   (setf (machine-idle machine) nil)
+  (%apply-reset-pc machine)
   machine)
 
 ;;; Accessors

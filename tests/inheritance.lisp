@@ -423,3 +423,147 @@ stop" :machine 'fam-w8))
   (fiveam:signals machine-definition-error
     (eval '(defmachine (fam-sp-width (:extends fam-sp-base))
              (stack-pointer sp :memory ram :bounds (0 255) :width 16)))))
+
+;;; Removing storage and devices (#223), model reset PC (#226)
+
+(defmachine rm-base
+  (register a :width 8)
+  (register b :width 8)
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region kbd-port #xF000 #xF000 :kind :device :device keyboard))
+  (flags z c)
+  (reset-pc #x100)
+  (device clock :id 1)
+  (device keyboard :id 2)
+  (device screen :id 3))
+
+(definstruction rm-base seta
+  (encoding (opcode #x10))
+  (semantics (set! a 1))
+  (cycles 1))
+
+(definstruction rm-base setb
+  (encoding (opcode #x11))
+  (semantics (set! b 1))
+  (cycles 1))
+
+(defmachine (rm-cut (:extends rm-base))
+  (without-instructions setb)
+  (without-storage b c)
+  (without-devices clock)
+  (reset-pc #x200))
+
+(defmachine (rm-cut-child (:extends rm-cut)))
+
+(defun rm-device-ids (machine-name)
+  (let ((m (make-machine machine-name)))
+    (loop for i below (device-count m)
+          collect (nth-value 0 (device-info m i)))))
+
+(fiveam:test without-storage-removes-registers-and-flags
+  (let ((names (mapcar #'storage-element-name
+                       (machine-descriptor-elements (find-machine-descriptor 'rm-cut)))))
+    (fiveam:is (not (intersection '(b c) names)))
+    (fiveam:is (subsetp '(a pc ram z) names)))
+  (fiveam:signals unknown-storage (sref (make-machine 'rm-cut) 'b))
+  (fiveam:is (= 0 (sref (make-machine 'rm-cut) 'a))))
+
+(fiveam:test removal-is-inherited-by-descendants
+  (fiveam:is (equal (mapcar #'storage-element-name
+                            (machine-descriptor-elements (find-machine-descriptor 'rm-cut)))
+                    (mapcar #'storage-element-name
+                            (machine-descriptor-elements (find-machine-descriptor 'rm-cut-child)))))
+  (fiveam:is (equal '(2 3) (rm-device-ids 'rm-cut-child)))
+  (fiveam:is (= #x200 (sref (make-machine 'rm-cut-child) 'pc))))
+
+(fiveam:test without-devices-compacts-the-bus-and-region-indices
+  (fiveam:is (equal '(1 2 3) (rm-device-ids 'rm-base)))
+  (fiveam:is (equal '(2 3) (rm-device-ids 'rm-cut)))
+  (let ((region (first (storage-element-regions
+                        (gethash 'ram (machine-descriptor-table (find-machine-descriptor 'rm-cut)))))))
+    (fiveam:is (= 0 (memory-region-device-index region)))))
+
+(fiveam:test removing-a-device-a-region-uses-is-an-error
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (rm-no-keyboard (:extends rm-base)) (without-devices keyboard)))))
+
+(fiveam:test removing-memory-is-an-error
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (rm-no-ram (:extends rm-base)) (without-storage ram)))))
+
+(fiveam:test removing-and-redeclaring-a-name-is-an-error
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (rm-both (:extends rm-base))
+            (without-storage b) (register b :width 8))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (rm-both-device (:extends rm-base))
+            (without-devices clock) (device clock :id 9)))))
+
+(fiveam:test removing-an-unknown-name-warns
+  (let ((warned 0))
+    (handler-bind ((style-warning (lambda (c) (incf warned) (muffle-warning c))))
+      (eval '(defmachine (rm-unknown (:extends rm-base))
+              (without-storage nope) (without-devices nope))))
+    (fiveam:is (= 2 warned))
+    (fiveam:is (eq 'rm-base (machine-descriptor-parent (find-machine-descriptor 'rm-unknown))))))
+
+(fiveam:test removal-clauses-need-a-parent
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine rm-orphan (register a :width 8) (without-storage a))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine rm-orphan (register a :width 8) (without-devices a)))))
+
+(defmachine rm-use-base
+  (register a :width 8)
+  (register b :width 8)
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8))
+
+(definstruction rm-use-base setb
+  (encoding (opcode #x11))
+  (semantics (set! b 1))
+  (cycles 1))
+
+(defmachine (rm-use-cut (:extends rm-use-base))
+  (without-storage b))
+
+(fiveam:test removing-a-register-an-inherited-instruction-uses-fails-at-run-time
+  (let ((m (make-machine 'rm-use-cut)))
+    (load-program m '(#x11))
+    (fiveam:signals unknown-storage (step-machine m))))
+
+(fiveam:test removing-a-register-interrupts-need-is-an-error
+  (eval '(defmachine rm-irq-base
+          (register a :width 8) (register vec :width 8) (register pc :width 8)
+          (memory ram :width 8 :addr-width 8)
+          (stack sk :width 8 :depth 4)
+          (interrupts :vector vec :message a :save (pc) :stack sk)))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine (rm-irq-cut (:extends rm-irq-base)) (without-storage vec)))))
+
+(fiveam:test reset-pc-is-inherited-and-overridden
+  (fiveam:is (= #x100 (machine-descriptor-reset-pc (find-machine-descriptor 'rm-base))))
+  (fiveam:is (= #x100 (machine-descriptor-reset-pc
+                       (find-machine-descriptor
+                        (progn (eval '(defmachine (rm-inherit (:extends rm-base)))) 'rm-inherit)))))
+  (fiveam:is (= #x200 (machine-descriptor-reset-pc (find-machine-descriptor 'rm-cut)))))
+
+(fiveam:test reset-pc-is-applied-by-make-machine-and-reset
+  (let ((m (make-machine 'rm-base)))
+    (fiveam:is (= #x100 (sref m 'pc)))
+    (setf (sref m 'pc) 5 (sref m 'a) 7)
+    (reset m)
+    (fiveam:is (= #x100 (sref m 'pc)))
+    (fiveam:is (= 0 (sref m 'a)))
+    (load-program m '(#x10) :origin #x40)
+    (fiveam:is (= #x40 (sref m 'pc)))))
+
+(fiveam:test reset-pc-is-validated
+  (dolist (form '((defmachine rm-pc-none (register a :width 8) (reset-pc 1))
+                  (defmachine rm-pc-banked (register pc :width 8 :count 2) (reset-pc 1))
+                  (defmachine rm-pc-wide (register pc :width 8) (reset-pc 256))
+                  (defmachine rm-pc-negative (register pc :width 8) (reset-pc -1))
+                  (defmachine rm-pc-twice (register pc :width 8) (reset-pc 1) (reset-pc 2))
+                  (defmachine (rm-pc-narrowed (:extends rm-base)) (register pc :width 8))))
+    (fiveam:signals machine-definition-error (eval form))))

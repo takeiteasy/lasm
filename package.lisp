@@ -146,6 +146,7 @@
    #:instruction-word-field
    #:instruction-word-layout-named
    #:machine-descriptor-clock-speed
+  #:machine-descriptor-reset-pc
    #:machine-cycles
    #:machine-descriptor-devices
    #:device-descriptor
