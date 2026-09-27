@@ -140,34 +140,50 @@
     ("(defstring msg \"hi\") (defun main () (+ (aref msg 0) (aref msg 1)))" . 209)
     ("(defvar w 0) (defun main () (poke-byte w 5) (poke-byte (+ w 1) 9)
       (+ (peek-byte w) (peek-byte (+ w 1))))" . 14)
-    ;; #367: macros.
-    ("(defmacro inc (v) (set v (+ v 1)))
+    ;; #367, #380: macros, evaluated at compile time.
+    ("(defmacro inc (v) `(set ,v (+ ,v 1)))
       (defun main () (let ((x 0)) (inc x) x))" . 1)
-    ("(defmacro unless (c &rest body) (if c 0 (progn body)))
+    ("(defmacro unless (c &rest body) `(if ,c 0 (progn ,@body)))
       (defvar hit 0)
       (defun main () (unless 0 (set hit 1) (set hit (+ hit 10))) hit)" . 11)
     ;; hygiene: the macro's own `tmp` doesn't capture the caller's variable of the same name.
-    ("(defmacro swap (a b) (let ((tmp a)) (set a b) (set b tmp)))
+    ("(defmacro swap (a b) `(let ((tmp ,a)) (set ,a ,b) (set ,b tmp)))
       (defun main () (let ((tmp 1) (y 2)) (swap tmp y) (+ (* tmp 100) y)))" . 201)
     ;; a function can use a macro defined later in the file.
-    ("(defun main () (inc2 5)) (defmacro inc2 (v) (+ v 1))" . 6)
-    ;; a macro's template can call another macro.
-    ("(defmacro inc (v) (set v (+ v 1)))
-      (defmacro inc2 (v) (progn (inc v) (inc v)))
+    ("(defun main () (inc2 5)) (defmacro inc2 (v) `(+ ,v 1))" . 6)
+    ;; a macro's body can call another macro.
+    ("(defmacro inc (v) `(set ,v (+ ,v 1)))
+      (defmacro inc2 (v) `(progn (inc ,v) (inc ,v)))
       (defun main () (let ((x 0)) (inc2 x) x))" . 2)
     ;; deep nesting, not limited by the expansion budget.
-    ("(defmacro inc (v) (+ v 1))
+    ("(defmacro inc (v) `(+ ,v 1))
       (defun main () (inc (inc (inc (inc (inc 0))))))" . 5)
     ;; a top-level macro call can expand to a defun.
-    ("(defmacro defadd1 (name) (defun name (x) (+ x 1)))
+    ("(defmacro defadd1 (name) `(defun ,name (x) (+ x 1)))
       (defadd1 add1)
       (defun main () (add1 41))" . 42)
     ;; a top-level macro call can expand to a (progn DEF...).
-    ("(defmacro both () (progn (defvar g 5) (defun main () g)))
+    ("(defmacro both () '(progn (defvar g 5) (defun main () g)))
       (both)" . 5)
-    ;; asm in a template substitutes (:var PARAM); register operands pass through.
-    ("(defmacro store3 (v) (asm (:op :const (reg a) 3) (:op :set (:var v) (reg a))))
-      (defun main () (let ((x 9)) (store3 x) x))" . 3))
+    ;; asm in a template substitutes any unquote; register operands pass through.
+    ("(defmacro store3 (v) `(asm (:op :const (reg a) 3) (:op :set (:var ,v) (reg a))))
+      (defun main () (let ((x 9)) (store3 x) x))" . 3)
+    ;; a macro computes its expansion from its (unevaluated) argument.
+    ("(defmacro double-or-inc (n) (if (integerp n) `(+ ,n ,n) `(+ ,n 1)))
+      (defun main () (+ (double-or-inc 20) (let ((y 4)) (double-or-inc y))))" . 45)
+    ;; a defun-for-syntax helper, called with its argument already evaluated.
+    ("(defun-for-syntax count-args (xs) (if (null xs) 0 (+ 1 (count-args (cdr xs)))))
+      (defmacro argc (&rest xs) (count-args xs))
+      (defun main () (argc 1 2 3 4))" . 4)
+    ;; ,@ splices a computed list of forms into the template.
+    ("(defmacro sum-all (&rest xs) `(+ ,@xs))
+      (defun main () (sum-all 1 2 3 4 5))" . 15)
+    ;; gensym never collides with a caller's own variable.
+    ("(defmacro capture (v) (let ((g (gensym))) `(let ((,g 99)) (+ ,v ,g))))
+      (defun main () (let ((g 1)) (capture g)))" . 100)
+    ;; a multi-form body runs as an implicit progn; only the last form expands.
+    ("(defmacro noisy (v) (list 'quote 'ignored) `(+ ,v 1))
+      (defun main () (noisy 4))" . 5))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -340,21 +356,33 @@
                   ("(defvar buf 0) (defarray buf 4) (defun main () 1)" "buf is defined twice")
                   ("(defstring s 5) (defun main () 1)" "expected (defstring NAME \"text\")")
                   ("(defarray a (1 nope)) (defun main () 1)" "not a constant, a function or an array/string")
-                  ;; #367: macros.
-                  ("(defmacro inc (v) (set v (+ v 1))) (defun main () (inc 1 2))" "inc takes exactly 1 argument, got 2")
+                  ;; #367, #380: macros.
+                  ("(defmacro inc (v) `(set ,v (+ ,v 1))) (defun main () (inc 1 2))" "inc takes exactly 1 argument, got 2")
                   ("(defmacro spread (v &rest r) v) (defun main () (spread))"
                    "spread takes at least 1 argument, got 0")
                   ("(defmacro if (a) a) (defun main () 0)" "if is a built-in form")
                   ("(defmacro + (a) a) (defun main () 0)" "+ is a built-in form")
                   ("(defmacro defun (a) a) (defun main () 0)" "defun is a built-in form")
+                  ("(defmacro quote (a) a) (defun main () 0)" "quote is a built-in form")
                   ("(defun f () 1) (defmacro f (a) a) (defun main () 1)" "f is defined twice")
                   ("(defmacro f (a) a) (defun f () 1) (defun main () 1)" "f is defined twice")
                   ("(defmacro f (a) a) (defmacro f (a) a) (defun main () 1)" "f is defined twice")
-                  ("(defmacro bad (v . w) v) (defun main () 1)" "defmacro parameter list is malformed")
+                  ("(defmacro f (a) a) (defun-for-syntax f (a) a) (defun main () 1)" "f is defined twice")
+                  ("(defmacro bad (v . w) v) (defun main () 1)" "parameter list is malformed")
                   ("(defmacro bad (v v) v) (defun main () (bad 1 2))" "v is a parameter twice")
                   ("(defmacro bad (v)) (defun main () 1)" "expected (defmacro NAME")
-                  ("(defmacro loopy () (loopy)) (defun main () (loopy))" "expands too many times")
-                  ("(defmacro leaky (&rest r) r) (defun main () (leaky 1 2))" "used outside a list")))
+                  ("(defmacro loopy () `(loopy)) (defun main () (loopy))" "expands too many times")
+                  ("(defmacro leaky (&rest r) r) (defun main () (leaky 1 2))" "expected (NAME ARG...)")
+                  ;; #380: the compile-time evaluator.
+                  ("(defmacro bad (v) (set v 1)) (defun main () (bad 1))" "set is not a compile-time operator")
+                  ("(defmacro bad () (car 5)) (defun main () (bad))" "car needs a list")
+                  ("(defmacro bad () (error \"boom\")) (defun main () (bad))" "boom")
+                  ("(defmacro bad (v) `(+ ,v ,@1)) (defun main () (bad 1))" ",@ must splice a list")
+                  ("(defmacro bad () `(a `(b ,1))) (defun main () (bad))" "nested quasiquote is not supported")
+                  ("(defun-for-syntax loopy (n) (loopy n)) (defmacro bad () (loopy 1)) (defun main () (bad))"
+                   "recursed too deeply")
+                  ("(defun-for-syntax f (a) a) (defmacro f (a) a) (defun main () 1)" "f is defined twice")
+                  ("(defun-for-syntax bad (v . w) v) (defun main () 1)" "parameter list is malformed")))
     (destructuring-bind (source expected) case
       (let ((detail (%cl-fail source)))
         (fiveam:is (and detail (search expected detail)) "~A: ~A" source detail)))))
@@ -404,14 +432,14 @@
     (fiveam:is (= 120 (%cv-a m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
 
-;;; #367: macros
+;;; #367, #380: macros
 
 (fiveam:test a-macro-hiding-a-set-a-call-or-asm-is-a-hazard-like-the-literal-form
-  (dolist (case '(("(defmacro setter (v n) (set v n))
+  (dolist (case '(("(defmacro setter (v n) `(set ,v ,n))
                     (defun main () (let ((x 1)) (+ x (progn (setter x 5) 0))))"
                    . "(defun main () (let ((x 1)) (+ x (progn (set x 5) 0))))")
                   ("(defun g (x) (+ x 1))
-                    (defmacro callm (n) (g n))
+                    (defmacro callm (n) `(g ,n))
                     (defun f (n) (+ (callm n) (if (= n 0) (return 42) (callm n))))
                     (defun main () (f 0))"
                    . "(defun g (x) (+ x 1))
@@ -422,15 +450,29 @@
                  "~A" with-macro))))
 
 (fiveam:test a-macro-call-can-precede-its-defmacro-at-top-level-only-inside-a-function
-  (fiveam:is (search "expected (defun" (%cl-fail "(inc x) (defmacro inc (v) (+ v 1)) (defvar x 0) (defun main () x)"))))
+  (fiveam:is (search "expected (defun" (%cl-fail "(inc x) (defmacro inc (v) `(+ ,v 1)) (defvar x 0) (defun main () x)"))))
 
-(fiveam:test an-error-inside-an-expansion-reports-the-macro-calls-position
+(fiveam:test an-error-inside-a-macro-reports-where-its-own-code-is-written
+  ;; NOPE is written in the defmacro's own body, on line 1: the error reports
+  ;; that line, not the call's (#380 -- a computed macro's own code can be
+  ;; wrong independently of any particular call).
   (let ((text (format nil "(defmacro bad (v) (+ v nope))~%(defun main () (bad 1))~%")))
     (handler-case (compile-source (read-source-from-string
                                    (concatenate 'string "(:program (:backend callfoo-lang-abi)) " text)))
       (program-compile-error (c)
+        (fiveam:is (= 1 (lasm-syntax-error-line c)))
+        (fiveam:is (search "unbound compile-time variable nope" (diagnostic-text c)))))))
+
+(fiveam:test a-quasiquote-templates-own-conses-are-attributed-to-the-call
+  ;; %CC-QQ-LIST rebuilds a fresh cons for every quasiquote list, even one
+  ;; with no unquote in it, so an error about the list itself (not one of its
+  ;; leaves) reports the call's line, not the template's own (#367, #362).
+  (let ((text (format nil "(defmacro bad () `(1 2))~%(defun main () (bad))~%")))
+    (handler-case (compile-source (read-source-from-string
+                                   (concatenate 'string "(:program (:backend callfoo-lang-abi)) " text)))
+      (program-compile-error (c)
         (fiveam:is (= 2 (lasm-syntax-error-line c)))
-        (fiveam:is (search "unknown variable nope" (diagnostic-text c)))))))
+        (fiveam:is (search "expected (NAME ARG...)" (diagnostic-text c)))))))
 
 ;;; #362: positioned compile errors
 
@@ -455,13 +497,22 @@
     (eval '(defbackend cl-arity-abi (:machine callfoo) (ops (:const (a b c) (ldi a b)))))))
 
 (fiveam:test source-is-read-without-evaluation-or-interning
-  (dolist (text '("(defun main () '1)" "(defun main () #.(+ 1 2))" "(defun main () 1" "(defun main () 1))"
+  (dolist (text '("(defun main () #.(+ 1 2))" "(defun main () 1" "(defun main () 1))"
                   "(defun main () foo:bar)"))
     (fiveam:signals program-compile-error (read-source-from-string text)))
   (let ((*read-eval* t))
     (fiveam:is (null (find-symbol "SOME-UNSEEN-SOURCE-NAME" '#:lasm)))
     (read-source-from-string "(defun some-unseen-source-name () 1)")
     (fiveam:is (null (find-symbol "SOME-UNSEEN-SOURCE-NAME" '#:lasm)))))
+
+(fiveam:test source-reads-quote-and-quasiquote-but-items-and-snapshots-dont
+  (let ((body (fourth (first (items-program-items (read-source-from-string "(defun main () '(1 2))"))))))
+    (fiveam:is (equal "QUOTE" (%designator-name (first body))))
+    (fiveam:is (equal '(1 2) (second body))))
+  (dolist (text '("(a 'b)" "(a `b)" "(a ,b)"))
+    (fiveam:signals error
+      (read-restricted-forms (make-string-input-stream text)
+                              (lambda (control &rest args) (error "~?" control args)) "items" :bare :uninterned))))
 
 (fiveam:test read-restricted-forms-reads-every-form
   (with-input-from-string (in "(a 1) b 2")
@@ -517,7 +568,7 @@
 
 (fiveam:test cli-run-executes-the-macros-example
   (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi)))
-    (fiveam:is (= 204 (%cv-a m)))))
+    (fiveam:is (= 220 (%cv-a m)))))
 
 (fiveam:test cli-compile-writes-an-items-program-that-run-accepts
   (uiop:with-temporary-file (:pathname path :type "lasm")

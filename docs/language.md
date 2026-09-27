@@ -38,7 +38,8 @@ A `.lsp` file holds top-level forms, in any order. A leading
 | `(defarray NAME SIZE)` | `SIZE` reserved, uninitialised cells. |
 | `(defarray NAME (VALUE...))` | Cells initialised to `VALUE...`, each an integer, `(function F)`, or another `defconstant`/`defarray`/`defstring` name. |
 | `(defstring NAME "TEXT")` | `TEXT`, one character a cell, `0`-terminated. |
-| `(defmacro NAME (PARAM... [&rest R]) TEMPLATE)` | A compile-time macro; see [below](#macros). |
+| `(defmacro NAME (PARAM... [&rest R]) BODY...)` | A compile-time macro; see [below](#macros). |
+| `(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` | A compile-time helper function, callable from a macro's `BODY`. |
 
 The program needs `(defun main () ...)`. The compiled program starts with a stub
 that stores the globals' initial values, calls `main` and halts; the runner sets
@@ -140,33 +141,72 @@ backend operation is a compile error naming the form.
 ## Macros
 
 A `defmacro` call, in an expression or at top level, is replaced by its
-template with each parameter substituted for the call's argument. Nothing
-computes at compile time.
+`BODY` evaluated at compile time, with each parameter bound to the call's own
+argument, unevaluated -- a form, not its value. `BODY` most often builds its
+result with a quasiquoted template.
 
 ```lisp
-(defmacro inc (v) (set v (+ v 1)))
-(defmacro unless (c &rest body) (if c 0 (progn body)))
-(defmacro swap (a b) (let ((tmp a)) (set a b) (set b tmp)))
-```
+(defmacro inc (v) `(set ,v (+ ,v 1)))
+(defmacro unless (c &rest body) `(if ,c 0 (progn ,@body)))
+(defmacro swap (a b) `(let ((tmp ,a)) (set ,a ,b) (set ,b tmp)))
 
-A trailing `&rest R` binds the remaining arguments; `R` used as a list
-element (`(progn body)` above) splices them in. A parameter is substituted
-wherever it appears, so using it twice in the template runs its argument
-twice.
+(defmacro double-or-inc (n) (if (integerp n) `(+ ,n ,n) `(+ ,n 1)))
+```
+`` `TEMPLATE `` is TEMPLATE with each `,FORM` replaced by FORM's value and each
+`,@FORM` (only as a list element) spliced in, FORM's value being a list.
+`double-or-inc` decides its expansion from its own argument: doubling it when
+it's a literal integer the macro can already see, incrementing it otherwise
+(so it still works on a non-literal argument, computed at run time).
+
+A trailing `&rest R` binds the remaining arguments as a list. A parameter is
+substituted wherever it appears, so using it twice in the template runs its
+argument twice.
 
 A `let` the template writes gets fresh binding names, so `(swap tmp y)`
 above doesn't confuse the macro's own `tmp` with the caller's: only a
 template's own `let` names are protected this way, and a name the template
 otherwise refers to free is still resolved where the macro is used, same as
-any other name. A macro call also works at top level, where it can expand to
-`defun`, `defvar`, `defconstant`, `defmacro`, or a `(progn DEF...)` of them.
+any other name. A binding name written as `,NAME` (its value, computed, not
+the template's own) is used as given, unrenamed. A macro call also works at
+top level, where it can expand to `defun`, `defvar`, `defconstant`,
+`defmacro`, or a `(progn DEF...)` of them.
 
-Inside `(asm ...)`, only `(:var PARAM)` substitutes, to the caller's argument
-(which must itself be a name) or the template's own renamed `let` name;
-everything else, including a register operand such as `(reg a)`, is left
-alone.[^macros]
+Inside `(asm ...)`, `,FORM` and `,@FORM` substitute like anywhere else in the
+template, so a constant, a register name or a `(:var NAME)` can all be
+computed; everything written literally, including a register operand such as
+`(reg a)`, is left alone.
 
-See [`examples/cli/macros.lsp`](../examples/cli/macros.lsp).
+### The compile-time evaluator
+
+`BODY`'s forms run over plain data: integers, strings, symbols and lists.
+`()` is false; anything else, including `t`, is true.
+
+| Form | Does |
+| --- | --- |
+| `(quote FORM)`, `'FORM` | FORM itself, unevaluated. |
+| `` (quasiquote FORM) ``, `` `FORM `` | FORM as a template; see above. |
+| `(if TEST THEN [ELSE])` | THEN when TEST is true, else ELSE (`()` if omitted). |
+| `(let ((NAME VALUE)...) BODY...)`, `let*` | As the language's own `let`, but at compile time. |
+| `(progn FORM...)` | Each FORM in order; the last one's value. |
+| `car`, `cdr`, `cons`, `list`, `append`, `length` | List operations; `car`/`cdr` of `()` is `()`. |
+| `null`, `consp`, `symbolp`, `integerp` | Type predicates. |
+| `eq`, `equal` | `eq` compares a pair of symbols by name, never by identity. |
+| `+`, `-`, `*`, `=`, `<`, `>` | Integer arithmetic and comparison, each over any number of arguments. |
+| `gensym` | A symbol no source text can spell, for a template to bind without capturing anything (`(gensym PREFIX)` names it, for reading a macro's own compile-time errors). |
+| `error` | Signals a compile error naming the macro's call. |
+
+`(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` is a compile-time
+helper: unlike a macro's, its own arguments are evaluated before the call, so
+it can recurse over a value a macro has already computed.
+
+```lisp
+(defun-for-syntax sum-of (xs) (if (null xs) 0 (+ (car xs) (sum-of (cdr xs)))))
+(defmacro total (&rest xs) (sum-of xs))
+
+(defun main () (total 1 2 3))          ; 6, added up at compile time
+```
+
+See [`examples/cli/macros.lsp`](../examples/cli/macros.lsp).[^macros]
 
 ## Inline items
 
@@ -263,9 +303,9 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a cell; no packed (several-per-cell) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
 | A word is one cell. | [#368](https://todo.sr.ht/~takeiteasy/lasm/368) |
-| A macro's template only copies and substitutes; it cannot compute from its arguments. | [#380](https://todo.sr.ht/~takeiteasy/lasm/380) |
-| A macro's `(asm ...)` can only substitute `(:var PARAM)`, not a constant or register name. | [#381](https://todo.sr.ht/~takeiteasy/lasm/381) |
 | A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
+| A quasiquote template can't nest another quasiquote inside it. | [#383](https://todo.sr.ht/~takeiteasy/lasm/383) |
+| The compile-time evaluator's operators are a minimal set: no strings, `apply`, `mapcar`, `and`/`or`/`cond`. | [#384](https://todo.sr.ht/~takeiteasy/lasm/384) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an
@@ -284,15 +324,23 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
 
-[^macros]: A fresh `let` name is an uninterned symbol whose printed name has
-  a space, which no source symbol can spell. A function body is expanded
-  once every top-level form (including every `defmacro`, wherever it sits in
-  the file) is registered, so a function can use a macro defined later in
-  the file; a macro used at top level needs its own `defmacro` earlier in
-  the file, same as a function needs a global defined before it's read. A
-  program is limited to 10000 total macro expansions, which also catches a
-  macro that expands into a call to itself. An error inside an expansion
-  reports the call's line and column, not the template's own.
+[^macros]: A fresh `let` name or `gensym` is an uninterned symbol whose
+  printed name has a space, which no source symbol can spell. `nil` and `t`
+  are self-evaluating, like Common Lisp's; every other symbol not bound by
+  a `let` or a parameter is unbound. A function body is expanded once every
+  top-level form (including every `defmacro`/`defun-for-syntax`, wherever it
+  sits in the file) is registered, so a function can use a macro defined
+  later in the file; a macro used at top level needs its own `defmacro`
+  earlier in the file, same as a function needs a global defined before it's
+  read. A program is limited to 10000 total macro expansions, which also
+  catches a macro that expands into a call to itself, and 1,000,000
+  compile-time evaluation steps across every macro and `defun-for-syntax`
+  call, which catches a helper's runaway recursion; either raises a
+  positioned error, as does recursing deep enough to exhaust the compiler's
+  own stack. An error a macro's own code causes -- an unbound name, a wrong
+  argument to `car` -- reports where that code is written, in the `defmacro`;
+  one about a quasiquote's own list structure, which has no position of its
+  own, reports the call instead.
 
 [^return]: Pops any temporaries the compiler has pushed for an enclosing
   operator or `poke` since the function's entry, so the stack is back at its

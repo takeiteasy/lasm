@@ -125,17 +125,25 @@ under READ-RESTRICTED-FORMS' :POSITIONS.")
 
 (defvar *restricted-readtable* nil)
 
+(defun %restrict-sharpsign (table)
+  "TABLE with every #X dispatch but the ones the restricted reader needs
+(numbers, characters, keywords) failing."
+  (dotimes (code 128)
+    (let ((char (code-char code)))
+      (unless (or (digit-char-p char) (member char '(#\\ #\( #\:)))
+        (eclector.readtable:set-dispatch-macro-character
+         table #\# char
+         (lambda (stream char parameter)
+           (declare (ignore parameter))
+           (%reader-fail "#~A is not allowed at ~D" char (file-position stream)))))))
+  table)
+
 (defun %restricted-readtable ()
+  "The readtable for snapshots and item files: no #X dispatch beyond numbers/
+characters/keywords, and ' ` , are rejected outright (#380: a source file's
+readtable, %SOURCE-READTABLE, allows them instead)."
   (or *restricted-readtable*
-      (let ((table (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))
-        (dotimes (code 128)
-          (let ((char (code-char code)))
-            (unless (or (digit-char-p char) (member char '(#\\ #\( #\:)))
-              (eclector.readtable:set-dispatch-macro-character
-               table #\# char
-               (lambda (stream char parameter)
-                 (declare (ignore parameter))
-                 (%reader-fail "#~A is not allowed at ~D" char (file-position stream)))))))
+      (let ((table (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*))))
         (dolist (char '(#\' #\` #\,))
           (eclector.readtable:set-macro-character
            table char
@@ -143,20 +151,56 @@ under READ-RESTRICTED-FORMS' :POSITIONS.")
              (%reader-fail "~A is not allowed at ~D" char (file-position stream)))))
         (setf *restricted-readtable* table))))
 
-(defun %read-restricted (stream fail path bare positions function)
+(defvar *source-readtable* nil)
+
+(defun %source-readtable ()
+  "The readtable for source files (#380): like %RESTRICTED-READTABLE, but
+' ` , ,@ read as quote/quasiquote/unquote/unquote-splicing (WRAP-IN-QUOTE and
+friends, specialized on RESTRICTED-SOURCE-CLIENT, build their lists headed by
+an uninterned symbol instead of interning CL:QUOTE &c.)."
+  (or *source-readtable*
+      (setf *source-readtable*
+            (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))))
+
+;;; Quote/quasiquote for source files only (#380): RESTRICTED-SOURCE-CLIENT
+;;; overrides Eclector's WRAP-IN-* so a quoted form's head is an uninterned
+;;; symbol, matching every other symbol the restricted reader hands back.
+;;; %SOURCE-READTABLE leaves ' ` , ,@ at their standard Eclector meaning, so
+;;; only this client, not the readtable, decides how they're represented.
+
+(defclass restricted-source-client (restricted-position-client) ())
+
+(defun %quote-symbol (name)
+  (make-symbol name))
+
+(defmethod eclector.reader:wrap-in-quote ((client restricted-source-client) material)
+  (list (%quote-symbol "QUOTE") material))
+
+(defmethod eclector.reader:wrap-in-quasiquote ((client restricted-source-client) form)
+  (list (%quote-symbol "QUASIQUOTE") form))
+
+(defmethod eclector.reader:wrap-in-unquote ((client restricted-source-client) form)
+  (list (%quote-symbol "UNQUOTE") form))
+
+(defmethod eclector.reader:wrap-in-unquote-splicing ((client restricted-source-client) form)
+  (list (%quote-symbol "UNQUOTE-SPLICING") form))
+
+(defun %read-restricted (stream fail path bare positions quotes function)
   "Call FUNCTION with a thunk that reads the next form of STREAM, or returns
 its second argument's unique end marker, under the restricted reader's
 limits. POSITIONS, an EQ hash table or NIL, records each cons or symbol's
-starting character offset."
+starting character offset. QUOTES allows ' ` , ,@ (#380), and requires
+POSITIONS."
   (handler-case
       (with-standard-io-syntax
-        (let* ((client-class (if positions 'restricted-position-client 'restricted-client))
+        (let* ((client-class (cond (quotes 'restricted-source-client) (positions 'restricted-position-client)
+                                    (t 'restricted-client)))
                (eclector.reader:*client* (make-instance client-class :fail fail :bare bare))
-               (eclector.readtable:*readtable* (%restricted-readtable))
+               (eclector.readtable:*readtable* (if quotes (%source-readtable) (%restricted-readtable)))
                (*read-eval* nil)
                (*reader-positions* positions)
                (eof (list nil)))
-          (flet ((next () (if positions
+          (flet ((next () (if (or positions quotes)
                               (eclector.parse-result:read eclector.reader:*client* stream nil eof)
                               (eclector.reader:read stream nil eof))))
             (declare (dynamic-extent #'next))
@@ -165,24 +209,24 @@ starting character offset."
     (storage-condition () (funcall fail "~A: nested too deeply" path))
     (error (e) (funcall fail "~A: unreadable (~A)" path e))))
 
-(defun read-restricted-form (stream fail path &key (bare :keyword) positions)
+(defun read-restricted-form (stream fail path &key (bare :keyword) positions quotes)
   "The single form on STREAM, read without interning symbols, evaluating or
 building shared structure. FAIL, called with a format control and arguments,
 signals the caller's own condition for anything unreadable; conditions it
 signals pass through, and PATH names STREAM in messages. A symbol with no
 package prefix must already exist as a keyword, or with BARE :UNINTERNED is
-made fresh; a prefixed one must already exist. POSITIONS is as in
+made fresh; a prefixed one must already exist. POSITIONS and QUOTES are as in
 %READ-RESTRICTED."
-  (%read-restricted stream fail path bare positions
+  (%read-restricted stream fail path bare positions quotes
                     (lambda (next eof)
                       (let ((form (funcall next)))
                         (unless (eq (funcall next) eof)
                           (funcall fail "trailing data"))
                         (if (eq form eof) :eof form)))))
 
-(defun read-restricted-forms (stream fail path &key (bare :keyword) positions)
+(defun read-restricted-forms (stream fail path &key (bare :keyword) positions quotes)
   "Every form on STREAM, read as READ-RESTRICTED-FORM reads one."
-  (%read-restricted stream fail path bare positions
+  (%read-restricted stream fail path bare positions quotes
                     (lambda (next eof)
                       (loop for form = (funcall next)
                             until (eq form eof)
