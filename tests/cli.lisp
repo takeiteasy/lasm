@@ -579,7 +579,8 @@
           (%run-cli (list "assemble" path "-m" (%cli-path "examples/cli/callfoo.lisp") "-o" "/dev/null"))
         (declare (ignore out))
         (fiveam:is (= 1 status))
-        (fiveam:is (search "Item error" err))))))
+        (fiveam:is (search "unknown item" err))
+        (fiveam:is (search ":1:" err) "reports a line and column (#372)")))))
 
 (fiveam:test cli-items-program-snapshots-and-resumes
   (uiop:with-temporary-file (:pathname snap :type "snap")

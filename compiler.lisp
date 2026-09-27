@@ -48,19 +48,10 @@
 (defvar *cc-source* nil "The program's source text, or NIL.")
 (defvar *cc-file* nil "The program's path, or NIL.")
 
-(defun %cc-offset-line-column (offset)
-  "1-based (VALUES LINE COLUMN) of character OFFSET in *CC-SOURCE*."
-  (let ((line 1) (column 1))
-    (dotimes (i (min offset (length *cc-source*)))
-      (if (char= (char *cc-source* i) #\Newline)
-          (setf line (1+ line) column 1)
-          (incf column)))
-    (values line column)))
-
 (defun %cc-line-column (form)
   "(VALUES LINE COLUMN) of FORM, when its position and the source text are known."
   (let ((offset (and *cc-positions* form (gethash form *cc-positions*))))
-    (and offset *cc-source* (%cc-offset-line-column offset))))
+    (and offset *cc-source* (%offset-line-column *cc-source* offset))))
 
 (defun %cc-fail (form control &rest args)
   (let* ((detail (apply #'format nil control args))
@@ -505,14 +496,6 @@ STREAM reads from, for #362."
   (let ((positions (make-hash-table :test 'eq)))
     (values (read-restricted-forms stream #'%source-fail path :bare :uninterned :positions positions)
             positions)))
-
-(defun %slurp-file (path)
-  "The text of the file PATH, read as characters (not bytes) so its length
-matches the character offsets a stream over it reports."
-  (with-open-file (in path)
-    (let* ((buffer (make-string (file-length in)))
-           (n (read-sequence buffer in)))
-      (subseq buffer 0 n))))
 
 (defun read-source-from-string (string)
   "The ITEMS-PROGRAM whose items are the source forms in STRING. The text is

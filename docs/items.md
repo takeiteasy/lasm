@@ -82,7 +82,10 @@ Choosing between a mnemonic's variants by width is not a mismatch:
 `items-malformed` is signalled for an item that is not well formed: an unknown
 operation or kind, a wrong argument count, a keyword where a value belongs.
 Both are `items-error`s; `items-error-detail` and `items-error-item` give the
-message and the item.
+message and the item. From `read-items`/`read-items-from-string`, the error
+also reports `FILE:LINE:COLUMN` with the source line and a caret, as an
+assembly error does; `assemble-items` on a plain list of items has no position
+to report.
 
 ## Forcing a variant
 
@@ -166,10 +169,10 @@ bounded. Anything else signals `items-malformed`.
 
 | Function | Does |
 | --- | --- |
-| `(read-items path)` | Returns an `items-program`: `items-program-items` `-backend` `-machine` `-origin` `-memory` `-lexer`. |
-| `(read-items-from-string text)` | The same for a string. |
+| `(read-items path)` | Returns an `items-program`: `items-program-items` `-backend` `-machine` `-origin` `-memory` `-lexer`, plus `-source` `-file` `-positions` for a positioned error. |
+| `(read-items-from-string text)` | The same for a string; `items-program-file` is `NIL`. |
 | `(assemble-items-file path &key backend machine lexer origin memory)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
-| `(assemble-items items &key backend machine lexer origin memory file)` | Assembles a list of items. |
+| `(assemble-items items &key backend machine lexer origin memory file positions source)` | Assembles a list of items. `positions` and `source`, as `read-items` sets them, are passed on for a positioned error. |
 | `(items-size items &key backend machine lexer origin memory assume)` | Returns the [size](#sizing) in cells. |
 | `(render-items items &key backend machine lexer origin memory)` | Returns the source text. |
 

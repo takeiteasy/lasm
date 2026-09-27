@@ -16,6 +16,25 @@ any program LASM realistically assembles, so this needn't be smarter."
           while text
           when (= i n) return text)))
 
+(defun %offset-line-column (text offset)
+  "1-based (VALUES LINE COLUMN) of the character OFFSET in TEXT -- used by a
+reader that records a form's position as an offset (compiler.lisp, items.lisp,
+#362, #372) rather than tracking line and column as it goes, as the lexer does."
+  (let ((line 1) (column 1))
+    (dotimes (i (min offset (length text)))
+      (if (char= (char text i) #\Newline)
+          (setf line (1+ line) column 1)
+          (incf column)))
+    (values line column)))
+
+(defun %slurp-file (path)
+  "The text of the file PATH, read as characters (not bytes) so its length
+matches the character offsets a stream over it reports."
+  (with-open-file (in path)
+    (let* ((buffer (make-string (file-length in)))
+           (n (read-sequence buffer in)))
+      (subseq buffer 0 n))))
+
 (defun diagnostic-text (condition &key (source nil source-supplied-p))
   "Render CONDITION (a LASM-SYNTAX-ERROR) as a diagnostic report: its
 position and message, followed -- when source text is available at the

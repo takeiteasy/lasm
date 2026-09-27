@@ -389,6 +389,34 @@ call .inner" :machine 'callfoo))
       (fiveam:is (= 9 (assembly-origin (assemble-items-file path :origin 9))))
       (fiveam:signals usage-error (assemble-items-file path :machine 'bk-ld-machine)))))
 
+;;; #372: positioned items errors
+
+(fiveam:test an-items-file-error-reports-its-line-and-column
+  (%call-with-items-file (format nil "(:program (:machine callfoo)~%  (:frobnicate))~%")
+    (lambda (path)
+      (handler-case (assemble-items-file path)
+        (items-malformed (c)
+          (fiveam:is (= 2 (lasm-syntax-error-line c)))
+          (fiveam:is (search (namestring path) (diagnostic-text c)))
+          (fiveam:is (search "unknown item" (diagnostic-text c)))
+          (fiveam:is (search "(:frobnicate)" (diagnostic-text c)))
+          (fiveam:is (search "^" (diagnostic-text c)) "shows a caret"))))))
+
+(fiveam:test an-items-error-from-a-string-has-a-line-but-no-file
+  (let ((program (read-items-from-string
+                  (format nil "(:program (:machine callfoo)~%  (:frobnicate))~%"))))
+    (handler-case (assemble-items (items-program-items program) :machine 'callfoo
+                                  :positions (items-program-positions program)
+                                  :source (items-program-source program))
+      (items-malformed (c)
+        (fiveam:is (= 2 (lasm-syntax-error-line c)))
+        (fiveam:is (null (lasm-syntax-error-file c)))))))
+
+(fiveam:test assemble-items-on-raw-items-has-no-position
+  (handler-case (assemble-items '((:frobnicate)) :machine 'callfoo)
+    (items-malformed (c)
+      (fiveam:is (null (lasm-syntax-error-line c))))))
+
 (fiveam:test assemble-items-file-resolves-includes-beside-the-file
   (uiop:with-temporary-file (:pathname included :type "asm" :stream out)
     (write-string "hlt" out)

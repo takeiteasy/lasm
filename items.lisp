@@ -21,23 +21,39 @@
 
 (in-package #:lasm)
 
-(define-condition items-error (lasm-error)
+;; #372: a LASM-SYNTAX-ERROR, as PROGRAM-COMPILE-ERROR is (#362), so
+;; DIAGNOSTIC-TEXT renders FILE:LINE:COLUMN and, when the item's position and
+;; the program's source text are known (READ-ITEMS, READ-ITEMS-FROM-STRING),
+;; the offending line with a caret.
+(define-condition items-error (lasm-syntax-error)
   ((detail :initarg :detail :reader items-error-detail)
-   (item :initarg :item :initform nil :reader items-error-item))
-  (:report (lambda (c s)
-             (format s "Item error: ~A~@[ (in ~S)~]" (items-error-detail c) (items-error-item c)))))
+   (item :initarg :item :initform nil :reader items-error-item)))
 
 (define-condition items-malformed (items-error) ())
 (define-condition items-operand-mismatch (items-error) ())
 
+(defvar *items-positions* nil "EQ hash table, item -> character offset, or NIL without one (#372).")
+(defvar *items-source-text* nil "The program's source text, or NIL.")
+(defvar *items-file* nil "The program's path, or NIL.")
+
+(defun %items-line-column (item)
+  "(VALUES LINE COLUMN) of ITEM, when its position and the source text are known."
+  (let ((offset (and *items-positions* item (gethash item *items-positions*))))
+    (and offset *items-source-text* (%offset-line-column *items-source-text* offset))))
+
 (defun %items-fail (type item control &rest args)
-  (error type :detail (apply #'format nil control args) :item item))
+  (let* ((detail (apply #'format nil control args))
+         (message (let ((*print-gensym* nil) (*print-case* :downcase) (*print-length* 8) (*print-level* 4))
+                    (format nil "~A~@[ (in ~S)~]" detail item))))
+    (multiple-value-bind (line column) (%items-line-column item)
+      (error type :detail detail :item item :message message :line line :column column
+                  :file *items-file* :source *items-source-text*))))
 
 (defstruct items-program
   items backend machine origin memory lexer
-  source   ; source text, for a program READ-SOURCE or READ-SOURCE-FROM-STRING made
-  file     ; its path, or NIL for READ-SOURCE-FROM-STRING
-  positions) ; EQ hash table, form -> character offset in SOURCE, for #362
+  source   ; source text, for a program a reader with positions made
+  file     ; its path, or NIL for a *-FROM-STRING reader
+  positions) ; EQ hash table, form -> character offset in SOURCE, for #362, #372
 
 ;;; Context
 
@@ -1150,28 +1166,36 @@ layout is left to ASSEMBLE-ITEMS."
     (multiple-value-bind (statements text unit lines) (%items-source items)
       (when (some #'item-line-stack-check lines)
         (handler-case (%check-laid-out-stack-lines statements text unit lines origin :widest)
+          ;; ITEMS-ERROR is a real modeling error (e.g. a stack-writer mismatch,
+          ;; #372) and must still reach the caller -- only the assembler's own
+          ;; layout ambiguity, at a WIDEST guess, is deferred to ASSEMBLE-ITEMS.
+          (items-error (c) (error c))
           (lasm-syntax-error () nil)))
       text)))
 
-(defun assemble-items (items &key backend machine (lexer 'default) (origin 0) memory file)
+(defun assemble-items (items &key backend machine (lexer 'default) (origin 0) memory file positions source)
   "Assemble ITEMS, a list of items, for the machine of BACKEND (a name or
 BACKEND-DESCRIPTOR) or for MACHINE. Returns an ASSEMBLY like ASSEMBLE, whose
 source is the text RENDER-ITEMS gives; LEXER, ORIGIN and MEMORY are ASSEMBLE's.
 FILE names the program in diagnostics. Signals ITEMS-MALFORMED for an item that
 is not well formed and ITEMS-OPERAND-MISMATCH for an operand that does not
 match its mode, or that the assembler read as another alternative of the
-instruction's modes; the assembler's own conditions otherwise."
-  (%with-items-context (backend machine lexer memory)
-    (multiple-value-bind (statements text unit lines) (%items-source items)
-      (setf (source-unit-file unit) (and file (namestring (pathname file))))
-      (let ((assembly (with-source-unit unit
-                        (assemble-statements statements
-                                             :machine *items-machine* :lexer *items-lexer* :origin origin
-                                             :memory *items-memory*
-                                             :source text :source-unit unit))))
-        (%check-choices assembly lines statements unit)
-        (%check-assembled-stack-lines (assembly-listing assembly) lines unit)
-        assembly))))
+instruction's modes; the assembler's own conditions otherwise. POSITIONS and
+SOURCE, as READ-ITEMS and READ-ITEMS-FROM-STRING set them on an ITEMS-PROGRAM,
+let such an error report FILE:LINE:COLUMN (#372)."
+  (let ((*items-positions* positions) (*items-source-text* source)
+        (*items-file* (and file (namestring (pathname file)))))
+    (%with-items-context (backend machine lexer memory)
+      (multiple-value-bind (statements text unit lines) (%items-source items)
+        (setf (source-unit-file unit) *items-file*)
+        (let ((assembly (with-source-unit unit
+                          (assemble-statements statements
+                                               :machine *items-machine* :lexer *items-lexer* :origin origin
+                                               :memory *items-memory*
+                                               :source text :source-unit unit))))
+          (%check-choices assembly lines statements unit)
+          (%check-assembled-stack-lines (assembly-listing assembly) lines unit)
+          assembly)))))
 
 (defun items-size (items &key backend machine (lexer 'default) (origin 0) memory (assume :widest))
   "The cells ITEMS occupy, from their first cell to the end of their last, laid
@@ -1215,24 +1239,38 @@ ASSEMBLE-ITEMS's."
                      (t (%program-fail "unknown :program option ~S" key)))))
     program))
 
+(defun %read-items-form (stream path)
+  "(VALUES FORM POSITIONS) for STREAM, as READ-ITEMS and READ-ITEMS-FROM-
+STRING read it. POSITIONS maps each item to a character offset into the text
+STREAM reads from, for #372."
+  (let ((positions (make-hash-table :test 'eq)))
+    (values (read-restricted-form stream (lambda (control &rest args)
+                                           (apply #'%program-fail control args))
+                                  path :bare :uninterned :positions positions)
+            positions)))
+
 (defun read-items (path)
   "The ITEMS-PROGRAM in the file PATH: one (:program (option...) item...) form,
 with options :backend, :machine, :memory, :lexer and :origin. The file is
 untrusted: it is read without evaluation and without interning symbols.
 Signals ITEMS-MALFORMED for an unreadable or malformed file."
-  (%parse-program
-   (with-open-file (in path)
-     (read-restricted-form in (lambda (control &rest args)
-                                (apply #'%program-fail control args))
-                           path :bare :uninterned))))
+  (let ((text (%slurp-file path)))
+    (with-input-from-string (in text)
+      (multiple-value-bind (form positions) (%read-items-form in path)
+        (let ((program (%parse-program form)))
+          (setf (items-program-source program) text
+                (items-program-file program) (namestring path)
+                (items-program-positions program) positions)
+          program)))))
 
 (defun read-items-from-string (string)
   "Like READ-ITEMS, for the text STRING."
-  (%parse-program
-   (with-input-from-string (in string)
-     (read-restricted-form in (lambda (control &rest args)
-                                (apply #'%program-fail control args))
-                           "items" :bare :uninterned))))
+  (with-input-from-string (in string)
+    (multiple-value-bind (form positions) (%read-items-form in "items")
+      (let ((program (%parse-program form)))
+        (setf (items-program-source program) string
+              (items-program-positions program) positions)
+        program))))
 
 (defun %assemble-items-program (program path &key backend machine lexer origin memory)
   "Assemble the ITEMS-PROGRAM read from PATH; the keys override its options."
@@ -1245,7 +1283,9 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
                                    :lexer (or lexer (items-program-lexer program) 'default)
                                    :origin (or origin (items-program-origin program) 0)
                                    :memory (or memory (items-program-memory program))
-                                   :file path)))
+                                   :file path
+                                   :positions (items-program-positions program)
+                                   :source (items-program-source program))))
     (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
     assembly))
 
