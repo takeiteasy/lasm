@@ -116,7 +116,14 @@
     ("(defun main () (let ((x 1)) (+ x (progn (asm (:op :const (reg a) 3) (:op :set (:var x) (reg a))) 0))))" . 1)
     ("(defconstant k 5) (defun main () (- k (+ 1 1)))" . 3)
     ("(defvar g 0) (defun main () (set g 7) (poke 210 g) (+ (peek 210) g))" . 14)
-    ("(defun main () (poke 220 (+ 1 2)) (not (peek 220)))" . 0))
+    ("(defun main () (poke 220 (+ 1 2)) (not (peek 220)))" . 0)
+    ;; #373: a register, not always the stack, holds a left operand.
+    ("(defun g (x) (+ x 1))
+      (defun f (n) (+ (g n) (if (= n 0) (return 42) (g n))))
+      (defun main () (f 0))" . 42)
+    ("(defun g (x) (+ x 1))
+      (defun h (a b c) (+ (g a) (+ b c)))
+      (defun main () (h 10 20 30))" . 61))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -186,9 +193,36 @@
                        "(defconstant k 5) (defun main () (- k (+ 1 1)))"))
       (fiveam:is (zerop (%cl-push-count (%cl-compile source backend))) "~A on ~A" source backend))))
 
-(fiveam:test a-complex-right-operand-still-uses-the-stack
-  (fiveam:is (= 1 (%cl-push-count (%cl-compile "(defun f (n) n) (defun main () (+ (f 1) (f 2)))"
+;;; #373: a register, not always the stack, holds a left operand
+
+(defun %cl-function-options (items name)
+  "The (:args ... :locals ... [:save (...)]) options of function NAME in ITEMS."
+  (let ((label (%cc-mangle "fn" name)))
+    (third (find-if (lambda (item) (and (eq :function (first item)) (%same-name-p label (second item))))
+                    items))))
+
+(fiveam:test a-call-in-the-right-operand-holds-the-left-in-a-saved-register
+  (let ((items (%cl-compile "(defun f (n) n) (defun main () (+ (f 1) (f 2)))" 'callfoo-lang-abi)))
+    (fiveam:is (zerop (%cl-push-count items)))
+    (fiveam:is (equal '("C") (mapcar #'%designator-name (getf (%cl-function-options items "main") :save))))))
+
+(fiveam:test a-call-free-right-operand-holds-the-left-in-a-volatile-register
+  (let ((items (%cl-compile "(defvar g 300) (defvar h 301)
+                             (defun main () (poke g 5) (poke h 6) (+ (peek g) (* (peek h) 2)))"
+                            'cl-reg-abi)))
+    (fiveam:is (zerop (%cl-push-count items)))
+    (fiveam:is (null (getf (%cl-function-options items "main") :save)))))
+
+(fiveam:test running-out-of-registers-still-falls-back-to-the-stack
+  (fiveam:is (= 1 (%cl-push-count (%cl-compile "(defun f (n) n)
+                                                 (defun main () (+ (f 1) (+ (f 2) (+ (f 3) (f 4)))))"
                                                'callfoo-lang-abi)))))
+
+(fiveam:test asm-in-the-right-operand-still-uses-the-stack
+  (fiveam:is (= 1 (%cl-push-count
+                   (%cl-compile "(defun main () (let ((x 1))
+                                    (+ x (progn (asm (:op :const (reg a) 3) (:op :set (:var x) (reg a))) 0))))"
+                               'callfoo-lang-abi)))))
 
 (fiveam:test function-items-declare-their-arguments-and-locals
   (let ((function (find-if (lambda (item) (eq :function (first item)))

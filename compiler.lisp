@@ -33,6 +33,9 @@
 (defvar *cc-temp* nil "The register operand that holds a right operand.")
 (defvar *cc-acc-name* nil "The accumulator's name, for the operations that take register names.")
 (defvar *cc-temp-name* nil "The temporary register's name.")
+(defvar *cc-volatile* nil "Upcased names the register allocator (#373) may hold a value in across ordinary code, least-preferred last.")
+(defvar *cc-preserved* nil "Upcased names the allocator may hold a value in across a call, saving it in the function's prologue.")
+(defvar *cc-saves* nil "Upcased names from *CC-PRESERVED* the function being compiled has used, for its :save option.")
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
@@ -112,6 +115,10 @@ cannot be a register alias or a generated label."
 (defun %cc-const (value)
   (%cc-op :const *cc-acc* value))
 
+(defun %cc-register-operand (name)
+  (list (%cc-symbol (string-downcase (getf (backend-descriptor-registers *cc-backend*) :operand)))
+        (%cc-symbol (string-downcase name))))
+
 ;;; Expressions
 
 (defun %cc-lookup (symbol)
@@ -149,19 +156,67 @@ cannot be a register alias or a generated label."
       (dolist (form forms) (%cc-expr form))
       (%cc-const 0)))
 
-;; TODO: a non-leaf operand still goes through the stack, one push per
-;; operand; a register allocator over the backend's scratch registers would
-;; avoid it when one is free (#373).
+(defun %cc-hazards (tree)
+  "(VALUES ASM-P CALL-P): whether TREE, an operand's source form, reaches an
+(asm ...) block, which can target any register directly, or calls a
+function, which clobbers the volatile pool (#373) -- a call's target may
+not preserve a :caller-saved register the way it preserves :callee-saved
+ones."
+  (if (not (consp tree))
+      (values nil nil)
+      (let* ((head (and (%cc-name-p (first tree)) (%designator-name (first tree))))
+             (asm (equal head "ASM")) (call (and head (gethash head *cc-functions*) t)))
+        (dolist (element tree)
+          (multiple-value-bind (a c) (%cc-hazards element)
+            (when a (setf asm t))
+            (when c (setf call t))))
+        (values asm call))))
+
+(defun %cc-take (form)
+  "A register from the pool to hold a value across compiling FORM, an
+operand not yet compiled, or NIL to fall back to the stack (#373): NIL when
+FORM reaches an (asm ...), which could target the held register directly;
+a free *CC-PRESERVED* register, recorded in *CC-SAVES* for the function's
+prologue and epilogue to save and restore, when FORM calls a function; a
+free *CC-VOLATILE* register otherwise, since a call is the only thing a
+compiled operand can do that a :caller-saved register does not survive."
+  (multiple-value-bind (asm call) (%cc-hazards form)
+    (cond (asm nil)
+          (call (let ((register (first *cc-preserved*)))
+                  (when register (pushnew register *cc-saves* :test #'string=))
+                  register))
+          (t (first *cc-volatile*)))))
+
+;; TODO: a register %CC-TAKE picks from *CC-PRESERVED* for a single call
+;; site costs a prologue push and an epilogue pop, about the same as the
+;; stack path it replaces. A use-count or loop-nesting heuristic that
+;; prefers the stack for a one-off use would remove that cost (#376).
+;;
+;; TODO: an (asm ...) in the operand always falls back to the stack (%CC-
+;; HAZARDS), because asm can target any register. A declared clobber list on
+;; asm would let most inline asm keep the register path (#377).
 (defun %cc-to-temp (form)
-  "FORM's value into the temp register, leaving the accumulator as it is."
+  "FORM's value into the temp register, leaving the accumulator as it is.
+A non-leaf FORM holds the accumulator's current value in a register from
+the pool (%CC-TAKE) while FORM computes, instead of the stack, when one is
+free and safe; otherwise the accumulator is pushed and popped as before."
   (if (%cc-leaf-p form)
       (%cc-load-leaf form *cc-temp* *cc-temp-name*)
-      (progn (%cc-emit (list :push *cc-acc*))
-             (incf *cc-depth*)
-             (%cc-expr form)
-             (%cc-op :move *cc-temp* *cc-acc*)
-             (%cc-emit (list :pop *cc-acc*))
-             (decf *cc-depth*))))
+      (let ((register (%cc-take form)))
+        (if register
+            (let ((operand (%cc-register-operand register))
+                  (*cc-volatile* (remove register *cc-volatile* :test #'string=))
+                  (*cc-preserved* (remove register *cc-preserved* :test #'string=)))
+              (%cc-op :move operand *cc-acc*)
+              (%cc-expr form)
+              (%cc-op :move *cc-temp* *cc-acc*)
+              (%cc-op :move *cc-acc* operand))
+            (progn (%cc-emit (list :push *cc-acc*))
+                   (incf *cc-depth*)
+                   (%cc-expr form)
+                   (%cc-op :move *cc-temp* *cc-acc*)
+                   (%cc-emit (list :pop *cc-acc*))
+                   (decf *cc-depth*))))))
 
 (defun %cc-value-to-temp (form)
   "FORM's value into the temp register, when the accumulator holds nothing to keep."
@@ -405,7 +460,7 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
-           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0)
+           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-saves* '())
            (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                             (if (eq args :stack) 0 (length args)))))
       (loop for param in params
@@ -420,21 +475,27 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
                        (cl:push (cons key slot) *cc-env*))
                      (cl:push (cons key (list :arg index)) *cc-env*))))
       (%cc-progn body)
-      (list* :function label (list :args (length params) :locals *cc-max*)
+      (list* :function label
+             (append (list :args (length params) :locals *cc-max*)
+                     ;; A preserved register %CC-TAKE used (#373); the backend's
+                     ;; own :callee-saved convention pushes and pops it, which
+                     ;; also restores it correctly across an early (return).
+                     (and *cc-saves* (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
+                                                          (reverse *cc-saves*)))))
              (nreverse (cl:push (list :return) *cc-out*))))))
 
-(defun %cc-register-operand (name)
-  (list (%cc-symbol (string-downcase (getf (backend-descriptor-registers *cc-backend*) :operand)))
-        (%cc-symbol (string-downcase name))))
-
 (defun %cc-registers ()
-  "Set the accumulator and the temporary register from the backend."
+  "Set the accumulator, the temporary register, and the volatile and
+preserved pools the register allocator (#373) holds operands in, all from
+the backend's register roles. An operation writes only its destination
+register, so any of these are free once nothing above still needs them."
   (let* ((registers (backend-descriptor-registers *cc-backend*))
          (acc (first (getf registers :return)))
          (pointer (getf (backend-descriptor-frame *cc-backend*) :pointer))
          (temp (and acc
                     (find-if (lambda (name) (and (string/= name acc) (not (equal name pointer))))
-                             (append (getf registers :scratch) (getf registers :caller-saved))))))
+                             (append (getf registers :scratch) (getf registers :caller-saved)))))
+         (reserved (list* acc temp pointer (getf registers :return))))
     (unless (getf registers :operand)
       (%cc-fail nil "the backend needs (registers :operand KIND)"))
     (unless acc
@@ -444,7 +505,11 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
     (setf *cc-acc* (%cc-register-operand acc)
           *cc-temp* (%cc-register-operand temp)
           *cc-acc-name* (%cc-symbol (string-downcase acc))
-          *cc-temp-name* (%cc-symbol (string-downcase temp)))))
+          *cc-temp-name* (%cc-symbol (string-downcase temp))
+          *cc-volatile* (remove-if (lambda (name) (member name reserved :test #'string=))
+                                    (append (getf registers :scratch) (getf registers :caller-saved)))
+          *cc-preserved* (remove-if (lambda (name) (member name reserved :test #'string=))
+                                     (getf registers :callee-saved)))))
 
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS), registering functions, globals and constants."
@@ -504,6 +569,7 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (*cc-constants* (make-hash-table :test 'equal))
         (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '())
         (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil)
+        (*cc-volatile* nil) (*cc-preserved* nil) (*cc-saves* nil)
         (*cc-positions* positions) (*cc-source* source) (*cc-file* file))
     (%cc-registers)
     (multiple-value-bind (definitions globals) (%cc-collect forms)

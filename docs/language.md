@@ -99,8 +99,13 @@ label.
 
 The backend's first `:return` register is the accumulator, and the first
 `:scratch` or `:caller-saved` register that is neither it nor the frame pointer
-holds a right operand.[^codegen] It needs `(registers :operand KIND)` and
-`(frame :slot KIND)`, and defines these [operations](backends.md#language-operations)
+holds a right operand. The rest of `:scratch`, `:caller-saved` and
+`:callee-saved`, less those two and the frame pointer, are a pool the compiler
+draws from to hold a left operand while a non-leaf right operand computes,
+instead of the stack.[^codegen] This needs every language operation to write
+only its destination register: nothing else may change while one of these
+holds a value across other code. It also needs `(registers :operand KIND)`
+and `(frame :slot KIND)`, and defines these [operations](backends.md#language-operations)
 for the forms a program uses. A missing one is a compile error naming the form.
 
 | Operation | Does |
@@ -159,7 +164,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| No register allocation: a non-leaf right operand still goes through the stack. | [#373](https://todo.sr.ht/~takeiteasy/lasm/373) |
+| A register `%CC-TAKE` picks from the callee-saved pool for a single call site costs a save/restore even when the stack would have been as cheap. | [#376](https://todo.sr.ht/~takeiteasy/lasm/376) |
+| An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
 | No immediate-operand operations, so a constant right operand still loads into a register. | [#374](https://todo.sr.ht/~takeiteasy/lasm/374) |
 | `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
 | No function values or indirect calls. | [#365](https://todo.sr.ht/~takeiteasy/lasm/365) |
@@ -173,12 +179,19 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   with `:const`/`:get`/`:peek`, and when the right operand is not a leaf but
   the left is an integer, a constant, or a local the right cannot change, the
   right is compiled first and the left loads afterwards. Otherwise the left
-  operand is pushed, the right compiled into the accumulator and moved to the
-  temporary register, and the left popped back. A call evaluates each
-  argument into its own frame slot, then passes those slots. A register
-  argument is copied to a slot on entry, so the body never reads an argument
-  register another call clobbers.
+  operand moves into a register from the pool while the right computes into
+  the accumulator, then moves back (#373): a `:scratch`/`:caller-saved`
+  register when the right operand has no call, since a call is the only
+  thing it could do that such a register does not survive; a
+  `:callee-saved` one, added to the function's `:save`, when it calls a
+  function; the stack, as before #373, when the pool has none free or the
+  right operand reaches an `(asm ...)`, which could target any register
+  directly. A call evaluates each argument into its own frame slot, then
+  passes those slots. A register argument is copied to a slot on entry, so
+  the body never reads an argument register another call clobbers.
 
 [^return]: Pops any temporaries the compiler has pushed for an enclosing
   operator or `poke` since the function's entry, so the stack is back at its
-  entry depth, then emits the function's ordinary exit.
+  entry depth, then emits the function's ordinary exit. A register the
+  allocator holds a value in needs nothing here: the function's ordinary
+  exit restores every `:save` register regardless of how it is reached.
