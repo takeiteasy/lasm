@@ -360,31 +360,47 @@ its string, except an instruction's mnemonic."
         ((consp form) (cons (first form) (%rename-labels-tail (rest form) renames)))
         (t form)))
 
+(defun %entry-matches-args-p (entry args)
+  "T when ARGS fit ENTRY's params: as many as its params, and an argument at a
+typed (NAME KIND) position (#365) is an operand of that kind."
+  (let ((kinds (third entry)))
+    (and (= (length kinds) (length args))
+         (every (lambda (kind arg) (or (null kind) (and (consp arg) (%same-name-p (first arg) kind))))
+                kinds args))))
+
 (defun %expand-op (backend name args &optional rename)
   "The forms of BACKEND's operation NAME with ARGS in place of its parameters.
 The forms may include the operation's (:label NAME) forms; RENAME, when given,
 maps each such NAME to the string that replaces it, before the arguments are
-substituted so an argument is never mistaken for a label."
+substituted so an argument is never mistaken for a label. Several clauses may
+share NAME, dispatched by ARGS's operand kinds (#365); with only one, its
+plain argument-count mismatch is reported instead."
   (let* ((backend (find-backend backend))
          (item (list* :op name args))
-         (entry (assoc (%designator-name name) (backend-descriptor-ops backend) :test #'equal)))
-    (unless entry
+         (key (%designator-name name))
+         (entries (remove key (backend-descriptor-ops backend) :key #'first :test-not #'equal)))
+    (unless entries
       (%items-fail 'items-malformed item "backend ~A has no operation ~A" (backend-descriptor-name backend) name))
-    (destructuring-bind (params &rest forms) (rest entry)
-      (unless (= (length params) (length args))
-        (%items-fail 'items-malformed item "operation ~A takes ~D argument~:P, got ~D"
-                     name (length params) (length args)))
-      (let ((bindings (mapcar #'cons params args))
-            (renames (and rename
-                          (loop for label in (%template-labels (first entry) params forms)
-                                collect (cons label (funcall rename label))))))
-        (mapcar (lambda (form)
-                  (let ((form (%rename-form-labels form renames)))
-                    (if (%label-form-p form)
-                        form
-                        (cons (first form)
-                              (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))))
-                forms)))))
+    (let ((entry (if (rest entries)
+                      (or (find-if (lambda (e) (%entry-matches-args-p e args)) entries)
+                          (%items-fail 'items-malformed item "no clause of operation ~A of backend ~A takes ~S"
+                                       name (backend-descriptor-name backend) args))
+                      (first entries))))
+      (let ((params (second entry)) (forms (cdddr entry)))
+        (unless (= (length params) (length args))
+          (%items-fail 'items-malformed item "operation ~A takes ~D argument~:P, got ~D"
+                       name (length params) (length args)))
+        (let ((bindings (mapcar #'cons params args))
+              (renames (and rename
+                            (loop for label in (%template-labels (first entry) params forms)
+                                  collect (cons label (funcall rename label))))))
+          (mapcar (lambda (form)
+                    (let ((form (%rename-form-labels form renames)))
+                      (if (%label-form-p form)
+                          form
+                          (cons (first form)
+                                (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))))
+                  forms))))))
 
 (defun backend-expand-op (backend name args)
   "The forms of BACKEND's operation NAME with ARGS in place of its parameters.
@@ -574,11 +590,13 @@ to the enclosing label when one has been defined and the lexer has local labels.
 
 (defun %stack-operation-of (form)
   "The name of the backend's :push, :pop, :alloc or :free that the single instruction FORM is."
-  (loop for hook in '("PUSH" "POP" "ALLOC" "FREE")
-        for entry = (assoc hook (backend-descriptor-ops *items-backend*) :test #'string=)
-        do (when (and entry (= (length entry) 3) (not (%label-form-p (third entry)))
-                      (%template-matches-p (third entry) form (second entry)))
-             (return hook))))
+  (block found
+    (dolist (hook '("PUSH" "POP" "ALLOC" "FREE"))
+      (dolist (entry (backend-descriptor-ops *items-backend*))
+        (when (and (equal (first entry) hook) (= (length (cdddr entry)) 1)
+                   (not (%label-form-p (fourth entry)))
+                   (%template-matches-p (fourth entry) form (second entry)))
+          (return-from found hook))))))
 
 (defun %check-stack-forms (forms item)
   "Reject a raw FORM in a function without a frame pointer that does what the backend's stack operation does."

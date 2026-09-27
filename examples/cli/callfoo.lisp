@@ -117,6 +117,28 @@
   (encoding (opcode 65) (operand addr :width 1) (operand src :width 1))
   (semantics (set! (mref machine 'ram (r addr)) (r src))))
 
+;; #366: byte access on a machine whose registers are wider than its cells.
+;; Byte-address = word-address * 2 (ANIMA-16's LDB/STB, docs/anima16.md in
+;; star): even reads/writes the low byte (bits 0-7), odd the high byte
+;; (bits 8-15); STB preserves the other byte of the word.
+(definstruction callfoo ldb (modes call-rind)
+  (encoding (opcode 26) (operand dst :width 1) (operand addr :width 1))
+  (semantics
+    (set! (r dst)
+          (let ((word (mref machine 'ram (truncate (r addr) 2))))
+            (if (evenp (r addr)) (logand word #xFF) (logand (ash word -8) #xFF))))))
+
+(definstruction callfoo stb (modes call-indr)
+  (encoding (opcode 27) (operand addr :width 1) (operand src :width 1))
+  (semantics
+    (let* ((cell (truncate (r addr) 2))
+           (word (mref machine 'ram cell))
+           (byte (logand (r src) #xFF)))
+      (set! (mref machine 'ram cell)
+            (if (evenp (r addr))
+                (logior (logand word #xFF00) byte)
+                (logior (logand word #x00FF) (ash byte 8)))))))
+
 (definstruction callfoo jmp (modes absolute)
   (encoding (opcode 66) (operand :mode))
   (semantics (set! pc operand)))
@@ -167,6 +189,11 @@
        (:move (d s) (movv d s))
        (:alloc (n) (subs (sp) (imm n)))
        (:free (n) (adds (sp) (imm n)))
+       ;; #365: a computed call target -- a register -- goes through callr;
+       ;; a label still goes through call. Tried in order, so a register
+       ;; operand picks the first clause and a label falls through to the
+       ;; second.
+       (:call ((f reg)) (callr f))
        (:call (f) (call f))
        (:return () (ret))))
 
@@ -183,6 +210,7 @@
        (:move (d s) (movv d s))
        (:alloc (n) (subs (sp) (imm n)))
        (:free (n) (adds (sp) (imm n)))
+       (:call ((f reg)) (callr f))
        (:call (f) (call f))
        (:return () (ret))))
 
@@ -195,6 +223,8 @@
        (:set (slot r) (sts slot r))
        (:peek (d a) (ldx (reg d) (ind a)))
        (:poke (a s) (stx (ind a) (reg s)))
+       (:peek-byte (d a) (ldb (reg d) (ind a)))
+       (:poke-byte (a s) (stb (ind a) (reg s)))
        (:jump (target) (jmp target))
        (:branch-zero (r target) (jz r target))
        (:halt () (hlt))

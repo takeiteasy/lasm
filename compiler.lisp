@@ -6,10 +6,20 @@
 ;;;; through the backend's operations (+BACKEND-LANGUAGE-OP-ARITIES+).
 ;;;;
 ;;;; Forms:  (defun NAME (PARAM...) BODY...)  (defvar NAME [INT])  (defconstant NAME INT)
+;;;;   (defarray NAME SIZE)  (defarray NAME (VALUE...))  (defstring NAME "TEXT")
 ;;;; Expressions: an integer or name, (set N E), (let ((V E)...) BODY...),
 ;;;;   (if C A [B]), (while C BODY...), (progn E...), (and E...), (or E...),
-;;;;   (not E), an operator, (peek A), (poke A V), (return [E]), (asm ITEM...),
-;;;;   (F ARG...)
+;;;;   (not E), an operator, (peek A), (poke A V), (peek-byte A), (poke-byte A V),
+;;;;   (aref A I), (aset A I V), (return [E]), (asm ITEM...), (function F),
+;;;;   (funcall E ARG...), (F ARG...)
+;;;;
+;;;; #365: (function F) is F's address, a value; (funcall E ARG...) calls
+;;;; through any expression, going straight to F's label when E is literally
+;;;; (function F). #366: (defarray ...) and (defstring ...) are initialised,
+;;;; addressed data; the name is its address, never peeked through like a
+;;;; global. (aref A I)/(aset A I V) index by cell; (peek-byte A)/(poke-byte A V)
+;;;; are the backend's optional :peek-byte/:poke-byte, for machines narrower
+;;;; than a cell.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 
@@ -39,6 +49,7 @@
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
+(defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING (#366).")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -122,31 +133,54 @@ cannot be a register alias or a generated label."
 ;;; Expressions
 
 (defun %cc-lookup (symbol)
-  "The location of the variable SYMBOL: (:LOCAL i), (:ARG i), (:GLOBAL LABEL) or (:CONSTANT n)."
+  "The location of the variable SYMBOL: (:LOCAL i), (:ARG i), (:GLOBAL LABEL),
+(:CONSTANT n) or (:ADDRESS LABEL), a DEFARRAY or DEFSTRING (#366)."
   (let ((key (%cc-key symbol *cc-form*)))
     (or (cdr (assoc key *cc-env* :test #'string=))
         (let ((label (gethash key *cc-globals*)))
           (and label (list :global label)))
         (let ((value (gethash key *cc-constants*)))
           (and value (list :constant value)))
+        (let ((label (gethash key *cc-data*)))
+          (and label (list :address label)))
         (%cc-fail *cc-form* "unknown variable ~A" (%source-name symbol nil)))))
 
-;; A leaf (an integer or a variable name) loads straight into any register
-;; with :const/:get/:peek (#364), instead of always going through the
-;; accumulator and the stack.
+(defun %cc-function-form-p (form)
+  "T when FORM is (function NAME) (#365)."
+  (and (consp form) (%cc-name-p (first form)) (equal (%designator-name (first form)) "FUNCTION")))
+
+(defun %cc-function-label (form)
+  "The label of the function (function NAME) names, checked to exist."
+  (let* ((key (%cc-key (second form) form))
+         (entry (gethash key *cc-functions*)))
+    (unless entry
+      (%cc-fail form "unknown function ~A" (%source-name (second form) nil)))
+    (car entry)))
+
+(defun %cc-function-expr (form)
+  (%cc-check-length form 2 2)
+  (%cc-const (%cc-function-label form)))
+
+;; A leaf (an integer, a variable name, or (function NAME)) loads straight
+;; into any register with :const/:get/:peek (#364), instead of always going
+;; through the accumulator and the stack.
 (defun %cc-leaf-p (form)
-  (or (integerp form) (%cc-name-p form)))
+  (or (integerp form) (%cc-name-p form) (%cc-function-form-p form)))
 
 (defun %cc-load-leaf (form register register-name)
   "Load leaf FORM into REGISTER; REGISTER-NAME names it, for :peek."
-  (if (integerp form)
-      (%cc-op :const register form)
-      (let ((location (%cc-lookup form)))
-        (ecase (first location)
-          ((:local :arg) (%cc-op :get register location))
-          (:global (%cc-op :const register (second location))
-           (%cc-op :peek register-name register-name))
-          (:constant (%cc-op :const register (second location)))))))
+  (cond
+    ((integerp form) (%cc-op :const register form))
+    ((%cc-function-form-p form)
+     (%cc-check-length form 2 2)
+     (%cc-op :const register (%cc-function-label form)))
+    (t (let ((location (%cc-lookup form)))
+         (ecase (first location)
+           ((:local :arg) (%cc-op :get register location))
+           (:global (%cc-op :const register (second location))
+            (%cc-op :peek register-name register-name))
+           (:constant (%cc-op :const register (second location)))
+           (:address (%cc-op :const register (second location))))))))
 
 (defun %cc-variable (symbol)
   (%cc-load-leaf symbol *cc-acc* *cc-acc-name*))
@@ -165,7 +199,8 @@ ones."
   (if (not (consp tree))
       (values nil nil)
       (let* ((head (and (%cc-name-p (first tree)) (%designator-name (first tree))))
-             (asm (equal head "ASM")) (call (and head (gethash head *cc-functions*) t)))
+             (asm (equal head "ASM"))
+             (call (and head (or (equal head "FUNCALL") (and (gethash head *cc-functions*) t)))))
         (dolist (element tree)
           (multiple-value-bind (a c) (%cc-hazards element)
             (when a (setf asm t))
@@ -238,14 +273,16 @@ through (:var KEY)."
 
 (defun %cc-swappable-p (left right)
   "T when LEFT, an operator's left operand, can be loaded after RIGHT is
-evaluated: an integer or a constant always can; a local or argument can when
-RIGHT does not (set) it or reach it through an (asm ...) block. A global
-never swaps -- a call or poke in RIGHT could change it."
+evaluated: an integer, a constant, an array/string address, or (function F)
+always can; a local or argument can when RIGHT does not (set) it or reach it
+through an (asm ...) block. A global never swaps -- a call or poke in RIGHT
+could change it."
   (or (integerp left)
+      (%cc-function-form-p left)
       (and (%cc-name-p left)
            (let ((location (%cc-lookup left)))
              (case (first location)
-               (:constant t)
+               ((:constant :address) t)
                ((:local :arg) (not (%cc-affects-p (%designator-name left) right)))
                (t nil))))))
 
@@ -368,7 +405,8 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
        (%cc-op :const *cc-acc* (second location))
        (%cc-op :poke *cc-acc-name* *cc-temp-name*)
        (%cc-op :move *cc-acc* *cc-temp*))
-      (:constant (%cc-fail form "~A is a constant" (%source-name (second form) nil))))))
+      (:constant (%cc-fail form "~A is a constant" (%source-name (second form) nil)))
+      (:address (%cc-fail form "~A is an array or string" (%source-name (second form) nil))))))
 
 (defun %cc-peek (form)
   (%cc-check-length form 2 2)
@@ -380,6 +418,31 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
   (%cc-operands (second form) (third form))
   (%cc-op :poke *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
+
+;; #366: (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
+;; backend's optional :peek-byte/:poke-byte, for a machine whose registers are
+;; wider than its cells; a machine byte-addresses A as it defines those ops.
+(defun %cc-peek-byte (form)
+  (%cc-check-length form 2 2)
+  (%cc-expr (second form))
+  (%cc-op :peek-byte *cc-acc-name* *cc-acc-name*))
+
+(defun %cc-poke-byte (form)
+  (%cc-check-length form 3 3)
+  (%cc-operands (second form) (third form))
+  (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)
+  (%cc-op :move *cc-acc* *cc-temp*))
+
+;; #366: (aref A I)/(aset A I V) index by cell, sugar for (peek (+ A I)) and
+;; (poke (+ A I) V) -- %CC-PEEK/%CC-POKE already give the address expression
+;; the same leaf and operand-ordering treatment as any other (#364).
+(defun %cc-aref (form)
+  (%cc-check-length form 3 3)
+  (%cc-peek (list 'peek (list '+ (second form) (third form)))))
+
+(defun %cc-aset (form)
+  (%cc-check-length form 4 4)
+  (%cc-poke (list 'poke (list '+ (second form) (third form)) (fourth form))))
 
 ;; #363: an early return. Pending temporaries (each binary operator's left
 ;; operand, or a POKE's address) sit on the stack above the frame's own
@@ -401,7 +464,7 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
          (let ((location (let ((*cc-form* form)) (%cc-lookup (second tree)))))
            (ecase (first location)
              ((:local :arg) location)
-             (:global (second location))
+             ((:global :address) (second location))
              (:constant (second location)))))
         ((and (consp tree) (null (cdr (last tree))))
          (mapcar (lambda (element) (%cc-substitute-variables element form)) tree))
@@ -412,6 +475,22 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
   (dolist (item (rest form))
     (%cc-emit (%cc-substitute-variables item form))))
 
+(defun %cc-args-to-slots (args)
+  "Each of ARGS compiled into a fresh frame slot, in order, returned least
+recently allocated first; a call's arguments each need their own slot, since
+computing a later one may otherwise clobber an earlier one held in the
+accumulator or a register (docs/language.md#backend-requirements)."
+  (let ((slots '()))
+    (dolist (arg args)
+      (%cc-expr arg)
+      (let ((slot (%cc-alloc)))
+        (%cc-op :set slot *cc-acc*)
+        (cl:push slot slots)))
+    (nreverse slots)))
+
+(defun %cc-free-slots (slots)
+  (dotimes (i (length slots)) (%cc-free)))
+
 (defun %cc-call (form)
   (let* ((entry (gethash (%cc-key (first form) form) *cc-functions*))
          (args (rest form)))
@@ -421,21 +500,73 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
     (unless (= (length args) (cdr entry))
       (%cc-fail form "~A takes ~D argument~:P, got ~D"
                 (%source-name (first form) nil) (cdr entry) (length args)))
-    (let ((slots '()))
-      (dolist (arg args)
-        (%cc-expr arg)
-        (let ((slot (%cc-alloc)))
-          (%cc-op :set slot *cc-acc*)
-          (cl:push slot slots)))
-      (%cc-emit (list* :call (car entry) (reverse slots)))
-      (dolist (slot slots)
-        (declare (ignore slot))
-        (%cc-free)))))
+    (let ((slots (%cc-args-to-slots args)))
+      (%cc-emit (list* :call (car entry) slots))
+      (%cc-free-slots slots))))
+
+;; #365: (function F) is a value, F's label; (funcall E ARG...) calls through
+;; any expression. A literal (function F) target compiles the same direct
+;; (:call LABEL ...) a plain (F ARG...) call does, arity-checked; any other E
+;; is held in a frame slot across compiling ARG..., as each of those is
+;; (%CC-ARGS-TO-SLOTS), then loaded into a register the call goes through.
+(defun %cc-funcall (form)
+  (%cc-check-length form 2 nil)
+  (let ((callee (second form)) (args (cddr form)))
+    (if (%cc-function-form-p callee)
+        (%cc-direct-funcall form callee args)
+        (%cc-indirect-funcall callee args))))
+
+(defun %cc-direct-funcall (form callee args)
+  (%cc-check-length callee 2 2)
+  (let* ((key (%cc-key (second callee) callee))
+         (entry (gethash key *cc-functions*)))
+    (unless entry
+      (%cc-fail callee "unknown function ~A" (%source-name (second callee) nil)))
+    (unless (= (length args) (cdr entry))
+      (%cc-fail form "~A takes ~D argument~:P, got ~D"
+                (%source-name (second callee) nil) (cdr entry) (length args)))
+    (let ((slots (%cc-args-to-slots args)))
+      (%cc-emit (list* :call (car entry) slots))
+      (%cc-free-slots slots))))
+
+(defun %cc-call-arg-registers ()
+  (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
+    (if (eq args :stack) '() args)))
+
+(defun %cc-call-target-register ()
+  "An upcased register name to hold FUNCALL's computed target: the
+accumulator or temp register when neither is a call argument register, since
+the callee's value already ends up in the accumulator; otherwise the first of
+the volatile pool that is not one. With none free, the accumulator anyway --
+a target in an argument register is copied to a free :scratch register, or is
+items-malformed, as any call target is (#335, docs/conventions.md)."
+  (let ((args (%cc-call-arg-registers))
+        (candidates (list* (symbol-name *cc-acc-name*) (symbol-name *cc-temp-name*) *cc-volatile*)))
+    (or (find-if (lambda (name) (not (member name args :test #'string=))) candidates)
+        (symbol-name *cc-acc-name*))))
+
+(defun %cc-indirect-funcall (callee args)
+  (let ((callee-slot (unless (%cc-leaf-p callee)
+                        (%cc-expr callee)
+                        (let ((slot (%cc-alloc)))
+                          (%cc-op :set slot *cc-acc*)
+                          slot))))
+    (let* ((slots (%cc-args-to-slots args))
+           (target (%cc-call-target-register))
+           (target-operand (%cc-register-operand target))
+           (target-name (%cc-symbol (string-downcase target))))
+      (if callee-slot
+          (%cc-op :get target-operand callee-slot)
+          (%cc-load-leaf callee target-operand target-name))
+      (%cc-emit (list* :call target-operand slots))
+      (%cc-free-slots slots))
+    (when callee-slot (%cc-free))))
 
 (defparameter *cc-forms*
   '(("PROGN" . %cc-progn-form) ("IF" . %cc-if) ("WHILE" . %cc-while) ("AND" . %cc-and) ("OR" . %cc-or)
     ("NOT" . %cc-not) ("LET" . %cc-let) ("SET" . %cc-set) ("PEEK" . %cc-peek) ("POKE" . %cc-poke)
-    ("ASM" . %cc-asm) ("RETURN" . %cc-return)))
+    ("PEEK-BYTE" . %cc-peek-byte) ("POKE-BYTE" . %cc-poke-byte) ("AREF" . %cc-aref) ("ASET" . %cc-aset)
+    ("ASM" . %cc-asm) ("RETURN" . %cc-return) ("FUNCTION" . %cc-function-expr) ("FUNCALL" . %cc-funcall)))
 
 (defun %cc-expr (form)
   (typecase form
@@ -511,18 +642,37 @@ register, so any of these are free once nothing above still needs them."
           *cc-preserved* (remove-if (lambda (name) (member name reserved :test #'string=))
                                      (getf registers :callee-saved)))))
 
+(defun %cc-array-value (value form)
+  "The integer VALUE, an element of a DEFARRAY's (VALUE...), resolves to: an
+integer as is, (function F)'s label, or a DEFCONSTANT's, DEFARRAY's or
+DEFSTRING's own name."
+  (cond
+    ((integerp value) value)
+    ((%cc-function-form-p value) (%cc-function-label value))
+    ((%cc-name-p value)
+     (let ((key (%cc-key value form)))
+       (or (gethash key *cc-constants*)
+           (gethash key *cc-data*)
+           (%cc-fail form "~A is not a constant, a function or an array/string"
+                     (%source-name value nil)))))
+    (t (%cc-fail form "~S is not a constant, a function or an array/string" value))))
+
 (defun %cc-collect (forms)
-  "(VALUES DEFINITIONS GLOBALS), registering functions, globals and constants."
-  (let ((definitions '()) (globals '()) (seen (make-hash-table :test 'equal)))
+  "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals, constants,
+and DEFARRAY/DEFSTRING data (#366). DATA's array/string values are resolved
+only once every form is registered, so one may name a function or array/string
+defined later in FORMS."
+  (let ((definitions '()) (globals '()) (arrays '()) (seen (make-hash-table :test 'equal)))
     (flet ((claim (name form label)
              (let ((existing (gethash (symbol-name label) seen)))
                (when (and existing (string/= existing (%designator-name name)))
                  (%cc-fail form "~A and ~A both make the label ~A"
                            (%source-name name nil) existing (symbol-name label)))
-               (setf (gethash (symbol-name label) seen) (%designator-name name)))))
+               (setf (gethash (symbol-name label) seen) (%designator-name name))))
+           (defined-p (key) (or (gethash key *cc-globals*) (gethash key *cc-constants*) (gethash key *cc-data*))))
       (dolist (form forms)
         (unless (and (consp form) (%cc-name-p (first form)) (listp (cdr form)) (null (cdr (last form))))
-          (%cc-fail form "expected (defun ...), (defvar ...) or (defconstant ...)"))
+          (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...) or (defstring ...)"))
         (let ((head (%designator-name (first form))))
           (cond
             ((string= head "DEFUN")
@@ -540,7 +690,7 @@ register, so any of these are free once nothing above still needs them."
              (unless (and (<= 2 (length form) 3) (or (null (cddr form)) (integerp (third form))))
                (%cc-fail form "expected (defvar NAME [INTEGER])"))
              (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "gv" name)))
-               (when (or (gethash key *cc-globals*) (gethash key *cc-constants*))
+               (when (defined-p key)
                  (%cc-fail form "~A is defined twice" (%source-name name nil)))
                (claim name form label)
                (setf (gethash key *cc-globals*) label)
@@ -549,11 +699,40 @@ register, so any of these are free once nothing above still needs them."
              (unless (and (= (length form) 3) (integerp (third form)))
                (%cc-fail form "expected (defconstant NAME INTEGER)"))
              (let ((key (%cc-key (second form) form)))
-               (when (or (gethash key *cc-globals*) (gethash key *cc-constants*))
+               (when (defined-p key)
                  (%cc-fail form "~A is defined twice" (%source-name (second form) nil)))
                (setf (gethash key *cc-constants*) (third form))))
-            (t (%cc-fail form "expected (defun ...), (defvar ...) or (defconstant ...)"))))))
-    (values (nreverse definitions) (nreverse globals))))
+            ((string= head "DEFARRAY")
+             (unless (= (length form) 3)
+               (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))"))
+             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "ar" name))
+                    (spec (third form)))
+               (when (defined-p key)
+                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
+               (claim name form label)
+               (setf (gethash key *cc-data*) label)
+               (cond
+                 ((and (integerp spec) (plusp spec)) (cl:push (list label :size spec form) arrays))
+                 ((and (listp spec) (null (cdr (last spec)))) (cl:push (list label :values spec form) arrays))
+                 (t (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))")))))
+            ((string= head "DEFSTRING")
+             (unless (and (= (length form) 3) (stringp (third form)))
+               (%cc-fail form "expected (defstring NAME \"text\")"))
+             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "st" name)))
+               (when (defined-p key)
+                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
+               (claim name form label)
+               (setf (gethash key *cc-data*) label)
+               (cl:push (list label :string (third form) form) arrays)))
+            (t (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...) or (defstring ...)"))))))
+    (values (nreverse definitions) (nreverse globals)
+            (loop for (label kind payload form) in (nreverse arrays)
+                  append (list (list :label label)
+                               (ecase kind
+                                 (:size (list :directive (%cc-symbol "res") payload))
+                                 (:values (list* :directive (%cc-symbol "cell")
+                                                 (mapcar (lambda (value) (%cc-array-value value form)) payload)))
+                                 (:string (list :directive (%cc-symbol "asciz") payload))))))))
 
 (defun compile-program (forms &key backend positions source file)
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and
@@ -567,12 +746,13 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (*cc-functions* (make-hash-table :test 'equal))
         (*cc-globals* (make-hash-table :test 'equal))
         (*cc-constants* (make-hash-table :test 'equal))
+        (*cc-data* (make-hash-table :test 'equal))
         (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '())
         (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil)
         (*cc-volatile* nil) (*cc-preserved* nil) (*cc-saves* nil)
         (*cc-positions* positions) (*cc-source* source) (*cc-file* file))
     (%cc-registers)
-    (multiple-value-bind (definitions globals) (%cc-collect forms)
+    (multiple-value-bind (definitions globals data) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
         (unless (and main (zerop (cdr main)))
           (%cc-fail nil "the program needs (defun main () ...)"))
@@ -587,7 +767,8 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
                 (mapcar #'%cc-function definitions)
                 (loop for (label) in globals
                       append (list (list :label label)
-                                   (list :directive (%cc-symbol "res") 1))))))))
+                                   (list :directive (%cc-symbol "res") 1)))
+                data)))))
 
 ;;; Source files
 

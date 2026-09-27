@@ -211,6 +211,49 @@ call .inner" :machine 'callfoo))
   (fiveam:is (equalp (assembly-cells (assemble "ldi c, #9" :machine 'callfoo))
                      (assembly-cells (assemble-items '((:op :load (reg c) 9)) :backend 'callfoo-abi)))))
 
+;;; Operand-kind clauses (#365): several clauses may share an operation name,
+;;; dispatched by an argument's operand kind, tried in the order written.
+
+(eval '(defbackend bk-kinds-abi (:extends callfoo-abi)
+        (ops (:tag ((f reg)) (movv (reg a) f))
+             (:tag ((f imm)) (ldi (reg a) f))
+             (:tag (f) (ldi (reg b) (imm f))))))
+
+(fiveam:test an-op-dispatches-by-its-argument-kind
+  (fiveam:is (equal '((movv (reg a) (reg c))) (backend-expand-op 'bk-kinds-abi :tag '((reg c)))))
+  (fiveam:is (equal '((ldi (reg a) (imm 5))) (backend-expand-op 'bk-kinds-abi :tag '((imm 5)))))
+  (fiveam:is (equal '((ldi (reg b) (imm foo))) (backend-expand-op 'bk-kinds-abi :tag '(foo)))))
+
+(fiveam:test an-op-with-no-matching-kind-clause-is-items-malformed
+  (fiveam:is (typep (%items-error-of '((:op :tag (sp-idx 1))) :backend 'bk-kinds-abi) 'items-malformed)))
+
+(fiveam:test a-single-untyped-clause-still-reports-its-own-arity-mismatch
+  (fiveam:is (typep (%items-error-of '((:op :add (reg a))) :backend 'callfoo-abi) 'items-malformed)))
+
+(fiveam:test two-clauses-of-one-op-with-the-same-kinds-is-a-definition-error
+  (let ((c (%backend-error-of '(defbackend bk-kinds-dup-1 (:extends callfoo-abi)
+                                 (ops (:tag ((f reg)) (movv (reg a) f))
+                                      (:tag ((f reg)) (movv (reg b) f)))))))
+    (fiveam:is (typep c 'backend-definition-error))
+    (fiveam:is (search "declared twice" (string-downcase (princ-to-string c))))))
+
+(fiveam:test an-op-parameter-kind-must-be-a-declared-operand-kind
+  (fiveam:is (typep (%backend-error-of '(defbackend bk-kinds-bad-1 (:extends callfoo-abi)
+                                         (ops (:tag ((f nosuch)) (ldi (reg a) f)))))
+                    'backend-definition-error)))
+
+(fiveam:test a-hook-op-checks-the-arity-of-every-clause-sharing-its-name
+  (fiveam:is (typep (%backend-error-of '(defbackend bk-kinds-bad-2 (:extends callfoo-abi)
+                                         (ops (:call ((f reg) (g reg)) (callr f)))))
+                    'backend-definition-error)))
+
+(fiveam:test an-extending-backend-replaces-every-clause-of-an-overridden-op
+  (eval '(defbackend bk-kinds-child (:extends bk-kinds-abi)
+          (ops (:tag (f) (ldi (reg c) (imm f))))))
+  (fiveam:is (equal '((ldi (reg c) (imm 9))) (backend-expand-op 'bk-kinds-child :tag '(9))))
+  (fiveam:is (typep (%items-error-of '((:op :tag (reg a))) :backend 'bk-kinds-child) 'items-malformed))
+  (fiveam:is (equal '((movv (reg a) (reg c))) (backend-expand-op 'bk-kinds-abi :tag '((reg c))))))
+
 ;;; Malformed items
 
 (fiveam:test malformed-items-signal-items-malformed
@@ -477,10 +520,10 @@ call .inner" :machine 'callfoo))
     (fiveam:is (eq 'callfoo (backend-descriptor-machine child)))
     (fiveam:is (equal '("D") (backend-register child :callee-saved)))
     (fiveam:is (equal '("A") (backend-register child :return)))
-    (fiveam:is (equal '((add s d)) (cddr (assoc "ADD" (backend-descriptor-ops child) :test #'string=))))
+    (fiveam:is (equal '((add s d)) (cdddr (assoc "ADD" (backend-descriptor-ops child) :test #'string=))))
     (fiveam:is (assoc "CALL" (backend-descriptor-ops child) :test #'string=))
     (fiveam:is (equal '((add d s))
-                      (cddr (assoc "ADD" (backend-descriptor-ops (find-backend 'callfoo-abi)) :test #'string=))))))
+                      (cdddr (assoc "ADD" (backend-descriptor-ops (find-backend 'callfoo-abi)) :test #'string=))))))
 
 (fiveam:test an-extending-backend-takes-its-options-in-either-order-and-assembles-inherited-ops
   (eval '(defbackend bk-child-2 (:machine callfoo-fp :extends callfoo-abi)))

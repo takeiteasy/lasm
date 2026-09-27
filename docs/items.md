@@ -26,7 +26,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | --- | --- |
 | `(:label NAME)` | A label. |
 | `(:directive NAME EXPR...)` | A directive; the `.` is optional. A string argument is a string literal. |
-| `(:op NAME ARG...)` | A backend [operation](backends.md#operations), expanded to instructions. |
+| `(:op NAME ARG...)` | A backend [operation](backends.md#operations), expanded to instructions -- by ARG's operand kinds, when NAME has [several clauses](backends.md#operand-kind-clauses). |
 | `(MNEMONIC OPERAND...)` | An instruction. |
 | `(:function ...)` `(:call ...)` `(:return)` `(:push X)` `(:pop X)` `(:depth n)` | Lowered from the backend's [calling convention](conventions.md). |
 

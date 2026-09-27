@@ -269,6 +269,7 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
 
 (defparameter +backend-language-op-arities+
   '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
+    ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2)
     ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0)
     ("ADD" . 2) ("SUB" . 2) ("MUL" . 2) ("DIV" . 2) ("MOD" . 2)
     ("AND" . 2) ("OR" . 2) ("XOR" . 2) ("SHL" . 2) ("SHR" . 2)
@@ -290,6 +291,26 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
                      forms (cddr forms))))
     (values effects forms)))
 
+(defun %parse-param-specs (key params)
+  "(VALUES NAMES KINDS) for PARAMS: each item a name, or (NAME KIND) restricting
+NAME to an operand of the declared kind KIND (#365) -- several clauses for one
+operation, tried in order, let a backend template a call target or other
+operand differently by kind, such as a register versus a label."
+  (let (names kinds)
+    (dolist (spec params)
+      (if (and (consp spec) (= (length spec) 2))
+          (let ((name (%designator-name (first spec))) (kind (%designator-name (second spec))))
+            (unless (and name kind)
+              (%backend-error "ops: ~A: ~S is not (NAME KIND)" key spec))
+            (cl:push name names)
+            (cl:push kind kinds))
+          (let ((name (%designator-name spec)))
+            (unless name
+              (%backend-error "ops: ~A: ~S is not a parameter name or (NAME KIND)" key spec))
+            (cl:push name names)
+            (cl:push nil kinds))))
+    (values (nreverse names) (nreverse kinds))))
+
 (defun %parse-ops-clause (entries)
   "The parsed operations, and the alist of the stack effects some declare."
   (let (result effects)
@@ -298,13 +319,15 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
         (let ((key (%designator-name name)))
           (unless key
             (%backend-error "ops: ~S is not an operation name" name))
-          (when (assoc key result :test #'string=)
-            (%backend-error "ops: ~A is declared twice" key))
-          (unless (and (listp params) (every #'%designator-name params))
-            (%backend-error "ops: ~A parameters must be a list of names, got ~S" key params))
-          (let ((names (mapcar #'%designator-name params)))
+          (unless (listp params)
+            (%backend-error "ops: ~A parameters must be a list, got ~S" key params))
+          (multiple-value-bind (names kinds) (%parse-param-specs key params)
             (unless (= (length names) (length (remove-duplicates names :test #'string=)))
               (%backend-error "ops: ~A repeats a parameter" key))
+            (when (find-if (lambda (other) (and (equal (first other) key) (equal (third other) kinds)))
+                            result)
+              (%backend-error "ops: ~A is declared twice~:[~; for the same operand kinds~]"
+                               key (some #'identity kinds)))
             (multiple-value-bind (declared forms) (%parse-op-effects key names forms)
               (unless forms
                 (%backend-error "ops: ~A has no instruction forms" key))
@@ -312,7 +335,7 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
                 (%backend-error "ops: ~A is used by call lowering, which knows its stack effect" key))
               (when declared
                 (cl:push (list* key declared) effects))
-              (cl:push (list* key names forms) result))))))
+              (cl:push (list* key names kinds forms) result))))))
     (values (nreverse result) (nreverse effects))))
 
 (defun %parse-stack-writer-entries (head machine entries)
@@ -371,10 +394,10 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
 
 (defun %check-backend-hooks (descriptor)
   (loop for (name . arity) in (append +backend-hook-arities+ +backend-language-op-arities+)
-        for entry = (assoc name (backend-descriptor-ops descriptor) :test #'string=)
-        when (and entry (/= arity (length (second entry))))
-          do (%backend-error "ops: ~A is used by call lowering or the language compiler and takes ~D parameter~:P, not ~D"
-                             name arity (length (second entry)))))
+        do (dolist (entry (backend-descriptor-ops descriptor))
+             (when (and (equal (first entry) name) (/= arity (length (second entry))))
+               (%backend-error "ops: ~A is used by call lowering or the language compiler and takes ~D parameter~:P, not ~D"
+                               name arity (length (second entry)))))))
 
 (defun %check-backend-kinds (descriptor)
   (loop for (what kind) in `(("registers :operand" ,(getf (backend-descriptor-registers descriptor) :operand))
@@ -455,7 +478,10 @@ local to one expansion of the operation."
 
 (defun %check-backend-ops (descriptor)
   (dolist (entry (backend-descriptor-ops descriptor))
-    (destructuring-bind (op params &rest forms) entry
+    (destructuring-bind (op params kinds &rest forms) entry
+      (loop for name in params for kind in kinds
+            when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
+              do (%backend-error "ops: ~A: parameter ~A's kind ~A is not a declared operand kind" op name kind))
       (let ((labels (%template-labels op params forms)))
         (dolist (form forms)
           (%check-op-form op form params (backend-descriptor-operands descriptor)
@@ -508,15 +534,25 @@ not another register the convention uses."
   (and (consp entry) (%designator-name (first entry))))
 
 (defun %merge-entries (parent child)
-  "PARENT's entries with CHILD's in place of those of the same name, then CHILD's new ones."
-  (let ((result (copy-list parent)))
+  "PARENT's entries with CHILD's in place of those of the same name, then CHILD's new
+ones. Several PARENT or CHILD entries may share a name -- an OPS clause's operand-kind
+clauses (#365) -- and CHILD's whole group for a name replaces PARENT's whole group, at
+its first position."
+  (let ((child-keys (remove-duplicates (mapcar #'%entry-key child) :test #'equal))
+        (result '()) (done '()))
+    (dolist (entry parent)
+      (let ((key (%entry-key entry)))
+        (cond ((member key child-keys :test #'equal)
+               (unless (member key done :test #'equal)
+                 (dolist (new child) (when (equal (%entry-key new) key) (cl:push new result)))
+                 (cl:push key done)))
+              (t (cl:push entry result)))))
     (dolist (entry child)
-      (let ((position (and (%entry-key entry)
-                           (position (%entry-key entry) result :test #'equal :key #'%entry-key))))
-        (if position
-            (setf (nth position result) entry)
-            (setf result (append result (list entry))))))
-    result))
+      (let ((key (%entry-key entry)))
+        (unless (member key done :test #'equal)
+          (dolist (new child) (when (equal (%entry-key new) key) (cl:push new result)))
+          (cl:push key done))))
+    (nreverse result)))
 
 (defun %merge-clause (head parent child)
   "The clause HEAD, CHILD's over PARENT's; either may be NIL."
@@ -697,6 +733,10 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
+       ; a param is a name, or (NAME KIND) restricting it to an operand of that
+       ; declared kind (#365); NAME may repeat across several clauses of one
+       ; operation, tried in the order written, the first whose arguments
+       ; match its params winning
      (branches mnemonic...)
      (stack-writers [entry...] [:except entry...])   ; an entry is MNEMONIC or (MNEMONIC MODE)
      (without-ops NAME...)                    ; with :extends only
