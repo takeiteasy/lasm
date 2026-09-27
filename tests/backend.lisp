@@ -13,6 +13,11 @@
 (let ((*package* (find-package '#:lasm)))
   (load (asdf:system-relative-pathname :lasm "examples/cli/callfoo-fp.lisp")))
 
+;;; #368: examples/cli/widefoo.lisp, whose registers are wider than its cells,
+;;; so a language word is 2 cells (BACKEND-WORD-CELLS).
+(let ((*package* (find-package '#:lasm)))
+  (load (asdf:system-relative-pathname :lasm "examples/cli/widefoo.lisp")))
+
 (defmachine bk-ld-machine
   (register pc :width 16)
   (register r :width 16 :names (a b c d))

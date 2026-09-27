@@ -59,7 +59,7 @@ names that register.
 | `:args` | `:stack`, or a list of registers | `:stack` |
 | `:order` | `:left-to-right`, `:right-to-left` | `:right-to-left` |
 | `:cleanup` | `:caller`, `:callee` | `:caller` |
-| `:return-address-slots` | Cells a call pushes | `1` |
+| `:return-address-slots` | Slots a call pushes | `1` |
 
 The values are stored and readable with `backend-descriptor-call`. Items lower
 calls from them; see [Calling conventions](conventions.md).
@@ -69,7 +69,7 @@ calls from them; see [Calling conventions](conventions.md).
 | Key | Values | Default |
 | --- | --- | --- |
 | `:grows` | `:down`, `:up` | The machine's stack-pointer direction, else `:down` |
-| `:alignment` | Positive integer, in cells | `1` |
+| `:alignment` | Positive integer, in slots | `1` |
 | `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer, or from the frame pointer when there is one | None |
 | `:stack-slot` | With a `:pointer`, the operand kind that addresses a slot from the stack pointer, for a function with [`:frame nil`](conventions.md#opting-out) | None |
 | `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
@@ -104,7 +104,7 @@ be a whole operand or one value inside one.
 ;; (:op :load (reg a) 5)  ->  (ldi (reg a) (imm 5))
 ```
 
-`:pushes` and `:pops` after the parameters declare the cells an operation puts
+`:pushes` and `:pops` after the parameters declare the slots an operation puts
 on or takes off the stack: an integer, or a parameter. A function without a
 [frame pointer](conventions.md#stack-depth) tracks a declared effect instead of
 rejecting the operation. The operations call lowering emits cannot declare one.

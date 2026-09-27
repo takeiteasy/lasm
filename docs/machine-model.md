@@ -73,7 +73,7 @@ delivery accept either stack form. See [Semantics vocabulary](semantics.md).
 
 | Option | Meaning |
 | --- | --- |
-| `:width n` | Bits per slot for `push`, `pop` and `stack-ref`. Defaults to the memory's `:cell-width`. |
+| `:width n` | Bits per slot for `push`, `pop` and `stack-ref`. Defaults to the memory's `:cell-width`. Also sets the [source language](language.md#words-wider-than-a-cell)'s word size on a backend targeting this stack pointer. |
 | `:bounds (LOW HIGH)` | Inclusive cell addresses the stack may touch. Without it nothing is checked. |
 
 A slot wider than one cell spans consecutive cells in the memory's `:endian`

@@ -50,8 +50,14 @@ cannot nest. `:args` is required when the call is `:cleanup :callee` or
 
 The prologue pushes each `:save` register, which must be `:callee-saved`, then
 allocates the locals. The locals are padded so the saves and locals fill a
-multiple of the frame's `:alignment` cells. `(:return)` undoes both, then
+multiple of the frame's `:alignment` slots. `(:return)` undoes both, then
 returns; it needs the stack at its entry depth.
+
+A slot is one push/pop's worth of stack space -- the stack pointer's own
+`:width`, which may span more than one memory cell (#167). `:alloc`, `:free`
+and every count below is in slots, not cells; the source language's own
+notion of a word ([Words wider than a cell](language.md#words-wider-than-a-cell))
+is layered on top, and stays out of this counting entirely.
 
 From the top of the stack, a frame holds the locals, the saved registers, the
 return address, then the stack arguments. A slot is addressed by its distance from the top of the stack, through the
@@ -64,7 +70,7 @@ overwrites it: copy it first or `:keep` it.
 ## Stack depth
 
 Without a frame pointer, `(:arg i)` and `(:local i)` are addressed from the
-stack pointer, so the lowering counts the cells the body has pushed. A function
+stack pointer, so the lowering counts the slots the body has pushed. A function
 without a frame pointer is checked four ways:
 
 | Check | Error when |
@@ -83,7 +89,7 @@ accepted, and the depth follows its net effect:
 
 ```lisp
 (:op :push2 (imm 1) (imm 2))   ; depth + 2
-(lds (reg a) (:arg 0))         ; addressed two cells deeper
+(lds (reg a) (:arg 0))         ; addressed two slots deeper
 ```
 
 `(:depth n)` states the depth where the tracking cannot know it, such as after
@@ -107,7 +113,7 @@ not checked.[^depth]
 
 `(frame :pointer REG)` in the [backend](backends.md#frame) gives every function
 a frame register. Slots are addressed from it, so `(:arg i)`, `(:local i)` and
-`(:return)` do not depend on how many cells the body has pushed.
+`(:return)` do not depend on how many slots the body has pushed.
 
 ```
 grows down     [fp + n]
@@ -213,7 +219,7 @@ an `items-malformed`.
 | Operation | Emitted for |
 | --- | --- |
 | `:push (x)` `:pop (x)` | Saves, kept registers, spilled arguments, `(:push)` `(:pop)`. |
-| `:alloc (n)` `:free (n)` | Locals; caller clean-up. `n` is a positive count of cells. |
+| `:alloc (n)` `:free (n)` | Locals; caller clean-up. `n` is a positive count of slots. |
 | `:move (dst src)` | Register arguments; a copy of a register the call target reads. |
 | `:exchange (a b)` | A register-argument cycle, when defined. Swaps two registers. |
 | `:call (f)` | `(:call ...)`. |

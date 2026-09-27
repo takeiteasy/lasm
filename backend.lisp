@@ -114,6 +114,24 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
   "The register name (or list of names) BACKEND assigns to ROLE, or NIL."
   (getf (backend-descriptor-registers (find-backend backend)) role))
 
+;; #368: a word is BACKEND-WORD-CELLS cells, the same split #167's
+;; (stack-pointer ... :width n) gives a stack slot -- the source language
+;; (compiler.lisp) lays globals, DEFARRAY/DEFSTRING data and AREF/ASET
+;; strides out by it.
+(defun backend-word-cells (backend)
+  "Cells a word spans on BACKEND's machine: its declared stack pointer's slot
+width (#167), which defaults to the memory's own cell width, divided by that
+cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
+  (let* ((backend (find-backend backend))
+         (machine-descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
+         (sp (%role-register backend :stack-pointer nil))
+         (pointer (%backend-matched-stack-pointer sp machine-descriptor)))
+    (if pointer
+        (ceiling (stack-pointer-descriptor-width pointer)
+                 (storage-element-cell-width
+                  (descriptor-element machine-descriptor (stack-pointer-descriptor-memory pointer))))
+        1)))
+
 ;;; Resolution by name
 
 (defun %find-machine-name (designator)
@@ -487,6 +505,14 @@ local to one expansion of the operation."
           (%check-op-form op form params (backend-descriptor-operands descriptor)
                           (backend-descriptor-machine descriptor) labels))))))
 
+(defun %backend-matched-stack-pointer (sp machine-descriptor)
+  "The (stack-pointer ...) descriptor of MACHINE-DESCRIPTOR whose register is
+SP, an upcased name, or NIL when SP is NIL or names none."
+  (and sp (find sp (loop for pointer being the hash-values of (machine-descriptor-stack-pointers machine-descriptor)
+                         collect pointer)
+                :test #'string=
+                :key (lambda (pointer) (%designator-name (stack-pointer-descriptor-register pointer))))))
+
 (defun %finish-backend-stack (descriptor machine-descriptor)
   "Check the backend's stack pointer and frame direction against the machine's
 declared (stack-pointer ...), and default the frame direction from it."
@@ -494,8 +520,7 @@ declared (stack-pointer ...), and default the frame direction from it."
          (sp (getf registers :stack-pointer))
          (declared (loop for pointer being the hash-values of (machine-descriptor-stack-pointers machine-descriptor)
                          collect pointer))
-         (match (and sp (find sp declared :test #'string=
-                                          :key (lambda (pointer) (%designator-name (stack-pointer-descriptor-register pointer))))))
+         (match (%backend-matched-stack-pointer sp machine-descriptor))
          (grows (getf (backend-descriptor-frame descriptor) :grows)))
     (when (and sp declared (not match))
       (%backend-error "registers :stack-pointer ~A is not the machine's declared stack-pointer (~{~A~^, ~})"

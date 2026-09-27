@@ -18,9 +18,14 @@
 ;;;; through any expression, going straight to F's label when E is literally
 ;;;; (function F). #366: (defarray ...) and (defstring ...) are initialised,
 ;;;; addressed data; the name is its address, never peeked through like a
-;;;; global. (aref A I)/(aset A I V) index by cell; (peek-byte A)/(poke-byte A V)
-;;;; are the backend's optional :peek-byte/:poke-byte, for machines narrower
-;;;; than a cell.
+;;;; global. (peek-byte A)/(poke-byte A V) are the backend's optional
+;;;; :peek-byte/:poke-byte, byte-addressing within a word, for a machine whose
+;;;; registers are wider than its cells.
+;;;;
+;;;; #368: a word is *CC-WORD-CELLS* cells (BACKEND-WORD-CELLS, backend.lisp),
+;;;; the split #167's (stack-pointer ... :width n) already gives a stack slot.
+;;;; A DEFVAR is *CC-WORD-CELLS* cells (.res); DEFARRAY indexes and sizes by
+;;;; it, and (aref A I)/(aset A I V) step a word, not a cell.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
@@ -61,6 +66,7 @@
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
 (defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING (#366).")
+(defvar *cc-word-cells* 1 "Cells a word spans on the target backend (BACKEND-WORD-CELLS, #368).")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -459,16 +465,26 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
   (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
 
-;; #366: (aref A I)/(aset A I V) index by cell, sugar for (peek (+ A I)) and
-;; (poke (+ A I) V) -- %CC-PEEK/%CC-POKE already give the address expression
-;; the same leaf and operand-ordering treatment as any other (#364).
+;; #366, #368: (aref A I)/(aset A I V) index by word, sugar for
+;; (peek (+ A (* I W))) and (poke (+ A (* I W)) V), W = *CC-WORD-CELLS*.
+;; %CC-PEEK/%CC-POKE already give the address expression the same leaf and
+;; operand-ordering treatment as any other (#364). A literal I folds to a
+;; literal offset at compile time; a computed I scales by a shift when W is a
+;; power of two, so scaling a variable index never newly requires :mul.
+(defun %cc-scaled-index (index)
+  (cond
+    ((= *cc-word-cells* 1) index)
+    ((integerp index) (* index *cc-word-cells*))
+    ((= (logcount *cc-word-cells*) 1) (list 'shl index (integer-length (1- *cc-word-cells*))))
+    (t (list '* index *cc-word-cells*))))
+
 (defun %cc-aref (form)
   (%cc-check-length form 3 3)
-  (%cc-peek (list 'peek (list '+ (second form) (third form)))))
+  (%cc-peek (list 'peek (list '+ (second form) (%cc-scaled-index (third form))))))
 
 (defun %cc-aset (form)
   (%cc-check-length form 4 4)
-  (%cc-poke (list 'poke (list '+ (second form) (third form)) (fourth form))))
+  (%cc-poke (list 'poke (list '+ (second form) (%cc-scaled-index (third form))) (fourth form))))
 
 ;; #363: an early return. Pending temporaries (each binary operator's left
 ;; operand, or a POKE's address) sit on the stack above the frame's own
@@ -1090,6 +1106,16 @@ DEFSTRING's own name."
                      (%source-name value nil)))))
     (t (%cc-fail form "~S is not a constant, a function or an array/string" value))))
 
+(defun %cc-word-directive (form)
+  "\"cell\", \"word\" or \"long\", the initialised-data directive for a
+*CC-WORD-CELLS*-cell word (#368); a compile error naming FORM when it is not
+1, 2 or 4, since no built-in directive emits any other width (use (defarray
+NAME SIZE), uninitialised, instead)."
+  (case *cc-word-cells*
+    (1 "cell") (2 "word") (4 "long")
+    (t (%cc-fail form "a ~D-cell word has no initialised data directive; use (defarray NAME SIZE) instead"
+                 *cc-word-cells*))))
+
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
 constants, DEFARRAY/DEFSTRING data (#366), macros and DEFUN-FOR-SYNTAX
@@ -1175,10 +1201,17 @@ defined later in FORMS."
             (loop for (label kind payload form) in (nreverse arrays)
                   append (list (list :label label)
                                (ecase kind
-                                 (:size (list :directive (%cc-symbol "res") payload))
-                                 (:values (list* :directive (%cc-symbol "cell")
+                                 (:size (list :directive (%cc-symbol "res") (* payload *cc-word-cells*)))
+                                 (:values (list* :directive (%cc-symbol (%cc-word-directive form))
                                                  (mapcar (lambda (value) (%cc-array-value value form)) payload)))
-                                 (:string (list :directive (%cc-symbol "asciz") payload))))))))
+                                 ;; #368: W=1 keeps .asciz's own terminator; a
+                                 ;; wider word has no terminated-string
+                                 ;; directive, so the trailing 0 is emitted as
+                                 ;; a value alongside the string's characters,
+                                 ;; same as .asciz "a", "b" emits two strings.
+                                 (:string (if (= *cc-word-cells* 1)
+                                              (list :directive (%cc-symbol "asciz") payload)
+                                              (list :directive (%cc-symbol (%cc-word-directive form)) payload 0)))))))))
 
 (defun compile-program (forms &key backend positions source file)
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and
@@ -1199,7 +1232,8 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (*cc-positions* positions) (*cc-source* source) (*cc-file* file)
         (*cc-macros* (make-hash-table :test 'equal)) (*cc-expansions* 0)
         (*cc-meta-functions* (make-hash-table :test 'equal)) (*cc-meta-steps* 0)
-        (*cc-rename-serial* 0) (*cc-expand-position* nil))
+        (*cc-rename-serial* 0) (*cc-expand-position* nil)
+        (*cc-word-cells* (backend-word-cells backend)))
     (%cc-registers)
     (multiple-value-bind (definitions globals data) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
@@ -1216,7 +1250,7 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
                 (mapcar #'%cc-function definitions)
                 (loop for (label) in globals
                       append (list (list :label label)
-                                   (list :directive (%cc-symbol "res") 1)))
+                                   (list :directive (%cc-symbol "res") *cc-word-cells*)))
                 data)))))
 
 ;;; Source files

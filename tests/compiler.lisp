@@ -312,6 +312,51 @@
                          (assembly-cells (assemble-items (items-program-items again) :backend backend)))
                  "~A" backend))))
 
+;;; #368: words wider than one cell. widefoo-lang-abi (examples/cli/widefoo.lisp,
+;;; loaded by tests/backend.lisp) has 16-bit registers over 8-bit cells, so
+;;; BACKEND-WORD-CELLS is 2; callfoo-lang-abi's is 1.
+
+(fiveam:test backend-word-cells-follows-the-stack-pointers-width
+  (fiveam:is (= 1 (backend-word-cells 'callfoo-lang-abi)))
+  (fiveam:is (= 1 (backend-word-cells 'callfoo-lang-fp-abi)))
+  (fiveam:is (= 2 (backend-word-cells 'widefoo-lang-abi))))
+
+(fiveam:test a-word-wider-than-a-cell-runs-globals-arrays-and-strings
+  (dolist (case '(("(defvar x 1000) (defvar y 2000) (defun main () (+ x y))" . 3000)
+                  ("(defarray arr (10 20 30)) (defun main () (+ (aref arr 0) (+ (aref arr 1) (aref arr 2))))" . 60)
+                  ("(defarray arr (10 20 30)) (defun main () (let ((i 2)) (aset arr i 99) (aref arr 2)))" . 99)
+                  ("(defstring s \"hi\") (defun main () (+ (aref s 0) (aref s 1)))" . 209)
+                  ("(defun f (x) x) (defarray fns ((function f))) (defun main () (funcall (aref fns 0) 42))" . 42)
+                  ("(defun fact (n) (if (< n 2) 1 (* n (fact (- n 1))))) (defun main () (fact 5))" . 120)))
+    (destructuring-bind (source . expected) case
+      (let ((m (%cl-run source 'widefoo-lang-abi 'widefoo)))
+        (fiveam:is (= expected (regref m 'r 0)) "~A" source)
+        (fiveam:is (= +cv-sp+ (sref m 'sp)) "the stack is balanced: ~A" source)))))
+
+(fiveam:test a-word-wider-than-a-cell-lays-globals-and-arrays-out-by-it
+  (let* ((source "(defvar x 5) (defarray arr (1 2 3)) (defstring s \"hi\") (defun main () 1)")
+         (items (%cl-compile source 'widefoo-lang-abi))
+         (res (find-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "res"))) items)))
+    (fiveam:is (= 2 (third res)) "a global reserves a whole word (.res 2)")
+    (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "word"))) items))
+               "the initialised defarray and defstring each use .word")))
+
+(fiveam:test a-word-with-no-initialised-data-directive-is-a-compile-error
+  (eval '(defmachine cl-w3-machine
+           (register sp :width 24) (register pc :width 16) (register r :width 24 :names (a b))
+           (memory ram :width 8 :addr-width 16)
+           (stack-pointer sp :memory ram :width 24)))
+  (eval '(defmode cl-w3-reg (expr :register r)))
+  (eval '(defbackend cl-w3-abi (:machine cl-w3-machine)
+          (registers :return (a) :scratch (a b) :stack-pointer sp :operand reg)
+          (operands (reg cl-w3-reg))))
+  (fiveam:is (= 3 (backend-word-cells 'cl-w3-abi)))
+  (fiveam:is (search "has no initialised data directive" (%cl-fail "(defarray arr (1 2)) (defun main () 1)" 'cl-w3-abi)))
+  ;; An uninitialised DEFARRAY needs no directive by width -- .res takes any
+  ;; count of cells -- so this backend's next problem is the one it was built
+  ;; to have, a missing op, not %CC-WORD-DIRECTIVE.
+  (fiveam:is (search "needs the operation" (%cl-fail "(defarray arr 2) (defun main () 1)" 'cl-w3-abi))))
+
 (fiveam:test a-source-file-can-name-its-backend
   (let ((program (read-source-from-string "(:program (:backend callfoo-lang-abi :origin 4)) (defun main () 1)")))
     (fiveam:is (%same-name-p 'callfoo-lang-abi (items-program-backend program)))

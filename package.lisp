@@ -262,6 +262,7 @@
    #:backend-descriptor-branches
    #:backend-stack-writers
    #:backend-register
+   #:backend-word-cells
    #:backend-expand-op
    #:assemble-items
    #:assemble-items-file

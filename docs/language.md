@@ -35,9 +35,9 @@ A `.lsp` file holds top-level forms, in any order. A leading
 | `(defun NAME (PARAM...) BODY...)` | A function returning its last form's value. |
 | `(defvar NAME [INTEGER])` | A one-word global, `0` unless given. |
 | `(defconstant NAME INTEGER)` | A compile-time integer. |
-| `(defarray NAME SIZE)` | `SIZE` reserved, uninitialised cells. |
-| `(defarray NAME (VALUE...))` | Cells initialised to `VALUE...`, each an integer, `(function F)`, or another `defconstant`/`defarray`/`defstring` name. |
-| `(defstring NAME "TEXT")` | `TEXT`, one character a cell, `0`-terminated. |
+| `(defarray NAME SIZE)` | `SIZE` words reserved, uninitialised. |
+| `(defarray NAME (VALUE...))` | Words initialised to `VALUE...`, each an integer, `(function F)`, or another `defconstant`/`defarray`/`defstring` name. |
+| `(defstring NAME "TEXT")` | `TEXT`, one character a word, `0`-terminated. |
 | `(defmacro NAME (PARAM... [&rest R]) BODY...)` | A compile-time macro; see [below](#macros). |
 | `(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` | A compile-time helper function, callable from a macro's `BODY`. |
 
@@ -48,7 +48,28 @@ stub, so it starts at those values every load.
 
 A `defarray`/`defstring` name is its address, always, unlike a `defvar`'s name,
 which is its value (peeked/poked through); it cannot be `set`. `(aref A I)`/
-`(aset A I V)` index either by cell, `I` from `0`.
+`(aset A I V)` index by word, `I` from `0`.
+
+## Words wider than a cell
+
+A word is one cell unless the backend's machine gives its stack pointer a
+[`:width`](machine-model.md#stacks) wider than a cell (#167), in which case a
+word spans that many cells, in the machine's own `:endian` order -- the same
+split a stack slot already gets. `(defvar ...)`, `(defarray ...)` and
+`(defstring ...)` all lay out by it: a `defvar` reserves a whole word, and
+`(aref A I)`/`(aset A I V)` scale `I` by it, so an array or string strides
+the same way regardless of word size.
+
+An initialised `(defarray NAME (VALUE...))` or `(defstring NAME "TEXT")`
+needs a built-in directive at that width -- `.cell`, `.word` or `.long` --
+which only exist for a 1, 2 or 4-cell word; any other word size is a compile
+error, though `(defarray NAME SIZE)`, uninitialised, still works (`.res`
+takes any count of cells).
+
+Raw `peek`/`poke` and a manual address computed with `+` always count
+cells, not words -- only `aref`/`aset` scale by the word size. The
+backend's `:peek`/`:poke` operations (below) must move a whole word for
+`peek`/`poke` to agree with `aref`/`aset` on what one element is.
 
 ## Expressions
 
@@ -117,9 +138,10 @@ Needs the backend's `:call` to have a clause for a register target (#365,
 ## Arrays, strings and byte access
 
 `(defarray NAME SIZE)` and `(defarray NAME (VALUE...))` declare an array;
-`(defstring NAME "TEXT")` a `0`-terminated string, one character a cell. Both
+`(defstring NAME "TEXT")` a `0`-terminated string, one character a word. Both
 are addressed data in the image, not a stub-initialised `defvar`: the name is
-always its address, and `(aref A I)`/`(aset A I V)` index a cell of it, `I`
+always its address, and `(aref A I)`/`(aset A I V)` index a word of it (a
+cell, unless the backend's [word is wider](#words-wider-than-a-cell)), `I`
 from `0`.
 
 ```lisp
@@ -239,7 +261,7 @@ for the forms a program uses. A missing one is a compile error naming the form.
 | --- | --- |
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
-| `:peek (d a)` `:poke (a s)` | Memory at the address in a register. These take register names, so a template can put one in a bracket operand. |
+| `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
 | `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` (#366). |
 | `:jump (target)` `:branch-zero (r target)` | Jump; jump when `r` is `0`. |
 | `:halt ()` | Stops the machine. |
@@ -254,7 +276,9 @@ target to compile `funcall` on a computed value (#365); one clause for the
 usual label call and another for a register are typical.
 
 [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) is a complete example;
-[`callfoo-lang-fp-abi`](../examples/cli/callfoo-fp.lisp) uses a frame pointer.
+[`callfoo-lang-fp-abi`](../examples/cli/callfoo-fp.lisp) uses a frame pointer;
+[`widefoo-lang-abi`](../examples/cli/widefoo.lisp) has registers wider than
+its cells (#368).
 
 ## Names
 
@@ -301,8 +325,9 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | No immediate-operand operations, so a constant right operand still loads into a register. | [#374](https://todo.sr.ht/~takeiteasy/lasm/374) |
 | `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
-| `defstring` is one character a cell; no packed (several-per-cell) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
-| A word is one cell. | [#368](https://todo.sr.ht/~takeiteasy/lasm/368) |
+| `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
+| A frame slot's offset from the stack/frame pointer is always in slots; a backend whose `:slot`/`:stack-slot` addressing mode takes a raw cell offset, rather than routing through the machine's own stack-slot sizing, addresses the wrong cell when the word is wider than one cell. | [#385](https://todo.sr.ht/~takeiteasy/lasm/385) |
+| An initialised `defarray`/`defstring` needs a built-in directive at the backend's word size; only 1, 2 and 4-cell words have one. | [#386](https://todo.sr.ht/~takeiteasy/lasm/386) |
 | A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
 | A quasiquote template can't nest another quasiquote inside it. | [#383](https://todo.sr.ht/~takeiteasy/lasm/383) |
 | The compile-time evaluator's operators are a minimal set: no strings, `apply`, `mapcar`, `and`/`or`/`cond`. | [#384](https://todo.sr.ht/~takeiteasy/lasm/384) |
