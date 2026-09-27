@@ -7,6 +7,7 @@
 ;;;;
 ;;;; Forms:  (defun NAME (PARAM...) BODY...)  (defvar NAME [INT])  (defconstant NAME INT)
 ;;;;   (defarray NAME SIZE)  (defarray NAME (VALUE...))  (defstring NAME "TEXT")
+;;;;   (defmacro NAME (PARAM... [&rest R]) TEMPLATE)
 ;;;; Expressions: an integer or name, (set N E), (let ((V E)...) BODY...),
 ;;;;   (if C A [B]), (while C BODY...), (progn E...), (and E...), (or E...),
 ;;;;   (not E), an operator, (peek A), (poke A V), (peek-byte A), (poke-byte A V),
@@ -22,6 +23,13 @@
 ;;;; than a cell.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
+;;;;
+;;;; #367: a defmacro call, in an expression or at top level, is replaced by
+;;;; its TEMPLATE with each parameter substituted for the call's argument and
+;;;; each &rest parameter spliced in as a list; nothing computes at compile
+;;;; time. %CC-INSTANTIATE does the substitution; %CC-EXPAND-ALL expands a
+;;;; function body, and %CC-COLLECT a top-level call, once every macro (from
+;;;; anywhere in the file) is registered.
 
 (in-package #:lasm)
 
@@ -61,6 +69,13 @@
 (defvar *cc-positions* nil "EQ hash table, form -> character offset, or NIL without one (#362).")
 (defvar *cc-source* nil "The program's source text, or NIL.")
 (defvar *cc-file* nil "The program's path, or NIL.")
+(defvar *cc-macros* nil "Upcased name -> (NAMES REST TEMPLATE): REST is a &rest parameter's key, or NIL (#367).")
+(defvar *cc-expansions* 0 "Macro expansions performed so far in this program (#367).")
+(defparameter +cc-expansion-limit+ 10000
+  "Total macro expansions a program may perform; a budget, not a nesting-depth
+limit, so it also catches a macro that expands into a call to itself (#367).")
+(defvar *cc-rename-serial* 0 "Fresh names handed out so far, for a macro template's own let bindings (#367).")
+(defvar *cc-expand-position* nil "The *CC-POSITIONS* offset a macro expansion's fresh conses are attributed to (#367).")
 
 (defun %cc-line-column (form)
   "(VALUES LINE COLUMN) of FORM, when its position and the source text are known."
@@ -80,6 +95,9 @@
 
 (defun %cc-name-p (x)
   (and x (symbolp x) (not (keywordp x))))
+
+(defun %cc-proper-list-p (x)
+  (and (listp x) (null (cdr (last x)))))
 
 (defun %cc-key (x form)
   (unless (%cc-name-p x)
@@ -568,6 +586,224 @@ items-malformed, as any call target is (#335, docs/conventions.md)."
     ("PEEK-BYTE" . %cc-peek-byte) ("POKE-BYTE" . %cc-poke-byte) ("AREF" . %cc-aref) ("ASET" . %cc-aset)
     ("ASM" . %cc-asm) ("RETURN" . %cc-return) ("FUNCTION" . %cc-function-expr) ("FUNCALL" . %cc-funcall)))
 
+;;; Macros (#367)
+
+(defun %cc-parse-macro-params (params form)
+  "(VALUES NAMES REST) for a defmacro PARAM list: NAMES are the fixed
+parameters' upcased keys, in order; REST is a trailing &rest parameter's
+key, or NIL."
+  (unless (%cc-proper-list-p params)
+    (%cc-fail form "defmacro parameter list is malformed"))
+  (let ((names '()) (rest nil) (seen (make-hash-table :test 'equal)))
+    (labels ((claim (param)
+               (let ((key (%cc-key param form)))
+                 (when (gethash key seen)
+                   (%cc-fail form "~A is a parameter twice" (%source-name param nil)))
+                 (setf (gethash key seen) t)
+                 key)))
+      (loop for tail on params
+            do (if (and (%cc-name-p (first tail)) (string= (%designator-name (first tail)) "&REST"))
+                   (progn
+                     (unless (and (consp (rest tail)) (null (cddr tail)))
+                       (%cc-fail form "&rest needs exactly one parameter name, at the end"))
+                     (setf rest (claim (second tail)))
+                     (return))
+                   (cl:push (claim (first tail)) names))))
+    (values (nreverse names) rest)))
+
+(defun %cc-parse-defmacro (form)
+  "Register FORM, a (defmacro NAME (PARAM... [&rest R]) TEMPLATE), in *CC-MACROS*."
+  (unless (and (%cc-proper-list-p form) (= (length form) 4))
+    (%cc-fail form "expected (defmacro NAME (PARAM...) TEMPLATE)"))
+  (let* ((name (second form)) (key (%cc-key name form)))
+    (when (or (assoc key *cc-forms* :test #'string=) (assoc key *cc-operators* :test #'string=)
+              (member key '("DEFUN" "DEFVAR" "DEFCONSTANT" "DEFMACRO") :test #'string=))
+      (%cc-fail form "~A is a built-in form" (%source-name name nil)))
+    (when (or (gethash key *cc-functions*) (gethash key *cc-macros*)
+              (gethash key *cc-globals*) (gethash key *cc-constants*) (gethash key *cc-data*))
+      (%cc-fail form "~A is defined twice" (%source-name name nil)))
+    (multiple-value-bind (names rest) (%cc-parse-macro-params (third form) form)
+      (setf (gethash key *cc-macros*) (list names rest (fourth form))))))
+
+(defun %cc-fresh-name (template-name)
+  "A fresh name standing for a macro TEMPLATE-NAME's own `let` binding: its
+printed name has a space, which no source symbol can spell, so it can never
+collide with a caller's variable of the same name (#367)."
+  (%cc-symbol (format nil "~A ~D" (string-downcase (%source-name template-name nil)) (incf *cc-rename-serial*))))
+
+(defun %cc-form-position (form)
+  (and *cc-positions* (gethash form *cc-positions*)))
+
+(defun %cc-remember-position (node)
+  "NODE, a fresh cons a macro expansion built, attributed to the enclosing
+call's position (*CC-EXPAND-POSITION*), so an error inside it reports the
+call's line and column, not the template's own (#367, #362)."
+  (when (and *cc-positions* *cc-expand-position* (consp node))
+    (setf (gethash node *cc-positions*) *cc-expand-position*))
+  node)
+
+(defun %cc-rest-splice (element bindings renames)
+  "The forms ELEMENT, a template list element, splices in as a &rest
+parameter, or NIL when it is not one."
+  (and (%cc-name-p element)
+       (not (assoc (%designator-name element) renames :test #'string=))
+       (let ((binding (assoc (%designator-name element) bindings :test #'string=)))
+         (and binding (eq (second binding) :rest) (third binding)))))
+
+(defun %cc-instantiate (node bindings renames form)
+  "TEMPLATE node NODE with each macro parameter in BINDINGS (KEY :FIXED FORM)
+or (KEY :REST FORMS) substituted, and each RENAMES (KEY . FRESH) applied. A
+substituted argument keeps its own position; only a cons this rebuilds is
+attributed to the call (%CC-REMEMBER-POSITION)."
+  (cond
+    ((%cc-name-p node)
+     (let ((rename (assoc (%designator-name node) renames :test #'string=)))
+       (if rename
+           (cdr rename)
+           (let ((binding (assoc (%designator-name node) bindings :test #'string=)))
+             (cond ((null binding) node)
+                   ((eq (second binding) :rest)
+                    (%cc-fail form "~A (a &rest parameter) is used outside a list" (%source-name node nil)))
+                   (t (third binding)))))))
+    ((not (consp node)) node)
+    ((and (%cc-name-p (first node)) (member (%designator-name (first node)) '("LET" "LET*") :test #'string=)
+          (consp (rest node)) (listp (second node)))
+     (%cc-instantiate-let node bindings renames form))
+    ((and (%cc-name-p (first node)) (equal (%designator-name (first node)) "ASM"))
+     (%cc-remember-position
+      (list* (first node) (mapcar (lambda (item) (%cc-instantiate-asm-item item bindings renames form)) (rest node)))))
+    (t (%cc-instantiate-list node bindings renames form))))
+
+(defun %cc-instantiate-list (node bindings renames form)
+  "NODE, a proper template list, instantiated element by element; a &rest
+parameter occupying an element position splices its forms in."
+  (unless (%cc-proper-list-p node)
+    (%cc-fail form "macro template is malformed"))
+  (%cc-remember-position
+   (loop for element in node
+         for forms = (%cc-rest-splice element bindings renames)
+         append (if forms (copy-list forms) (list (%cc-instantiate element bindings renames form))))))
+
+(defun %cc-instantiate-let (node bindings renames form)
+  "A template `let`/`let*`'s own binding names are fresh (%CC-FRESH-NAME)
+unless the name is itself a macro parameter, in which case it keeps the
+caller's name; LET*'s later bindings and the body see each rename in turn."
+  (unless (%cc-proper-list-p (second node))
+    (%cc-fail form "let needs a list of (NAME VALUE) bindings"))
+  (let* ((sequential (equal (%designator-name (first node)) "LET*"))
+         (inner renames) (new-bindings '()))
+    (dolist (binding (second node))
+      (unless (and (consp binding) (= (length binding) 2) (%cc-name-p (first binding)))
+        (%cc-fail form "let binding ~S is not (NAME VALUE)" binding))
+      (let* ((key (%designator-name (first binding)))
+             (value (%cc-instantiate (second binding) bindings (if sequential inner renames) form))
+             (fixed (assoc key bindings :test #'string=)))
+        (cond ((and fixed (eq (second fixed) :rest))
+               (%cc-fail form "~A (a &rest parameter) is used outside a list" (%source-name (first binding) nil)))
+              (fixed (cl:push (list (third fixed) value) new-bindings))
+              (t (let ((fresh (%cc-fresh-name (first binding))))
+                   (cl:push (list fresh value) new-bindings)
+                   (setf inner (acons key fresh inner)))))))
+    (%cc-remember-position
+     (list* (first node) (%cc-remember-position (nreverse new-bindings))
+            (mapcar (lambda (each) (%cc-instantiate each bindings inner form)) (cddr node))))))
+
+(defun %cc-instantiate-asm-item (item bindings renames form)
+  "An (asm ...) ITEM from a macro template, with each (:var PARAM) replaced by
+(:var ARGUMENT-NAME) or (:var FRESH-NAME); other items, including register
+operands such as (reg a), pass through untouched."
+  (cond ((and (consp item) (%keyword-named-p (first item) "VAR") (consp (rest item)) (%cc-name-p (second item)))
+         (let* ((key (%designator-name (second item)))
+                (rename (assoc key renames :test #'string=))
+                (binding (assoc key bindings :test #'string=)))
+           (cond (rename (list :var (cdr rename)))
+                 ((null binding) item)
+                 ((eq (second binding) :rest)
+                  (%cc-fail form "~A (a &rest parameter) is used outside a list" (%source-name (second item) nil)))
+                 ((not (%cc-name-p (third binding)))
+                  (%cc-fail form "(:var ~A) needs a name, got ~S" (%source-name (second item) nil) (third binding)))
+                 (t (list :var (third binding))))))
+        ((%cc-proper-list-p item)
+         (mapcar (lambda (element) (%cc-instantiate-asm-item element bindings renames form)) item))
+        (t item)))
+
+(defun %cc-expand-call (name entry form)
+  "FORM, a call (NAME ARG...) matching macro ENTRY = (NAMES REST TEMPLATE),
+expanded once into a fresh copy of TEMPLATE."
+  (destructuring-bind (names rest template) entry
+    (unless (%cc-proper-list-p form)
+      (%cc-fail form "expected (~A ARG...)" (%source-name name nil)))
+    (let* ((args (rest form)) (fixed (length names)))
+      (unless (and (>= (length args) fixed) (or rest (= (length args) fixed)))
+        (%cc-fail form "~A takes ~:[exactly~;at least~] ~D argument~:P, got ~D"
+                  (%source-name name nil) rest fixed (length args)))
+      (when (> (incf *cc-expansions*) +cc-expansion-limit+)
+        (%cc-fail form "macro ~A expands too many times (over ~D expansions)"
+                  (%source-name name nil) +cc-expansion-limit+))
+      (let ((bindings (append (loop for key in names for arg in args collect (list key :fixed arg))
+                               (and rest (list (list rest :rest (nthcdr fixed args)))))))
+        (%cc-instantiate template bindings nil form)))))
+
+(defun %cc-expand-macro-form (name entry form)
+  "FORM expanded (%CC-EXPAND-CALL) with *CC-EXPAND-POSITION* set to its own
+position, or the enclosing expansion's when it has none of its own."
+  (let ((*cc-expand-position* (or (%cc-form-position form) *cc-expand-position*)))
+    (%cc-expand-call name entry form)))
+
+(defun %cc-rebuild-if-changed (original elements)
+  "ORIGINAL, a list, given its own ELEMENTS (mapped from it): ORIGINAL itself
+when every element is EQ to its own, so an unexpanded form keeps its #362
+position; otherwise a fresh list, carrying ORIGINAL's own position, since a
+form with a macro call somewhere inside still needs one for the rest of it."
+  (if (every #'eq original elements)
+      original
+      (let ((position (%cc-form-position original)))
+        (when (and *cc-positions* position)
+          (setf (gethash elements *cc-positions*) position))
+        elements)))
+
+(defun %cc-expand-let-elements (form)
+  "FORM's (LET/LET* ((NAME VALUE)...) BODY...) elements, a binding's VALUE and
+each BODY form macro-expanded; binding names are left alone."
+  (list* (first form)
+         (if (%cc-proper-list-p (second form))
+             (let ((bindings (mapcar (lambda (binding)
+                                        (if (and (consp binding) (consp (rest binding)))
+                                            (let ((value (%cc-expand-all (second binding))))
+                                              (if (eq value (second binding)) binding (list (first binding) value)))
+                                            binding))
+                                      (second form))))
+               (if (every #'eq bindings (second form)) (second form) bindings))
+             (second form))
+         (mapcar #'%cc-expand-all (cddr form))))
+
+(defun %cc-expand-set-elements (form)
+  "FORM's (SET NAME VALUE) elements with only VALUE macro-expanded, so its
+place name is left alone."
+  (if (and (consp (rest form)) (consp (cddr form)) (null (cdddr form)))
+      (let ((value (%cc-expand-all (third form))))
+        (if (eq value (third form)) form (list (first form) (second form) value)))
+      form))
+
+(defun %cc-expand-all (form)
+  "FORM with every macro call macro-expanded, keeping the original cons
+wherever nothing inside changed, so #362 positions survive. A `let`'s
+binding names, a `set`'s place, and an `asm` block are left alone: those
+names must stay literal for the rest of the compiler to resolve."
+  (if (not (and (consp form) (%cc-name-p (first form))))
+      form
+      (let* ((key (%designator-name (first form)))
+             (entry (gethash key *cc-macros*)))
+        (if entry
+            (%cc-expand-all (%cc-expand-macro-form (first form) entry form))
+            (%cc-rebuild-if-changed
+             form
+             (cond ((member key '("LET" "LET*") :test #'string=) (%cc-expand-let-elements form))
+                   ((string= key "SET") (%cc-expand-set-elements form))
+                   ((string= key "ASM") form)
+                   ((%cc-proper-list-p form) (mapcar #'%cc-expand-all form))
+                   (t form)))))))
+
 (defun %cc-expr (form)
   (typecase form
     (integer (%cc-const form))
@@ -591,6 +827,9 @@ items-malformed, as any call target is (#335, docs/conventions.md)."
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
+           ;; Every macro in the file is registered by now (%CC-COLLECT ran
+           ;; first), regardless of where NAME's DEFUN sits relative to them (#367).
+           (body (mapcar #'%cc-expand-all body))
            (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-saves* '())
            (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                             (if (eq args :stack) 0 (length args)))))
@@ -658,73 +897,83 @@ DEFSTRING's own name."
     (t (%cc-fail form "~S is not a constant, a function or an array/string" value))))
 
 (defun %cc-collect (forms)
-  "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals, constants,
-and DEFARRAY/DEFSTRING data (#366). DATA's array/string values are resolved
-only once every form is registered, so one may name a function or array/string
-defined later in FORMS."
+  "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
+constants, DEFARRAY/DEFSTRING data (#366) and macros (#367), in file order.
+A top-level macro call expands in place, and a (progn DEF...) it (or the
+source) produces flattens. A DEFUN's own body is expanded later, in
+%CC-FUNCTION, once every macro here is registered. DATA's array/string
+values are resolved only once every form is registered, so one may name a
+function, macro or array/string defined later in FORMS."
   (let ((definitions '()) (globals '()) (arrays '()) (seen (make-hash-table :test 'equal)))
-    (flet ((claim (name form label)
-             (let ((existing (gethash (symbol-name label) seen)))
-               (when (and existing (string/= existing (%designator-name name)))
-                 (%cc-fail form "~A and ~A both make the label ~A"
-                           (%source-name name nil) existing (symbol-name label)))
-               (setf (gethash (symbol-name label) seen) (%designator-name name))))
-           (defined-p (key) (or (gethash key *cc-globals*) (gethash key *cc-constants*) (gethash key *cc-data*))))
-      (dolist (form forms)
-        (unless (and (consp form) (%cc-name-p (first form)) (listp (cdr form)) (null (cdr (last form))))
-          (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...) or (defstring ...)"))
-        (let ((head (%designator-name (first form))))
-          (cond
-            ((string= head "DEFUN")
-             (unless (and (>= (length form) 3) (listp (third form)) (null (cdr (last (third form)))))
-               (%cc-fail form "expected (defun NAME (PARAM...) BODY...)"))
-             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "fn" name)))
-               (when (or (assoc key *cc-forms* :test #'string=) (assoc key *cc-operators* :test #'string=))
-                 (%cc-fail form "~A is a built-in form" (%source-name name nil)))
-               (when (gethash key *cc-functions*)
-                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
-               (claim name form label)
-               (setf (gethash key *cc-functions*) (cons label (length (third form))))
-               (cl:push (list name (third form) (cdddr form) label) definitions)))
-            ((string= head "DEFVAR")
-             (unless (and (<= 2 (length form) 3) (or (null (cddr form)) (integerp (third form))))
-               (%cc-fail form "expected (defvar NAME [INTEGER])"))
-             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "gv" name)))
-               (when (defined-p key)
-                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
-               (claim name form label)
-               (setf (gethash key *cc-globals*) label)
-               (cl:push (list label (or (third form) 0)) globals)))
-            ((string= head "DEFCONSTANT")
-             (unless (and (= (length form) 3) (integerp (third form)))
-               (%cc-fail form "expected (defconstant NAME INTEGER)"))
-             (let ((key (%cc-key (second form) form)))
-               (when (defined-p key)
-                 (%cc-fail form "~A is defined twice" (%source-name (second form) nil)))
-               (setf (gethash key *cc-constants*) (third form))))
-            ((string= head "DEFARRAY")
-             (unless (= (length form) 3)
-               (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))"))
-             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "ar" name))
-                    (spec (third form)))
-               (when (defined-p key)
-                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
-               (claim name form label)
-               (setf (gethash key *cc-data*) label)
-               (cond
-                 ((and (integerp spec) (plusp spec)) (cl:push (list label :size spec form) arrays))
-                 ((and (listp spec) (null (cdr (last spec)))) (cl:push (list label :values spec form) arrays))
-                 (t (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))")))))
-            ((string= head "DEFSTRING")
-             (unless (and (= (length form) 3) (stringp (third form)))
-               (%cc-fail form "expected (defstring NAME \"text\")"))
-             (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "st" name)))
-               (when (defined-p key)
-                 (%cc-fail form "~A is defined twice" (%source-name name nil)))
-               (claim name form label)
-               (setf (gethash key *cc-data*) label)
-               (cl:push (list label :string (third form) form) arrays)))
-            (t (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...) or (defstring ...)"))))))
+    (labels
+        ((claim (name form label)
+           (let ((existing (gethash (symbol-name label) seen)))
+             (when (and existing (string/= existing (%designator-name name)))
+               (%cc-fail form "~A and ~A both make the label ~A"
+                         (%source-name name nil) existing (symbol-name label)))
+             (setf (gethash (symbol-name label) seen) (%designator-name name))))
+         (defined-p (key) (or (gethash key *cc-globals*) (gethash key *cc-constants*)
+                               (gethash key *cc-data*) (gethash key *cc-macros*)))
+         (process (form)
+           (unless (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form))
+             (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...), (defstring ...) or (defmacro ...)"))
+           (let* ((head (%designator-name (first form)))
+                  (macro (gethash head *cc-macros*)))
+             (cond
+               ((string= head "PROGN") (dolist (sub (rest form)) (process sub)))
+               (macro (process (%cc-expand-macro-form (first form) macro form)))
+               ((string= head "DEFMACRO") (%cc-parse-defmacro form))
+               ((string= head "DEFUN")
+                (unless (and (>= (length form) 3) (listp (third form)) (null (cdr (last (third form)))))
+                  (%cc-fail form "expected (defun NAME (PARAM...) BODY...)"))
+                (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "fn" name)))
+                  (when (or (assoc key *cc-forms* :test #'string=) (assoc key *cc-operators* :test #'string=))
+                    (%cc-fail form "~A is a built-in form" (%source-name name nil)))
+                  (when (or (gethash key *cc-functions*) (gethash key *cc-macros*))
+                    (%cc-fail form "~A is defined twice" (%source-name name nil)))
+                  (claim name form label)
+                  (setf (gethash key *cc-functions*) (cons label (length (third form))))
+                  (cl:push (list name (third form) (cdddr form) label) definitions)))
+               ((string= head "DEFVAR")
+                (unless (and (<= 2 (length form) 3) (or (null (cddr form)) (integerp (third form))))
+                  (%cc-fail form "expected (defvar NAME [INTEGER])"))
+                (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "gv" name)))
+                  (when (defined-p key)
+                    (%cc-fail form "~A is defined twice" (%source-name name nil)))
+                  (claim name form label)
+                  (setf (gethash key *cc-globals*) label)
+                  (cl:push (list label (or (third form) 0)) globals)))
+               ((string= head "DEFCONSTANT")
+                (unless (and (= (length form) 3) (integerp (third form)))
+                  (%cc-fail form "expected (defconstant NAME INTEGER)"))
+                (let ((key (%cc-key (second form) form)))
+                  (when (defined-p key)
+                    (%cc-fail form "~A is defined twice" (%source-name (second form) nil)))
+                  (setf (gethash key *cc-constants*) (third form))))
+               ((string= head "DEFARRAY")
+                (unless (= (length form) 3)
+                  (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))"))
+                (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "ar" name))
+                       (spec (third form)))
+                  (when (defined-p key)
+                    (%cc-fail form "~A is defined twice" (%source-name name nil)))
+                  (claim name form label)
+                  (setf (gethash key *cc-data*) label)
+                  (cond
+                    ((and (integerp spec) (plusp spec)) (cl:push (list label :size spec form) arrays))
+                    ((and (listp spec) (null (cdr (last spec)))) (cl:push (list label :values spec form) arrays))
+                    (t (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))")))))
+               ((string= head "DEFSTRING")
+                (unless (and (= (length form) 3) (stringp (third form)))
+                  (%cc-fail form "expected (defstring NAME \"text\")"))
+                (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "st" name)))
+                  (when (defined-p key)
+                    (%cc-fail form "~A is defined twice" (%source-name name nil)))
+                  (claim name form label)
+                  (setf (gethash key *cc-data*) label)
+                  (cl:push (list label :string (third form) form) arrays)))
+               (t (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...), (defstring ...) or (defmacro ...)"))))))
+      (dolist (form forms) (process form)))
     (values (nreverse definitions) (nreverse globals)
             (loop for (label kind payload form) in (nreverse arrays)
                   append (list (list :label label)
@@ -750,7 +999,9 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '())
         (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil)
         (*cc-volatile* nil) (*cc-preserved* nil) (*cc-saves* nil)
-        (*cc-positions* positions) (*cc-source* source) (*cc-file* file))
+        (*cc-positions* positions) (*cc-source* source) (*cc-file* file)
+        (*cc-macros* (make-hash-table :test 'equal)) (*cc-expansions* 0)
+        (*cc-rename-serial* 0) (*cc-expand-position* nil))
     (%cc-registers)
     (multiple-value-bind (definitions globals data) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
