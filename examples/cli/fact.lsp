@@ -1,4 +1,5 @@
-;; Factorial, a loop and a global, in the small source language (docs/language.md).
+;; Factorial, a loop, a global and an early return, in the small source
+;; language (docs/language.md).
 ;;
 ;;   lasm run fact.lsp -m callfoo.lisp --backend callfoo-lang-abi
 ;;
@@ -9,9 +10,8 @@
 
 (defun fact (n)
   (set calls (+ calls 1))
-  (if (< n 2)
-      1
-      (* n (fact (- n 1)))))
+  (if (< n 2) (return 1))
+  (* n (fact (- n 1))))
 
 (defun sum-to (n)
   (let ((total 0) (i 1))

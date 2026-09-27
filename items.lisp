@@ -34,7 +34,10 @@
   (error type :detail (apply #'format nil control args) :item item))
 
 (defstruct items-program
-  items backend machine origin memory lexer)
+  items backend machine origin memory lexer
+  source   ; source text, for a program READ-SOURCE or READ-SOURCE-FROM-STRING made
+  file     ; its path, or NIL for READ-SOURCE-FROM-STRING
+  positions) ; EQ hash table, form -> character offset in SOURCE, for #362
 
 ;;; Context
 

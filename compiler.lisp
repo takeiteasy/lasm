@@ -8,21 +8,22 @@
 ;;;; Forms:  (defun NAME (PARAM...) BODY...)  (defvar NAME [INT])  (defconstant NAME INT)
 ;;;; Expressions: an integer or name, (set N E), (let ((V E)...) BODY...),
 ;;;;   (if C A [B]), (while C BODY...), (progn E...), (and E...), (or E...),
-;;;;   (not E), an operator, (peek A), (poke A V), (asm ITEM...), (F ARG...)
+;;;;   (not E), an operator, (peek A), (poke A V), (return [E]), (asm ITEM...),
+;;;;   (F ARG...)
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 
 (in-package #:lasm)
 
-(define-condition program-compile-error (lasm-error)
+;; #362: a LASM-SYNTAX-ERROR so DIAGNOSTIC-TEXT renders FILE:LINE:COLUMN and,
+;; when the program's source text is known (READ-SOURCE, READ-SOURCE-FROM-
+;; STRING), the offending line with a caret. DETAIL, FORM and FUNCTION are
+;; the plain message parts; MESSAGE (on LASM-SYNTAX-ERROR) is all of them
+;; combined, for the :REPORT method to print.
+(define-condition program-compile-error (lasm-syntax-error)
   ((detail :initarg :detail :reader program-compile-error-detail)
    (form :initarg :form :initform nil :reader program-compile-error-form)
-   (function :initarg :function :initform nil :reader program-compile-error-function))
-  (:report (lambda (c s)
-             (let ((*print-gensym* nil) (*print-case* :downcase) (*print-length* 8) (*print-level* 4))
-               (format s "Compile error: ~A~@[ (in ~S)~]~@[ (function ~A)~]"
-                       (program-compile-error-detail c) (program-compile-error-form c)
-                       (program-compile-error-function c))))))
+   (function :initarg :function :initform nil :reader program-compile-error-function)))
 
 (defparameter *cc-source-keywords* '(:var)
   "Keywords that source text uses, which the reader accepts only once they exist.")
@@ -42,9 +43,33 @@
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
 (defvar *cc-labels* 0 "Control labels made so far.")
+(defvar *cc-depth* 0 "Temporaries the compiler has pushed since the function's entry.")
+(defvar *cc-positions* nil "EQ hash table, form -> character offset, or NIL without one (#362).")
+(defvar *cc-source* nil "The program's source text, or NIL.")
+(defvar *cc-file* nil "The program's path, or NIL.")
+
+(defun %cc-offset-line-column (offset)
+  "1-based (VALUES LINE COLUMN) of character OFFSET in *CC-SOURCE*."
+  (let ((line 1) (column 1))
+    (dotimes (i (min offset (length *cc-source*)))
+      (if (char= (char *cc-source* i) #\Newline)
+          (setf line (1+ line) column 1)
+          (incf column)))
+    (values line column)))
+
+(defun %cc-line-column (form)
+  "(VALUES LINE COLUMN) of FORM, when its position and the source text are known."
+  (let ((offset (and *cc-positions* form (gethash form *cc-positions*))))
+    (and offset *cc-source* (%cc-offset-line-column offset))))
 
 (defun %cc-fail (form control &rest args)
-  (error 'program-compile-error :detail (apply #'format nil control args) :form form :function *cc-function*))
+  (let* ((detail (apply #'format nil control args))
+         (message (let ((*print-gensym* nil) (*print-case* :downcase) (*print-length* 8) (*print-level* 4))
+                    (format nil "~A~@[ (in ~S)~]~@[ (function ~A)~]" detail form *cc-function*))))
+    (multiple-value-bind (line column) (%cc-line-column form)
+      (error 'program-compile-error :detail detail :form form :function *cc-function*
+                                     :message message :line line :column column
+                                     :file *cc-file* :source *cc-source*))))
 
 ;;; Names
 
@@ -125,9 +150,11 @@ cannot be a register alias or a generated label."
 (defun %cc-binary (op rhs)
   "Combine the accumulator, the left operand, with the value of RHS."
   (%cc-emit (list :push *cc-acc*))
+  (incf *cc-depth*)
   (%cc-expr rhs)
   (%cc-op :move *cc-temp* *cc-acc*)
   (%cc-emit (list :pop *cc-acc*))
+  (decf *cc-depth*)
   (%cc-op op *cc-acc* *cc-temp*))
 
 (defparameter *cc-operators*
@@ -251,11 +278,25 @@ cannot be a register alias or a generated label."
   (%cc-check-length form 3 3)
   (%cc-expr (second form))
   (%cc-emit (list :push *cc-acc*))
+  (incf *cc-depth*)
   (%cc-expr (third form))
   (%cc-op :move *cc-temp* *cc-acc*)
   (%cc-emit (list :pop *cc-acc*))
+  (decf *cc-depth*)
   (%cc-op :poke *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
+
+;; #363: an early return. Pending temporaries (each binary operator's left
+;; operand, or a POKE's address) sit on the stack above the frame's own
+;; locals, which (:return) cannot see -- pop them back off first, then leave
+;; the rest of the body's depth tracking (ITEMS-FRAME-DEPTH) where it was
+;; with (:depth n).
+(defun %cc-return (form)
+  (%cc-check-length form 1 2)
+  (if (second form) (%cc-expr (second form)) (%cc-const 0))
+  (dotimes (i *cc-depth*) (%cc-emit (list :pop *cc-temp*)))
+  (%cc-emit (list :return))
+  (when (plusp *cc-depth*) (%cc-emit (list :depth *cc-depth*))))
 
 (defun %cc-substitute-variables (tree form)
   "TREE with each (:VAR NAME) replaced by the operand or label of that variable."
@@ -299,7 +340,7 @@ cannot be a register alias or a generated label."
 (defparameter *cc-forms*
   '(("PROGN" . %cc-progn-form) ("IF" . %cc-if) ("WHILE" . %cc-while) ("AND" . %cc-and) ("OR" . %cc-or)
     ("NOT" . %cc-not) ("LET" . %cc-let) ("SET" . %cc-set) ("PEEK" . %cc-peek) ("POKE" . %cc-poke)
-    ("ASM" . %cc-asm)))
+    ("ASM" . %cc-asm) ("RETURN" . %cc-return)))
 
 (defun %cc-expr (form)
   (typecase form
@@ -324,7 +365,7 @@ cannot be a register alias or a generated label."
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
-           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0)
+           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0)
            (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                             (if (eq args :stack) 0 (length args)))))
       (loop for param in params
@@ -409,18 +450,21 @@ cannot be a register alias or a generated label."
             (t (%cc-fail form "expected (defun ...), (defvar ...) or (defconstant ...)"))))))
     (values (nreverse definitions) (nreverse globals))))
 
-(defun compile-program (forms &key backend)
+(defun compile-program (forms &key backend positions source file)
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and
 (defconstant ...) forms, for BACKEND. A stub at the start stores the
-globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR."
+globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR.
+POSITIONS, SOURCE and FILE, as READ-SOURCE and READ-SOURCE-FROM-STRING set
+them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
   (unless backend
     (%cc-fail nil "compiling needs a backend"))
   (let ((*cc-backend* (find-backend backend))
         (*cc-functions* (make-hash-table :test 'equal))
         (*cc-globals* (make-hash-table :test 'equal))
         (*cc-constants* (make-hash-table :test 'equal))
-        (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-out* '())
-        (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil))
+        (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '())
+        (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil)
+        (*cc-positions* positions) (*cc-source* source) (*cc-file* file))
     (%cc-registers)
     (multiple-value-bind (definitions globals) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
@@ -442,7 +486,8 @@ globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR."
 ;;; Source files
 
 (defun %source-fail (control &rest args)
-  (error 'program-compile-error :detail (apply #'format nil control args)))
+  (let ((detail (apply #'format nil control args)))
+    (error 'program-compile-error :detail detail :message detail)))
 
 (defun %parse-source (forms)
   "The ITEMS-PROGRAM whose items are FORMS, less a leading (:program (option...))."
@@ -453,17 +498,43 @@ globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR."
           program)
         (make-items-program :items forms))))
 
+(defun %read-source-forms (stream path)
+  "(VALUES FORMS POSITIONS) for STREAM, as READ-SOURCE and READ-SOURCE-FROM-
+STRING read it. POSITIONS maps each form to a character offset into the text
+STREAM reads from, for #362."
+  (let ((positions (make-hash-table :test 'eq)))
+    (values (read-restricted-forms stream #'%source-fail path :bare :uninterned :positions positions)
+            positions)))
+
+(defun %slurp-file (path)
+  "The text of the file PATH, read as characters (not bytes) so its length
+matches the character offsets a stream over it reports."
+  (with-open-file (in path)
+    (let* ((buffer (make-string (file-length in)))
+           (n (read-sequence buffer in)))
+      (subseq buffer 0 n))))
+
 (defun read-source-from-string (string)
   "The ITEMS-PROGRAM whose items are the source forms in STRING. The text is
 read without evaluation and without interning symbols."
   (with-input-from-string (in string)
-    (%parse-source (read-restricted-forms in #'%source-fail "source" :bare :uninterned))))
+    (multiple-value-bind (forms positions) (%read-source-forms in "source")
+      (let ((program (%parse-source forms)))
+        (setf (items-program-source program) string
+              (items-program-positions program) positions)
+        program))))
 
 (defun read-source (path)
   "The ITEMS-PROGRAM whose items are the source forms in the file PATH, less an
 optional leading (:program (option...)) as in a .lasm file."
-  (with-open-file (in path)
-    (%parse-source (read-restricted-forms in #'%source-fail path :bare :uninterned))))
+  (let ((text (%slurp-file path)))
+    (with-input-from-string (in text)
+      (multiple-value-bind (forms positions) (%read-source-forms in path)
+        (let ((program (%parse-source forms)))
+          (setf (items-program-source program) text
+                (items-program-file program) (namestring path)
+                (items-program-positions program) positions)
+          program)))))
 
 (defun compile-source (program &key backend)
   "An ITEMS-PROGRAM of the items that compile the source PROGRAM, with its
@@ -472,7 +543,11 @@ options. BACKEND overrides the program's."
     (unless backend
       (%source-fail "no backend: name one in (:program (:backend NAME)) or pass one"))
     (let ((compiled (copy-items-program program)))
-      (setf (items-program-items compiled) (compile-program (items-program-items program) :backend backend)
+      (setf (items-program-items compiled)
+            (compile-program (items-program-items program) :backend backend
+                              :positions (items-program-positions program)
+                              :source (items-program-source program)
+                              :file (items-program-file program))
             (items-program-backend compiled) backend)
       compiled)))
 

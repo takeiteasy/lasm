@@ -277,6 +277,9 @@
    #:items-program-origin
    #:items-program-memory
    #:items-program-lexer
+   #:items-program-source
+   #:items-program-file
+   #:items-program-positions
    #:items-error
    #:items-error-detail
    #:items-error-item

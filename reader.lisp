@@ -105,6 +105,24 @@ marker and exponent (capped at 10^12); NIL for anything else."
   (unwind-protect (call-next-method)
     (decf (client-depth client))))
 
+;;; Position tracking (#362): a second client, mixing in Eclector's
+;;; parse-result protocol, records where each cons or symbol started without
+;;; changing what is read -- MAKE-EXPRESSION-RESULT returns its RESULT
+;;; unchanged, so callers that don't ask for positions see plain data.
+
+(defvar *reader-positions* nil
+  "EQ hash table, form -> starting character offset, bound while reading
+under READ-RESTRICTED-FORMS' :POSITIONS.")
+
+(defclass restricted-position-client (restricted-client eclector.parse-result:parse-result-client) ())
+
+(defmethod eclector.parse-result:make-expression-result
+    ((client restricted-position-client) result children source)
+  (declare (ignore children))
+  (when (and *reader-positions* (or (consp result) (and (symbolp result) (not (keywordp result)))))
+    (setf (gethash result *reader-positions*) (car source)))
+  result)
+
 (defvar *restricted-readtable* nil)
 
 (defun %restricted-readtable ()
@@ -125,37 +143,46 @@ marker and exponent (capped at 10^12); NIL for anything else."
              (%reader-fail "~A is not allowed at ~D" char (file-position stream)))))
         (setf *restricted-readtable* table))))
 
-(defun %read-restricted (stream fail path bare function)
+(defun %read-restricted (stream fail path bare positions function)
   "Call FUNCTION with a thunk that reads the next form of STREAM, or returns
-its second argument's unique end marker, under the restricted reader's limits."
+its second argument's unique end marker, under the restricted reader's
+limits. POSITIONS, an EQ hash table or NIL, records each cons or symbol's
+starting character offset."
   (handler-case
       (with-standard-io-syntax
-        (let ((eclector.reader:*client* (make-instance 'restricted-client :fail fail :bare bare))
-              (eclector.readtable:*readtable* (%restricted-readtable))
-              (*read-eval* nil)
-              (eof (list nil)))
-          (funcall function (lambda () (eclector.reader:read stream nil eof)) eof)))
+        (let* ((client-class (if positions 'restricted-position-client 'restricted-client))
+               (eclector.reader:*client* (make-instance client-class :fail fail :bare bare))
+               (eclector.readtable:*readtable* (%restricted-readtable))
+               (*read-eval* nil)
+               (*reader-positions* positions)
+               (eof (list nil)))
+          (flet ((next () (if positions
+                              (eclector.parse-result:read eclector.reader:*client* stream nil eof)
+                              (eclector.reader:read stream nil eof))))
+            (declare (dynamic-extent #'next))
+            (funcall function #'next eof))))
     (lasm-error (e) (error e))
     (storage-condition () (funcall fail "~A: nested too deeply" path))
     (error (e) (funcall fail "~A: unreadable (~A)" path e))))
 
-(defun read-restricted-form (stream fail path &key (bare :keyword))
+(defun read-restricted-form (stream fail path &key (bare :keyword) positions)
   "The single form on STREAM, read without interning symbols, evaluating or
 building shared structure. FAIL, called with a format control and arguments,
 signals the caller's own condition for anything unreadable; conditions it
 signals pass through, and PATH names STREAM in messages. A symbol with no
 package prefix must already exist as a keyword, or with BARE :UNINTERNED is
-made fresh; a prefixed one must already exist."
-  (%read-restricted stream fail path bare
+made fresh; a prefixed one must already exist. POSITIONS is as in
+%READ-RESTRICTED."
+  (%read-restricted stream fail path bare positions
                     (lambda (next eof)
                       (let ((form (funcall next)))
                         (unless (eq (funcall next) eof)
                           (funcall fail "trailing data"))
                         (if (eq form eof) :eof form)))))
 
-(defun read-restricted-forms (stream fail path &key (bare :keyword))
+(defun read-restricted-forms (stream fail path &key (bare :keyword) positions)
   "Every form on STREAM, read as READ-RESTRICTED-FORM reads one."
-  (%read-restricted stream fail path bare
+  (%read-restricted stream fail path bare positions
                     (lambda (next eof)
                       (loop for form = (funcall next)
                             until (eq form eof)

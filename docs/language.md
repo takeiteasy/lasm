@@ -56,6 +56,7 @@ constant.
 | `(and E...)` `(or E...)` | The deciding value; stops at the first false, or true, one. |
 | `(not E)` | `1` if `E` is `0`, else `0`. |
 | `(peek ADDR)` `(poke ADDR V)` | The word at `ADDR`; `V`, stored there. |
+| `(return [E])` | Exits the function with `E`, or `0`; see [below](#return).[^return] |
 | `(F ARG...)` | A call to `defun` `F`. |
 | `(asm ITEM...)` | The accumulator; see [inline items](#inline-items). |
 
@@ -68,6 +69,17 @@ A value is true unless it is `0`.
 | `= /= < > <= >=` | Two operands; `1` or `0`. |
 
 Symbols are compared by name, ignoring case.
+
+## Return
+
+`(return [E])` exits the enclosing function with `E`'s value, or `0` with no
+`E`.
+
+```lisp
+(defun clamp (n limit)
+  (if (< n limit) (return n))
+  limit)
+```
 
 ## Inline items
 
@@ -116,10 +128,19 @@ alias or mnemonic. Two names that make the same label are a compile error.
 
 ## Errors
 
-`program-compile-error` carries the message, the form and the function:
-`unknown variable y (in (+ x y)) (function helper)`. A source file is read
-without evaluation, as [items files](items.md#lasm-files) are, so `'`, `#` syntax and
-unknown packages are errors.
+`program-compile-error` carries the message, the form and the function, and
+(from `read-source`/`read-source-from-string`) reports `FILE:LINE:COLUMN` with
+the source line and a caret, as an assembly error does:
+
+```
+fact.lsp:2:7: unknown variable y (in (+ x y)) (function helper)
+2 |   (+ x y))
+  |       ^
+```
+
+`compile-program` on plain forms has no position to report. A source file is
+read without evaluation, as [items files](items.md#lasm-files) are, so `'`,
+`#` syntax and unknown packages are errors.
 
 ## Functions
 
@@ -138,8 +159,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| Errors have no line or column. | [#362](https://todo.sr.ht/~takeiteasy/lasm/362) |
-| No early `return`. | [#363](https://todo.sr.ht/~takeiteasy/lasm/363) |
 | Code is naive: intermediates go through the stack. | [#364](https://todo.sr.ht/~takeiteasy/lasm/364) |
 | No function values or indirect calls. | [#365](https://todo.sr.ht/~takeiteasy/lasm/365) |
 | No arrays, strings or sub-word access. | [#366](https://todo.sr.ht/~takeiteasy/lasm/366) |
@@ -152,3 +171,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   evaluates each argument into its own frame slot, then passes those slots. A
   register argument is copied to a slot on entry, so the body never reads an
   argument register another call clobbers.
+
+[^return]: Pops any temporaries the compiler has pushed for an enclosing
+  operator or `poke` since the function's entry, so the stack is back at its
+  entry depth, then emits the function's ordinary exit.

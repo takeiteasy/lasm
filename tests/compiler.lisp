@@ -102,7 +102,13 @@
     ("(defun main () (/ 7 2) (mod 7 2) (+ (logand 12 10) (logior 12 10) (logxor 12 10) (shl 1 4) (shr 32 2)))" . 52)
     ("(defun main () (let ((x 9)) (asm (:op :const (reg a) 3) (:op :set (:var x) (reg a))) x))" . 3)
     ("(defun main () (/ 7 0))" . 0)
-    ("(defun main () (< (- 1) 2))" . 1))
+    ("(defun main () (< (- 1) 2))" . 1)
+    ("(defun main () (if (< 1 2) (return 5)) 9)" . 5)
+    ("(defun main () (+ 1 (return 5)))" . 5)
+    ("(defun main () (poke (return 3) 9))" . 3)
+    ("(defun f (n) (while (< n 5) (if (= n 2) (return 99)) (set n (+ n 1))) n)
+      (defun main () (f 0))" . 99)
+    ("(defun main () (return) 9)" . 0))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -236,6 +242,39 @@
 (fiveam:test a-compile-needs-a-backend
   (fiveam:signals program-compile-error (compile-program '((defun main () 1)))))
 
+;;; #363: (return [E])
+
+(fiveam:test return-is-a-built-in-form
+  (fiveam:is (search "return is a built-in form" (%cl-fail "(defun return () 1) (defun main () 1)"))))
+
+(fiveam:test return-is-malformed-with-two-values
+  (fiveam:is (search "return is malformed" (%cl-fail "(defun main () (return 1 2))"))))
+
+(fiveam:test return-leaves-a-recursive-call-balanced
+  (let ((m (%cl-run "(defun fact (n) (if (< n 2) (return 1)) (* n (fact (- n 1))))
+                      (defun main () (fact 5))"
+                    'callfoo-lang-abi)))
+    (fiveam:is (= 120 (%cv-a m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp)))))
+
+;;; #362: positioned compile errors
+
+(fiveam:test a-compile-error-reports-its-line-and-column
+  (let ((text (format nil "(defun helper (x y)~%  (+ x nope))~%~%(defun main () (helper 1 2))~%")))
+    (handler-case (compile-source (read-source-from-string
+                                   (concatenate 'string "(:program (:backend callfoo-lang-abi)) " text)))
+      (program-compile-error (c)
+        (fiveam:is (= 2 (lasm-syntax-error-line c)))
+        (fiveam:is (search "unknown variable nope" (diagnostic-text c)))
+        (fiveam:is (search "(+ x nope)" (diagnostic-text c)))
+        (fiveam:is (search "nope))" (diagnostic-text c)) "shows the source line")
+        (fiveam:is (search "^" (diagnostic-text c)) "shows a caret")))))
+
+(fiveam:test compile-program-on-raw-forms-has-no-position
+  (handler-case (compile-program '((defun main () (nope))) :backend 'callfoo-lang-abi)
+    (program-compile-error (c)
+      (fiveam:is (null (lasm-syntax-error-line c))))))
+
 (fiveam:test a-backend-checks-the-arity-of-the-language-operations
   (fiveam:signals backend-definition-error
     (eval '(defbackend cl-arity-abi (:machine callfoo) (ops (:const (a b c) (ldi a b)))))))
@@ -265,6 +304,15 @@
 
 (defun %cl-delete (path)
   (uiop:delete-file-if-exists path))
+
+(fiveam:test a-compile-error-from-a-file-names-the-file
+  (let ((path (%cl-source-file (format nil "(:program (:backend callfoo-lang-abi))~%(defun main () (nope))~%"))))
+    (unwind-protect
+        (handler-case (compile-source-file path)
+          (program-compile-error (c)
+            (fiveam:is (search (namestring path) (diagnostic-text c)))
+            (fiveam:is (= 2 (lasm-syntax-error-line c)))))
+      (%cl-delete path))))
 
 (fiveam:test assemble-source-file-runs-a-program
   (let ((path (%cl-source-file "(:program (:backend callfoo-lang-abi)) (defun main () (* 6 7))")))
