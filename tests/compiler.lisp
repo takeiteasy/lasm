@@ -12,8 +12,9 @@
 ;;; pointer. cl-up is a machine whose stack grows up.
 
 (defun %cl-lang-ops ()
-  (loop for (name params . forms) in (backend-descriptor-ops (find-backend 'callfoo-lang-abi))
-        unless (member name '("LOAD" "PUSH" "POP" "MOVE" "ALLOC" "FREE" "CALL" "RETURN") :test #'string=)
+  (loop for (name params kinds . forms) in (backend-descriptor-ops (find-backend 'callfoo-lang-abi))
+        unless (or (member name '("LOAD" "PUSH" "POP" "MOVE" "ALLOC" "FREE" "CALL" "RETURN") :test #'string=)
+                   (some #'identity kinds))
           collect (list* (intern name :keyword) (mapcar #'intern params) forms)))
 
 (eval `(defbackend cl-reg-abi (:extends callfoo-reg-abi)
@@ -123,7 +124,22 @@
       (defun main () (f 0))" . 42)
     ("(defun g (x) (+ x 1))
       (defun h (a b c) (+ (g a) (+ b c)))
-      (defun main () (h 10 20 30))" . 61))
+      (defun main () (h 10 20 30))" . 61)
+    ;; #365: function values and indirect calls.
+    ("(defun f (x) (+ x 1)) (defun main () (funcall (function f) 5))" . 6)
+    ("(defvar g 0) (defun f (x) (* x 2))
+      (defun main () (set g (function f)) (funcall g 21))" . 42)
+    ("(defun g () 100) (defun f (x) x) (defun main () (+ (g) (funcall (function f) 1)))" . 101)
+    ("(defun fact (n) (if (< n 2) 1 (* n (funcall (function fact) (- n 1)))))
+      (defun main () (fact 5))" . 120)
+    ;; #366: arrays, strings and byte access.
+    ("(defarray buf 4) (defun main () (aset buf 0 10) (aset buf 1 20) (+ (aref buf 0) (aref buf 1)))" . 30)
+    ("(defun double (x) (* x 2))
+      (defarray fns ((function double) (function double)))
+      (defun main () (funcall (aref fns 0) 21))" . 42)
+    ("(defstring msg \"hi\") (defun main () (+ (aref msg 0) (aref msg 1)))" . 209)
+    ("(defvar w 0) (defun main () (poke-byte w 5) (poke-byte (+ w 1) 9)
+      (+ (peek-byte w) (peek-byte (+ w 1))))" . 14))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -241,6 +257,17 @@
                          (assembly-cells (assemble-items (items-program-items again) :backend backend)))
                  "~A" backend))))
 
+(fiveam:test defarray-and-defstring-data-writes-and-reads-back-to-the-same-cells
+  (%cl-each-backend (backend machine)
+    (let* ((source "(defun f (x) x) (defarray fns ((function f))) (defstring s \"hi\")
+                    (defun main () (+ (funcall (aref fns 0) 1) (aref s 0)))")
+           (program (compile-source (read-source-from-string source) :backend backend))
+           (text (with-output-to-string (out) (write-items-program program out)))
+           (again (read-items-from-string text)))
+      (fiveam:is (equalp (assembly-cells (assemble-items (items-program-items program) :backend backend))
+                         (assembly-cells (assemble-items (items-program-items again) :backend backend)))
+                 "~A" backend))))
+
 (fiveam:test a-source-file-can-name-its-backend
   (let ((program (read-source-from-string "(:program (:backend callfoo-lang-abi :origin 4)) (defun main () 1)")))
     (fiveam:is (%same-name-p 'callfoo-lang-abi (items-program-backend program)))
@@ -273,7 +300,18 @@
                   ("(defun main () (1 2))" "expected (NAME ARG...)")
                   ("(print 1)" "expected (defun")
                   ("(defvar v x) (defun main () 1)" "expected (defvar NAME [INTEGER])")
-                  ("(defun a-b () 1) (defun az2dzb () 2) (defun main () 1)" "both make the label")))
+                  ("(defun a-b () 1) (defun az2dzb () 2) (defun main () 1)" "both make the label")
+                  ;; #365: function values and indirect calls.
+                  ("(defun main () (funcall (function nope) 1))" "unknown function nope")
+                  ("(defun f (a b) a) (defun main () (funcall (function f) 1))" "f takes 2 arguments, got 1")
+                  ("(defun funcall (x) x) (defun main () 1)" "funcall is a built-in form")
+                  ("(defun function (x) x) (defun main () 1)" "function is a built-in form")
+                  ;; #366: arrays, strings and byte access.
+                  ("(defarray buf 4) (defun main () (set buf 1))" "buf is an array or string")
+                  ("(defarray buf foo) (defun main () 1)" "expected (defarray NAME size)")
+                  ("(defvar buf 0) (defarray buf 4) (defun main () 1)" "buf is defined twice")
+                  ("(defstring s 5) (defun main () 1)" "expected (defstring NAME \"text\")")
+                  ("(defarray a (1 nope)) (defun main () 1)" "not a constant, a function or an array/string")))
     (destructuring-bind (source expected) case
       (let ((detail (%cl-fail source)))
         (fiveam:is (and detail (search expected detail)) "~A: ~A" source detail)))))
@@ -291,6 +329,10 @@
 (fiveam:test a-missing-backend-operation-names-the-operation-and-the-form
   (let ((detail (%cl-fail "(defun main () (- 1 2))" 'callfoo-abi)))
     (fiveam:is (and detail (search "needs the operation :halt" detail)))))
+
+(fiveam:test a-missing-peek-byte-op-names-the-form
+  (let ((detail (%cl-fail "(defun main () (peek-byte 5))" 'cl-up-abi)))
+    (fiveam:is (and detail (search "needs the operation :peek-byte" detail)))))
 
 (fiveam:test a-backend-without-a-temporary-register-is-rejected
   (eval '(defbackend cl-bare-abi (:machine callfoo)
@@ -393,6 +435,12 @@
 
 (fiveam:test cli-run-executes-a-source-program
   (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/fact.lsp"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped" out))))
+
+;; #365, #366: function values, arrays and strings, run through the CLI.
+(fiveam:test cli-run-executes-table-lsp
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/table.lsp"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped" out))))
 

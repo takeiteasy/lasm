@@ -75,6 +75,8 @@
        (:set (slot r) (stf slot r))
        (:peek (d a) (ldx (reg d) (ind a)))
        (:poke (a s) (stx (ind a) (reg s)))
+       (:peek-byte (d a) (ldb (reg d) (ind a)))
+       (:poke-byte (a s) (stb (ind a) (reg s)))
        (:jump (target) (jmp target))
        (:branch-zero (r target) (jz r target))
        (:halt () (hlt))

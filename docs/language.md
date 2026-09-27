@@ -35,10 +35,18 @@ A `.lsp` file holds top-level forms, in any order. A leading
 | `(defun NAME (PARAM...) BODY...)` | A function returning its last form's value. |
 | `(defvar NAME [INTEGER])` | A one-word global, `0` unless given. |
 | `(defconstant NAME INTEGER)` | A compile-time integer. |
+| `(defarray NAME SIZE)` | `SIZE` reserved, uninitialised cells. |
+| `(defarray NAME (VALUE...))` | Cells initialised to `VALUE...`, each an integer, `(function F)`, or another `defconstant`/`defarray`/`defstring` name. |
+| `(defstring NAME "TEXT")` | `TEXT`, one character a cell, `0`-terminated. |
 
 The program needs `(defun main () ...)`. The compiled program starts with a stub
 that stores the globals' initial values, calls `main` and halts; the runner sets
-the stack pointer.
+the stack pointer. `defarray` and `defstring` data is part of the image, not the
+stub, so it starts at those values every load.
+
+A `defarray`/`defstring` name is its address, always, unlike a `defvar`'s name,
+which is its value (peeked/poked through); it cannot be `set`. `(aref A I)`/
+`(aset A I V)` index either by cell, `I` from `0`.
 
 ## Expressions
 
@@ -56,7 +64,11 @@ constant.
 | `(and E...)` `(or E...)` | The deciding value; stops at the first false, or true, one. |
 | `(not E)` | `1` if `E` is `0`, else `0`. |
 | `(peek ADDR)` `(poke ADDR V)` | The word at `ADDR`; `V`, stored there. |
+| `(peek-byte ADDR)` `(poke-byte ADDR V)` | The byte at `ADDR`; `V`, stored there; see [below](#arrays-strings-and-byte-access). |
+| `(aref A I)` `(aset A I V)` | The cell at index `I` of array/string `A`; `V`, stored there. |
 | `(return [E])` | Exits the function with `E`, or `0`; see [below](#return).[^return] |
+| `(function F)` | `F`'s address, a value; see [below](#function-values). |
+| `(funcall E ARG...)` | Calls through `E`'s value; see [below](#function-values). |
 | `(F ARG...)` | A call to `defun` `F`. |
 | `(asm ITEM...)` | The accumulator; see [inline items](#inline-items). |
 
@@ -80,6 +92,49 @@ Symbols are compared by name, ignoring case.
   (if (< n limit) (return n))
   limit)
 ```
+
+## Function values
+
+`(function F)` is `F`'s address, a value like any other -- stored in a
+variable, put in a `defarray`, or called through. `(funcall E ARG...)` calls
+through `E`'s value: a literal `(function F)` compiles the same direct call
+`(F ARG...)` does, arity-checked at compile time; any other `E` computes a
+target checked only at the call.
+
+```lisp
+(defun add-one (x) (+ x 1))
+(defun double (x) (* x 2))
+(defarray ops ((function add-one) (function double)))
+
+(defun apply-op (index n) (funcall (aref ops index) n))
+```
+
+Needs the backend's `:call` to have a clause for a register target (#365,
+[backend requirements](#backend-requirements)).
+
+## Arrays, strings and byte access
+
+`(defarray NAME SIZE)` and `(defarray NAME (VALUE...))` declare an array;
+`(defstring NAME "TEXT")` a `0`-terminated string, one character a cell. Both
+are addressed data in the image, not a stub-initialised `defvar`: the name is
+always its address, and `(aref A I)`/`(aset A I V)` index a cell of it, `I`
+from `0`.
+
+```lisp
+(defstring greeting "hi")
+
+(defun sum (s len)
+  (let ((total 0) (i 0))
+    (while (< i len)
+      (set total (+ total (aref s i)))
+      (set i (+ i 1)))
+    total))
+```
+
+`(peek-byte ADDR)`/`(poke-byte ADDR V)` are the backend's optional
+`:peek-byte`/`:poke-byte`, byte-addressing `ADDR` as the machine defines it --
+for a machine whose registers are wider than its cells. Using one without the
+backend operation is a compile error naming the form.
 
 ## Inline items
 
@@ -113,6 +168,7 @@ for the forms a program uses. A missing one is a compile error naming the form.
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
 | `:peek (d a)` `:poke (a s)` | Memory at the address in a register. These take register names, so a template can put one in a bracket operand. |
+| `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` (#366). |
 | `:jump (target)` `:branch-zero (r target)` | Jump; jump when `r` is `0`. |
 | `:halt ()` | Stops the machine. |
 | `:add :sub :mul :div :mod :and :or :xor :shl :shr (d s)` | `d` = `d` op `s`. |
@@ -120,16 +176,20 @@ for the forms a program uses. A missing one is a compile error naming the form.
 
 It also defines the operations [call lowering](conventions.md#backend-operations)
 uses: `:push :pop :move :alloc :free :call :return`. `:push` and `:move` accept a
-frame slot as a source, which is how a call passes its arguments.
+frame slot as a source, which is how a call passes its arguments. `:call` needs
+an [operand-kind clause](backends.md#operand-kind-clauses) for a register
+target to compile `funcall` on a computed value (#365); one clause for the
+usual label call and another for a register are typical.
 
 [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) is a complete example;
 [`callfoo-lang-fp-abi`](../examples/cli/callfoo-fp.lisp) uses a frame pointer.
 
 ## Names
 
-A function `add-one` is the label `fnaddz2dzone`; a global is `gv...`, and control
-flow uses `lbl1`, `lbl2`. Every name is alphanumeric, so it cannot be a register
-alias or mnemonic. Two names that make the same label are a compile error.
+A function `add-one` is the label `fnaddz2dzone`; a global is `gv...`, an array
+`ar...`, a string `st...`, and control flow uses `lbl1`, `lbl2`. Every name is
+alphanumeric, so it cannot be a register alias or mnemonic. Two names that make
+the same label are a compile error.
 
 ## Errors
 
@@ -168,8 +228,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
 | No immediate-operand operations, so a constant right operand still loads into a register. | [#374](https://todo.sr.ht/~takeiteasy/lasm/374) |
 | `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
-| No function values or indirect calls. | [#365](https://todo.sr.ht/~takeiteasy/lasm/365) |
-| No arrays, strings or sub-word access. | [#366](https://todo.sr.ht/~takeiteasy/lasm/366) |
+| `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
+| `defstring` is one character a cell; no packed (several-per-cell) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
 | No macros. | [#367](https://todo.sr.ht/~takeiteasy/lasm/367) |
 | A word is one cell. | [#368](https://todo.sr.ht/~takeiteasy/lasm/368) |
 

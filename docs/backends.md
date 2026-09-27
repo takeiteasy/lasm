@@ -118,6 +118,24 @@ rejecting the operation. The operations call lowering emits cannot declare one.
 form is returned as written. A form's mnemonic
 must exist on the machine, and its operand kinds must be declared.
 
+### Operand-kind clauses
+
+Several clauses may share a NAME: a parameter may be `(NAME KIND)`, restricting
+it to an operand of that declared kind, and lowering tries the clauses in the
+order written, expanding the first whose arguments match.[^dispatch] This lets
+one operation template differently by what it is given -- a computed call
+target, a register, needs a different instruction than a label does.
+
+```lisp
+(ops (:call ((f reg)) (callr f))   ; a register target
+     (:call (f) (call f)))         ; a label
+```
+
+`(:call (reg a) ...)` (`items.md#convention-lowering`) expands the first
+clause; `(:call double ...)` the second. A single clause still reports a plain
+argument-count mismatch when called with the wrong number of arguments; with
+several, none matching is `items-malformed`.
+
 ### Labels
 
 A `(:label NAME)` form in a template defines a label of that operation. Each
@@ -143,11 +161,12 @@ number of parameters.
 
 ### Language operations
 
-The [source language](language.md) emits `:const :get :set :peek :poke :jump
-:branch-zero :halt`, the arithmetic operations `:add :sub :mul :div :mod :and :or
-:xor :shl :shr` and the comparisons `:eq :ne :lt :gt :le :ge`. Each has a fixed
-number of parameters, checked at definition, and a backend defines those its
-programs use.
+The [source language](language.md) emits `:const :get :set :peek :poke
+:peek-byte :poke-byte :jump :branch-zero :halt`, the arithmetic operations
+`:add :sub :mul :div :mod :and :or :xor :shl :shr` and the comparisons
+`:eq :ne :lt :gt :le :ge`. Each has a fixed number of parameters, checked at
+definition, and a backend defines those its programs use; `:peek-byte`/
+`:poke-byte` are needed only by `peek-byte`/`poke-byte` (#366).
 
 ## Branches
 
@@ -211,7 +230,7 @@ the child's machine.
 | --- | --- |
 | `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
 | `operands` | By kind. |
-| `ops` | By operation name. |
+| `ops` | By operation name: the child's clauses for a name replace all of the parent's for it, together (#365). |
 | `branches` `stack-writers` | The child's clause replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 
@@ -234,5 +253,11 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
+
+[^dispatch]: An untyped parameter position (`NAME`, no `KIND`) matches any
+  argument; a match needs the same number of arguments as the clause has
+  parameters, and each typed position's argument to be `(KIND value...)` of
+  that kind. `:extends` replaces a name's whole group of clauses with the
+  child's, at the parent's first clause of that name.
 
 [^writers]: The walk reads the instruction's own `set!`, `setf`, `push`, `pop` and `interrupt-return` forms, through macros, including those a `macrolet` in `semantics` or around the `definstruction` defines, with the `choice-case` clauses around each. A `macrolet` expander body can use the macros bound around it, but not its sibling macros. A `let` or `let*` variable bound to a `choice-case` carries that choice into the branches of an `if`, `when`, `unless`, `and` or `cond` testing it, a `choice-case` tested directly, or their `not`, `null`, `and` and `or`: the then branch of an `and` and the else branch of an `or` take the conditions of their operands, the other branches none. A clause that returns a literal decides the branch; a clause whose result is computed may return either, so it stays in both: the then branch excludes only the clauses that return nil, the else branch only those that return non-nil. A variable assigned anywhere in its scope, by `setq` or a macro expanding to an assignment, is not followed. Other conditions are not followed, so a write under one is unconditional ([#357](conventions.md#limitations)). When the operand syntax leaves several variants tied on width, such as zero-page and absolute, constant operands select the one the assembler picks; an operand with no value yet, such as a label, is judged by the variant a layout of the items chooses. `assemble-items` uses the assembler's, `items-size` its `:assume`, and `render-items` `:widest`. See the [limitations](conventions.md#limitations).

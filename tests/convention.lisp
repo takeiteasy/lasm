@@ -44,6 +44,9 @@
          :extra-ops ((:call (f) (callr f))))
 (%cv-abi cv-indirect-bare-abi :args (b c) :registers (:return (a) :caller-saved (b c))
          :extra-ops ((:call (f) (callr f))))
+;; #365: a register target and a label each pick their own :call clause.
+(%cv-abi cv-dispatch-abi :args (b c) :registers (:return (a) :scratch (a) :caller-saved (b c))
+         :extra-ops ((:call ((f reg)) (callr f)) (:call (f) (call f))))
 (%cv-abi cv-three-abi :args (b c d) :registers (:return (a) :scratch (a) :caller-saved (b c d)))
 
 (defmachine cv-up
@@ -327,6 +330,22 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
   (let ((text (render-items '((:call (reg d) (imm 5))) :backend 'cv-indirect-abi)))
     (fiveam:is (search "callr d" text))
     (fiveam:is (= 1 (%cv-count text "movv")))))
+
+;;; Register-target vs. label :call clauses (#365)
+
+(fiveam:test a-register-target-and-a-label-each-pick-their-own-call-clause
+  (let ((reg (render-items '((:call (reg d) (imm 5))) :backend 'cv-dispatch-abi))
+        (label (render-items '((:call f (imm 5)) (:function f (:args 1) (:return)))
+                             :backend 'cv-dispatch-abi)))
+    (fiveam:is (search "callr d" reg))
+    (fiveam:is (not (search "callr" label)))
+    (fiveam:is (search "call f" label))))
+
+(fiveam:test a-register-target-call-still-runs
+  (let ((m (%cv-run '((ldi (reg b) (imm f)) (:call (reg b) (imm 5)) (hlt)
+                      (:function f (:args 1) (movv (reg c) (reg b)) (:return)))
+                    'cv-dispatch-abi)))
+    (fiveam:is (= 5 (regref m 'r 2)))))
 
 (fiveam:test keep-saves-caller-saved-registers-around-a-call
   (let* ((items `((:call f (imm 1) (imm 2) (imm 3) :keep (b d)) (hlt) ,*cv-sum-function*))
