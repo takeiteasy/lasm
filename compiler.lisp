@@ -124,29 +124,86 @@ cannot be a register alias or a generated label."
           (and value (list :constant value)))
         (%cc-fail *cc-form* "unknown variable ~A" (%source-name symbol nil)))))
 
+;; A leaf (an integer or a variable name) loads straight into any register
+;; with :const/:get/:peek (#364), instead of always going through the
+;; accumulator and the stack.
+(defun %cc-leaf-p (form)
+  (or (integerp form) (%cc-name-p form)))
+
+(defun %cc-load-leaf (form register register-name)
+  "Load leaf FORM into REGISTER; REGISTER-NAME names it, for :peek."
+  (if (integerp form)
+      (%cc-op :const register form)
+      (let ((location (%cc-lookup form)))
+        (ecase (first location)
+          ((:local :arg) (%cc-op :get register location))
+          (:global (%cc-op :const register (second location))
+           (%cc-op :peek register-name register-name))
+          (:constant (%cc-op :const register (second location)))))))
+
 (defun %cc-variable (symbol)
-  (let ((location (%cc-lookup symbol)))
-    (ecase (first location)
-      ((:local :arg) (%cc-op :get *cc-acc* location))
-      (:global (%cc-op :const *cc-acc* (second location))
-       (%cc-op :peek *cc-acc-name* *cc-acc-name*))
-      (:constant (%cc-const (second location))))))
+  (%cc-load-leaf symbol *cc-acc* *cc-acc-name*))
 
 (defun %cc-progn (forms)
   (if forms
       (dolist (form forms) (%cc-expr form))
       (%cc-const 0)))
 
-;; TODO: every intermediate goes through the stack (#364); use direct operands and fewer pushes.
-(defun %cc-binary (op rhs)
-  "Combine the accumulator, the left operand, with the value of RHS."
-  (%cc-emit (list :push *cc-acc*))
-  (incf *cc-depth*)
-  (%cc-expr rhs)
-  (%cc-op :move *cc-temp* *cc-acc*)
-  (%cc-emit (list :pop *cc-acc*))
-  (decf *cc-depth*)
-  (%cc-op op *cc-acc* *cc-temp*))
+;; TODO: a non-leaf operand still goes through the stack, one push per
+;; operand; a register allocator over the backend's scratch registers would
+;; avoid it when one is free (#373).
+(defun %cc-to-temp (form)
+  "FORM's value into the temp register, leaving the accumulator as it is."
+  (if (%cc-leaf-p form)
+      (%cc-load-leaf form *cc-temp* *cc-temp-name*)
+      (progn (%cc-emit (list :push *cc-acc*))
+             (incf *cc-depth*)
+             (%cc-expr form)
+             (%cc-op :move *cc-temp* *cc-acc*)
+             (%cc-emit (list :pop *cc-acc*))
+             (decf *cc-depth*))))
+
+(defun %cc-value-to-temp (form)
+  "FORM's value into the temp register, when the accumulator holds nothing to keep."
+  (if (%cc-leaf-p form)
+      (%cc-load-leaf form *cc-temp* *cc-temp-name*)
+      (progn (%cc-expr form)
+             (%cc-op :move *cc-temp* *cc-acc*))))
+
+(defun %cc-affects-p (key tree)
+  "T when TREE, an operand's source form, might write KEY (a variable's
+%DESIGNATOR-NAME): a (set KEY ...), or any (asm ...), which can reach it
+through (:var KEY)."
+  (and (consp tree)
+       (let ((head (and (%cc-name-p (first tree)) (%designator-name (first tree)))))
+         (or (equal head "ASM")
+             (and (equal head "SET")
+                  (equal key (and (%cc-name-p (second tree)) (%designator-name (second tree)))))
+             (some (lambda (element) (%cc-affects-p key element)) tree)))))
+
+(defun %cc-swappable-p (left right)
+  "T when LEFT, an operator's left operand, can be loaded after RIGHT is
+evaluated: an integer or a constant always can; a local or argument can when
+RIGHT does not (set) it or reach it through an (asm ...) block. A global
+never swaps -- a call or poke in RIGHT could change it."
+  (or (integerp left)
+      (and (%cc-name-p left)
+           (let ((location (%cc-lookup left)))
+             (case (first location)
+               (:constant t)
+               ((:local :arg) (not (%cc-affects-p (%designator-name left) right)))
+               (t nil))))))
+
+(defun %cc-operands (left right)
+  "Compile LEFT into the accumulator and RIGHT into the temp register, in
+whichever order avoids the stack (#364): RIGHT first, when LEFT is safe to
+load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
+  (if (and (not (%cc-leaf-p right)) (%cc-swappable-p left right))
+      (progn (%cc-expr right)
+             (%cc-op :move *cc-temp* *cc-acc*)
+             (%cc-load-leaf left *cc-acc* *cc-acc-name*))
+      (progn (%cc-expr left)
+             (%cc-to-temp right))))
 
 (defparameter *cc-operators*
   '(("+" :add 2 nil) ("-" :sub 1 nil) ("*" :mul 2 nil) ("/" :div 2 2) ("MOD" :mod 2 2)
@@ -161,19 +218,17 @@ cannot be a register alias or a generated label."
         (%cc-fail form "~(~A~) takes ~D~@[ to ~D~] operand~:P, got ~D"
                   name least (and most (/= most least) most) (length args)))
       (cond ((and (eq op :sub) (null (rest args)))
-             (%cc-expr (first args))
-             (%cc-op :move *cc-temp* *cc-acc*)
-             (%cc-const 0)
+             (%cc-operands 0 (first args))
              (%cc-op :sub *cc-acc* *cc-temp*))
-            (t (%cc-expr (first args))
-               (dolist (arg (rest args))
-                 (%cc-binary op arg)))))))
+            (t (%cc-operands (first args) (second args))
+               (%cc-op op *cc-acc* *cc-temp*)
+               (dolist (arg (cddr args))
+                 (%cc-to-temp arg)
+                 (%cc-op op *cc-acc* *cc-temp*)))))))
 
 (defun %cc-not (form)
   (%cc-check-length form 2 2)
-  (%cc-expr (second form))
-  (%cc-op :move *cc-temp* *cc-acc*)
-  (%cc-const 0)
+  (%cc-operands 0 (second form))
   (%cc-op :eq *cc-acc* *cc-temp*))
 
 (defun %cc-check-length (form least most)
@@ -251,10 +306,10 @@ cannot be a register alias or a generated label."
 (defun %cc-set (form)
   (%cc-check-length form 3 3)
   (let ((location (%cc-lookup (second form))))
-    (%cc-expr (third form))
     (ecase (first location)
-      ((:local :arg) (%cc-op :set location *cc-acc*))
-      (:global (%cc-op :move *cc-temp* *cc-acc*)
+      ((:local :arg) (%cc-expr (third form))
+       (%cc-op :set location *cc-acc*))
+      (:global (%cc-value-to-temp (third form))
        (%cc-op :const *cc-acc* (second location))
        (%cc-op :poke *cc-acc-name* *cc-temp-name*)
        (%cc-op :move *cc-acc* *cc-temp*))
@@ -267,13 +322,7 @@ cannot be a register alias or a generated label."
 
 (defun %cc-poke (form)
   (%cc-check-length form 3 3)
-  (%cc-expr (second form))
-  (%cc-emit (list :push *cc-acc*))
-  (incf *cc-depth*)
-  (%cc-expr (third form))
-  (%cc-op :move *cc-temp* *cc-acc*)
-  (%cc-emit (list :pop *cc-acc*))
-  (decf *cc-depth*)
+  (%cc-operands (second form) (third form))
   (%cc-op :poke *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
 

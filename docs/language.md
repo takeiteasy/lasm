@@ -159,18 +159,25 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| Code is naive: intermediates go through the stack. | [#364](https://todo.sr.ht/~takeiteasy/lasm/364) |
+| No register allocation: a non-leaf right operand still goes through the stack. | [#373](https://todo.sr.ht/~takeiteasy/lasm/373) |
+| No immediate-operand operations, so a constant right operand still loads into a register. | [#374](https://todo.sr.ht/~takeiteasy/lasm/374) |
+| `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
 | No function values or indirect calls. | [#365](https://todo.sr.ht/~takeiteasy/lasm/365) |
 | No arrays, strings or sub-word access. | [#366](https://todo.sr.ht/~takeiteasy/lasm/366) |
 | No macros. | [#367](https://todo.sr.ht/~takeiteasy/lasm/367) |
 | A word is one cell. | [#368](https://todo.sr.ht/~takeiteasy/lasm/368) |
 
-[^codegen]: A binary operator compiles its left operand, pushes the accumulator,
-  compiles the right operand into the accumulator, moves it to the temporary
-  register, pops the left operand back and applies the operation. A call
-  evaluates each argument into its own frame slot, then passes those slots. A
-  register argument is copied to a slot on entry, so the body never reads an
-  argument register another call clobbers.
+[^codegen]: A binary operator's operands go into the accumulator and the
+  temporary register in whichever order avoids the stack (#364): a leaf (an
+  integer, or a parameter, `let` variable, global or constant) loads directly
+  with `:const`/`:get`/`:peek`, and when the right operand is not a leaf but
+  the left is an integer, a constant, or a local the right cannot change, the
+  right is compiled first and the left loads afterwards. Otherwise the left
+  operand is pushed, the right compiled into the accumulator and moved to the
+  temporary register, and the left popped back. A call evaluates each
+  argument into its own frame slot, then passes those slots. A register
+  argument is copied to a slot on entry, so the body never reads an argument
+  register another call clobbers.
 
 [^return]: Pops any temporaries the compiler has pushed for an enclosing
   operator or `poke` since the function's entry, so the stack is back at its

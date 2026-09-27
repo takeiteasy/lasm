@@ -108,7 +108,15 @@
     ("(defun main () (poke (return 3) 9))" . 3)
     ("(defun f (n) (while (< n 5) (if (= n 2) (return 99)) (set n (+ n 1))) n)
       (defun main () (f 0))" . 99)
-    ("(defun main () (return) 9)" . 0))
+    ("(defun main () (return) 9)" . 0)
+    ;; #364: direct operands and reordering, not always the stack.
+    ("(defun f (x) (let ((y 3)) (+ (* x y) (- x) (- y 1)))) (defun main () (f 5))" . 12)
+    ("(defun main () (let ((x 1)) (+ x (set x 5))))" . 6)
+    ("(defvar g 1) (defun bump () (set g 10)) (defun main () (+ g (bump)))" . 11)
+    ("(defun main () (let ((x 1)) (+ x (progn (asm (:op :const (reg a) 3) (:op :set (:var x) (reg a))) 0))))" . 1)
+    ("(defconstant k 5) (defun main () (- k (+ 1 1)))" . 3)
+    ("(defvar g 0) (defun main () (set g 7) (poke 210 g) (+ (peek 210) g))" . 14)
+    ("(defun main () (poke 220 (+ 1 2)) (not (peek 220)))" . 0))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -161,6 +169,26 @@
   (let ((items (%cl-compile "(defun main () 1)" 'callfoo-lang-abi)))
     (fiveam:is (equal '(:call :op) (mapcar #'first (subseq items 0 2))))
     (fiveam:is (equal '(:op :halt) (list (first (second items)) (second (second items)))))))
+
+;;; #364: direct operands, not always the stack
+
+(defun %cl-push-count (items)
+  "How many (:push ...) items ITEMS, compiled output, contains."
+  (cond ((and (consp items) (eq :push (first items))) 1)
+        ((consp items) (reduce #'+ (mapcar #'%cl-push-count items) :initial-value 0))
+        (t 0)))
+
+(fiveam:test simple-operands-do-not-go-through-the-stack
+  (%cl-each-backend (backend machine)
+    machine
+    (dolist (source '("(defun f (n) (+ (* n 2) n)) (defun main () (f 4))"
+                       "(defun g (n) (+ n 1)) (defun f (n) (* n (g n))) (defun main () (f 4))"
+                       "(defconstant k 5) (defun main () (- k (+ 1 1)))"))
+      (fiveam:is (zerop (%cl-push-count (%cl-compile source backend))) "~A on ~A" source backend))))
+
+(fiveam:test a-complex-right-operand-still-uses-the-stack
+  (fiveam:is (= 1 (%cl-push-count (%cl-compile "(defun f (n) n) (defun main () (+ (f 1) (f 2)))"
+                                               'callfoo-lang-abi)))))
 
 (fiveam:test function-items-declare-their-arguments-and-locals
   (let ((function (find-if (lambda (item) (eq :function (first item)))
