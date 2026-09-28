@@ -172,6 +172,10 @@ The [source language](language.md) emits `:const :get :set :peek :poke
 definition, and a backend defines those its programs use; `:peek-byte`/
 `:poke-byte` are needed only by `peek-byte`/`poke-byte` (#366).
 
+Each arithmetic and comparison operation may also have an `-imm` and a `-slot`
+variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler
+uses [when the right operand allows](language.md#backend-requirements).
+
 ## Branches
 
 `(branches call jz br)` lists the instructions whose operands are branch

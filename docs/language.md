@@ -267,6 +267,21 @@ for the forms a program uses. A missing one is a compile error naming the form.
 | `:halt ()` | Stops the machine. |
 | `:add :sub :mul :div :mod :and :or :xor :shl :shr (d s)` | `d` = `d` op `s`. |
 | `:eq :ne :lt :gt :le :ge (d s)` | `d` = `1` or `0`. |
+| `:add-imm (d v)` `:add-slot (d slot)`, and the same for every operation above | Optional: `d` = `d` op an integer or label, or op a frame slot. |
+
+An operator whose right operand is a constant, array or `(function F)` uses
+the `-imm` variant, and one whose right operand is a parameter or `let`
+variable uses the `-slot` variant, when the backend defines it. Any other
+operand, or a backend without the variant, loads the operand into a register
+first.[^variants]
+
+```lisp
+(ops (:add (d s) (add d s))
+     (:add-imm (d v) (addri d (imm v)))
+     (:add-slot (d slot) (addrs d slot)))
+;; (+ x 1)  ->  :get a x, :add-imm a 1
+;; (+ x y)  ->  :get a x, :add-slot a y
+```
 
 It also defines the operations [call lowering](conventions.md#backend-operations)
 uses: `:push :pop :move :alloc :free :call :return`. `:push` and `:move` accept a
@@ -322,7 +337,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | A register `%CC-TAKE` picks from the callee-saved pool for a single call site costs a save/restore even when the stack would have been as cheap. | [#376](https://todo.sr.ht/~takeiteasy/lasm/376) |
 | An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
-| No immediate-operand operations, so a constant right operand still loads into a register. | [#374](https://todo.sr.ht/~takeiteasy/lasm/374) |
+| A constant or variable *left* operand never uses an immediate or slot variant, even for a commutative operator. | [#388](https://todo.sr.ht/~takeiteasy/lasm/388) |
 | `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
@@ -346,6 +361,13 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   directly. A call evaluates each argument into its own frame slot, then
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
+
+[^variants]: `not` compares with `:eq-imm 0`. A global is not a slot, and reads
+  through `:peek`, so it loads first. The variants take the same operand a
+  load would: `:add-slot`'s `slot` is the operand `:get` takes, and
+  `:add-imm`'s `v` is the one `:const` takes. The example backend
+  [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines them for `:add`,
+  `:sub`, `:eq` and `:lt` only; `:mul` and the rest load first.
 
 [^macros]: A fresh `let` name or `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`

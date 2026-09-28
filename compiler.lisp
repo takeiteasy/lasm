@@ -27,6 +27,10 @@
 ;;;; A DEFVAR is *CC-WORD-CELLS* cells (.res); DEFARRAY indexes and sizes by
 ;;;; it, and (aref A I)/(aset A I V) step a word, not a cell.
 ;;;;
+;;;; #374: a binary operator's right operand that is a leaf goes straight into
+;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
+;;;; operation when it defines one, instead of loading into the temp register.
+;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
 ;;;; #367, #380: a defmacro call, in an expression or at top level, is
@@ -140,9 +144,12 @@ cannot be a register alias or a generated label."
 (defun %cc-emit (item)
   (cl:push item *cc-out*))
 
+(defun %cc-op-p (name)
+  (assoc (string name) (backend-descriptor-ops *cc-backend*) :test #'string=))
+
 (defun %cc-op (name &rest args)
   "Emit the backend operation NAME, which must exist."
-  (unless (assoc (string name) (backend-descriptor-ops *cc-backend*) :test #'string=)
+  (unless (%cc-op-p name)
     (%cc-fail *cc-form* "the backend ~A needs the operation ~(~S~)"
               (backend-descriptor-name *cc-backend*) name))
   (%cc-emit (list* :op name args)))
@@ -335,6 +342,31 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
     ("=" :eq 2 2) ("/=" :ne 2 2) ("<" :lt 2 2) (">" :gt 2 2) ("<=" :le 2 2) (">=" :ge 2 2))
   "Operator name, the backend operation, and the fewest and most operands.")
 
+(defun %cc-direct (op form)
+  "(VARIANT ARGUMENT) when the leaf FORM, an operator's right operand, can go
+straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
+  (flet ((variant (suffix)
+           (let ((name (intern (format nil "~A-~A" op suffix) :keyword)))
+             (and (%cc-op-p name) name))))
+    (cond ((integerp form)
+           (let ((name (variant "IMM"))) (and name (list name form))))
+          ((%cc-function-form-p form)
+           (%cc-check-length form 2 2)
+           (let ((name (variant "IMM"))) (and name (list name (%cc-function-label form)))))
+          ((%cc-name-p form)
+           (let ((location (%cc-lookup form)))
+             (ecase (first location)
+               ((:local :arg) (let ((name (variant "SLOT"))) (and name (list name location))))
+               ((:constant :address) (let ((name (variant "IMM"))) (and name (list name (second location)))))
+               (:global nil)))))))
+
+(defun %cc-apply (op form)
+  "The accumulator OP FORM, into the accumulator."
+  (let ((direct (%cc-direct op form)))
+    (cond (direct (apply #'%cc-op (first direct) *cc-acc* (rest direct)))
+          (t (%cc-to-temp form)
+             (%cc-op op *cc-acc* *cc-temp*)))))
+
 (defun %cc-operator (entry form)
   (destructuring-bind (name op least most) entry
     (let ((args (rest form)))
@@ -344,16 +376,21 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
       (cond ((and (eq op :sub) (null (rest args)))
              (%cc-operands 0 (first args))
              (%cc-op :sub *cc-acc* *cc-temp*))
+            ((%cc-direct op (second args))
+             (%cc-expr (first args))
+             (%cc-apply op (second args)))
             (t (%cc-operands (first args) (second args))
-               (%cc-op op *cc-acc* *cc-temp*)
-               (dolist (arg (cddr args))
-                 (%cc-to-temp arg)
-                 (%cc-op op *cc-acc* *cc-temp*)))))))
+               (%cc-op op *cc-acc* *cc-temp*)))
+      (dolist (arg (cddr args))
+        (%cc-apply op arg)))))
 
 (defun %cc-not (form)
   (%cc-check-length form 2 2)
-  (%cc-operands 0 (second form))
-  (%cc-op :eq *cc-acc* *cc-temp*))
+  (if (%cc-direct :eq 0)
+      (progn (%cc-expr (second form))
+             (%cc-apply :eq 0))
+      (progn (%cc-operands 0 (second form))
+             (%cc-op :eq *cc-acc* *cc-temp*))))
 
 (defun %cc-check-length (form least most)
   (unless (and (listp (cdr form)) (null (cdr (last form)))

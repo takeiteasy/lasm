@@ -174,6 +174,34 @@
 (defarith sle 82 (if (<= sx sy) 1 0))
 (defarith sge 83 (if (>= sx sy) 1 0))
 
+;; #374: the same operations with an immediate or a stack slot as the source,
+;; for the language compiler's optional :OP-imm and :OP-slot operations.
+(defmacro defarith-variant (mnemonic mode opcode operand-name source expression)
+  `(definstruction callfoo ,mnemonic (modes ,mode)
+     (encoding (opcode ,opcode) (operand dst :width 1) (operand ,operand-name :width 1))
+     (semantics
+       (let* ((x (r dst)) (y ,source)
+              (sx (if (>= x 32768) (- x 65536) x))
+              (sy (if (>= y 32768) (- y 65536) y)))
+         (declare (ignorable sx sy))
+         (set! (r dst) (wrap-value ,expression 16))))))
+
+(defmacro defarith-ri (mnemonic opcode expression)
+  `(defarith-variant ,mnemonic call-ri ,opcode value value ,expression))
+
+(defmacro defarith-rs (mnemonic opcode expression)
+  `(defarith-variant ,mnemonic call-rs ,opcode offset
+                     (mref machine 'ram (wrap-value (+ sp offset) 16)) ,expression))
+
+(defarith-ri addri 100 (+ x y))
+(defarith-rs addrs 101 (+ x y))
+(defarith-ri subri 102 (- x y))
+(defarith-rs subrs 103 (- x y))
+(defarith-ri seqri 104 (if (= x y) 1 0))
+(defarith-rs seqrs 105 (if (= x y) 1 0))
+(defarith-ri sltri 106 (if (< sx sy) 1 0))
+(defarith-rs sltrs 107 (if (< sx sy) 1 0))
+
 ;; Arguments go on the stack right to left and the caller removes them; a
 ;; function finds its first argument above the return address.
 (defbackend callfoo-abi (:machine callfoo)
@@ -221,6 +249,14 @@
   (ops (:const (r v) (ldi r (imm v)))
        (:get (r slot) (lds r slot))
        (:set (slot r) (sts slot r))
+       (:add-imm (d v) (addri d (imm v)))
+       (:add-slot (d slot) (addrs d slot))
+       (:sub-imm (d v) (subri d (imm v)))
+       (:sub-slot (d slot) (subrs d slot))
+       (:eq-imm (d v) (seqri d (imm v)))
+       (:eq-slot (d slot) (seqrs d slot))
+       (:lt-imm (d v) (sltri d (imm v)))
+       (:lt-slot (d slot) (sltrs d slot))
        (:peek (d a) (ldx (reg d) (ind a)))
        (:poke (a s) (stx (ind a) (reg s)))
        (:peek-byte (d a) (ldb (reg d) (ind a)))

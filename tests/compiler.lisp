@@ -253,6 +253,69 @@
                        "(defconstant k 5) (defun main () (- k (+ 1 1)))"))
       (fiveam:is (zerop (%cl-push-count (%cl-compile source backend))) "~A on ~A" source backend))))
 
+;;; #374: immediate and slot variants of an operation
+
+(defun %cl-op-names (items)
+  "The names of the (:op NAME ...) items in ITEMS, compiled output, in order."
+  (cond ((and (consp items) (eq :op (first items))) (list (%designator-name (second items))))
+        ((consp items) (mapcan #'%cl-op-names (copy-list items)))
+        (t '())))
+
+(fiveam:test a-leaf-right-operand-uses-the-imm-and-slot-variants-a-backend-defines
+  (let ((ops (%cl-op-names (%cl-compile "(defconstant k 2)
+                                         (defun f (x y) (< (+ (- x k) 1) (+ x y)))
+                                         (defun main () (f 5 6))"
+                                        'callfoo-lang-abi))))
+    (dolist (name '("SUB-IMM" "ADD-IMM" "ADD-SLOT" "LT"))
+      (fiveam:is (member name ops :test #'string=) "~A is used" name))
+    (fiveam:is (notany (lambda (name) (member name '("SUB" "ADD") :test #'string=)) ops))))
+
+(fiveam:test a-backend-without-variants-loads-the-operand-as-before
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (x) (+ x 1)) (defun main () (f 5))" 'callfoo-lang-fp-abi))))
+    (fiveam:is (member "ADD" ops :test #'string=))
+    (fiveam:is (notany (lambda (name) (search "-IMM" name)) ops))
+    (fiveam:is (notany (lambda (name) (search "-SLOT" name)) ops))))
+
+(fiveam:test an-operation-without-a-variant-falls-back-on-a-backend-that-has-others
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (x) (* x 3)) (defun main () (f 5))" 'callfoo-lang-abi))))
+    (fiveam:is (member "MUL" ops :test #'string=))
+    (fiveam:is (member "CONST" ops :test #'string=))))
+
+(fiveam:test a-global-right-operand-does-not-use-a-variant
+  (let ((ops (%cl-op-names (%cl-compile "(defvar g 4) (defun main () (+ 10 g))" 'callfoo-lang-abi))))
+    (fiveam:is (member "ADD" ops :test #'string=))
+    (fiveam:is (notany (lambda (name) (search "-IMM" name)) ops))))
+
+(fiveam:test not-compares-with-an-immediate-zero
+  (fiveam:is (member "EQ-IMM" (%cl-op-names (%cl-compile "(defun main () (not 3))" 'callfoo-lang-abi))
+                     :test #'string=)))
+
+(defparameter +cl-variant-programs+
+  '(("(defun f (x) (+ (- x 2) 1)) (defun main () (f 5))" . 4)
+    ("(defun f (x y) (= x y)) (defun main () (+ (f 3 3) (f 3 4)))" . 1)
+    ("(defun f (x y) (< x y)) (defun main () (+ (f 3 4) (f 4 3) (f 3 3)))" . 1)
+    ("(defun main () (+ 1 2 3 4))" . 10)
+    ("(defun f (a b) (+ a 1 b 2)) (defun main () (f 10 20))" . 33)
+    ("(defun f (a b c d) (- a b c d)) (defun main () (f 20 1 2 3))" . 14)
+    ("(defun f (x) (not x)) (defun main () (+ (f 0) (f 5)))" . 1)
+    ("(defvar g 4) (defun main () (+ 10 g))" . 14)
+    ("(defarray tbl (1 2 3)) (defun main () (- (+ tbl 1) tbl))" . 1)
+    ("(defun f () 1) (defun main () (= (function f) (function f)))" . 1)
+    ("(defun main () (let ((x 1)) (+ (set x 5) x)))" . 10)
+    ("(defun f (a b c d e) (+ (- a b) (* c d) e)) (defun main () (f 9 2 3 4 5))" . 24)
+    ("(defun main () (- 0 3))" . 65533))
+  "Programs whose values the variants must not change; every backend runs them.")
+
+(fiveam:test variants-and-fallbacks-compute-the-same-values
+  (%cl-each-backend (backend machine)
+    (loop for (source . expected) in +cl-variant-programs+
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend machine))) "~A on ~A" source backend))))
+
+(fiveam:test a-variant-operation-has-its-arity-checked
+  (dolist (name '(:add-imm :lt-slot))
+    (fiveam:signals backend-definition-error
+      (eval `(defbackend cl-variant-arity-abi (:machine callfoo) (ops (,name (a b c) (ldi a b))))))))
+
 ;;; #373: a register, not always the stack, holds a left operand
 
 (defun %cl-function-options (items name)

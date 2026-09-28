@@ -291,13 +291,18 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
     ("ENTER" . 0) ("LEAVE" . 0))
   "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 
+(defparameter +backend-binary-ops+
+  '("ADD" "SUB" "MUL" "DIV" "MOD" "AND" "OR" "XOR" "SHL" "SHR" "EQ" "NE" "LT" "GT" "LE" "GE")
+  "The arithmetic and comparison operations; each may have -IMM and -SLOT variants (#374).")
+
 (defparameter +backend-language-op-arities+
-  '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
-    ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2)
-    ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0)
-    ("ADD" . 2) ("SUB" . 2) ("MUL" . 2) ("DIV" . 2) ("MOD" . 2)
-    ("AND" . 2) ("OR" . 2) ("XOR" . 2) ("SHL" . 2) ("SHR" . 2)
-    ("EQ" . 2) ("NE" . 2) ("LT" . 2) ("GT" . 2) ("LE" . 2) ("GE" . 2))
+  (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
+            ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2)
+            ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0))
+          (loop for name in +backend-binary-ops+
+                collect (cons name 2)
+                collect (cons (concatenate 'string name "-IMM") 2)
+                collect (cons (concatenate 'string name "-SLOT") 2)))
   "Operations that the language compiler (compiler.lisp) emits, with their parameter counts.")
 
 (defun %parse-op-effects (key names forms)
