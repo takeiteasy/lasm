@@ -87,7 +87,7 @@ The spec is the block comment at the top of `examples/chip8/chip8.lsp`.
 | File | Holds |
 | --- | --- |
 | `package.lisp` | A package that only `use`s `#:lasm`. |
-| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 8-bit registers and cells, [register pairs](register-pairs.md) for 16-bit words, [static frames](static-frames.md), byte access, and the [operations the language needs](language.md#backend-requirements). |
+| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 8-bit registers and cells, [register pairs](register-pairs.md) for 16-bit words, [static frames](static-frames.md), byte access, compare-and-branch, and the [operations the language needs](language.md#backend-requirements). |
 | `chip8.lsp` | The interpreter: [`defarray`](language.md#arrays-strings-and-byte-access) memory and display, one byte a host cell, [macros](language.md#macros), and a table of [function values](language.md#function-values) indexed by opcode. |
 | `chip8.lisp` | Compiles `chip8.lsp` with `assemble-source-file`, loads a ROM and reads the state back. |
 | `test.lisp` | A FiveAM suite: a small ROM for each group of instructions, and one that asserts registers, memory and display together. |

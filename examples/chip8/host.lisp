@@ -175,6 +175,19 @@
 (defsetter setlt 24 (/= nf vf))
 (defsetter setge 25 (= nf vf))
 
+;;; Jump on the flags a CP/CPC pair leaves, as a signed comparison of words.
+(defmacro defbranch (mnemonic opcode condition)
+  `(definstruction host ,mnemonic (modes h-addr)
+     (encoding (opcode ,opcode) (operand :mode))
+     (semantics (when ,condition (set! pc operand)))))
+
+(defbranch breq 12 (= zf 1))
+(defbranch brne 13 (= zf 0))
+(defbranch brlt 14 (/= nf vf))
+(defbranch brge 15 (= nf vf))
+(defbranch brgt 34 (and (= zf 0) (= nf vf)))
+(defbranch brle 35 (or (= zf 1) (/= nf vf)))
+
 (defmacro defbitwise (mnemonic opcode function)
   `(progn
      (definstruction host ,mnemonic (modes h-rr)
@@ -216,9 +229,6 @@
 ;;; the callee's static frame, and `:call` has a clause for a register target,
 ;;; which is how `funcall` on a computed function value compiles.
 ;;; See docs/backends.md.
-;;; Adding the optional :branch-* operations would let a comparison in an `if`
-;;; jump directly instead of computing 1 or 0 and testing it, making the
-;;; compiled interpreter smaller and faster.
 (defbackend host-lang (:machine host)
   (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
@@ -259,6 +269,18 @@
                 (seteq (:lo d)) (ldi (:hi d) (imm 0)))
        (:lt-imm (d v) (cpi (:lo d) (imm (:lo v))) (cpci (:hi d) (imm (:hi v)))
                 (setlt (:lo d)) (ldi (:hi d) (imm 0)))
+       (:branch-eq (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (breq target))
+       (:branch-ne (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (brne target))
+       (:branch-lt (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (brlt target))
+       (:branch-gt (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (brgt target))
+       (:branch-le (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (brle target))
+       (:branch-ge (a b target) (cp (:lo a) (:lo b)) (cpc (:hi a) (:hi b)) (brge target))
+       (:branch-eq-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (breq target))
+       (:branch-ne-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (brne target))
+       (:branch-lt-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (brlt target))
+       (:branch-gt-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (brgt target))
+       (:branch-le-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (brle target))
+       (:branch-ge-imm (a v target) (cpi (:lo a) (imm (:lo v))) (cpci (:hi a) (imm (:hi v))) (brge target))
        (:call ((f reg)) (callr (:hi f) (:lo f)))
        (:call (f) (call f))
        (:return () (ret))))
