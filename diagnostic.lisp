@@ -359,30 +359,73 @@ all (a bare (operand :width n) M1-style encoding), since :STRICT lives on a
 MODE-DESCRIPTOR.")
 
 ;; The definers match their clause heads by symbol identity. Rewriting each
-;; head to its lasm symbol lets a machine be defined from any package;
-;; SEMANTICS and CYCLES bodies are user code and stay untouched.
+;; head to its lasm symbol lets a machine be defined from any package. Only
+;; heads are rewritten: mode names, choice keys, option values and SEMANTICS
+;; and CYCLES bodies stay the user's own.
 (defparameter *dsl-clause-heads*
   (let ((table (make-hash-table :test #'equal)))
     (dolist (head '(register stack memory flags instruction-word clock-speed reset-pc device
                     stack-pointer interrupts undefined-opcode properties privilege idle
                     without-instructions instruction-cycles without-storage without-devices
                     region field layout extra-word-order
-                    modes encoding semantics cycles opcode operand field-value for-choice sub-opcode fallback
-                    variant choice sub holes range extra-word)
+                    modes encoding semantics cycles opcode operand field-value for-choice
+                    sub-opcode fallback variant choice sub holes range extra-word
+                    comment-styles number-formats label-suffix local-label-prefix string-delim
+                    ident-chars line-continuation mode-suffix-separator hole-prefix-separator
+                    function-operators location-counter)
                     table)
       (setf (gethash (symbol-name head) table) head))))
 
-(defun %dsl-form (form)
-  "FORM with every clause head naming a DSL keyword replaced by lasm's symbol."
-  (if (atom form)
-      form
-      (let* ((head (first form))
-             (canonical (and (symbolp head) (gethash (symbol-name head) *dsl-clause-heads*)))
-             (head (or canonical head)))
-        (if (member (and (symbolp head) (symbol-name head)) '("SEMANTICS" "CYCLES" "QUOTE") :test #'equal)
-            (cons head (rest form))
-            (cons (%dsl-form head)
-                  (loop for tail = (rest form) then (cdr tail)
-                        while (consp tail)
-                        collect (%dsl-form (car tail)) into items
-                        finally (return (nconc items tail))))))))
+(defun %dsl-head (form)
+  "FORM, a list, with its head replaced by lasm's symbol when it names a DSL word."
+  (let ((canonical (and (symbolp (first form)) (gethash (symbol-name (first form)) *dsl-clause-heads*))))
+    (if canonical (cons canonical (rest form)) form)))
+
+(defun %dsl-heads-in (forms)
+  (mapcar (lambda (form) (if (consp form) (%dsl-head form) form)) forms))
+
+(defun %dsl-machine-clause (clause)
+  (let ((clause (%dsl-head clause)))
+    (if (member (first clause) '(memory instruction-word layout))
+        (cons (first clause)
+              (mapcar (lambda (item) (if (consp item) (%dsl-machine-clause item) item)) (rest clause)))
+        clause)))
+
+(defun %dsl-encoding-subclause (subclause)
+  (let ((subclause (%dsl-head subclause)))
+    (case (first subclause)
+      (operand (list* (first subclause) (second subclause)
+                      (mapcar (lambda (item)
+                                (if (consp item) (%dsl-variant item) item))
+                              (cddr subclause))))
+      (for-choice (list* (first subclause) (second subclause)
+                         (mapcar #'%dsl-encoding-subclause (cddr subclause))))
+      (fallback (cons (first subclause) (mapcar #'%dsl-encoding-subclause (rest subclause))))
+      (t subclause))))
+
+(defun %dsl-variant (form)
+  "An OPERAND's variant, or the atoms and plist values around one, unchanged."
+  (let ((form (%dsl-head form)))
+    (if (eq (first form) 'variant)
+        (list* (first form)
+               (if (consp (second form)) (%dsl-head (second form)) (second form))
+               (%dsl-heads-in (cddr form)))
+        form)))
+
+(defun %dsl-instruction-clause (clause)
+  (let ((clause (%dsl-head clause)))
+    (case (first clause)
+      (modes (cons (first clause)
+                   (mapcar (lambda (mode)
+                             (if (consp mode)
+                                 (cons (first mode) (mapcar #'%dsl-modes-subclause (rest mode)))
+                                 mode))
+                           (rest clause))))
+      (encoding (cons (first clause) (mapcar #'%dsl-encoding-subclause (rest clause))))
+      (t clause))))
+
+(defun %dsl-modes-subclause (subclause)
+  (let ((subclause (%dsl-head subclause)))
+    (if (member (first subclause) '(semantics cycles))
+        subclause
+        (%dsl-encoding-subclause subclause))))

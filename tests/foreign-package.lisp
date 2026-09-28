@@ -113,6 +113,29 @@
   (encoding (opcode 2))
   (semantics (trap :halt)))
 
+(deflexer fpm-colon
+  (comment-styles (";" :line))
+  (number-formats (:hex "0x") (:dec :default))
+  (label-suffix ":")
+  (string-delim "\"")
+  (ident-chars :alnum "_"))
+
+(defmachine fpm8
+  (register pc :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16))
+
+;; Mode names that are also DSL words stay the user's own.
+(defmode register "r" expr)
+(defmode memory "[" expr "]")
+(defmode stack "#" expr)
+
+(definstruction fpm8 ld
+  (modes (register (opcode 1) (operand :mode))
+         (memory (opcode 2) (operand :mode))
+         (stack (opcode 3) (operand :mode)))
+  (semantics (set! a operand)))
+
 (in-package #:lasm)
 
 (defun %foreign-run (source)
@@ -152,3 +175,12 @@ halt")
     (step-machine m)
     (fiveam:is (= #x0100 (sref m 'pc)))
     (fiveam:is (= 9 (regref m 'lasm-foreign-test::reg 0)))))
+
+(fiveam:test foreign-package-lexer
+  (fiveam:is (typep (find-lexer-descriptor 'lasm-foreign-test::fpm-colon) 'lexer-descriptor)))
+
+(fiveam:test foreign-package-mode-names-may-be-dsl-words
+  (fiveam:is (equalp #(1 5 0 2 6 0 3 7 0)
+                     (assembly-cells (assemble "ld r 5
+ld [6]
+ld #7" :machine 'lasm-foreign-test::fpm8)))))

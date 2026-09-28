@@ -257,7 +257,7 @@ extra-chars string, or building this descriptor signals an error.
 Registers a LEXER-DESCRIPTOR under NAME in *LEXERS*, retrievable with
 FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
   `(progn
-     (setf (gethash ',name *lexers*) (build-lexer-descriptor ',name ',clauses))
+     (setf (gethash ',name *lexers*) (build-lexer-descriptor ',name ',(mapcar #'%dsl-head clauses)))
      ',name))
 
 ;; A ready-to-use default syntax so callers need not define their own lexer
