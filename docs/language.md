@@ -1,3 +1,40 @@
+`BODY`'s forms run over plain data: integers, strings, symbols, lists and
+functions. `()` is false; anything else, including `t`, is true.
+
+| Form | Does |
+| --- | --- |
+| `(quote FORM)`, `'FORM` | FORM itself, each name in it marked. |
+| `` (quasiquote FORM) ``, `` `FORM `` | FORM as a template; see above. |
+| `(if TEST THEN [ELSE])` | THEN when TEST is true, else ELSE (`()` if omitted). |
+| `(let ((NAME VALUE)...) BODY...)`, `let*` | As the language's own `let`, but at compile time. |
+| `(progn FORM...)` | Each FORM in order; the last one's value. |
+| `and`, `or`, `not` | Short-circuit, returning the deciding value; `not` gives `t` or `()`. |
+| `(cond (TEST BODY...)...)` | The first clause whose TEST is true; a clause without BODY gives TEST's value. |
+| `(when TEST BODY...)`, `unless` | BODY when TEST is true (`when`) or false (`unless`), else `()`. |
+| `(lambda (PARAM... [&rest R]) BODY...)` | A function that sees the variables around it. |
+| `(function NAME)`, `'NAME` | A builtin or `defun-for-syntax` helper as a value. |
+| `funcall`, `apply`, `mapcar` | `(funcall F ARG...)`, `(apply F ARG... LIST)`, `(mapcar F LIST...)`, F a lambda or a name. |
+| `car`, `cdr`, `cons`, `list`, `append`, `length` | List operations; `car`/`cdr` of `()` is `()`. |
+| `reverse`, `nth`, `nthcdr`, `second`, `third`, `last`, `member`, `assoc` | More list operations; `member` and `assoc` compare with `equal`. |
+| `null`, `consp`, `symbolp`, `integerp`, `stringp` | Type predicates. |
+| `eq`, `equal` | `eq` compares a pair of symbols by name, never by identity. |
+| `concat`, `string=`, `symbol-name`, `number-to-string` | String operations; `concat` takes strings only. |
+| `(intern STRING)` | The symbol named STRING, marked like any name the macro writes. |
+| `(unmark FORM)` | FORM with every name unmarked, so a name reaches the caller's variable. |
+| `+`, `-`, `*`, `/`, `mod`, `min`, `max`, `logand`, `logior`, `ash` | Integer arithmetic; `/` truncates, and `ash` shifts by at most 64. |
+| `=`, `/=`, `<`, `>`, `<=`, `>=` | Integer comparison, each over a run of arguments. |
+| `gensym` | A symbol no source text can spell, for a template to bind without capturing anything (`(gensym PREFIX)` names it, for reading a macro's own compile-time errors). |
+| `error` | Signals a compile error naming the macro's call. |
+
+A macro body calls these operators and its helpers, never macros, so a macro
+can share an operator's name: `(defmacro unless ...)` is a program's `unless`,
+while `unless` in a body is the operator. A `defun-for-syntax` can't.
+
+```lisp
+(defmacro scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
+(defun main () (scaled 10 1 2 3))                     ; 60
+```
+
 # Source language
 
 A small Lisp-like language that compiles to [items](items.md) through a
@@ -184,18 +221,20 @@ A trailing `&rest R` binds the remaining arguments as a list. A parameter is
 substituted wherever it appears, so using it twice in the template runs its
 argument twice.
 
-Each expansion marks every name its template writes, so the template's own
-names and the caller's never meet. A template's `let` or `defun` parameter
-can't capture the caller's variable of the same name, and a caller's `let`
-can't capture a free name the template uses: a free name must be a global,
-constant, array or string, or it's an `unknown variable` error. `,'NAME`
-reaches the caller's own variable on purpose.[^hygiene] A name from `,FORM`
-(including a `,NAME` binding name) is the caller's own, unmarked.
+Each expansion marks every name it writes, in a template or a `quote`, so the
+macro's own names and the caller's never meet. A template's `let` or `defun`
+parameter can't capture the caller's variable of the same name, and a caller's
+`let` can't capture a free name the macro uses: a free name must be a global,
+constant, array or string, or it's an `unknown variable` error.
+`(unmark FORM)` returns FORM with every name unmarked, which reaches the
+caller's own variable on purpose.[^hygiene] A name from `,FORM` (including a
+`,NAME` binding name) is the caller's own.
 
 ```lisp
 (defvar counter 10)
 (defmacro bump () `(set counter (+ counter 1)))       ; the global, always
-(defmacro bump-mine () `(set ,'counter (+ ,'counter 1)))  ; the caller's
+(defmacro bump-mine ()                                 ; the caller's
+  `(set ,(unmark 'counter) (+ ,(unmark 'counter) 1)))
 
 (defun main () (let ((counter 5)) (bump) (bump-mine) counter))   ; 6
 ```
@@ -211,6 +250,9 @@ template, as in Common Lisp.
 (defadder add5 5)
 (defun main () (add5 10))                             ; 15
 ```
+
+A symbol passed through to the inner template is marked by the inner `quote`,
+so `,(unmark ',n)` is how the inner macro reaches the caller's variable `n`.
 
 Inside `(asm ...)`, `,FORM` and `,@FORM` substitute like anywhere else in the
 template, so a constant, a register name or a `(:var NAME)` can all be
@@ -395,8 +437,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
-| A `quote`d symbol in a macro body is unmarked, so a caller's `let` can still capture it. | [#395](https://todo.sr.ht/~takeiteasy/lasm/395) |
-| The compile-time evaluator's operators are a minimal set: no strings, `apply`, `mapcar`, `and`/`or`/`cond`. | [#384](https://todo.sr.ht/~takeiteasy/lasm/384) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an
@@ -449,8 +489,11 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 [^hygiene]: A mark is a number kept on a fresh uninterned copy of each name
   a quasiquote template writes; a local variable is looked up by name plus
-  mark, and a function, global or constant by name alone. Only a quasiquote
-  marks names: a `quote`d symbol (`'x`) is unmarked, like one from `,FORM`.
+  mark, and a function, global or constant by name alone. A quasiquote, a
+  `quote` and `intern` mark names; a name from `,FORM` is unmarked. `unmark`
+  gives each name the mark of the macro's own call: none when written in
+  source, or the enclosing macro's when written in its template, so a macro
+  called from another macro's template reaches that template's variables.
 
 [^macros]: A `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`

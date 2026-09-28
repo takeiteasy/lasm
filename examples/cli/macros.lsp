@@ -1,7 +1,8 @@
 ;; Compile-time macros (docs/language.md#macros): a body evaluated at
 ;; compile time, quasiquote/unquote to build the expansion, a &rest splice,
 ;; hygiene keeping a template's names and a caller's apart, a macro that
-;; defines a macro, and a defun-for-syntax helper.
+;; defines a macro, a defun-for-syntax helper, mapcar over a lambda, and
+;; unmark reaching the caller's variable.
 ;;
 ;;   lasm run macros.lsp -m callfoo.lisp --backend callfoo-lang-abi
 ;;
@@ -32,10 +33,17 @@
 (defmacro defadder (name n) `(defmacro ,name (x) `(+ ,x ,',n)))
 (defadder add5 5)
 
+;; mapcar with a compile-time lambda builds one term per argument.
+(defmacro scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
+
+;; A quoted or template name is the macro's own; unmark reaches the caller's.
+(defmacro bump-mine () `(set ,(unmark 'count) (+ ,(unmark 'count) 1)))
+
 (defun main ()
   (let ((count 0) (tmp 1) (y 2))
     (inc count)
     (unless 0 (inc count) (inc count))
     (swap tmp y)
-    (+ (* tmp 100) y count (double-or-inc 5) (total 1 2 3)
-       (add5 0) (let ((hits 0)) (hit) (+ hits (hit-count))))))
+    (+ (* tmp 100) y (progn (bump-mine) count) (double-or-inc 5) (total 1 2 3)
+       (add5 0) (let ((hits 0)) (hit) (+ hits (hit-count)))
+       (scaled 10 1 2 3))))

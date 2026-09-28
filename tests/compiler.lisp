@@ -68,11 +68,11 @@
 (defun %cl-compile (source backend)
   (compile-program (items-program-items (read-source-from-string source)) :backend backend))
 
-(defun %cl-run (source backend &optional (machine 'callfoo))
-  "Compile, assemble and run SOURCE, with the stack at +CV-SP+; returns the machine."
+(defun %cl-run (source backend &optional (machine 'callfoo) (sp +cv-sp+))
+  "Compile, assemble and run SOURCE, with the stack at SP; returns the machine."
   (let ((m (make-machine machine)))
     (load-program m (assemble-items (%cl-compile source backend) :backend backend))
-    (setf (sref m 'sp) +cv-sp+)
+    (setf (sref m 'sp) sp)
     (run m :max-steps 100000)
     m))
 
@@ -198,9 +198,59 @@
     ("(defvar counter 10) (defun g () counter)
       (defmacro bump () `(set counter (+ counter 1)))
       (defun main () (let ((counter 5)) (bump) (+ (* counter 100) (g))))" . 511)
-    ;; ,'NAME reaches the caller's own variable on purpose.
-    ("(defmacro bump-mine () `(set ,'n (+ ,'n 1)))
+    ;; #395: (unmark 'NAME) reaches the caller's own variable on purpose.
+    ("(defmacro bump-mine () `(set ,(unmark 'n) (+ ,(unmark 'n) 1)))
       (defun main () (let ((n 5)) (bump-mine) n))" . 6)
+    ;; #395: a quoted name is marked too, so a caller's let can't capture it.
+    ("(defvar n 10) (defun g () n)
+      (defmacro bump-quoted () (list 'set 'n (list '+ 'n 1)))
+      (defun main () (let ((n 5)) (bump-quoted) (+ (* n 100) (g))))" . 511)
+    ("(defmacro bump-form () (unmark '(set n (+ n 1))))
+      (defun main () (let ((n 5)) (bump-form) n))" . 6)
+    ;; unmark reaches the calling template's own variable, not the caller's.
+    ("(defmacro bump-mine () `(set ,(unmark 'n) (+ ,(unmark 'n) 1)))
+      (defmacro with-n () `(let ((n 1)) (bump-mine) n))
+      (defun main () (let ((n 100)) (+ (with-n) n)))" . 102)
+    ("(defmacro def-bump (name var) `(defmacro ,name () `(set ,(unmark ',var) (+ ,(unmark ',var) 1))))
+      (def-bump bump-x x)
+      (defun main () (let ((x 5)) (bump-x) x))" . 6)
+    ;; #384: function values.
+    ("(defmacro sum-scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
+      (defun main () (sum-scaled 10 1 2 3))" . 60)
+    ("(defun-for-syntax double (x) (* x 2))
+      (defmacro doubled (&rest xs) `(+ ,@(mapcar 'double xs) ,@(mapcar (function double) xs)))
+      (defun main () (doubled 1 2 3))" . 24)
+    ("(defmacro apply-sum (&rest xs) (+ (apply '+ xs) (apply '+ 100 xs) (funcall (lambda (a b) (+ a b)) 3 4)))
+      (defun main () (apply-sum 1 2 3))" . 119)
+    ("(defmacro zero-all (&rest vars) `(progn ,@(mapcar (lambda (v) `(set ,v 0)) vars)))
+      (defun main () (let ((a 1) (b 2)) (zero-all a b) (+ a b)))" . 0)
+    ;; #384: control forms.
+    ("(defmacro pick (x) (cond ((eq x 'a) 1) ((eq x 'b) 2) (t 3)))
+      (defun main () (+ (pick a) (* 10 (pick b)) (* 100 (pick c))))" . 321)
+    ("(defmacro clamp (x) (or (and (integerp x) (when (> x 10) 10)) x))
+      (defmacro known (x) (or (unless (integerp x) 7) x))
+      (defun main () (+ (clamp 50) (clamp 3) (known 4) (let ((y 0)) (known y))))" . 24)
+    ;; #384: list, string, symbol and integer operators.
+    ("(defmacro lists ()
+        (+ (car (reverse '(1 2 3))) (nth 1 '(5 6 7)) (car (nthcdr 2 '(1 2 3))) (second '(9 8))
+           (third '(1 2 4)) (car (last '(1 2 3))) (if (member 2 '(1 2 3)) 100 0)
+           (cdr (assoc 'b '((a . 1) (b . 2)))) (if (not (member 9 '(1 2))) 1000 0)))
+      (defun main () (lists))" . 1129)
+    ("(defmacro strings ()
+        (if (and (string= (concat \"ab\" \"c\") \"abc\") (stringp \"x\") (not (stringp 'x))
+                 (string= (symbol-name 'foo) \"foo\") (string= (number-to-string 12) \"12\"))
+            42 0))
+      (defun main () (strings))" . 42)
+    ("(defmacro ints ()
+        (+ (/ 17 5) (mod 17 5) (min 4 2 9) (max 4 2 9) (logand 12 10) (logior 12 10) (ash 1 4) (ash 16 -2)
+           (if (and (<= 1 1) (>= 2 1) (/= 1 2)) 1000 0)))
+      (defun main () (ints))" . 1058)
+    ("(defmacro defgetter (n v) `(defun ,(intern (concat \"get-\" (symbol-name n))) () ,v))
+      (defgetter x 7)
+      (defun main () (get-x))" . 7)
+    ;; a macro can be named for a compile-time operator.
+    ("(defmacro cond (c a b) `(if ,c ,a ,b))
+      (defun main () (cond 1 5 6))" . 5)
     ;; each expansion's own let is separate from a nested one's, and from the caller's.
     ("(defmacro twice-tmp (v) `(let ((tmp ,v)) (+ tmp tmp)))
       (defun main () (let ((tmp 1)) (+ (twice-tmp (twice-tmp 3)) (twice-tmp tmp))))" . 14)
@@ -731,7 +781,23 @@
                   ("(defun-for-syntax loopy (n) (loopy n)) (defmacro bad () (loopy 1)) (defun main () (bad))"
                    "recursed too deeply")
                   ("(defun-for-syntax f (a) a) (defmacro f (a) a) (defun main () 1)" "f is defined twice")
-                  ("(defun-for-syntax bad (v . w) v) (defun main () 1)" "parameter list is malformed")))
+                  ("(defun-for-syntax bad (v . w) v) (defun main () 1)" "parameter list is malformed")
+                  ;; #384: the evaluator's operators check their arguments.
+                  ("(defmacro bad () (/ 1 0)) (defun main () (bad))" "division by zero")
+                  ("(defmacro bad () (mod 1 0)) (defun main () (bad))" "division by zero")
+                  ("(defmacro bad () (nth -1 '(1))) (defun main () (bad))" "non-negative index")
+                  ("(defmacro bad () (concat \"a\" 1)) (defun main () (bad))" "expected a string")
+                  ("(defmacro bad () (assoc 1 '(2))) (defun main () (bad))" "assoc needs a list of pairs")
+                  ("(defmacro bad () (ash 1 100)) (defun main () (bad))" "ash shifts by at most 64")
+                  ("(defmacro bad () (intern \"a b\")) (defun main () (bad))" "cannot intern")
+                  ("(defmacro bad () (intern \"12\")) (defun main () (bad))" "cannot intern")
+                  ("(defmacro bad () (intern \"\")) (defun main () (bad))" "cannot intern")
+                  ("(defmacro bad () (mapcar (function nope) '(1))) (defun main () (bad))" "nope is not a compile-time function")
+                  ("(defmacro bad () (funcall 'if 1)) (defun main () (bad))" "if is not a compile-time function")
+                  ("(defmacro bad () (funcall (lambda (x) x) 1 2)) (defun main () (bad))" "lambda takes exactly 1 argument, got 2")
+                  ("(defmacro bad () (lambda (x) x)) (defun main () (bad))" "#<compile-time lambda>")
+                  ("(defun-for-syntax when (a) a) (defun main () 0)" "when is a built-in form")
+                  ("(defmacro unquote (a) a) (defun main () 0)" "unquote is a built-in form")))
     (destructuring-bind (source expected) case
       (let ((detail (%cl-fail source)))
         (fiveam:is (and detail (search expected detail)) "~A: ~A" source detail)))))
@@ -916,8 +982,8 @@
     (fiveam:is (search "stopped" out))))
 
 (fiveam:test cli-run-executes-the-macros-example
-  (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi)))
-    (fiveam:is (= 226 (%cv-a m)))))
+  (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi 'callfoo #x800)))
+    (fiveam:is (= 287 (%cv-a m)))))
 
 (fiveam:test cli-compile-writes-an-items-program-that-run-accepts
   (uiop:with-temporary-file (:pathname path :type "lasm")
