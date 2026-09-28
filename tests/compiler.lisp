@@ -1768,3 +1768,73 @@ two |#
                     'backend-definition-error))
   (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:machine callfoo) (ops (:poke-label (a) (ldi a 1)))))
                     'backend-definition-error)))
+
+;;; #417: a dedicated pointer register
+
+(eval `(defbackend cl-pointer-abi (:extends cl-static-abi)
+         (registers :address d)
+         (without-ops :peek :poke)
+         (ops (:point (r) (movv (reg d) (reg r)))
+              (:peek-pointer (dst) (ldx (reg dst) (ind d)))
+              (:poke-pointer (src) (stx (ind d) (reg src))))))
+
+(defbackend cl-pointer-label-abi (:extends cl-pointer-abi)
+  (ops (:point-label (label) (ldi (reg d) (imm label)))))
+
+(defparameter +cl-pointer-programs+
+  (append (remove-if (lambda (program) (search ":op :poke" (car program))) +cl-static-programs+)
+          '(("(defarray a (1 2 3)) (defun main () (aset a 1 9) (+ (aref a 0) (aref a 1)))" . 10)
+            ("(defvar g 0) (defun main () (set g 5) (poke (+ 1 (function main)) 0) (+ g 1))" . 6)
+            ("(defvar g 3) (defun main () (set g (+ g g)) (set g (* g g)) g)" . 36))))
+
+(defun %cl-count-op (name source backend)
+  (count name (%cl-op-names (%cl-compile source backend)) :test #'string-equal))
+
+(fiveam:test pointer-register-backends-run-the-programs
+  (dolist (backend '(cl-pointer-abi cl-pointer-label-abi))
+    (loop for (source . expected) in +cl-pointer-programs+
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend))) "~A ~A" backend source))))
+
+(fiveam:test pointer-register-reads-and-writes-globals-and-static-slots-through-it
+  (dolist (backend '(cl-pointer-abi cl-pointer-label-abi))
+    (let ((source "(defvar g 0) (defun f (x) (let ((y (+ x g))) (set g y) y)) (defun main () (f 2))"))
+      (fiveam:is (plusp (%cl-count-op "PEEK-POINTER" source backend)))
+      (fiveam:is (plusp (%cl-count-op "POKE-POINTER" source backend)))
+      (fiveam:is (= 0 (%cl-count-op "PEEK" source backend)))
+      (fiveam:is (= 0 (%cl-count-op "POKE" source backend))))))
+
+(fiveam:test pointer-register-is-reused-while-it-holds-the-address
+  (fiveam:is (= 1 (%cl-count-op "POINT-LABEL" "(defvar g 0) (defun main () (set g (+ g 1)) g)" 'cl-pointer-label-abi)))
+  (fiveam:is (= 1 (%cl-count-op "POINT" "(defvar g 0) (defun main () (set g (+ g 1)) g)" 'cl-pointer-abi))))
+
+(fiveam:test pointer-register-is-reloaded-after-a-label-a-call-or-an-asm
+  (dolist (source '("(defvar g 0) (defun main () g (if g 1 2) g)"
+                    "(defvar g 0) (defun f () 1) (defun main () g (f) g)"
+                    "(defvar g 0) (defun main () g (asm (:op :const (reg a) 0)) g)"))
+    (fiveam:is (= 2 (%cl-count-op "POINT-LABEL" source 'cl-pointer-label-abi)) "~A" source))
+  (fiveam:is (= 1 (%cl-count-op "POINT-LABEL" "(defvar g 0) (defun main () g (asm (:clobbers a) (:op :const (reg a) 0)) g)"
+                                'cl-pointer-label-abi))))
+
+(fiveam:test pointer-register-is-forgotten-after-a-computed-address
+  (fiveam:is (= 2 (%cl-count-op "POINT-LABEL" "(defvar g 0) (defarray a 2) (defun main () g (peek a) g)" 'cl-pointer-label-abi))))
+
+(fiveam:test label-ops-come-before-the-pointer-register
+  (eval '(defbackend cl-pointer-both-abi (:extends cl-pointer-abi)
+          (ops (:peek-label (d label) (ldm d label))
+               (:poke-label (label s) (stm s label)))))
+  (let ((source "(defvar g 0) (defun main () (set g (+ g 1)) g)"))
+    (fiveam:is (= 0 (%cl-count-op "POINT" source 'cl-pointer-both-abi)))
+    (fiveam:is (= 0 (%cl-count-op "PEEK-POINTER" source 'cl-pointer-both-abi)))))
+
+(fiveam:test address-register-needs-its-operations
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-address-bad-abi (:extends callfoo-lang-abi) (registers :address d)))
+                    'backend-definition-error))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-address-bad-abi (:extends cl-pointer-abi) (registers :address a :return (a))))
+                    'backend-definition-error))
+  (fiveam:is (null (%backend-error-of '(defbackend cl-address-ok-abi (:extends cl-pointer-abi))))))
+
+(fiveam:test pointer-register-operations-take-their-parameter-counts
+  (dolist (form '((:point (a b) (ldi a b)) (:point-label (a b) (ldi a b))
+                  (:peek-pointer (a b) (ldi a b)) (:poke-pointer (a b) (ldi a b))))
+    (fiveam:is (typep (%backend-error-of `(defbackend cl-pointer-arity-abi (:machine callfoo) (ops ,form)))
+                      'backend-definition-error) "~S" form)))

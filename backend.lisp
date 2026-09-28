@@ -247,7 +247,7 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
 (defparameter +backend-register-roles+ '(:return :arguments :scratch :caller-saved :callee-saved)
   "Register roles holding a list of registers.")
 
-(defparameter +backend-register-singles+ '(:stack-pointer :program-counter :frame-pointer)
+(defparameter +backend-register-singles+ '(:stack-pointer :program-counter :frame-pointer :address)
   "Register roles holding one register.")
 
 (defparameter +backend-clause-keys+
@@ -372,6 +372,7 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
 (defparameter +backend-language-op-arities+
   (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
             ("PEEK-LABEL" . 2) ("POKE-LABEL" . 2)
+            ("POINT" . 1) ("POINT-LABEL" . 1) ("PEEK-POINTER" . 1) ("POKE-POINTER" . 1)
             ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2) ("BYTE-ADDRESS" . 1)
             ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0))
           (loop for name in +backend-binary-ops+
@@ -507,6 +508,16 @@ operand differently by kind, such as a register versus a label."
              (when (and (equal (first entry) name) (/= arity (length (second entry))))
                (%backend-error "ops: ~A is used by call lowering or the language compiler and takes ~D parameter~:P, not ~D"
                                name arity (length (second entry)))))))
+
+(defun %check-backend-address (descriptor)
+  "A backend with an :address register defines the operations that load and use it."
+  (let ((address (getf (backend-descriptor-registers descriptor) :address)))
+    (when address
+      (dolist (name '("POINT" "PEEK-POINTER" "POKE-POINTER"))
+        (unless (assoc name (backend-descriptor-ops descriptor) :test #'string=)
+          (%backend-error "registers :address ~A needs the operation ~(~A~)" address name)))
+      (when (member address (getf (backend-descriptor-registers descriptor) :return) :test #'string=)
+        (%backend-error "registers :address ~A is also in :return" address)))))
 
 (defun %check-backend-kinds (descriptor)
   (loop for (what kind) in `(("registers :operand" ,(getf (backend-descriptor-registers descriptor) :operand))
@@ -872,6 +883,7 @@ its first position."
       (%check-backend-kinds descriptor)
       (%check-backend-ops descriptor)
       (%check-backend-hooks descriptor)
+      (%check-backend-address descriptor)
       descriptor)))
 
 (defun %define-backend (name options clauses)
@@ -901,7 +913,7 @@ its first position."
 OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (registers [:return (reg...)] [:arguments (reg...)] [:scratch (reg...)]
                 [:caller-saved (reg...)] [:callee-saved (reg...)]
-                [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg]
+                [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg] [:address reg]
                 [:operand kind] [:pairs ((NAME HIGH LOW)...)])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])

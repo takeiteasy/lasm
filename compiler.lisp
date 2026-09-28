@@ -140,6 +140,7 @@
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
+(defvar *cc-pointer* nil "The name of the label the backend's :address register is known to hold, or NIL.")
 (defvar *cc-env* nil "(KEY . LOCATION) for each parameter and let variable in scope.")
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
@@ -218,6 +219,8 @@ cannot be a register alias or a generated label."
 ;;; Emission
 
 (defun %cc-emit (item)
+  (when (or (atom item) (member (first item) '(:label :call)))
+    (setf *cc-pointer* nil))
   (cl:push item *cc-out*))
 
 (defun %cc-op-p (name)
@@ -258,19 +261,42 @@ cannot be a register alias or a generated label."
 (defun %cc-const (value)
   (%cc-op :const *cc-acc* value))
 
+(defun %cc-address-register ()
+  (getf (backend-descriptor-registers *cc-backend*) :address))
+
+(defun %cc-point-label (label scratch scratch-name)
+  "Point the :address register at LABEL, unless it holds it already. Without :point-label the address goes through SCRATCH."
+  (let ((name (string label)))
+    (unless (equal name *cc-pointer*)
+      (if (%cc-op-p :point-label)
+          (%cc-op :point-label label)
+          (progn (%cc-op :const scratch label)
+                 (%cc-op :point scratch-name)))
+      (setf *cc-pointer* name))))
+
 (defun %cc-load-label (label register register-name)
   "The word at LABEL into REGISTER."
-  (if (%cc-op-p :peek-label)
-      (%cc-op :peek-label register label)
-      (progn (%cc-op :const register label)
-             (%cc-op :peek register-name register-name))))
+  (cond ((%cc-op-p :peek-label)
+         (%cc-op :peek-label register label))
+        ((%cc-address-register)
+         (%cc-point-label label register register-name)
+         (%cc-op :peek-pointer register-name))
+        (t (%cc-op :const register label)
+           (%cc-op :peek register-name register-name))))
+
+(defun %cc-label-store-p ()
+  "T when a store to a label needs no register of its own for the address."
+  (or (%cc-op-p :poke-label) (%cc-address-register)))
 
 (defun %cc-store-label (label source source-name)
-  "SOURCE into the word at LABEL. Without :poke-label the address goes through the temp register."
-  (if (%cc-op-p :poke-label)
-      (%cc-op :poke-label label source)
-      (progn (%cc-op :const *cc-temp* label)
-             (%cc-op :poke *cc-temp-name* source-name))))
+  "SOURCE into the word at LABEL. Without :poke-label or an :address register the address goes through the temp register."
+  (cond ((%cc-op-p :poke-label)
+         (%cc-op :poke-label label source))
+        ((%cc-address-register)
+         (%cc-point-label label *cc-temp* *cc-temp-name*)
+         (%cc-op :poke-pointer source-name))
+        (t (%cc-op :const *cc-temp* label)
+           (%cc-op :poke *cc-temp-name* source-name))))
 
 (defun %cc-store (slot)
   "The accumulator into the frame SLOT. A static slot goes through the temp register."
@@ -968,7 +994,7 @@ comparison, to a landing that loads the result."
        (%cc-hold (%cc-local-cell (second form)) (third form))
        (%cc-store location))
       (:global (%cc-hold (second location) (third form))
-       (if (%cc-op-p :poke-label)
+       (if (%cc-label-store-p)
            (progn (%cc-expr (third form))
                   (%cc-store-label (second location) *cc-acc* *cc-acc-name*))
            (progn (%cc-value-to-temp (third form))
@@ -978,15 +1004,27 @@ comparison, to a landing that loads the result."
       (:constant (%cc-fail form "~A is a constant" (%source-name (second form) nil)))
       (:address (%cc-fail form "~A is an array or string" (%source-name (second form) nil))))))
 
+(defun %cc-through-pointer-p ()
+  "T when a computed address goes through the :address register, the backend having no :peek and :poke."
+  (and (%cc-address-register) (not (%cc-op-p :peek)) (not (%cc-op-p :poke))))
+
 (defun %cc-peek (form)
   (%cc-check-length form 2 2)
   (%cc-expr (second form))
-  (%cc-op :peek *cc-acc-name* *cc-acc-name*))
+  (cond ((%cc-through-pointer-p)
+         (%cc-op :point *cc-acc-name*)
+         (setf *cc-pointer* nil)
+         (%cc-op :peek-pointer *cc-acc-name*))
+        (t (%cc-op :peek *cc-acc-name* *cc-acc-name*))))
 
 (defun %cc-poke (form)
   (%cc-check-length form 3 3)
   (%cc-operands (second form) (third form))
-  (%cc-op :poke *cc-acc-name* *cc-temp-name*)
+  (cond ((%cc-through-pointer-p)
+         (%cc-op :point *cc-acc-name*)
+         (setf *cc-pointer* nil)
+         (%cc-op :poke-pointer *cc-temp-name*))
+        (t (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
   (%cc-op :move *cc-acc* *cc-temp*))
 
 ;; (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
@@ -1093,7 +1131,10 @@ comparison, to a landing that loads the result."
         (when (member name clobbers :test #'string=)
           (pushnew name *cc-saves* :test #'string=)))))
   (dolist (item (if (%cc-clobber-declaration-p (second form)) (cddr form) (rest form)))
-    (%cc-emit (%cc-substitute-variables item form))))
+    (%cc-emit (%cc-substitute-variables item form)))
+  (let ((clobbers (%cc-asm-clobbers form)))
+    (when (or (eq clobbers :all) (member (%cc-address-register) clobbers :test #'equal))
+      (setf *cc-pointer* nil))))
 
 (defun %cc-args-to-slots (args)
   "Each of ARGS compiled into a fresh frame slot, in order, returned least
@@ -1935,6 +1976,7 @@ the function once and discarding the items."
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
            (*cc-caller* (%designator-name name))
+           (*cc-pointer* nil)
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
            ;; first), regardless of where NAME's DEFUN sits relative to them.
            (body (mapcar #'%cc-expand-all body))
@@ -1951,10 +1993,11 @@ register, so any of these are free once nothing above still needs them."
   (let* ((registers (backend-descriptor-registers *cc-backend*))
          (acc (first (getf registers :return)))
          (pointer (getf (backend-descriptor-frame *cc-backend*) :pointer))
+         (address (getf registers :address))
          (temp (and acc
-                    (find-if (lambda (name) (and (string/= name acc) (not (equal name pointer))))
+                    (find-if (lambda (name) (and (string/= name acc) (not (equal name pointer)) (not (equal name address))))
                              (append (getf registers :scratch) (getf registers :caller-saved)))))
-         (reserved (list* acc temp pointer (getf registers :return))))
+         (reserved (list* acc temp pointer address (getf registers :return))))
     (unless (getf registers :operand)
       (%cc-fail nil "the backend needs (registers :operand KIND)"))
     (unless acc
@@ -2215,7 +2258,7 @@ or NIL for what the backend's (frame :static t) says."
         (*cc-globals* (make-hash-table :test 'equal))
         (*cc-constants* (make-hash-table :test 'equal))
         (*cc-data* (make-hash-table :test 'equal))
-        (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '())
+        (*cc-function* nil) (*cc-form* nil) (*cc-labels* 0) (*cc-depth* 0) (*cc-out* '()) (*cc-pointer* nil)
         (*cc-acc* nil) (*cc-temp* nil) (*cc-acc-name* nil) (*cc-temp-name* nil)
         (*cc-volatile* nil) (*cc-preserved* nil) (*cc-saves* nil)
         (*cc-positions* positions) (*cc-source* source) (*cc-file* file)
@@ -2238,7 +2281,7 @@ or NIL for what the backend's (frame :static t) says."
         (loop for (label value) in globals
               do (unless (zerop value)
                    (setf (gethash label *cc-holdings*) :unknown)
-                   (if (%cc-op-p :poke-label)
+                   (if (%cc-label-store-p)
                        (progn (%cc-const value)
                               (%cc-store-label label *cc-acc* *cc-acc-name*))
                        (progn (%cc-op :const *cc-acc* label)

@@ -44,6 +44,7 @@ Every name is a register or register alias of the machine.
 | --- | --- |
 | `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. A [call](conventions.md#register-cycles) breaks an argument cycle through a `:scratch` one, and copies a register its target reads into one. |
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
+| `:address` | The [pointer register](#pointer-register) that memory access goes through. |
 | `:operand` | The [operand kind](#operand-kinds) that writes a register. |
 | `:pairs` | `((NAME HIGH LOW)...)`: [register pairs](register-pairs.md), which every role list then names. |
 
@@ -193,6 +194,36 @@ uses [when the right operand allows](language.md#backend-requirements).
 Each comparison also has an optional `:branch-eq`...`:branch-ge (a b target)`
 operation, with the same variants, that a condition jumps on directly.
 `:branch-ne-imm` also serves a jump on a nonzero value, as `a 0 target`.
+
+### Pointer register
+
+A machine that reaches memory only through one pointer register, loaded in its
+own step, names it with `(registers :address REG)` and defines the operations
+that load and use it. The compiler keeps `REG` out of its register pools.
+
+| Operation | Does |
+| --- | --- |
+| `:point (r)` | `REG` = register `r`. Required. |
+| `:point-label (label)` | Optional: `REG` = `label`. Without it, `:const` then `:point`. |
+| `:peek-pointer (d)` `:poke-pointer (s)` | `d` = the word at `REG`; the word at `REG` = `s`. Required, and they leave `REG` as it was. |
+
+A global or static slot loads and stores through it, and a computed address
+does when the backend has no `:peek`/`:poke`. `:peek-label`/`:poke-label` win
+when both exist. The compiler skips `:point-label` while `REG` still holds the
+label: it forgets it at a label, a call, a `:point` and an `(asm ...)` that may
+write `REG`.
+
+```lisp
+(registers :return (a) :scratch (a b) :address i :operand reg)
+(ops (:point (r) (movi (reg r)))
+     (:point-label (label) (ldi (imm label)))
+     (:peek-pointer (d) (ldm (reg d)))
+     (:poke-pointer (s) (stm (reg s))))
+;; (set g (+ g 1))  ->  :point-label gvg, :peek-pointer a, :add-imm a 1, :poke-pointer a
+```
+
+Byte access and repeated computed addresses do not use it
+([Limitations](language.md#limitations)).
 
 ## Branches
 
