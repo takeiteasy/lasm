@@ -1,40 +1,3 @@
-`BODY`'s forms run over plain data: integers, strings, symbols, lists and
-functions. `()` is false; anything else, including `t`, is true.
-
-| Form | Does |
-| --- | --- |
-| `(quote FORM)`, `'FORM` | FORM itself, each name in it marked; a `nil` in it is `()`. |
-| `` (quasiquote FORM) ``, `` `FORM `` | FORM as a template; see above. |
-| `(if TEST THEN [ELSE])` | THEN when TEST is true, else ELSE (`()` if omitted). |
-| `(let ((NAME VALUE)...) BODY...)`, `let*` | As the language's own `let`, but at compile time. |
-| `(progn FORM...)` | Each FORM in order; the last one's value. |
-| `and`, `or`, `not` | Short-circuit, returning the deciding value; `not` gives `t` or `()`. |
-| `(cond (TEST BODY...)...)` | The first clause whose TEST is true; a clause without BODY gives TEST's value. |
-| `(when TEST BODY...)`, `unless` | BODY when TEST is true (`when`) or false (`unless`), else `()`. |
-| `(lambda (PARAM... [&rest R]) BODY...)` | A function that sees the variables around it. |
-| `(function NAME)`, `'NAME` | A builtin or `defun-for-syntax` helper as a value. |
-| `funcall`, `apply`, `mapcar` | `(funcall F ARG...)`, `(apply F ARG... LIST)`, `(mapcar F LIST...)`, F a lambda or a name. |
-| `car`, `cdr`, `cons`, `list`, `append`, `length` | List operations; `car`/`cdr` of `()` is `()`. |
-| `reverse`, `nth`, `nthcdr`, `second`, `third`, `last`, `member`, `assoc` | More list operations; `member` and `assoc` compare with `equal`. |
-| `null`, `consp`, `symbolp`, `integerp`, `stringp` | Type predicates. |
-| `eq`, `equal` | `eq` compares a pair of symbols by name, never by identity. |
-| `concat`, `string=`, `symbol-name`, `number-to-string` | String operations; `concat` takes strings only. |
-| `(intern STRING)` | The symbol named STRING, marked like any name the macro writes. |
-| `(unmark FORM)` | FORM with every name unmarked, so a name reaches the caller's variable. |
-| `+`, `-`, `*`, `/`, `mod`, `min`, `max`, `logand`, `logior`, `ash` | Integer arithmetic; `/` truncates, and `ash` shifts by at most 64. |
-| `=`, `/=`, `<`, `>`, `<=`, `>=` | Integer comparison, each over a run of arguments. |
-| `gensym` | A symbol no source text can spell, for a template to bind without capturing anything (`(gensym PREFIX)` names it, for reading a macro's own compile-time errors). |
-| `error` | Signals a compile error naming the macro's call. |
-
-A macro body calls these operators and its helpers, never macros, so a macro
-can share an operator's name: `(defmacro unless ...)` is a program's `unless`,
-while `unless` in a body is the operator. A `defun-for-syntax` can't.
-
-```lisp
-(defmacro scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
-(defun main () (scaled 10 1 2 3))                     ; 60
-```
-
 # Source language
 
 A small Lisp-like language that compiles to [items](items.md) through a
@@ -261,22 +224,42 @@ computed; everything written literally, including a register operand such as
 
 ### The compile-time evaluator
 
-`BODY`'s forms run over plain data: integers, strings, symbols and lists.
-`()` is false; anything else, including `t`, is true.
+`BODY`'s forms run over plain data: integers, strings, symbols, lists and
+functions. `()` is false; anything else, including `t`, is true.
 
 | Form | Does |
 | --- | --- |
-| `(quote FORM)`, `'FORM` | FORM itself, unevaluated. |
+| `(quote FORM)`, `'FORM` | FORM itself, each name in it marked; a `nil` in it is `()`. |
 | `` (quasiquote FORM) ``, `` `FORM `` | FORM as a template; see above. |
 | `(if TEST THEN [ELSE])` | THEN when TEST is true, else ELSE (`()` if omitted). |
 | `(let ((NAME VALUE)...) BODY...)`, `let*` | As the language's own `let`, but at compile time. |
 | `(progn FORM...)` | Each FORM in order; the last one's value. |
+| `and`, `or`, `not` | Short-circuit, returning the deciding value; `not` gives `t` or `()`. |
+| `(cond (TEST BODY...)...)` | The first clause whose TEST is true; a clause without BODY gives TEST's value. |
+| `(when TEST BODY...)`, `unless` | BODY when TEST is true (`when`) or false (`unless`), else `()`. |
+| `(lambda (PARAM... [&rest R]) BODY...)` | A function that sees the variables around it. |
+| `(function NAME)`, `'NAME` | A builtin or `defun-for-syntax` helper as a value. |
+| `funcall`, `apply`, `mapcar` | `(funcall F ARG...)`, `(apply F ARG... LIST)`, `(mapcar F LIST...)`, F a lambda or a name. |
 | `car`, `cdr`, `cons`, `list`, `append`, `length` | List operations; `car`/`cdr` of `()` is `()`. |
-| `null`, `consp`, `symbolp`, `integerp` | Type predicates. |
+| `reverse`, `nth`, `nthcdr`, `second`, `third`, `last`, `member`, `assoc` | More list operations; `member` and `assoc` compare with `equal`. |
+| `null`, `consp`, `symbolp`, `integerp`, `stringp` | Type predicates. |
 | `eq`, `equal` | `eq` compares a pair of symbols by name, never by identity. |
-| `+`, `-`, `*`, `=`, `<`, `>` | Integer arithmetic and comparison, each over any number of arguments. |
+| `concat`, `string=`, `symbol-name`, `number-to-string` | String operations; `concat` takes strings only. |
+| `(intern STRING)` | The symbol named STRING, marked like any name the macro writes. |
+| `(unmark FORM)` | FORM with every name unmarked, so a name reaches the caller's variable. |
+| `+`, `-`, `*`, `/`, `mod`, `min`, `max`, `logand`, `logior`, `ash` | Integer arithmetic; `/` truncates, and `ash` shifts by at most 64. |
+| `=`, `/=`, `<`, `>`, `<=`, `>=` | Integer comparison, each over a run of arguments. |
 | `gensym` | A symbol no source text can spell, for a template to bind without capturing anything (`(gensym PREFIX)` names it, for reading a macro's own compile-time errors). |
 | `error` | Signals a compile error naming the macro's call. |
+
+A macro body calls these operators and its helpers, never macros, so a macro
+can share an operator's name: `(defmacro unless ...)` is a program's `unless`,
+while `unless` in a body is the operator. A `defun-for-syntax` can't.
+
+```lisp
+(defmacro scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
+(defun main () (scaled 10 1 2 3))                     ; 60
+```
 
 `(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` is a compile-time
 helper: unlike a macro's, its own arguments are evaluated before the call, so
