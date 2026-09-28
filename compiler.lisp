@@ -35,8 +35,9 @@
 ;;;; in a pair, and a word is two of its halves' widths.
 ;;;;
 ;;;; A binary operator's right operand that is a leaf goes straight into
-;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
-;;;; operation when it defines one, instead of loading into the temp register.
+;;;; the backend's optional :OP-imm (a constant), :OP-slot (a frame slot) or
+;;;; :OP-label (a global or static slot) operation when it defines one, instead
+;;;; of loading into the temp register.
 ;;;;
 ;;;; A global or static slot loads and stores through the backend's optional
 ;;;; :PEEK-LABEL (d label) and :POKE-LABEL (label s), one operation instead of
@@ -645,8 +646,8 @@ through (:var KEY)."
   "T when LEFT, an operator's left operand, can be loaded after RIGHT is
 evaluated: an integer, a constant, an array/string address, or (function F)
 always can; a local or argument can when RIGHT does not (set) it or reach it
-through an (asm ...) block. A global never swaps -- a call or poke in RIGHT
-could change it."
+through an (asm ...) block. A global swaps only past a leaf RIGHT -- a call
+or poke in any other RIGHT could change it."
   (or (integerp left)
       (%cc-function-form-p left)
       (and (%cc-name-p left)
@@ -654,6 +655,7 @@ could change it."
              (case (first location)
                ((:constant :address) t)
                ((:local :arg :static) (not (%cc-affects-p (%designator-name left) right)))
+               (:global (%cc-leaf-p right))
                (t nil))))))
 
 (defun %cc-operands (left right)
@@ -691,7 +693,7 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
 
 (defun %cc-direct (op form)
   "(VARIANT ARGUMENT) when the leaf FORM, an operator's right operand, can go
-straight into the backend's OP-IMM or OP-SLOT variant, else NIL."
+straight into the backend's OP-IMM, OP-SLOT or OP-LABEL variant, else NIL."
   (flet ((variant (suffix)
            (let ((name (intern (format nil "~A-~A" op suffix) :keyword)))
              (and (%cc-op-p name) name))))
@@ -705,7 +707,7 @@ straight into the backend's OP-IMM or OP-SLOT variant, else NIL."
              (ecase (first location)
                ((:local :arg) (let ((name (variant "SLOT"))) (and name (list name location))))
                ((:constant :address) (let ((name (variant "IMM"))) (and name (list name (second location)))))
-               ((:global :static) nil)))))))
+               ((:global :static) (let ((name (variant "LABEL"))) (and name (list name (second location)))))))))))
 
 (defun %cc-pair-plan (op swapped left right)
   "(KIND . OPERATION) for the operation OP on LEFT and RIGHT: :DIRECT with RIGHT's

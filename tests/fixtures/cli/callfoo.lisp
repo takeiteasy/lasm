@@ -202,6 +202,9 @@
   `(defarith-variant ,mnemonic call-rs ,opcode offset
                      (mref machine 'ram (wrap-value (+ sp offset) 16)) ,expression))
 
+(defmacro defarith-rm (mnemonic opcode expression)
+  `(defarith-variant ,mnemonic call-rt ,opcode addr (mref machine 'ram addr) ,expression))
+
 (defarith-ri addri 100 (+ x y))
 (defarith-rs addrs 101 (+ x y))
 (defarith-ri subri 102 (- x y))
@@ -211,11 +214,18 @@
 (defarith-ri sltri 106 (if (< sx sy) 1 0))
 (defarith-rs sltrs 107 (if (< sx sy) 1 0))
 
+;; The same with a word at a label as the source, for :OP-label.
+(defarith-rm addrm 130 (+ x y))
+(defarith-rm subrm 131 (- x y))
+(defarith-rm seqrm 132 (if (= x y) 1 0))
+(defarith-rm sltrm 133 (if (< sx sy) 1 0))
+
 ;; #375: compare and jump, on the same source operands and signed values as
 ;; the operations above, for the compiler's optional :BRANCH-cmp operations.
 (defmode call-rrt (expr :register r) "," (expr :register r) "," expr)
 (defmode call-rit (expr :register r) "," "#" expr "," expr)
 (defmode call-rst (expr :register r) "," "[" "sp" "+" expr "]" "," expr)
+(defmode call-rmt (expr :register r) "," expr "," expr)
 
 (defmacro defbranch (mnemonic mode opcode operand-name source expression)
   `(definstruction callfoo ,mnemonic (modes ,mode)
@@ -235,7 +245,9 @@
              collect `(defbranch ,(intern (format nil "B~Ar" suffix)) call-rrt ,(+ 108 offset) src (r src) ,expression)
              collect `(defbranch ,(intern (format nil "B~Ari" suffix)) call-rit ,(+ 114 offset) value value ,expression)
              collect `(defbranch ,(intern (format nil "B~Ars" suffix)) call-rst ,(+ 120 offset) offset
-                                 (mref machine 'ram (wrap-value (+ sp offset) 16)) ,expression))))
+                                 (mref machine 'ram (wrap-value (+ sp offset) 16)) ,expression)
+             collect `(defbranch ,(intern (format nil "B~Arm" suffix)) call-rmt ,(+ 140 offset) addr
+                                 (mref machine 'ram addr) ,expression))))
 
 (defbranches ((eq (= x y)) (ne (/= x y)) (lt (< sx sy)) (gt (> sx sy)) (le (<= sx sy)) (ge (>= sx sy))))
 

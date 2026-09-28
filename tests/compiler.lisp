@@ -1838,3 +1838,51 @@ two |#
                   (:peek-pointer (a b) (ldi a b)) (:poke-pointer (a b) (ldi a b))))
     (fiveam:is (typep (%backend-error-of `(defbackend cl-pointer-arity-abi (:machine callfoo) (ops ,form)))
                       'backend-definition-error) "~S" form)))
+
+;;; #430: -label variants
+
+(eval `(defbackend cl-label-variant-abi (:extends cl-label-abi)
+         (ops (:add-label (d label) (addrm d label))
+              (:sub-label (d label) (subrm d label))
+              (:eq-label (d label) (seqrm d label))
+              (:lt-label (d label) (sltrm d label))
+              ,@(loop for comparison in '("EQ" "NE" "LT" "GT" "LE" "GE")
+                      for mnemonic in '(beqrm bnerm bltrm bgtrm blerm bgerm)
+                      collect `(,(intern (format nil "BRANCH-~A-LABEL" comparison) :keyword)
+                                (a label target) (,mnemonic a label target))))))
+
+(defun %cl-label-variant-names (source)
+  (%cl-op-names (%cl-compile source 'cl-label-variant-abi)))
+
+(fiveam:test label-variants-replace-the-load-of-a-global-right-operand
+  (let ((names (%cl-label-variant-names "(defvar g 4) (defun f (x) (+ x g)) (defun main () (f 3))")))
+    (fiveam:is (member "ADD-LABEL" names :test #'string-equal))
+    (fiveam:is (= 1 (count "PEEK-LABEL" names :test #'string-equal)) "only x is loaded")
+    (fiveam:is (= 7 (%cv-a (%cl-run "(defvar g 4) (defun f (x) (+ x g)) (defun main () (f 3))"
+                                   'cl-label-variant-abi))))))
+
+(fiveam:test label-variants-serve-a-static-slot
+  (let ((source "(defun f (a b) (- a b)) (defun main () (f 9 4))"))
+    (fiveam:is (member "SUB-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 5 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test label-variants-branch-on-a-global
+  (let ((source "(defvar g 5) (defun f (x) (if (< x g) 1 2)) (defun main () (+ (* 10 (f 3)) (f 7)))"))
+    (fiveam:is (member "BRANCH-GE-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 12 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test label-variants-swap-a-global-left-operand-past-a-leaf
+  (let ((source "(defvar g 5) (defun f (x) (> g x)) (defun main () (+ (* 10 (f 3)) (f 7)))"))
+    (fiveam:is (member "LT-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 10 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test label-variants-do-not-swap-a-global-past-a-call
+  (let ((source "(defvar g 5) (defun bump () (set g 9) 1) (defun main () (- g (bump)))"))
+    (fiveam:is (not (member "SUB-LABEL" (%cl-label-variant-names source) :test #'string-equal)))
+    (fiveam:is (= 4 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test label-variants-must-take-the-parameters-of-their-operation
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:machine callfoo) (ops (:add-label (a) (ldi a 1)))))
+                    'backend-definition-error))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:machine callfoo) (ops (:branch-lt-label (a b) (ldi a b)))))
+                    'backend-definition-error)))

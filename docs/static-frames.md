@@ -32,7 +32,8 @@ mode; a program can still ask for `stack` when the backend defines them.
 
 ## What a backend needs
 
-None of `:get` `:set` `:alloc` `:free` `:push` `:pop`, nor the `-slot` variants,
+None of `:get` `:set` `:alloc` `:free` `:push` `:pop`, nor the `-slot` variants
+(the `-label` variants take their place),
 nor a `(frame :slot ...)` operand kind: a backend with no slot operand omits it.
 A static slot is read with `:peek-label` and written with `:poke-label`, or
 with `:const` then `:peek`/`:poke` when the backend has no such operations, so

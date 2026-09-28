@@ -188,8 +188,9 @@ static frame slot, in place of `:const` then `:peek`/`:poke`.
 ;; (+ g 1)  ->  :peek-label a gvg, :add-imm a 1
 ```
 
-Each arithmetic and comparison operation may also have an `-imm` and a `-slot`
-variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler
+Each arithmetic and comparison operation may also have an `-imm`, a `-slot`
+and a `-label` variant, such as `:add-imm (d v)`, `:add-slot (d slot)` and
+`:add-label (d label)` (the word at a global or static slot), that the compiler
 uses [when the right operand allows](language.md#backend-requirements).
 Each comparison also has an optional `:branch-eq`...`:branch-ge (a b target)`
 operation, with the same variants, that a condition jumps on directly.

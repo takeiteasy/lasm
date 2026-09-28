@@ -398,29 +398,34 @@ those registers is a pair.
 | `:halt ()` | Stops the machine. |
 | `:add :sub :mul :div :mod :and :or :xor :shl :shr (d s)` | `d` = `d` op `s`. |
 | `:eq :ne :lt :gt :le :ge (d s)` | `d` = `1` or `0`. |
-| `:add-imm (d v)` `:add-slot (d slot)`, and the same for every operation above | Optional: `d` = `d` op an integer or label, or op a frame slot. |
+| `:add-imm (d v)` `:add-slot (d slot)` `:add-label (d label)`, and the same for every operation above | Optional: `d` = `d` op an integer or label, a frame slot, or the word at a label. |
 | `:branch-eq :branch-ne :branch-lt :branch-gt :branch-le :branch-ge (a b target)` | Optional: jump to `target` when `a` compares to `b` as the matching `:eq`...`:ge` does. |
-| `:branch-lt-imm (a v target)` `:branch-lt-slot (a slot target)`, and the same for every branch above | Optional: as above, with an integer or label, or a frame slot, for `b`. |
+| `:branch-lt-imm (a v target)` `:branch-lt-slot (a slot target)` `:branch-lt-label (a label target)`, and the same for every branch above | Optional: as above, with an integer or label, a frame slot, or the word at a label, for `b`. |
 
 An operator whose right operand is a constant, array or `(function F)` uses
-the `-imm` variant, and one whose right operand is a parameter or `let`
-variable uses the `-slot` variant, when the backend defines it. Any other
+the `-imm` variant, one whose right operand is a parameter or `let`
+variable uses the `-slot` variant, and one whose right operand is a global or
+a [static frame](static-frames.md) slot uses the `-label` variant, when the
+backend defines it. Any other
 operand, or a backend without the variant, loads the operand into a register
 first.[^variants]
 
 ```lisp
 (ops (:add (d s) (add d s))
      (:add-imm (d v) (addri d (imm v)))
-     (:add-slot (d slot) (addrs d slot)))
+     (:add-slot (d slot) (addrs d slot))
+     (:add-label (d label) (addrm d label)))
 ;; (+ x 1)  ->  :get a x, :add-imm a 1
 ;; (+ x y)  ->  :get a x, :add-slot a y
+;; (+ x g)  ->  :get a x, :add-label a g   ; g is a global
 ```
 
 A constant or variable *left* operand swaps to the right when that lets a
 variant apply and the right operand has none: `(+ 1 (f y))` becomes
 `(+ (f y) 1)`, and `(> 5 (f y))` becomes `(< (f y) 5)`. Only `+ * logand logior
 logxor` and the comparisons swap. The swap happens only when evaluating the
-right operand first cannot change the left one.[^swap]
+right operand first cannot change the left one: a global swaps only past a
+constant or variable.[^swap]
 
 A condition that is a comparison, or an `and`, `or` or `not` of conditions,
 jumps on the backend's `:branch-` operation, when it defines the one it needs,
@@ -541,17 +546,17 @@ With several arities taken, a wrong one that another function has is not caught 
   - A global that starts non-zero, or a variable named by `(:var NAME)` in an
     `(asm ...)`, is unknown.
 
-[^variants]: `not` compares with `:eq-imm 0` when its value is used. A global is not a slot, and reads
-  through `:peek`, so it loads first. The variants take the same operand a
-  load would: `:add-slot`'s `slot` is the operand `:get` takes, and
-  `:add-imm`'s `v` is the one `:const` takes. The example backend
+[^variants]: `not` compares with `:eq-imm 0` when its value is used. The variants take the same operand a
+  load would: `:add-slot`'s `slot` is the operand `:get` takes,
+  `:add-imm`'s `v` is the one `:const` takes, and `:add-label`'s `label` is
+  the one `:peek-label` takes. Without `:add-label`, a global loads first. The example backend
   [`callfoo-lang-abi`](../tests/fixtures/cli/callfoo.lisp) defines them for `:add`,
   `:sub`, `:eq` and `:lt` only; `:mul` and the rest load first.
 
 [^swap]: Safe means the left operand is a constant, array, `(function F)` or
   a parameter or `let` variable the right operand neither sets nor reaches
-  through an `(asm ...)` block. A global never swaps: a call or `poke` in the
-  right operand could change it.
+  through an `(asm ...)` block. A global swaps only past a constant or
+  variable: a call or `poke` in any other right operand could change it.
 
 [^branches]: An `and`, `or` and `not` in a condition jump between their
   operands and produce no value. A comparison whose `:branch-cmp` the backend

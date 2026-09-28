@@ -367,7 +367,7 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
 
 (defparameter +backend-binary-ops+
   (append '("ADD" "SUB" "MUL" "DIV" "MOD" "AND" "OR" "XOR" "SHL" "SHR") +backend-comparison-ops+)
-  "The arithmetic and comparison operations; each may have -IMM and -SLOT variants.")
+  "The arithmetic and comparison operations; each may have -IMM, -SLOT and -LABEL variants.")
 
 (defparameter +backend-language-op-arities+
   (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
@@ -378,12 +378,14 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
           (loop for name in +backend-binary-ops+
                 collect (cons name 2)
                 collect (cons (concatenate 'string name "-IMM") 2)
-                collect (cons (concatenate 'string name "-SLOT") 2))
+                collect (cons (concatenate 'string name "-SLOT") 2)
+                collect (cons (concatenate 'string name "-LABEL") 2))
           (loop for name in +backend-comparison-ops+
                 for branch = (concatenate 'string "BRANCH-" name)
                 collect (cons branch 3)
                 collect (cons (concatenate 'string branch "-IMM") 3)
-                collect (cons (concatenate 'string branch "-SLOT") 3)))
+                collect (cons (concatenate 'string branch "-SLOT") 3)
+                collect (cons (concatenate 'string branch "-LABEL") 3)))
   "Operations that the language compiler (compiler.lisp) emits, with their parameter counts.")
 
 (defun %parse-op-effects (key names forms)
