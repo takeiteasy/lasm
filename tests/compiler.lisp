@@ -796,8 +796,8 @@
              "an integer or constant target is a raw address, not checked")
   (let ((detail (%cl-fail "(defun later (h) (funcall h 1 2)) (defun f (x) x)
                            (defun main () (later (function f)))")))
-    (fiveam:is (and detail (search "no function value takes 2 arguments" detail))
-               "a parameter is checked against every function value")))
+    (fiveam:is (and detail (search "funcall through h passes 2 arguments, but it holds only function values taking 1" detail))
+               "a parameter holds what its callers pass")))
 
 ;;; #397: a variable's own function values narrow the check.
 
@@ -826,18 +826,93 @@
 
 (fiveam:test funcall-through-a-variable-falls-back-when-what-it-holds-is-unknown
   (flet ((fail (body) (%cl-fail (concatenate 'string +cl-two-arities+ body))))
-    (fiveam:is (null (fail "(defun main () (let ((g (aref taken 0))) (funcall g 1 2)))"))
-               "a value from an array is checked program-wide")
+    (fiveam:is (null (fail "(defun main () (let ((g (aref taken 0))) (funcall g 1 2) (peek taken)))"))
+               "a value from an escaped array is checked program-wide")
     (fiveam:is (null (fail "(defun main () (let ((g (function one))) (set g (+ 1 2)) (funcall g 1 2)))"))
                "a computed value makes the variable unknown")
     (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (function one)) (call (function two)))"))
                "a parameter is unknown")
     (fiveam:is (null (fail "(defun call (h) (set h (function one)) (funcall h 1 2)) (defun main () (call (function two)))"))
-               "a set does not narrow a parameter")
+               "a set on a parameter adds to what its callers pass")
     (fiveam:is (null (fail "(defvar g 4000) (defun main () (set g (function one)) (funcall g 1 2))"))
                "a global that starts non-zero may hold a raw address")
     (fiveam:is (null (fail "(defvar g 0) (defun main () (set g (function one)) (asm (:var g)) (funcall g 1 2))"))
                "an (asm) naming the variable may write it")))
+
+;;; #402: a parameter, an array element and an if/progn/let value narrow it too.
+
+(fiveam:test funcall-through-a-parameter-checks-what-its-callers-pass
+  (flet ((fail (body) (%cl-fail (concatenate 'string +cl-two-arities+ body))))
+    (fiveam:is (search "funcall through h passes 2 arguments, but it holds only function values taking 1"
+                       (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (function one)))"))
+               "one caller")
+    (fiveam:is (search "taking 1"
+                       (fail "(defun inner (h) (funcall h 1 2)) (defun outer (g) (inner g)) (defun main () (outer (function one)))"))
+               "a parameter passed on")
+    (fiveam:is (search "taking 1"
+                       (fail "(defun rec (h n) (if n (rec h (- n 1)) (funcall h 1 2))) (defun main () (rec (function one) 3))"))
+               "a recursive call adds nothing")
+    (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (function one)) (call (function two)))"))
+               "each caller's function counts")
+    (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defarray fns ((function call))) (defun main () (call (function one)))"))
+               "a function taken as a value has callers not seen")
+    (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defun main () 0)"))
+               "a function nothing calls")
+    (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (function one)) (asm (:call fncall)))"))
+               "a function whose label an (asm) spells")
+    (fiveam:is (null (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (+ 1 2)))"))
+               "a computed argument")))
+
+(fiveam:test funcall-through-an-array-element-checks-what-is-put-in-it
+  (flet ((fail (body) (%cl-fail (concatenate 'string +cl-two-arities+ "(defarray slots 2) " body))))
+    (fiveam:is (search "funcall passes 2 arguments, but its target holds only function values taking 1"
+                       (fail "(defun main () (funcall (aref taken 0) 1 2))"))
+               "an initial value")
+    (fiveam:is (null (fail "(defun main () (funcall (aref taken 1) 1 2))")))
+    (fiveam:is (search "taking 1"
+                       (fail "(defun main () (aset slots 0 (function one)) (aset slots 1 (function two)) (funcall (aref slots 0) 1 2))"))
+               "an aset at a constant index")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (function one)) (aset slots 1 (function two)) (funcall (aref slots 1) 1 2))")))
+    (fiveam:is (search "taking 1"
+                       (fail "(defconstant first 0) (defun main () (aset slots first (function one)) (funcall (aref slots first) 1 2))"))
+               "a defconstant index")
+    (fiveam:is (search "taking 1, 2"
+                       (fail "(defun main () (let ((i 1)) (funcall (aref taken i) 1 2 3)))"))
+               "a computed index reads every element")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (function one)) (let ((i 1)) (aset slots i (function two))) (funcall (aref slots 0) 1 2))"))
+               "a computed index writes every element")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (+ 1 2)) (funcall (aref slots 0) 1 2))"))
+               "a computed value")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (function one)) (funcall (aref slots 5) 1 2))"))
+               "an index past the end")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (function one)) (poke slots 0) (funcall (aref slots 0) 1 2))"))
+               "an array used other than by aref and aset")
+    (fiveam:is (null (fail "(defun get (a) (aref a 0)) (defun main () (aset slots 0 (function one)) (get slots) (funcall (aref slots 0) 1 2))"))
+               "an array passed to a function")
+    (fiveam:is (null (fail "(defarray other (slots)) (defun main () (aset slots 0 (function one)) (funcall (aref slots 0) 1 2))"))
+               "an array's address stored in another")
+    (fiveam:is (null (fail "(defun main () (aset slots 0 (function one)) (let ((slots 0)) slots) (funcall (aref slots 0) 1 2))"))
+               "a local of the same name makes the array escaped")))
+
+(fiveam:test funcall-through-an-if-progn-or-let-value-checks-what-it-yields
+  (flet ((fail (body) (%cl-fail (concatenate 'string +cl-two-arities+ body))))
+    (fiveam:is (search "funcall passes 2 arguments, but its target holds only function values taking 1"
+                       (fail "(defun main () (funcall (if 1 (function one) (function one)) 1 2))")))
+    (fiveam:is (null (fail "(defun main () (funcall (if 1 (function one) (function two)) 1 2))"))
+               "each branch counts")
+    (fiveam:is (null (fail "(defun main () (funcall (if 1 (function one)) 1 2))"))
+               "an if with no else")
+    (fiveam:is (search "taking 1" (fail "(defun main () (funcall (progn 1 (function one)) 1 2))")))
+    (fiveam:is (search "taking 1" (fail "(defun main () (funcall (let ((x 1)) (function one)) 1 2))")))
+    (fiveam:is (search "funcall through g passes"
+                       (fail "(defun main () (let ((g (let ((x 1)) (if x (function one) (function one))))) (funcall g 1 2)))"))
+               "a value nested in a binding")
+    (fiveam:is (search "taking 1"
+                       (fail "(defun main () (let ((f (function one))) (funcall (let ((x 1)) f) 1 2)))"))
+               "a let's value names a variable of the outer scope")
+    (fiveam:is (search "funcall through g passes"
+                       (fail "(defvar g 0) (defun main () (set g (function one)) (let ((g g)) (funcall g 1 2)))"))
+               "a binding's value is looked up before the binding exists")))
 
 (fiveam:test funcall-arity-narrowing-is-the-same-when-optimizing-for-speed
   (flet ((fail (body optimize)
@@ -845,7 +920,9 @@
              (program-compile-error (c) (program-compile-error-detail c)))))
     (dolist (optimize '(:size :speed))
       (fiveam:is (search "taking 1" (fail "(defun main () (let ((g (function one))) (while 0 (funcall g 1)) (funcall g 1 2)))" optimize)))
-      (fiveam:is (null (fail "(defun main () (let ((g (function one))) (set g (function two)) (funcall g 1 2)))" optimize))))))
+      (fiveam:is (null (fail "(defun main () (let ((g (function one))) (set g (function two)) (funcall g 1 2)))" optimize)))
+      (fiveam:is (search "taking 1" (fail "(defun call (h) (funcall h 1 2)) (defun main () (call (function one)))" optimize)))
+      (fiveam:is (search "taking 1" (fail "(defun main () (funcall (aref taken 0) 1 2))" optimize))))))
 
 (fiveam:test a-word-wider-than-a-cell-runs-globals-arrays-and-strings
   (dolist (case '(("(defvar x 1000) (defvar y 2000) (defun main () (+ x y))" . 3000)
@@ -1036,7 +1113,7 @@
                   ("(defvar g 0) (defun f (x) x) (defun main () (set g (function f)) (funcall g 1 2))"
                    "funcall through g passes 2 arguments, but it holds only function values taking 1")
                   ("(defun f (x) x) (defarray fns ((function f))) (defun main () (funcall (aref fns 0)))"
-                   "no function value takes 0 arguments (function values take 1)")
+                   "funcall passes 0 arguments, but its target holds only function values taking 1")
                   ("(defvar g 0) (defun main () (funcall g 1))" "no function value takes 1 argument")
                   ("(defun funcall (x) x) (defun main () 1)" "funcall is a built-in form")
                   ("(defun function (x) x) (defun main () 1)" "function is a built-in form")

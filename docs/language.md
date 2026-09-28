@@ -125,10 +125,12 @@ Symbols are compared by name, ignoring case.
 variable, put in a `defarray`, or called through. `(funcall E ARG...)` calls
 through `E`'s value: a literal `(function F)` compiles the same direct call
 `(F ARG...)` does, arity-checked at compile time. Any other `E` computes its
-target at run time. Through a `let` variable or global, its argument count must
-be one of the function values put in that variable; through anything else, one
-some `(function F)` in the program takes. Otherwise it is a compile error. An
-integer or `defconstant` target is a raw address and is not checked.[^funcall-arity]
+target at run time, and its argument count must be one of the function values
+that can reach it: those put in a `let` variable, global or parameter, in a
+`defarray` element, or yielded by an `if`, `progn` or `let`. Otherwise it is a
+compile error. Where that is not known, one some `(function F)` in the program
+takes will do. An integer or `defconstant` target is a raw address and is not
+checked.[^funcall-arity]
 
 ```lisp
 (defun add-one (x) (+ x 1))
@@ -477,7 +479,10 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| `funcall` through a parameter, an array element or a computed target is checked only against every function value's arity; with several arities taken, a wrong one that another function has is not caught. | [#402](https://todo.sr.ht/~takeiteasy/lasm/402) |
+| `funcall` through a function's return value is checked only against every function value's arity. | [#403](https://todo.sr.ht/~takeiteasy/lasm/403) |
+| `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#404](https://todo.sr.ht/~takeiteasy/lasm/404) |
+
+With several arities taken, a wrong one that another function has is not caught in these cases.
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an
@@ -502,11 +507,21 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 [^funcall-arity]: The check runs once every function is compiled, so a function
   value taken after the call still counts. `(function F)` in a function body or
-  a `defarray` adds `F`'s argument count to the program-wide set. A `let`
-  binding or `set` of a variable to a literal `(function F)` adds it to that
-  variable's own set; any other value, a parameter, a global that starts
-  non-zero, or an `(asm ...)` naming the variable with `(:var NAME)` makes the
-  variable unknown, and a call through it uses the program-wide set.
+  a `defarray` adds `F`'s argument count to the program-wide set. A variable,
+  parameter or array element holds the function values put in it, and whatever
+  else flows in from another variable or an `if`, `progn` or `let` value; any
+  other value, such as a computed one or an `if` with no `else`, makes it
+  unknown, and a call through it uses the program-wide set.
+
+  - A parameter holds what each direct call passes. A function taken with
+    `(function F)`, or whose label an `(asm ...)` spells, has callers not seen,
+    so its parameters are unknown.
+  - An element of a `defarray` holds its initial value (`0` holds nothing) and
+    what a constant-index `aset` puts in it; a computed index reads or writes
+    every element. An array named other than as the base of `aref` or `aset`,
+    even by a local of the same name, has unknown elements.
+  - A global that starts non-zero, or a variable named by `(:var NAME)` in an
+    `(asm ...)`, is unknown.
 
 [^variants]: `not` compares with `:eq-imm 0` when its value is used. A global is not a slot, and reads
   through `:peek`, so it loads first. The variants take the same operand a
