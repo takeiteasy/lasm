@@ -235,11 +235,34 @@ See [Assembler](assembler.md#assemblys-cell-width).
 
 The grouped form orders groups with its first keyword and cells within a
 group with its second. Word-addressed memory and word-encoded instructions
-can be combined; see [`dcpu16.lisp`](../examples/dcpu16.lisp).
+can be combined; the [DCPU-16 example](examples.md) does.
 
 `:endian` also orders the 8-bit characters within a cell of a
 [packed string](language.md#arrays-strings-and-byte-access) and of
 [`.pack`/`.packz`](directives.md#pack--packz); a grouped order uses its inner one.
+
+## Your own package
+
+Define machines, modes and instructions in any package that uses `#:lasm`.
+Clause names such as `register`, `encoding` or `variant` are matched by name,
+so they need no import.
+
+```lisp
+(defpackage #:my-cpu
+  (:use #:cl #:lasm)
+  (:shadowing-import-from #:lasm #:push #:pop))
+
+(in-package #:my-cpu)
+
+(defmachine my-cpu
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+```
+
+`push` and `pop` are lasm's stack operators, so the package shadows the CL
+functions. `pc`, `opcode`, `machine` and `choice-case` are exported from
+`#:lasm`: the PC register and an instruction word's `opcode` field are found by
+symbol, and semantics bodies use `machine` and `choice-case`.
 
 ## Limitations
 

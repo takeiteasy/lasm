@@ -324,6 +324,10 @@
    #:bit-set?
    #:page-crossed?
    #:elapse
+   #:machine
+   #:choice-case
+   #:pc
+   #:opcode
 
    ;; Lexer
    #:deflexer

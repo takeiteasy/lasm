@@ -4677,6 +4677,7 @@ a hole matching none of the given keys -- including a hole with no recorded
 choice at all, e.g. a cell-encoded machine's hole with no hole-selected
 (variant (choice ...) (sub ...)) selector of its own -- signals
 NO-MATCHING-CHOICE rather than silently falling through."
+  (setf clauses (mapcar #'%dsl-form clauses))
   (%with-definition (name instruction-definition-error)
     (let (modes-clause encoding-clause semantics-clause cycles-clause privilege-clause seen-heads fallbackp)
       (dolist (clause clauses)

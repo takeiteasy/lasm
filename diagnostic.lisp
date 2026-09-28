@@ -357,3 +357,32 @@ this global switch via DEFMODE's :STRICT T (mode.lisp) -- see %ENCODE's
 switch is the only way to cover an instruction with no addressing mode at
 all (a bare (operand :width n) M1-style encoding), since :STRICT lives on a
 MODE-DESCRIPTOR.")
+
+;; The definers match their clause heads by symbol identity. Rewriting each
+;; head to its lasm symbol lets a machine be defined from any package;
+;; SEMANTICS and CYCLES bodies are user code and stay untouched.
+(defparameter *dsl-clause-heads*
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (head '(register stack memory flags instruction-word clock-speed reset-pc device
+                    stack-pointer interrupts undefined-opcode properties privilege idle
+                    without-instructions instruction-cycles without-storage without-devices
+                    region field layout extra-word-order
+                    modes encoding semantics cycles opcode operand field-value for-choice sub-opcode fallback
+                    variant choice sub holes range extra-word)
+                    table)
+      (setf (gethash (symbol-name head) table) head))))
+
+(defun %dsl-form (form)
+  "FORM with every clause head naming a DSL keyword replaced by lasm's symbol."
+  (if (atom form)
+      form
+      (let* ((head (first form))
+             (canonical (and (symbolp head) (gethash (symbol-name head) *dsl-clause-heads*)))
+             (head (or canonical head)))
+        (if (member (and (symbolp head) (symbol-name head)) '("SEMANTICS" "CYCLES" "QUOTE") :test #'equal)
+            (cons head (rest form))
+            (cons (%dsl-form head)
+                  (loop for tail = (rest form) then (cdr tail)
+                        while (consp tail)
+                        collect (%dsl-form (car tail)) into items
+                        finally (return (nconc items tail))))))))

@@ -97,6 +97,7 @@
                (:file "cli")
                (:file "debugger")
                (:file "banks")
+               (:file "foreign-package")
                (:file "examples"))
   :perform (test-op (op c)
              (let ((results (uiop:symbol-call :fiveam :run (uiop:find-symbol* :lasm :lasm))))
