@@ -848,3 +848,80 @@
            (fiveam:is (= 1 status))
            (fiveam:is (search "no backend" err)))
       (%cl-delete path))))
+
+;;; #389: a jump on a true value without a comparison
+
+(defbackend cl-no-ne-imm-abi (:extends callfoo-lang-abi)
+  (without-ops :branch-ne-imm))
+
+(fiveam:test a-true-jump-on-a-value-uses-branch-ne-imm
+  (flet ((ops (source backend) (%cl-op-names (%cl-compile source backend))))
+    (dolist (source '("(defun f (x) (while (not x) (set x 1))) (defun main () (f 0))"
+                      "(defun f (x y) (if (or x y) 1 2)) (defun main () (f 0 1))"))
+      (let ((ops (ops source 'callfoo-lang-abi)))
+        (fiveam:is (member "BRANCH-NE-IMM" ops :test #'string=) "~A" source))
+      (let ((ops (ops source 'cl-no-ne-imm-abi)))
+        (fiveam:is (notany (lambda (name) (string= name "BRANCH-NE-IMM")) ops) "~A" source)
+        (fiveam:is (member "BRANCH-ZERO" ops :test #'string=) "~A" source)
+        (fiveam:is (member "JUMP" ops :test #'string=) "~A" source)))))
+
+;;; #390: a value-context and/or fuses its comparisons when that is shorter
+
+(defun %cl-value-source (operator count)
+  (format nil "(defun f (x y) (set x (~A~{ ~A~}))) (defun main () (f 1 2))" operator
+          (loop for i below count collect (format nil "(< x ~D)" (+ i 3)))))
+
+(fiveam:test a-value-and-fuses-only-when-it-is-shorter
+  (flet ((fused-p (count)
+           (%cl-branch-names (%cl-op-names (%cl-compile (%cl-value-source "and" count) 'callfoo-lang-abi)))))
+    (fiveam:is (null (fused-p 2)))
+    (fiveam:is (null (fused-p 3)))
+    (fiveam:is (fused-p 4))))
+
+(fiveam:test a-value-or-fuses-only-when-it-is-shorter
+  (flet ((fused-p (count backend)
+           (remove "BRANCH-NE-IMM"
+                   (%cl-branch-names (%cl-op-names (%cl-compile (%cl-value-source "or" count) backend)))
+                   :test #'string=)))
+    (fiveam:is (null (fused-p 2 'callfoo-lang-abi)))
+    (fiveam:is (null (fused-p 3 'callfoo-lang-abi)))
+    (fiveam:is (fused-p 4 'cl-no-ne-imm-abi) "two saved per comparison without :branch-ne-imm")
+    (fiveam:is (fused-p 4 'callfoo-lang-abi))
+    (fiveam:is (fused-p 3 'cl-no-ne-imm-abi))
+    (fiveam:is (null (fused-p 2 'cl-no-ne-imm-abi)))))
+
+(fiveam:test a-value-or-branches-on-a-nonzero-operand
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (x y) (set x (or x y 5))) (defun main () (f 0 1))"
+                                        'callfoo-lang-abi))))
+    (fiveam:is (member "BRANCH-NE-IMM" ops :test #'string=))
+    (fiveam:is (notany (lambda (name) (string= name "BRANCH-ZERO")) ops))))
+
+(defparameter +cl-value-shapes+
+  (list (cons "(and (~A x y) (~A y 3) (~A x 7) (~A 2 y))"
+              (lambda (c x y) (and (funcall c x y) (funcall c y 3) (funcall c x 7) (funcall c 2 y))))
+        (cons "(or (~A x y) (~A y 3) (~A x 7) (~A 2 y))"
+              (lambda (c x y) (or (funcall c x y) (funcall c y 3) (funcall c x 7) (funcall c 2 y))))
+        (cons "(or (~A x y) (~A y 3) (~A x 7) 9)"
+              (lambda (c x y) (or (funcall c x y) (funcall c y 3) (funcall c x 7) 9)))
+        (cons "(and (~A x y) (~A y 3) (~A x 7) 9)"
+              (lambda (c x y) (and (funcall c x y) (funcall c y 3) (funcall c x 7) 9)))
+        (cons "(or (~A x y) x (~A y 3) (~A x 7) 4)"
+              (lambda (c x y) (or (funcall c x y) (if (/= x 0) x nil) (funcall c y 3) (funcall c x 7) 4)))
+        (cons "(and (~A x y) x (~A y 3) (~A x 7) 4)"
+              (lambda (c x y) (and (funcall c x y) (if (/= x 0) x nil) (funcall c y 3) (funcall c x 7) 4))))
+  "Value-context source, with the value it must give for comparison C on signed X and Y.")
+
+(fiveam:test value-and-or-give-the-same-values-with-and-without-fusing
+  (dolist (backend '((callfoo-lang-abi callfoo) (cl-no-ne-imm-abi callfoo) (cl-no-ge-abi callfoo)
+                     (callfoo-lang-fp-abi callfoo-fp)))
+    (loop for (name function) in '(("=" =) ("/=" /=) ("<" <) (">" >) ("<=" <=) (">=" >=))
+          do (loop for (control . expected) in +cl-value-shapes+
+                   do (loop for (x y) in '((1 2) (2 1) (3 3) (0 3) (65535 1) (1 65535) (8 65535))
+                            for source = (format nil "(defun f (x y) ~A) (defun main () (f ~D ~D))"
+                                                 (format nil control name name name name) x y)
+                            for want = (let ((value (funcall expected
+                                                             (lambda (a b) (and (funcall function a b) 1))
+                                                             (%cl-signed x) (%cl-signed y))))
+                                         (mod (or value 0) 65536))
+                            do (fiveam:is (= want (%cv-a (%cl-run source (first backend) (second backend))))
+                                          "~A on ~A" source (first backend)))))))

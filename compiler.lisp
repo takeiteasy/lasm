@@ -39,6 +39,12 @@
 ;;;; them, jumps on the backend's optional :BRANCH-cmp (a b target) operation,
 ;;;; and its -imm/-slot variants, instead of computing a 0 or 1 first.
 ;;;;
+;;;; #389: a jump on a true value with no comparison of its own uses the
+;;;; backend's optional :BRANCH-NE-IMM (a 0 target) rather than skipping a :jump.
+;;;;
+;;;; #390: an and/or whose value is used jumps on its comparisons into a
+;;;; shared 0/1 landing when the operands save more than the landing costs.
+;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
 ;;;; #367, #380: a defmacro call, in an expression or at top level, is
@@ -438,9 +444,22 @@ on the temp register."
     (and entry (assoc (second entry) +cc-negations+) (= (length form) 3)
          (list (second entry) (second form) (third form)))))
 
-;; TODO: a true-sense jump on an operand with no comparison of its own (an
-;; `or` condition, `(not x)`) skips over a :jump; a backend with :branch-ne-imm
-;; could branch on it directly (#389).
+(defun %cc-branch-op (comparison sense)
+  "The backend's :BRANCH-cmp that jumps when the COMPARISON, (OP LEFT RIGHT), is
+true if SENSE or false if not, or NIL when it has none."
+  (let ((name (%cc-branch-name (if sense (first comparison)
+                                   (cdr (assoc (first comparison) +cc-negations+))))))
+    (and name (%cc-op-p name) name)))
+
+(defun %cc-branch-nonzero (target)
+  "Jump to TARGET when the accumulator is not 0 (#389)."
+  (if (%cc-op-p :branch-ne-imm)
+      (%cc-op :branch-ne-imm *cc-acc* 0 target)
+      (let ((skip (%cc-new-label)))
+        (%cc-op :branch-zero *cc-acc* skip)
+        (%cc-op :jump target)
+        (%cc-emit (list :label skip)))))
+
 (defun %cc-branch (form sense target)
   "Jump to TARGET when FORM is true if SENSE, or false if not, else fall
 through (#375). A comparison uses the backend's :BRANCH-cmp when it has one; an
@@ -448,7 +467,8 @@ and, or and not of conditions jump between their operands and produce no value."
   (let* ((head (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form)
                     (%designator-name (first form))))
          (args (and head (rest form)))
-         (comparison (%cc-comparison form)))
+         (comparison (%cc-comparison form))
+         (branch (and comparison (%cc-branch-op comparison sense))))
     (cond ((and (equal head "NOT") (= (length args) 1))
            (%cc-branch (first args) (not sense) target))
           ((and (member head '("AND" "OR") :test #'equal) args)
@@ -459,19 +479,15 @@ and, or and not of conditions jump between their operands and produce no value."
                           (%cc-branch arg stop (if (eq sense stop) target skip))
                           (%cc-branch arg sense target)))
              (when skip (%cc-emit (list :label skip)))))
-          ((and comparison
-                (%cc-op-p (%cc-branch-name (if sense (first comparison)
-                                               (cdr (assoc (first comparison) +cc-negations+))))))
+          (branch
            (let* ((*cc-form* form)
-                  (op (if sense (first comparison) (cdr (assoc (first comparison) +cc-negations+))))
-                  (pair (%cc-pair (%cc-branch-name op) (%cc-branch-name (cdr (assoc op +cc-flips+)))
+                  (op (if sense (first comparison)
+                          (cdr (assoc (first comparison) +cc-negations+))))
+                  (pair (%cc-pair branch (%cc-branch-name (cdr (assoc op +cc-flips+)))
                                   (second comparison) (third comparison))))
              (apply #'%cc-op (first pair) *cc-acc* (append (rest pair) (list target)))))
-          (sense (let ((skip (%cc-new-label)))
-                   (%cc-expr form)
-                   (%cc-op :branch-zero *cc-acc* skip)
-                   (%cc-op :jump target)
-                   (%cc-emit (list :label skip))))
+          (sense (%cc-expr form)
+                 (%cc-branch-nonzero target))
           (t (%cc-expr form)
              (%cc-op :branch-zero *cc-acc* target)))))
 
@@ -495,33 +511,47 @@ and, or and not of conditions jump between their operands and produce no value."
     (%cc-emit (list :label end))
     (%cc-const 0)))
 
-;; TODO: an and/or whose value is used compares into the accumulator, then
-;; branches, per operand; fused :branch-cmp jumps into a shared 0/1 landing
-;; would save an instruction per comparison after the first (#390).
-(defun %cc-and (form)
+(defun %cc-fuses-p (args sense)
+  "True when fusing the comparisons of the and/or operands ARGS into jumps to a
+shared 0/1 landing (#390) is shorter: it saves more than the landing's :jump
+and :const. SENSE is the operand value that ends the and/or."
+  (let ((saving (if sense (if (%cc-op-p :branch-ne-imm) 1 2) 1)))
+    (> (* saving (count-if (lambda (arg)
+                             (let ((comparison (%cc-comparison arg)))
+                               (and comparison (%cc-branch-op comparison sense))))
+                           (butlast args)))
+       2)))
+
+(defun %cc-short-circuit (form sense)
+  "An and (SENSE nil) or or (SENSE t) whose value is used. An operand that ends
+it jumps to the end with its value in the accumulator, or, for a fused
+comparison, to a landing that loads the result."
   (%cc-check-length form 1 nil)
   (if (null (rest form))
-      (%cc-const 1)
-      (let ((end (%cc-new-label)))
+      (%cc-const (if sense 0 1))
+      (let* ((end (%cc-new-label))
+             (fuse (%cc-fuses-p (rest form) sense))
+             (landing (and fuse (%cc-new-label))))
         (loop for (arg . more) on (rest form)
-              do (%cc-expr arg)
-                 (when more
-                   (%cc-op :branch-zero *cc-acc* end)))
+              for comparison = (%cc-comparison arg)
+              do (cond ((not more) (%cc-expr arg))
+                       ((and fuse comparison (%cc-branch-op comparison sense))
+                        (%cc-branch arg sense landing))
+                       (t (%cc-expr arg)
+                          (if sense
+                              (%cc-branch-nonzero end)
+                              (%cc-op :branch-zero *cc-acc* end)))))
+        (when fuse
+          (%cc-op :jump end)
+          (%cc-emit (list :label landing))
+          (%cc-const (if sense 1 0)))
         (%cc-emit (list :label end)))))
 
+(defun %cc-and (form)
+  (%cc-short-circuit form nil))
+
 (defun %cc-or (form)
-  (%cc-check-length form 1 nil)
-  (if (null (rest form))
-      (%cc-const 0)
-      (let ((end (%cc-new-label)))
-        (loop for (arg . more) on (rest form)
-              do (%cc-expr arg)
-                 (when more
-                   (let ((next (%cc-new-label)))
-                     (%cc-op :branch-zero *cc-acc* next)
-                     (%cc-op :jump end)
-                     (%cc-emit (list :label next)))))
-        (%cc-emit (list :label end)))))
+  (%cc-short-circuit form t))
 
 (defun %cc-let (form)
   (%cc-check-length form 2 nil)

@@ -177,6 +177,7 @@ variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler
 uses [when the right operand allows](language.md#backend-requirements).
 Each comparison also has an optional `:branch-eq`...`:branch-ge (a b target)`
 operation, with the same variants, that a condition jumps on directly.
+`:branch-ne-imm` also serves a jump on a nonzero value, as `a 0 target`.
 
 ## Branches
 
