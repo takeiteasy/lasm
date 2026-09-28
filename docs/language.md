@@ -244,6 +244,17 @@ label.
     x))                                   ; 3
 ```
 
+`(asm (:clobbers REG...) ITEM...)` declares the registers the block writes; the
+declaration is not emitted. The [register allocator](#backend-requirements)
+holds a value across an `asm` in any other register. Without a declaration,
+`asm` may write any register. The list is a promise: an `asm` that calls a
+routine lists every register the routine changes.
+
+```lisp
+(asm (:clobbers b)
+     (:op :const (reg b) 3))                  ; a value held in c survives
+```
+
 ## Backend requirements
 
 The backend's first `:return` register is the accumulator, and the first
@@ -360,8 +371,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| A register `%CC-TAKE` picks from the callee-saved pool for a single call site costs a save/restore even when the stack would have been as cheap. | [#376](https://todo.sr.ht/~takeiteasy/lasm/376) |
-| An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
+| A first callee-saved register is claimed only inside a loop, so one-off call sites outside a loop never share one. | [#394](https://todo.sr.ht/~takeiteasy/lasm/394) |
+| An `asm` that declares a callee-saved register in `:clobbers` must still save and restore it itself. | [#393](https://todo.sr.ht/~takeiteasy/lasm/393) |
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
@@ -380,9 +391,12 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   register when the right operand has no call, since a call is the only
   thing it could do that such a register does not survive; a
   `:callee-saved` one, added to the function's `:save`, when it calls a
-  function; the stack, as before #373, when the pool has none free or the
-  right operand reaches an `(asm ...)`, which could target any register
-  directly. A call evaluates each argument into its own frame slot, then
+  function inside a `while` or the function already saves that register,
+  since a first save costs a push and a pop that the stack would not (#376);
+  the stack when the pool has none free. An `(asm ...)` in the right operand
+  rules out the registers it declares in `:clobbers`, or every register when
+  it declares none (#377).
+  A call evaluates each argument into its own frame slot, then
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
 

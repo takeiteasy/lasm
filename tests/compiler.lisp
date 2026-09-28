@@ -125,6 +125,16 @@
     ("(defun g (x) (+ x 1))
       (defun h (a b c) (+ (g a) (+ b c)))
       (defun main () (h 10 20 30))" . 61)
+    ;; #376: saved registers inside a loop, and reused outside it.
+    ("(defun g (x) (+ x 1))
+      (defun f (n) (let ((s 0)) (while (< n 3) (set s (+ s (+ (g n) (g n)))) (set n (+ n 1))) s))
+      (defun main () (f 0))" . 12)
+    ("(defun g (x) (+ x 1))
+      (defun f (n) (while (< n 1) (set n (+ n (+ (g n) (if (= n 0) (return 42) (g n)))))) n)
+      (defun main () (f 0))" . 42)
+    ("(defun g (x) (+ x 1))
+      (defun main () (let ((i 0) (s 0)) (while (< i 2) (set s (+ s (+ (g 1) (g 2)))) (set i (+ i 1)))
+                       (+ s (+ (g 3) (g 4)))))" . 19)
     ;; #365: function values and indirect calls.
     ("(defun f (x) (+ x 1)) (defun main () (funcall (function f) 5))" . 6)
     ("(defvar g 0) (defun f (x) (* x 2))
@@ -462,8 +472,27 @@
     (third (find-if (lambda (item) (and (eq :function (first item)) (%same-name-p label (second item))))
                     items))))
 
-(fiveam:test a-call-in-the-right-operand-holds-the-left-in-a-saved-register
+(defparameter +cl-loop-calls+
+  "(defun f (n) n)
+   (defun main () (let ((i 0)) (while (< i 1) (+ (f 1) (f 2)) (set i 1)) 0))"
+  "One call-holding site inside a while.")
+
+(fiveam:test a-call-in-a-loop-holds-the-left-in-a-saved-register
+  (let ((items (%cl-compile +cl-loop-calls+ 'callfoo-lang-abi)))
+    (fiveam:is (zerop (%cl-push-count items)))
+    (fiveam:is (equal '("C") (mapcar #'%designator-name (getf (%cl-function-options items "main") :save))))))
+
+(fiveam:test a-one-off-call-outside-a-loop-uses-the-stack
   (let ((items (%cl-compile "(defun f (n) n) (defun main () (+ (f 1) (f 2)))" 'callfoo-lang-abi)))
+    (fiveam:is (= 1 (%cl-push-count items)))
+    (fiveam:is (null (getf (%cl-function-options items "main") :save)))))
+
+(fiveam:test a-saved-register-is-reused-outside-the-loop
+  (let ((items (%cl-compile "(defun f (n) n)
+                             (defun main () (let ((i 0))
+                               (while (< i 1) (+ (f 1) (f 2)) (set i 1))
+                               (+ (f 3) (f 4))))"
+                            'callfoo-lang-abi)))
     (fiveam:is (zerop (%cl-push-count items)))
     (fiveam:is (equal '("C") (mapcar #'%designator-name (getf (%cl-function-options items "main") :save))))))
 
@@ -476,14 +505,40 @@
 
 (fiveam:test running-out-of-registers-still-falls-back-to-the-stack
   (fiveam:is (= 1 (%cl-push-count (%cl-compile "(defun f (n) n)
-                                                 (defun main () (+ (f 1) (+ (f 2) (+ (f 3) (f 4)))))"
+                                                 (defun main () (let ((i 0)) (while (< i 1)
+                                                   (+ (f 1) (+ (f 2) (+ (f 3) (f 4)))) (set i 1)) 0))"
                                                'callfoo-lang-abi)))))
 
-(fiveam:test asm-in-the-right-operand-still-uses-the-stack
-  (fiveam:is (= 1 (%cl-push-count
-                   (%cl-compile "(defun main () (let ((x 1))
-                                    (+ x (progn (asm (:op :const (reg a) 3) (:op :set (:var x) (reg a))) 0))))"
-                               'callfoo-lang-abi)))))
+;;; #377: a declared clobber list keeps the register path
+
+(defparameter +cl-asm-source+
+  "(defun main () (let ((x 1))
+     (+ x (progn (asm ~A (:op :const (reg b) 3) (:op :set (:var x) (reg b))) 7))))"
+  "An asm in a right operand, with the declaration ~A; x is 1 unless the asm is wrongly reordered.")
+
+(defun %cl-asm-source (declaration)
+  (format nil +cl-asm-source+ declaration))
+
+(fiveam:test asm-in-the-right-operand-without-a-declaration-uses-the-stack
+  (dolist (backend '(callfoo-lang-abi cl-reg-abi))
+    (fiveam:is (= 1 (%cl-push-count (%cl-compile (%cl-asm-source "") backend))))))
+
+(fiveam:test asm-that-declares-its-clobbers-keeps-the-register-path
+  (fiveam:is (zerop (%cl-push-count (%cl-compile (%cl-asm-source "(:clobbers b)") 'cl-reg-abi))))
+  (fiveam:is (zerop (%cl-push-count (%cl-compile (%cl-asm-source "(:clobbers)") 'cl-reg-abi))))
+  (fiveam:is (= 8 (%cv-a (%cl-run (%cl-asm-source "(:clobbers b)") 'cl-reg-abi)))))
+
+(fiveam:test asm-declaring-the-only-free-register-uses-the-stack
+  (fiveam:is (= 1 (%cl-push-count (%cl-compile (%cl-asm-source "(:clobbers C)") 'cl-reg-abi))))
+  (fiveam:is (= 8 (%cv-a (%cl-run (%cl-asm-source "(:clobbers c)") 'cl-reg-abi)))))
+
+(fiveam:test a-clobber-declaration-is-not-emitted
+  (let ((items (%cl-compile (%cl-asm-source "(:clobbers b)") 'cl-reg-abi)))
+    (fiveam:is (null (find-if (lambda (item) (and (consp item) (eq :clobbers (first item)))) (fourth (find :function items :key #'first)))))))
+
+(fiveam:test a-clobber-declaration-names-registers
+  (fiveam:is (search "nope" (%cl-fail (%cl-asm-source "(:clobbers nope)"))))
+  (fiveam:is (%cl-fail (%cl-asm-source "(:clobbers 3)"))))
 
 (fiveam:test function-items-declare-their-arguments-and-locals
   (let ((function (find-if (lambda (item) (eq :function (first item)))

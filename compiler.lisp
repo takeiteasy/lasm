@@ -47,6 +47,12 @@
 ;;;; #391: so does a nested not/and/or operand, by its estimated saving
 ;;;; (%CC-COSTS).
 ;;;;
+;;;; #376: an operand holds a :callee-saved register across a call only inside a
+;;;; loop, or when the function already saves that register; otherwise the
+;;;; stack costs less than the prologue/epilogue pair.
+;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
+;;;; writes, so an operand holding another register may reach it.
+;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
 ;;;; #367, #380: a defmacro call, in an expression or at top level, is
@@ -71,7 +77,7 @@
    (form :initarg :form :initform nil :reader program-compile-error-form)
    (function :initarg :function :initform nil :reader program-compile-error-function)))
 
-(defparameter *cc-source-keywords* '(:var)
+(defparameter *cc-source-keywords* '(:var :clobbers)
   "Keywords that source text uses, which the reader accepts only once they exist.")
 
 (defvar *cc-backend* nil)
@@ -94,6 +100,7 @@
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
 (defvar *cc-labels* 0 "Control labels made so far.")
+(defvar *cc-loop-depth* 0 "While loops enclosing the expression being compiled (#376).")
 (defvar *cc-depth* 0 "Temporaries the compiler has pushed since the function's entry.")
 (defvar *cc-positions* nil "EQ hash table, form -> character offset, or NIL without one (#362).")
 (defvar *cc-source* nil "The program's source text, or NIL.")
@@ -245,46 +252,67 @@ cannot be a register alias or a generated label."
       (dolist (form forms) (%cc-expr form))
       (%cc-const 0)))
 
+(defun %cc-clobber-declaration-p (item)
+  (and (consp item) (eq (first item) :clobbers)))
+
+(defun %cc-asm-clobbers (form)
+  "The upcased register names an (asm ...) FORM declares with a first item
+(:clobbers REG...), or :ALL without one."
+  (let ((item (second form)))
+    (if (%cc-clobber-declaration-p item)
+        (let ((descriptor (find-machine-descriptor (backend-descriptor-machine *cc-backend*))))
+          (mapcar (lambda (name)
+                    (unless (%cc-name-p name)
+                      (%cc-fail form "expected a register name in :clobbers, got ~S" name))
+                    (handler-case (%backend-register-name descriptor name)
+                      (backend-definition-error ()
+                        (%cc-fail form "~A in :clobbers is not a register" (%source-name name nil)))))
+                  (rest item)))
+        :all)))
+
 (defun %cc-hazards (tree)
-  "(VALUES ASM-P CALL-P): whether TREE, an operand's source form, reaches an
-(asm ...) block, which can target any register directly, or calls a
-function, which clobbers the volatile pool (#373) -- a call's target may
-not preserve a :caller-saved register the way it preserves :callee-saved
-ones."
+  "(VALUES CLOBBERS CALL-P): the registers the (asm ...) blocks in TREE, an
+operand's source form, can write -- :ALL when one declares none -- and
+whether it calls a function, which clobbers the volatile pool (#373): a
+call's target may not preserve a :caller-saved register the way it preserves
+:callee-saved ones."
   (if (not (consp tree))
       (values nil nil)
       (let* ((head (and (%cc-name-p (first tree)) (%designator-name (first tree))))
-             (asm (equal head "ASM"))
+             (clobbers (if (equal head "ASM") (%cc-asm-clobbers tree) nil))
              (call (and head (or (equal head "FUNCALL") (and (gethash head *cc-functions*) t)))))
         (dolist (element tree)
-          (multiple-value-bind (a c) (%cc-hazards element)
-            (when a (setf asm t))
-            (when c (setf call t))))
-        (values asm call))))
+          (multiple-value-bind (c k) (%cc-hazards element)
+            (setf clobbers (if (or (eq clobbers :all) (eq c :all))
+                               :all
+                               (union clobbers c :test #'string=)))
+            (when k (setf call t))))
+        (values clobbers call))))
 
+;; TODO: a first preserved register is claimed only inside a loop, so one-off
+;; sites outside a loop never share one; a two-pass count of sites would
+;; recover the memory-access saving (#394).
 (defun %cc-take (form)
   "A register from the pool to hold a value across compiling FORM, an
-operand not yet compiled, or NIL to fall back to the stack (#373): NIL when
-FORM reaches an (asm ...), which could target the held register directly;
-a free *CC-PRESERVED* register, recorded in *CC-SAVES* for the function's
-prologue and epilogue to save and restore, when FORM calls a function; a
-free *CC-VOLATILE* register otherwise, since a call is the only thing a
-compiled operand can do that a :caller-saved register does not survive."
-  (multiple-value-bind (asm call) (%cc-hazards form)
-    (cond (asm nil)
-          (call (let ((register (first *cc-preserved*)))
-                  (when register (pushnew register *cc-saves* :test #'string=))
-                  register))
-          (t (first *cc-volatile*)))))
+operand not yet compiled, or NIL to fall back to the stack (#373). Registers
+an (asm ...) in FORM may clobber (%CC-HAZARDS) are skipped (#377). When FORM
+calls a function the pick is a *CC-PRESERVED* register, recorded in
+*CC-SAVES* for the function's prologue and epilogue to save and restore: one
+already saved, else a new one only inside a loop (#376). Otherwise it is a
+*CC-VOLATILE* register, since a call is the only thing a compiled operand
+can do that a :caller-saved register does not survive."
+  (multiple-value-bind (clobbers call) (%cc-hazards form)
+    (flet ((usable (pool)
+             (remove-if (lambda (name) (or (eq clobbers :all) (member name clobbers :test #'string=)))
+                        pool)))
+      (if call
+          (let* ((pool (usable *cc-preserved*))
+                 (register (or (find-if (lambda (name) (member name *cc-saves* :test #'string=)) pool)
+                               (and (plusp *cc-loop-depth*) (first pool)))))
+            (when register (pushnew register *cc-saves* :test #'string=))
+            register)
+          (first (usable *cc-volatile*))))))
 
-;; TODO: a register %CC-TAKE picks from *CC-PRESERVED* for a single call
-;; site costs a prologue push and an epilogue pop, about the same as the
-;; stack path it replaces. A use-count or loop-nesting heuristic that
-;; prefers the stack for a one-off use would remove that cost (#376).
-;;
-;; TODO: an (asm ...) in the operand always falls back to the stack (%CC-
-;; HAZARDS), because asm can target any register. A declared clobber list on
-;; asm would let most inline asm keep the register path (#377).
 (defun %cc-to-temp (form)
   "FORM's value into the temp register, leaving the accumulator as it is.
 A non-leaf FORM holds the accumulator's current value in a register from
@@ -511,8 +539,9 @@ and, or and not of conditions jump between their operands and produce no value."
   (%cc-check-length form 3 nil)
   (let ((top (%cc-new-label)) (end (%cc-new-label)))
     (%cc-emit (list :label top))
-    (%cc-branch (second form) nil end)
-    (dolist (body (cddr form)) (%cc-expr body))
+    (let ((*cc-loop-depth* (1+ *cc-loop-depth*)))
+      (%cc-branch (second form) nil end)
+      (dolist (body (cddr form)) (%cc-expr body)))
     (%cc-op :jump top)
     (%cc-emit (list :label end))
     (%cc-const 0)))
@@ -708,9 +737,12 @@ comparison, to a landing that loads the result."
          (mapcar (lambda (element) (%cc-substitute-variables element form)) tree))
         (t tree)))
 
+;; TODO: a declared :callee-saved clobber is not added to *CC-SAVES*, so the
+;; asm must save it itself (#393).
 (defun %cc-asm (form)
   (%cc-check-length form 1 nil)
-  (dolist (item (rest form))
+  (%cc-asm-clobbers form)
+  (dolist (item (if (%cc-clobber-declaration-p (second form)) (cddr form) (rest form)))
     (%cc-emit (%cc-substitute-variables item form))))
 
 (defun %cc-args-to-slots (args)
@@ -1236,7 +1268,7 @@ names must stay literal for the rest of the compiler to resolve."
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
            ;; first), regardless of where NAME's DEFUN sits relative to them (#367).
            (body (mapcar #'%cc-expand-all body))
-           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-saves* '())
+           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-saves* '())
            (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                             (if (eq args :stack) 0 (length args)))))
       (loop for param in params
