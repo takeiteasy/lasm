@@ -131,7 +131,7 @@
 (defvar *cc-frame-label* nil "The label of the function being compiled, which its static slots' labels are made from.")
 (defvar *cc-sizes* nil "Upcased function name -> the static slots its frame needs.")
 (defvar *cc-entered* nil "Upcased names of the functions taken with (function F) under static frames, each of which gets an entry thunk.")
-(defvar *cc-computed-calls* nil "(CALLER ARITY FORM FUNCTION), reversed, for each funcall through a computed target under static frames.")
+(defvar *cc-computed-calls* nil "(CALLER ARITY FORM FUNCTION SOURCES), reversed, for each funcall through a computed target under static frames.")
 (defvar *cc-block-size* 0 "The most arguments any computed call passes, the words of the shared argument block.")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
@@ -335,7 +335,7 @@ cannot be a register alias or a generated label."
       ((%cc-function-form-p value)
        (let ((entry (and (= (length value) 2) (%cc-name-p (second value))
                          (gethash (%cc-key (second value) value) *cc-functions*))))
-         (if entry (list (cdr entry)) :unknown)))
+         (if entry (list (%cc-key (second value) value)) :unknown)))
       ((%cc-name-p value)
        (let ((binding (%cc-binding value)))
          (if binding (list binding) :unknown)))
@@ -354,13 +354,17 @@ cannot be a register alias or a generated label."
                (t (coerce elements 'list)))))
       (t :unknown))))
 
+(defun %cc-same-source-p (a b)
+  "T when A and B are the same binding, or the same function name."
+  (or (eq a b) (and (stringp a) (stringp b) (string= a b))))
+
 (defun %cc-hold (binding value)
   "Record that VALUE, an expression, may be put in BINDING."
   (let ((held (gethash binding *cc-holdings*))
         (sources (%cc-sources value)))
     (unless (eq held :unknown)
       (setf (gethash binding *cc-holdings*)
-            (if (eq sources :unknown) :unknown (union held sources))))))
+            (if (eq sources :unknown) :unknown (union held sources :test #'%cc-same-source-p))))))
 
 (defun %cc-hold-arguments (key args)
   "Record that the function named KEY is called with ARGS."
@@ -409,21 +413,21 @@ escaped, and each function whose label it spells as taken."
            finally (%cc-note-escapes rest)))))
 
 (defun %cc-resolve (sources)
-  "The argument counts SOURCES lead to, or :UNKNOWN when any binding they pass through is."
+  "The upcased names of the functions SOURCES lead to, or :UNKNOWN when any binding they pass through is."
   (if (eq sources :unknown)
       :unknown
-      (let ((seen (make-hash-table :test 'eq)) (arities '()) (pending sources))
+      (let ((seen (make-hash-table :test 'eq)) (functions '()) (pending sources))
         (loop while pending
               do (let ((source (cl:pop pending)))
-                   (if (integerp source)
-                       (pushnew source arities)
+                   (if (stringp source)
+                       (pushnew source functions :test #'string=)
                        (unless (gethash source seen)
                          (setf (gethash source seen) t)
                          (let ((held (gethash source *cc-holdings*)))
                            (when (eq held :unknown)
                              (return-from %cc-resolve :unknown))
                            (setf pending (append held pending)))))))
-        arities)))
+        functions)))
 
 (defun %cc-widen-untraced ()
   "Make :UNKNOWN what a caller or an aset this compile did not see may put there."
@@ -1188,12 +1192,18 @@ items-malformed, as any call target is (docs/conventions.md)."
   (or (integerp callee)
       (and (%cc-name-p callee) (eq (first (%cc-lookup callee)) :constant))))
 
+(defun %cc-function-arities (keys)
+  "The argument counts of the functions named KEYS, or KEYS when it is :UNKNOWN."
+  (if (eq keys :unknown)
+      keys
+      (mapcar (lambda (key) (cdr (gethash key *cc-functions*))) keys)))
+
 (defun %cc-check-indirect-calls ()
   "Fail on the first funcall through a computed target whose argument count no
 function value takes, or that the function values reaching its target do not."
   (%cc-widen-untraced)
   (loop for (arity form function sources name) in (reverse *cc-indirect-calls*)
-        for held = (%cc-resolve sources)
+        for held = (%cc-function-arities (%cc-resolve sources))
         do (let ((*cc-function* function))
              (cond ((consp held)
                     (unless (member arity held)
@@ -1221,7 +1231,9 @@ function value takes, or that the function values reaching its target do not."
                          (%cc-store slot)
                          slot))))
     (setf *cc-block-size* (max *cc-block-size* (length args)))
-    (cl:push (list *cc-caller* (length args) form function) *cc-computed-calls*)
+    (cl:push (list *cc-caller* (length args) form function
+                   (if (%cc-raw-address-p callee) :unknown (%cc-sources callee)))
+             *cc-computed-calls*)
     (%cc-note-indirect-call callee args form function)
     (let* ((held (%cc-store-arguments args (loop for index below (length args)
                                                  collect (%cc-block-label index))))
@@ -1968,25 +1980,23 @@ register, so any of these are free once nothing above still needs them."
       (loop for (caller) in (reverse *cc-calls*)
             unless (gethash caller state) do (visit caller '())))))
 
-;; TODO: edges go by arity, so the recursion check can report a cycle no run takes; carry names in the holdings (#425)
 (defun %cc-computed-edges ()
-  "Add a call from each computed call's caller to every function with an entry thunk that takes as many arguments."
-  (loop for (caller arity form function) in (reverse *cc-computed-calls*)
-        do (dolist (key (reverse *cc-entered*))
-             (when (= arity (cdr (gethash key *cc-functions*)))
+  "Add a call from each computed call's caller to each function with an entry thunk that its target can be. An unknown target can be any that takes as many arguments."
+  (loop for (caller arity form function sources) in (reverse *cc-computed-calls*)
+        for reached = (%cc-resolve sources)
+        do (dolist (key (if (eq reached :unknown) (reverse *cc-entered*) reached))
+             (when (and (member key *cc-entered* :test #'string=)
+                        (= arity (cdr (gethash key *cc-functions*))))
                (cl:push (list caller key form function) *cc-calls*)))))
 
-;; TODO: the thunk jumps to its function; placed before it, it would fall through (#426)
-(defun %cc-entry-thunks ()
-  "The items of each entry thunk: copy the argument block into the function's parameter words, then run it."
+(defun %cc-entry-thunk (key)
+  "The items of the entry thunk of the function named KEY: copy the argument block into its parameter words, then fall through into it."
   (let ((*cc-out* '()))
-    (dolist (key (reverse *cc-entered*))
-      (destructuring-bind (label . arity) (gethash key *cc-functions*)
-        (%cc-emit (list :label (%cc-entry-label label)))
-        (dotimes (index arity)
-          (%cc-load-leaf-slot (list :static (%cc-block-label index)))
-          (%cc-store (list :static (%cc-slot-label label index))))
-        (%cc-op :jump label)))
+    (destructuring-bind (label . arity) (gethash key *cc-functions*)
+      (%cc-emit (list :label (%cc-entry-label label)))
+      (dotimes (index arity)
+        (%cc-load-leaf-slot (list :static (%cc-block-label index)))
+        (%cc-store (list :static (%cc-slot-label label index)))))
     (nreverse *cc-out*)))
 
 (defun %cc-static-area (definitions)
@@ -2034,14 +2044,14 @@ DEFSTRING's own name."
 
 (defun %cc-register-array (label values)
   "Give each element of the DEFARRAY LABEL, laid out from VALUES, a binding holding
-what it starts as: a (function F)'s argument count, nothing for 0, else :UNKNOWN."
+what it starts as: a (function F)'s name, nothing for 0, else :UNKNOWN."
   (setf (gethash label *cc-arrays*)
         (map 'vector
              (lambda (value)
                (let ((element (list :element label)))
                  (cond ((%cc-function-form-p value)
                         (setf (gethash element *cc-holdings*)
-                              (list (cdr (gethash (%cc-key (second value) value) *cc-functions*)))))
+                              (list (%cc-key (second value) value))))
                        ((not (eql value 0))
                         (setf (gethash element *cc-holdings*) :unknown)))
                  element))
@@ -2222,8 +2232,12 @@ or NIL for what the backend's (frame :static t) says."
             (%cc-computed-edges)
             (%cc-check-recursion))
           (append stub
-                  functions
-                  (and (%cc-static-p) (%cc-entry-thunks))
+                  (loop for (name) in definitions
+                        for function in functions
+                        for key = (%designator-name name)
+                        append (and (%cc-static-p) (member key *cc-entered* :test #'string=)
+                                    (%cc-entry-thunk key))
+                        collect function)
                   (loop for (label) in globals
                         append (list (list :label label)
                                      (list :directive (%cc-symbol "res") *cc-word-cells*)))

@@ -94,8 +94,13 @@ computed value.
 
 `(function F)` is F's entry thunk, `sf`*f*`e`. The caller stores its arguments
 in the shared block, `sfx0`…, then calls the target. The thunk copies the block
-into F's parameter words and jumps to F.[^block] A raw address, such as an
-`(asm ...)` label, receives its arguments in the block the same way.
+into F's parameter words and falls through into F, which follows it.[^block] A
+raw address, such as an `(asm ...)` label, receives its arguments in the block
+the same way.
+
+A computed call is linked only to the functions its target can be, for the
+recursion check and the frame layout. A target the compiler cannot trace is
+taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
 
@@ -103,8 +108,6 @@ into F's parameter words and jumps to F.[^block] A raw address, such as an
 
 | Limitation | Ticket |
 | --- | --- |
-| A computed call is taken to reach every function of its arity, so recursion can be reported that no run takes. | [#425](https://todo.sr.ht/~takeiteasy/lasm/425) |
-| An entry thunk jumps to its function instead of falling through. | [#426](https://todo.sr.ht/~takeiteasy/lasm/426) |
 | A recursive function is an error; it cannot keep a stack frame. | [#420](https://todo.sr.ht/~takeiteasy/lasm/420) |
 | No value is held across a call in a callee-saved register. | [#421](https://todo.sr.ht/~takeiteasy/lasm/421) |
 | A global or static word takes two instructions to read or write, `:const` and `:peek`/`:poke`. | [#422](https://todo.sr.ht/~takeiteasy/lasm/422) |

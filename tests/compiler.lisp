@@ -1597,6 +1597,8 @@ two |#
     ("(defun f (a b) (- a b)) (defun g (x) (+ x 10)) (defun main () (f 100 (g 2)))" . 88)
     ("(defun f (a b c) (- a (- b c))) (defun g (x) x) (defun main () (f (g 9) 4 (g 1)))" . 6)
     ("(defun f (x) (+ x 1)) (defun main () (funcall (function f) 5))" . 6)
+    ("(defarray tbl ((function g))) (defvar fp 0) (defun g (x) (+ x 1)) (defun f (x) (funcall (aref tbl 0) x)) (defun main () (set fp (function f)) (funcall fp 4))" . 5)
+    ("(defarray tbl ((function g))) (defvar fp 0) (defun g (x) (+ x 1)) (defun h (x y) (+ x y)) (defun f (x) (funcall (aref tbl 0) x)) (defun main () (set fp (function f)) (funcall fp 4))" . 5)
     ("(defun f (x) (+ x 1)) (defun g (x) (f (f x))) (defun main () (+ (g 1) (g 10)))" . 15)
     ("(defvar g 1) (defun f (x) (set g (+ g x))) (defun main () (f 2) (f 3) g)" . 6)
     ("(defun main () (let ((x 9)) (asm (:clobbers a b) (:op :const (reg a) 3) (:op :const (reg b) (:var x)) (:op :poke b a)) x))" . 3))
@@ -1650,6 +1652,19 @@ two |#
                   ("(defarray tbl ((function b))) (defun a (n) (funcall (aref tbl 0) n)) (defun b (n) (a n)) (defun main () (a 1))" "is recursive")))
     (let ((detail (%cl-static-fail (first case))))
       (fiveam:is (and detail (search (second case) detail)) "~A: ~A" (first case) detail))))
+
+(fiveam:test static-frames-report-recursion-through-an-unknown-computed-target
+  (let ((detail (%cl-static-fail "(defun f (p n) (if n (funcall p p (- n 1)) 0)) (defun main () (f (function f) 3))")))
+    (fiveam:is (and detail (search "f calls itself" detail)) "~A" detail)))
+
+(fiveam:test static-frames-place-an-entry-thunk-before-its-function
+  (let* ((items (%cl-static-items "(defvar fp 0) (defun f (x) x) (defun main () (set fp (function f)) (funcall fp 1))"))
+         (thunk (position-if (lambda (item) (and (consp item) (eq (first item) :label) (string-equal (second item) "sffe"))) items)))
+    (fiveam:is (not (null thunk)))
+    (when thunk
+      (let ((after (find-if-not (lambda (item) (and (consp item) (eq (first item) :op))) items :start (1+ thunk))))
+        (fiveam:is (and (consp after) (eq (first after) :function)))))
+    (fiveam:is (notany (lambda (item) (and (consp item) (eq (first item) :op) (string-equal (second item) "jump"))) items))))
 
 (fiveam:test static-frames-keep-a-computed-callee-apart-from-its-caller
   (flet ((reserved (source)
