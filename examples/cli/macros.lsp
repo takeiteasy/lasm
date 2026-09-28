@@ -1,7 +1,7 @@
 ;; Compile-time macros (docs/language.md#macros): a body evaluated at
 ;; compile time, quasiquote/unquote to build the expansion, a &rest splice,
-;; hygiene keeping a template's own `let` name from capturing a caller's
-;; variable of the same name, and a defun-for-syntax helper.
+;; hygiene keeping a template's names and a caller's apart, a macro that
+;; defines a macro, and a defun-for-syntax helper.
 ;;
 ;;   lasm run macros.lsp -m callfoo.lisp --backend callfoo-lang-abi
 ;;
@@ -23,9 +23,19 @@
 (defun-for-syntax sum-of (xs) (if (null xs) 0 (+ (car xs) (sum-of (cdr xs)))))
 (defmacro total (&rest xs) (sum-of xs))
 
+;; A template's free name is the global, even under a caller's local `hits`.
+(defvar hits 0)
+(defun hit-count () hits)
+(defmacro hit () `(set hits (+ hits 1)))
+
+;; A macro that defines a macro: ,',n puts n's value into the inner template.
+(defmacro defadder (name n) `(defmacro ,name (x) `(+ ,x ,',n)))
+(defadder add5 5)
+
 (defun main ()
   (let ((count 0) (tmp 1) (y 2))
     (inc count)
     (unless 0 (inc count) (inc count))
     (swap tmp y)
-    (+ (* tmp 100) y count (double-or-inc 5) (total 1 2 3))))
+    (+ (* tmp 100) y count (double-or-inc 5) (total 1 2 3)
+       (add5 0) (let ((hits 0)) (hit) (+ hits (hit-count))))))

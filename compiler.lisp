@@ -65,6 +65,9 @@
 ;;;; before the call, like an ordinary function. %CC-EXPAND-ALL expands a
 ;;;; function body, and %CC-COLLECT a top-level call, once every macro and
 ;;;; helper (from anywhere in the file) is registered.
+;;;; #382: each expansion marks the names its templates write, so its own
+;;;; variables and a caller's never capture one another; a marked free name
+;;;; must be a global, and ,'NAME reaches the caller's variable.
 
 (in-package #:lasm)
 
@@ -116,7 +119,8 @@ limit, so it also catches a macro that expands into a call to itself (#367).")
 (defparameter +cc-meta-step-limit+ 1000000
   "Total %CC-META-EVAL steps a program's macros and DEFUN-FOR-SYNTAX helpers
 may take; catches runaway compile-time recursion (#380).")
-(defvar *cc-rename-serial* 0 "Fresh names handed out so far, for a macro template's own let bindings or GENSYM (#367, #380).")
+(defvar *cc-rename-serial* 0 "Fresh names and expansion marks handed out so far (#367, #380, #382).")
+(defvar *cc-expansion-mark* nil "The serial marking every name the running macro expansion's templates write, or NIL outside one (#382).")
 (defvar *cc-expand-position* nil "The *CC-POSITIONS* offset a macro expansion's fresh conses are attributed to (#367).")
 
 (defun %cc-line-column (form)
@@ -145,6 +149,13 @@ may take; catches runaway compile-time recursion (#380).")
   (unless (%cc-name-p x)
     (%cc-fail form "expected a name, got ~S" x))
   (%designator-name x))
+
+(defun %cc-local-key (x form)
+  "The environment key of the local variable X: its plain key, plus its
+expansion's mark when a macro template wrote it. The space makes it a key no
+source name can spell, so a template's own variable and a caller's never meet (#382)."
+  (let ((key (%cc-key x form)) (mark (get x 'cc-mark)))
+    (if mark (format nil "~A ~D" key mark) key)))
 
 (defun %cc-symbol (string)
   "A symbol that names STRING when items are rendered, and prints readably as it."
@@ -199,7 +210,7 @@ cannot be a register alias or a generated label."
   "The location of the variable SYMBOL: (:LOCAL i), (:ARG i), (:GLOBAL LABEL),
 (:CONSTANT n) or (:ADDRESS LABEL), a DEFARRAY or DEFSTRING (#366)."
   (let ((key (%cc-key symbol *cc-form*)))
-    (or (cdr (assoc key *cc-env* :test #'string=))
+    (or (cdr (assoc (%cc-local-key symbol *cc-form*) *cc-env* :test #'string=))
         (let ((label (gethash key *cc-globals*)))
           (and label (list :global label)))
         (let ((value (gethash key *cc-constants*)))
@@ -649,7 +660,7 @@ comparison, to a landing that loads the result."
       (let ((slot (%cc-alloc)))
         (%cc-op :set slot *cc-acc*)
         (incf slots)
-        (cl:push (cons (%cc-key (first binding) form) slot) *cc-env*)))
+        (cl:push (cons (%cc-local-key (first binding) form) slot) *cc-env*)))
     (%cc-progn (cddr form))
     (dotimes (i slots) (%cc-free))))
 
@@ -904,9 +915,9 @@ from %CC-META-EVAL (#380)."
     (setf (gethash key *cc-meta-functions*) (list names rest body))))
 
 (defun %cc-fresh-name (template-name)
-  "A fresh name standing for a macro TEMPLATE-NAME's own `let` binding, or a
-GENSYM: its printed name has a space, which no source symbol can spell, so it
-can never collide with a caller's variable of the same name (#367, #380)."
+  "A fresh name for a GENSYM: its printed name has a space, which no source
+symbol can spell, so it can never collide with a caller's variable of the same
+name (#380)."
   (%cc-symbol (format nil "~A ~D" (string-downcase (%source-name template-name nil)) (incf *cc-rename-serial*))))
 
 (defun %cc-form-position (form)
@@ -927,10 +938,12 @@ call's line and column, not the template's own (#367, #362)."
 ;;; interned) and lists. () is false; anything else, including the symbol T,
 ;;; is true. QUOTE returns its argument unevaluated; QUASIQUOTE (%CC-QQ)
 ;;; walks its template, evaluating each UNQUOTE and splicing each UNQUOTE-
-;;; SPLICING, and gives a literal `let`'s own binding names fresh renames
-;;; (%CC-FRESH-NAME), same as #367 -- including inside a literal (asm ...),
-;;; since %CC-QQ walks every symbol in a template alike. Nested quasiquote
-;;; isn't supported (#383).
+;;; SPLICING, and marks every bare name the template writes with the
+;;; expansion's own mark (%CC-MARK-NAME), so a binding it makes can't capture a
+;;; caller's variable and a caller's binding can't capture a free name it uses
+;;; (#367, #382) -- including inside a literal (asm ...), since %CC-QQ walks
+;;; every symbol in a template alike. A nested quasiquote raises the depth
+;;; an UNQUOTE needs to reach the outer level, as in Common Lisp (#383).
 
 (defun %cc-qq-tagged-p (form tag)
   (and (consp form) (%cc-name-p (first form)) (equal (%designator-name (first form)) tag)
@@ -958,64 +971,45 @@ by identity, since source is read without interning."
   (when (> (incf *cc-meta-steps*) +cc-meta-step-limit+)
     (%cc-fail form "macro expansion exceeded ~D compile-time evaluation steps" +cc-meta-step-limit+)))
 
-(defun %cc-qq (form env renames)
-  "FORM, a quasiquote template, with each UNQUOTE evaluated in ENV, each
-UNQUOTE-SPLICING's value spliced in, and RENAMES (KEY . FRESH) applied to a
-bare name -- from an enclosing literal `let`, same as %CC-FRESH-NAME (#367)."
-  (cond
-    ((%cc-qq-tagged-p form "UNQUOTE") (%cc-meta-eval (second form) env))
-    ((%cc-qq-tagged-p form "UNQUOTE-SPLICING")
-     (%cc-fail form ",@ is only valid as a list element"))
-    ((%cc-qq-tagged-p form "QUASIQUOTE") (%cc-fail form "nested quasiquote is not supported (#383)"))
-    ((%cc-name-p form)
-     (let ((rename (assoc (%designator-name form) renames :test #'string=)))
-       (if rename (cdr rename) form)))
-    ((not (consp form)) form)
-    ((and (%cc-name-p (first form)) (member (%designator-name (first form)) '("LET" "LET*") :test #'string=)
-          (consp (rest form)) (listp (second form)))
-     (%cc-qq-let form env renames))
-    (t (%cc-qq-list form env renames))))
+(defun %cc-mark-name (symbol)
+  "SYMBOL, a bare name a template wrote, as a fresh symbol of the same name
+tagged with the running expansion's mark, or SYMBOL itself outside one (#382)."
+  (if *cc-expansion-mark*
+      (let ((marked (make-symbol (symbol-name symbol))))
+        (setf (get marked 'cc-mark) *cc-expansion-mark*)
+        marked)
+      symbol))
 
-(defun %cc-qq-list (form env renames)
+(defun %cc-qq (form env depth)
+  "FORM, a quasiquote template nested DEPTH quasiquotes deep, with each
+UNQUOTE at depth 0 evaluated in ENV, each UNQUOTE-SPLICING's value spliced in,
+and each bare name marked (%CC-MARK-NAME). A nested QUASIQUOTE raises DEPTH by
+one and an UNQUOTE below depth 0 lowers it, both kept literal (#383)."
+  (cond
+    ((and (%cc-qq-tagged-p form "UNQUOTE") (zerop depth)) (%cc-meta-eval (second form) env))
+    ((and (%cc-qq-tagged-p form "UNQUOTE-SPLICING") (zerop depth))
+     (%cc-fail form ",@ is only valid as a list element"))
+    ((or (%cc-qq-tagged-p form "UNQUOTE") (%cc-qq-tagged-p form "UNQUOTE-SPLICING"))
+     (%cc-remember-position (list* (first form) (%cc-qq-list (rest form) env (1- depth)))))
+    ((%cc-qq-tagged-p form "QUASIQUOTE")
+     (%cc-remember-position (list* (first form) (%cc-qq-list (rest form) env (1+ depth)))))
+    ((%cc-name-p form) (if (zerop depth) (%cc-mark-name form) form))
+    ((not (consp form)) form)
+    (t (%cc-qq-list form env depth))))
+
+(defun %cc-qq-list (form env depth)
   "FORM, a proper quasiquote template list, walked element by element; an
-UNQUOTE-SPLICING occupying an element position splices its value in."
+UNQUOTE-SPLICING occupying an element position at depth 0 splices its value in."
   (unless (%cc-proper-list-p form)
     (%cc-fail form "quasiquote template is malformed"))
   (%cc-remember-position
    (loop for element in form
-         append (if (%cc-qq-tagged-p element "UNQUOTE-SPLICING")
+         append (if (and (zerop depth) (%cc-qq-tagged-p element "UNQUOTE-SPLICING"))
                     (let ((value (%cc-meta-eval (second element) env)))
                       (unless (%cc-proper-list-p value)
                         (%cc-fail element ",@ must splice a list, got ~S" value))
                       (copy-list value))
-                    (list (%cc-qq element env renames))))))
-
-(defun %cc-qq-let (form env renames)
-  "A template `let`/`let*`'s own binding names are fresh (%CC-FRESH-NAME),
-so they can't capture a caller's variable of the same name; a binding name
-that is itself an UNQUOTE keeps the value it evaluates to, unrenamed. LET*'s
-later bindings and the body see each rename in turn."
-  (unless (%cc-proper-list-p (second form))
-    (%cc-fail form "let needs a list of (NAME VALUE) bindings"))
-  (let* ((sequential (equal (%designator-name (first form)) "LET*"))
-         (inner renames) (new-bindings '()))
-    (dolist (binding (second form))
-      (unless (and (consp binding) (= (length binding) 2))
-        (%cc-fail form "let binding ~S is not (NAME VALUE)" binding))
-      (let ((value (%cc-qq (second binding) env (if sequential inner renames))))
-        (if (%cc-qq-tagged-p (first binding) "UNQUOTE")
-            (let ((name (%cc-meta-eval (second (first binding)) env)))
-              (unless (%cc-name-p name) (%cc-fail form "a let binding name must be a name, got ~S" name))
-              (cl:push (list name value) new-bindings))
-            (progn
-              (unless (%cc-name-p (first binding))
-                (%cc-fail form "let binding ~S is not (NAME VALUE)" binding))
-              (let ((fresh (%cc-fresh-name (first binding))))
-                (cl:push (list fresh value) new-bindings)
-                (setf inner (acons (%designator-name (first binding)) fresh inner)))))))
-    (%cc-remember-position
-     (list* (first form) (%cc-remember-position (nreverse new-bindings))
-            (mapcar (lambda (each) (%cc-qq each env inner)) (cddr form))))))
+                    (list (%cc-qq element env depth))))))
 
 (defparameter *cc-meta-specials*
   '(("QUOTE" . %cc-meta-quote) ("QUASIQUOTE" . %cc-meta-quasiquote) ("IF" . %cc-meta-if)
@@ -1030,7 +1024,7 @@ compile-time special form.")
 
 (defun %cc-meta-quasiquote (form env)
   (unless (= (length form) 2) (%cc-fail form "expected (quasiquote FORM)"))
-  (%cc-qq (second form) env nil))
+  (%cc-qq (second form) env 0))
 
 (defun %cc-meta-if (form env)
   (unless (<= 3 (length form) 4) (%cc-fail form "expected (if TEST THEN [ELSE])"))
@@ -1182,7 +1176,8 @@ error, same as the step and expansion budgets."
                   (%source-name name nil) +cc-expansion-limit+))
       (let ((env (append (loop for key in names for arg in args collect (cons key arg))
                           (and rest (list (cons rest (nthcdr fixed args)))))))
-        (handler-case (%cc-meta-progn body env)
+        (handler-case (let ((*cc-expansion-mark* (incf *cc-rename-serial*)))
+                        (%cc-meta-progn body env))
           (storage-condition () (%cc-fail form "macro ~A recursed too deeply" (%source-name name nil))))))))
 
 (defun %cc-expand-macro-form (name entry form)
@@ -1276,7 +1271,7 @@ names must stay literal for the rest of the compiler to resolve."
                             (if (eq args :stack) 0 (length args)))))
       (loop for param in params
             for index from 0
-            do (let ((key (%cc-key param name)))
+            do (let ((key (%cc-local-key param name)))
                  (when (assoc key *cc-env* :test #'string=)
                    (%cc-fail name "~A is a parameter twice" (%source-name param nil)))
                  (if (< index arg-registers)

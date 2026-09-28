@@ -184,14 +184,33 @@ A trailing `&rest R` binds the remaining arguments as a list. A parameter is
 substituted wherever it appears, so using it twice in the template runs its
 argument twice.
 
-A `let` the template writes gets fresh binding names, so `(swap tmp y)`
-above doesn't confuse the macro's own `tmp` with the caller's: only a
-template's own `let` names are protected this way, and a name the template
-otherwise refers to free is still resolved where the macro is used, same as
-any other name. A binding name written as `,NAME` (its value, computed, not
-the template's own) is used as given, unrenamed. A macro call also works at
-top level, where it can expand to `defun`, `defvar`, `defconstant`,
-`defmacro`, or a `(progn DEF...)` of them.
+Each expansion marks every name its template writes, so the template's own
+names and the caller's never meet. A template's `let` or `defun` parameter
+can't capture the caller's variable of the same name, and a caller's `let`
+can't capture a free name the template uses: a free name must be a global,
+constant, array or string, or it's an `unknown variable` error. `,'NAME`
+reaches the caller's own variable on purpose.[^hygiene] A name from `,FORM`
+(including a `,NAME` binding name) is the caller's own, unmarked.
+
+```lisp
+(defvar counter 10)
+(defmacro bump () `(set counter (+ counter 1)))       ; the global, always
+(defmacro bump-mine () `(set ,'counter (+ ,'counter 1)))  ; the caller's
+
+(defun main () (let ((counter 5)) (bump) (bump-mine) counter))   ; 6
+```
+
+A macro call also works at top level, where it can expand to `defun`,
+`defvar`, `defconstant`, `defmacro`, or a `(progn DEF...)` of them. A
+template can contain another quasiquote, so a macro can define a macro: an
+inner `,X` or `,@X` stays literal, and `,,X` or `,@',X` reaches the outer
+template, as in Common Lisp.
+
+```lisp
+(defmacro defadder (name n) `(defmacro ,name (x) `(+ ,x ,',n)))
+(defadder add5 5)
+(defun main () (add5 10))                             ; 15
+```
 
 Inside `(asm ...)`, `,FORM` and `,@FORM` substitute like anywhere else in the
 template, so a constant, a register name or a `(:var NAME)` can all be
@@ -376,8 +395,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
-| A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
-| A quasiquote template can't nest another quasiquote inside it. | [#383](https://todo.sr.ht/~takeiteasy/lasm/383) |
+| A `quote`d symbol in a macro body is unmarked, so a caller's `let` can still capture it. | [#395](https://todo.sr.ht/~takeiteasy/lasm/395) |
 | The compile-time evaluator's operators are a minimal set: no strings, `apply`, `mapcar`, `and`/`or`/`cond`. | [#384](https://todo.sr.ht/~takeiteasy/lasm/384) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
@@ -429,7 +447,12 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   something, and an `or` operand must also give only `0` or `1`, since the
   landing loads `1`: `(or (and a b) ...)` keeps computing `b`'s value.
 
-[^macros]: A fresh `let` name or `gensym` is an uninterned symbol whose
+[^hygiene]: A mark is a number kept on a fresh uninterned copy of each name
+  a quasiquote template writes; a local variable is looked up by name plus
+  mark, and a function, global or constant by name alone. Only a quasiquote
+  marks names: a `quote`d symbol (`'x`) is unmarked, like one from `,FORM`.
+
+[^macros]: A `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`
   are self-evaluating, like Common Lisp's; every other symbol not bound by
   a `let` or a parameter is unbound. A function body is expanded once every

@@ -193,7 +193,45 @@
       (defun main () (let ((g 1)) (capture g)))" . 100)
     ;; a multi-form body runs as an implicit progn; only the last form expands.
     ("(defmacro noisy (v) (list 'quote 'ignored) `(+ ,v 1))
-      (defun main () (noisy 4))" . 5))
+      (defun main () (noisy 4))" . 5)
+    ;; #382: a caller's let can't capture a global the template names.
+    ("(defvar counter 10) (defun g () counter)
+      (defmacro bump () `(set counter (+ counter 1)))
+      (defun main () (let ((counter 5)) (bump) (+ (* counter 100) (g))))" . 511)
+    ;; ,'NAME reaches the caller's own variable on purpose.
+    ("(defmacro bump-mine () `(set ,'n (+ ,'n 1)))
+      (defun main () (let ((n 5)) (bump-mine) n))" . 6)
+    ;; each expansion's own let is separate from a nested one's, and from the caller's.
+    ("(defmacro twice-tmp (v) `(let ((tmp ,v)) (+ tmp tmp)))
+      (defun main () (let ((tmp 1)) (+ (twice-tmp (twice-tmp 3)) (twice-tmp tmp))))" . 14)
+    ;; a template defun's own parameter, even with a global of the same name.
+    ("(defvar x 100) (defmacro defid (name) `(defun ,name (x) x))
+      (defid ident) (defun main () (ident 7))" . 7)
+    ;; a template's function calls, (function NAME) and asm labels still resolve.
+    ("(defun helper (v) (+ v 1))
+      (defmacro call-helper (x) `(helper ,x))
+      (defmacro call-through (x) `(funcall (function helper) ,x))
+      (defun main () (+ (call-helper 4) (call-through 10)))" . 16)
+    ("(defmacro skip-set (v)
+        `(let ((r 1)) (asm (:op :jump done) (:op :set (:var r) (reg a)) (:label done)) (+ ,v r)))
+      (defun main () (skip-set 4))" . 5)
+    ;; a template's asm (:var NAME) resolves to the template's own let.
+    ("(defmacro seven () `(let ((tmp 0)) (asm (:op :const (reg a) 7) (:op :set (:var tmp) (reg a))) tmp))
+      (defun main () (let ((tmp 1)) (+ (* tmp 100) (seven))))" . 107)
+    ;; #383: a macro that defines a macro, its inner template's own ,X and ,@X left literal.
+    ("(defmacro defadder (name n) `(defmacro ,name (x) `(+ ,x ,',n)))
+      (defadder add5 5)
+      (defun main () (add5 10))" . 15)
+    ("(defmacro def-sum (name) `(defmacro ,name (&rest xs) `(+ ,@xs)))
+      (def-sum sum)
+      (defun main () (sum 1 2 3))" . 6)
+    ;; ,,X and ,@',X reach through the inner template to the outer level.
+    ("(defmacro def-const (name v) `(defmacro ,name () `,,v))
+      (def-const seven 7)
+      (defun main () (+ (seven) (seven)))" . 14)
+    ("(defmacro def-const-list (name &rest xs) `(defmacro ,name () `(+ ,@',xs)))
+      (def-const-list six 1 2 3)
+      (defun main () (six))" . 6))
   "Source and the value main leaves in the accumulator.")
 
 (fiveam:test programs-run-on-every-backend
@@ -688,7 +726,8 @@
                   ("(defmacro bad () (car 5)) (defun main () (bad))" "car needs a list")
                   ("(defmacro bad () (error \"boom\")) (defun main () (bad))" "boom")
                   ("(defmacro bad (v) `(+ ,v ,@1)) (defun main () (bad 1))" ",@ must splice a list")
-                  ("(defmacro bad () `(a `(b ,1))) (defun main () (bad))" "nested quasiquote is not supported")
+                  ;; #382: a free name a template writes must be a global.
+                  ("(defmacro peek-n () `(+ n 1)) (defun main () (let ((n 5)) (peek-n)))" "unknown variable n")
                   ("(defun-for-syntax loopy (n) (loopy n)) (defmacro bad () (loopy 1)) (defun main () (bad))"
                    "recursed too deeply")
                   ("(defun-for-syntax f (a) a) (defmacro f (a) a) (defun main () 1)" "f is defined twice")
@@ -878,7 +917,7 @@
 
 (fiveam:test cli-run-executes-the-macros-example
   (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi)))
-    (fiveam:is (= 220 (%cv-a m)))))
+    (fiveam:is (= 226 (%cv-a m)))))
 
 (fiveam:test cli-compile-writes-an-items-program-that-run-accepts
   (uiop:with-temporary-file (:pathname path :type "lasm")
