@@ -44,6 +44,8 @@
 ;;;;
 ;;;; #390: an and/or whose value is used jumps on its comparisons into a
 ;;;; shared 0/1 landing when the operands save more than the landing costs.
+;;;; #391: so does a nested not/and/or operand, by its estimated saving
+;;;; (%CC-COSTS).
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
@@ -460,12 +462,16 @@ true if SENSE or false if not, or NIL when it has none."
         (%cc-op :jump target)
         (%cc-emit (list :label skip)))))
 
+(defun %cc-head (form)
+  "The upcased operator name of the call FORM, or NIL."
+  (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form)
+       (%designator-name (first form))))
+
 (defun %cc-branch (form sense target)
   "Jump to TARGET when FORM is true if SENSE, or false if not, else fall
 through (#375). A comparison uses the backend's :BRANCH-cmp when it has one; an
 and, or and not of conditions jump between their operands and produce no value."
-  (let* ((head (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form)
-                    (%designator-name (first form))))
+  (let* ((head (%cc-head form))
          (args (and head (rest form)))
          (comparison (%cc-comparison form))
          (branch (and comparison (%cc-branch-op comparison sense))))
@@ -511,16 +517,65 @@ and, or and not of conditions jump between their operands and produce no value."
     (%cc-emit (list :label end))
     (%cc-const 0)))
 
+(defun %cc-jump-cost (sense)
+  "Instructions to jump on the accumulator's value, when true if SENSE (#389)."
+  (if (and sense (not (%cc-op-p :branch-ne-imm))) 2 1))
+
+(defun %cc-boolean-p (form)
+  "True when FORM's value is always 0 or 1."
+  (let* ((head (%cc-head form))
+         (args (and head (rest form))))
+    (cond ((%cc-comparison form) t)
+          ((equal head "NOT") (= (length args) 1))
+          ((equal head "AND") (or (null args) (%cc-boolean-p (car (last args)))))
+          ((equal head "OR") (every #'%cc-boolean-p args)))))
+
+;; TODO: a comparison counts as one instruction, ignoring -imm/-slot variants
+;; of :cmp and :branch-cmp; count the variants or trial-compile both ways (#392).
+(defun %cc-costs (form)
+  "Estimated instructions, beyond loading operands, FORM needs to compute its
+value, to jump when it is false and to jump when it is true, as three values.
+Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT (#391)."
+  (let* ((head (%cc-head form))
+         (args (and head (rest form)))
+         (comparison (%cc-comparison form)))
+    (cond ((and (equal head "NOT") (= (length args) 1))
+           (multiple-value-bind (value false true) (%cc-costs (first args))
+             (values (1+ value) true false)))
+          ((and (member head '("AND" "OR") :test #'equal) args)
+           (let ((stop (equal head "OR")) (false 0) (true 0) (unfused 0) (saving 0))
+             (loop for (arg . more) on args
+                   do (multiple-value-bind (v f tr) (%cc-costs arg)
+                        (cond (more (incf false (if stop tr f))
+                                    (incf true (if stop tr f))
+                                    (incf unfused (+ v (%cc-jump-cost stop)))
+                                    (incf saving (%cc-saving arg stop v f tr)))
+                              (t (incf false f)
+                                 (incf true tr)
+                                 (incf unfused v)))))
+             (values (- unfused (max 0 (- saving 2))) false true)))
+          (comparison
+           (flet ((jump (sense)
+                    (if (%cc-branch-op comparison sense) 1 (1+ (%cc-jump-cost sense)))))
+             (values 1 (jump nil) (jump t))))
+          (t (values 0 (%cc-jump-cost nil) (%cc-jump-cost t))))))
+
+(defun %cc-saving (arg sense value false true)
+  "Instructions saved by jumping on the and/or operand ARG, given its %CC-COSTS,
+rather than computing its value and jumping on that. SENSE is the operand value
+that ends the and/or; an or's landing loads 1, so its operand must be 0 or 1."
+  (if (and sense (not (%cc-boolean-p arg)))
+      0
+      (max 0 (- (+ value (%cc-jump-cost sense)) (if sense true false)))))
+
+(defun %cc-fused-saving (arg sense)
+  (multiple-value-call #'%cc-saving arg sense (%cc-costs arg)))
+
 (defun %cc-fuses-p (args sense)
-  "True when fusing the comparisons of the and/or operands ARGS into jumps to a
-shared 0/1 landing (#390) is shorter: it saves more than the landing's :jump
-and :const. SENSE is the operand value that ends the and/or."
-  (let ((saving (if sense (if (%cc-op-p :branch-ne-imm) 1 2) 1)))
-    (> (* saving (count-if (lambda (arg)
-                             (let ((comparison (%cc-comparison arg)))
-                               (and comparison (%cc-branch-op comparison sense))))
-                           (butlast args)))
-       2)))
+  "True when jumping on the and/or operands ARGS into a shared 0/1 landing
+(#390, #391) is shorter: it saves more than the landing's :jump and :const."
+  (> (loop for arg in (butlast args) sum (%cc-fused-saving arg sense))
+     2))
 
 (defun %cc-short-circuit (form sense)
   "An and (SENSE nil) or or (SENSE t) whose value is used. An operand that ends
@@ -533,9 +588,8 @@ comparison, to a landing that loads the result."
              (fuse (%cc-fuses-p (rest form) sense))
              (landing (and fuse (%cc-new-label))))
         (loop for (arg . more) on (rest form)
-              for comparison = (%cc-comparison arg)
               do (cond ((not more) (%cc-expr arg))
-                       ((and fuse comparison (%cc-branch-op comparison sense))
+                       ((and fuse (plusp (%cc-fused-saving arg sense)))
                         (%cc-branch arg sense landing))
                        (t (%cc-expr arg)
                           (if sense

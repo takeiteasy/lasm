@@ -896,6 +896,9 @@
     (fiveam:is (member "BRANCH-NE-IMM" ops :test #'string=))
     (fiveam:is (notany (lambda (name) (string= name "BRANCH-ZERO")) ops))))
 
+(defun %cl-not (value)
+  (if value nil 1))
+
 (defparameter +cl-value-shapes+
   (list (cons "(and (~A x y) (~A y 3) (~A x 7) (~A 2 y))"
               (lambda (c x y) (and (funcall c x y) (funcall c y 3) (funcall c x 7) (funcall c 2 y))))
@@ -908,7 +911,27 @@
         (cons "(or (~A x y) x (~A y 3) (~A x 7) 4)"
               (lambda (c x y) (or (funcall c x y) (if (/= x 0) x nil) (funcall c y 3) (funcall c x 7) 4)))
         (cons "(and (~A x y) x (~A y 3) (~A x 7) 4)"
-              (lambda (c x y) (and (funcall c x y) (if (/= x 0) x nil) (funcall c y 3) (funcall c x 7) 4))))
+              (lambda (c x y) (and (funcall c x y) (if (/= x 0) x nil) (funcall c y 3) (funcall c x 7) 4)))
+        ;; #391: nested not/and/or operands
+        (cons "(and (not (~A x y)) (not (~A y 3)) (not (~A x 7)) (~A 2 y))"
+              (lambda (c x y) (and (%cl-not (funcall c x y)) (%cl-not (funcall c y 3))
+                                   (%cl-not (funcall c x 7)) (funcall c 2 y))))
+        (cons "(or (not (~A x y)) (not (~A y 3)) (not (~A x 7)) 9)"
+              (lambda (c x y) (or (%cl-not (funcall c x y)) (%cl-not (funcall c y 3))
+                                  (%cl-not (funcall c x 7)) 9)))
+        (cons "(and (and (~A x y) (~A y 3)) (and (~A x 7) (~A 2 y)) 6)"
+              (lambda (c x y) (and (and (funcall c x y) (funcall c y 3))
+                                   (and (funcall c x 7) (funcall c 2 y)) 6)))
+        (cons "(or (or (~A x y) (~A y 3)) (or (~A x 7) (~A 2 y)) 9)"
+              (lambda (c x y) (or (or (funcall c x y) (funcall c y 3))
+                                  (or (funcall c x 7) (funcall c 2 y)) 9)))
+        (cons "(or (and (~A x y) x) (and (~A y 3) y) (and (~A x 7) 5) 4)"
+              (lambda (c x y) (or (and (funcall c x y) (if (/= x 0) x nil))
+                                  (and (funcall c y 3) (if (/= y 0) y nil))
+                                  (and (funcall c x 7) 5) 4)))
+        (cons "(and (or (~A x y) (~A y 3)) (or (~A x 7) (~A 2 y)) 8)"
+              (lambda (c x y) (and (or (funcall c x y) (funcall c y 3))
+                                   (or (funcall c x 7) (funcall c 2 y)) 8))))
   "Value-context source, with the value it must give for comparison C on signed X and Y.")
 
 (fiveam:test value-and-or-give-the-same-values-with-and-without-fusing
@@ -925,3 +948,30 @@
                                          (mod (or value 0) 65536))
                             do (fiveam:is (= want (%cv-a (%cl-run source (first backend) (second backend))))
                                           "~A on ~A" source (first backend)))))))
+
+;;; #391: a value-context and/or fuses nested not/and/or operands by their saving
+
+(defun %cl-value-ops (body backend)
+  (%cl-op-names (%cl-compile (format nil "(defun f (x y z w) (set x ~A)) (defun main () (f 1 2 3 4))" body)
+                             backend)))
+
+(fiveam:test a-value-and-fuses-a-nested-not-when-it-saves
+  (let ((body "(and (not (< x 3)) (not (< y 4)) (not (< z 5)) w)"))
+    (fiveam:is (%cl-branch-names (%cl-value-ops body 'callfoo-lang-abi)))
+    (fiveam:is (member "JUMP" (%cl-value-ops body 'callfoo-lang-abi) :test #'string=))))
+
+(fiveam:test a-not-of-a-value-fuses-only-with-branch-ne-imm
+  (let ((body "(and (not x) (not y) (not z) w)"))
+    (fiveam:is (member "BRANCH-NE-IMM" (%cl-value-ops body 'callfoo-lang-abi) :test #'string=))
+    (let ((ops (%cl-value-ops body 'cl-no-ne-imm-abi)))
+      (fiveam:is (notany (lambda (name) (string= name "JUMP")) ops)))))
+
+(fiveam:test a-value-and-fuses-nested-and-and-or-operands
+  (dolist (body '("(and (and (< x 3) (< y 4)) (and (< z 5) (< w 6)) 9)"
+                  "(and (or (< x 3) (< y 4)) (or (< z 5) (< w 6)) 9)"
+                  "(or (or (< x 3) (< y 4)) (or (< z 5) (< w 6)) 9)"))
+    (fiveam:is (member "JUMP" (%cl-value-ops body 'callfoo-lang-abi) :test #'string=) "~A" body)))
+
+(fiveam:test a-value-or-does-not-fuse-an-operand-whose-value-is-not-0-or-1
+  (let ((ops (%cl-value-ops "(or (and (< x 3) y) (and (< y 4) z) (and (< z 5) w) 9)" 'callfoo-lang-abi)))
+    (fiveam:is (notany (lambda (name) (string= name "JUMP")) ops))))

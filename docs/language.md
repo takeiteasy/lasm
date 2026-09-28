@@ -299,8 +299,9 @@ the `else` or the end of the loop, so `<` uses `:branch-ge`.[^branches] A
 A value with no comparison of its own that must jump when true uses
 `:branch-ne-imm (a 0 target)` when the backend defines it.
 
-A value-context `and` or `or` jumps on its comparisons to a shared landing
-that loads `0` or `1`, when that is shorter than computing each one.[^fusing]
+A value-context `and` or `or` jumps on its comparisons, and on its nested
+`not`, `and` and `or` operands, to a shared landing that loads `0` or `1`, when
+that is shorter than computing each one.[^fusing]
 
 ```lisp
 (ops (:branch-ge-imm (a v target) (bger a (imm v) target)))
@@ -361,7 +362,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | A register `%CC-TAKE` picks from the callee-saved pool for a single call site costs a save/restore even when the stack would have been as cheap. | [#376](https://todo.sr.ht/~takeiteasy/lasm/376) |
 | An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
-| A value-context `and`/`or` fuses only operands that are comparisons; a nested `not`, `and` or `or` operand computes a value. | [#391](https://todo.sr.ht/~takeiteasy/lasm/391) |
+| The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
 | A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
@@ -403,11 +404,16 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines all eighteen
   branch operations.
 
-[^fusing]: The landing costs a `:jump` and a `:const`. Each fused comparison
-  before the last saves one instruction in an `and`, and in an `or` one with
-  `:branch-ne-imm` or two without it. The operands fuse when they save more
-  than the landing costs: four operands in an `and`, or in an `or` with
-  `:branch-ne-imm`, and three in an `or` without it.
+[^fusing]: The landing costs a `:jump` and a `:const`. Each operand before the
+  last saves its estimated cost of computing a value and jumping on it, less
+  the cost of jumping on it directly; the operands fuse when the savings total
+  more than the landing costs. A comparison saves one instruction in an `and`,
+  and in an `or` one with `:branch-ne-imm` or two without it, so four
+  comparisons fuse in an `and`, or in an `or` with `:branch-ne-imm`, and
+  three in an `or` without it. `(not x)` saves one with `:branch-ne-imm` and
+  nothing without it. An operand that jumps is one the estimate says saves
+  something, and an `or` operand must also give only `0` or `1`, since the
+  landing loads `1`: `(or (and a b) ...)` keeps computing `b`'s value.
 
 [^macros]: A fresh `let` name or `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`
