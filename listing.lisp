@@ -1,5 +1,5 @@
 ;;;; listing.lisp
-;;;; #25 (M7): renders an ASSEMBLY's LISTING (assembler.lisp) as a
+;;;; Renders an ASSEMBLY's LISTING (assembler.lisp) as a
 ;;;; conventional address/cells/source listing and answers address<->line
 ;;;; lookups against it, built on the address<->statement mapping
 ;;;; ASSEMBLE-STATEMENTS now retains instead of discarding once %ENCODE has
@@ -44,8 +44,8 @@ ADDRESS-of-entry + SIZE) run contains ADDRESS, or NIL if ADDRESS falls in a
 gap (e.g. a forward .ORG's pad) or past the end. REGION and BANK select an
 entry placed in that bank of a banked region; by default only main-image
 entries match. A linear scan over ASSEMBLY-LISTING -- fine at the program
-sizes LASM currently targets; ticket 295 tracks an address-indexed
-structure if that ever matters."
+sizes LASM currently targets; an address-indexed
+structure would replace it if that ever matters."
   (find-if (lambda (l) (and (%same-image-p l region bank)
                             (<= (listing-line-address l) address
                                 (1- (+ (listing-line-address l) (listing-line-size l))))))
@@ -141,7 +141,7 @@ contribute entries from each occurrence."
                                     (assembly-source-unit assembly))))))
                  (assembly-listing assembly)))
 
-;;; Data regions (#82)
+;;; Data regions
 
 (defun assembly-data-regions (assembly &key region bank)
   "The (START . END) cell ranges, END exclusive, ASSEMBLY's .byte/.word/.res
@@ -204,7 +204,7 @@ of its own."
         (format nil "~{~V,'0X~^ ~}" (loop for c in cells collect digits collect c)))))
 
 (defvar *listing-cycles* nil
-  "True while LISTING-TEXT renders its cycles column (#180).")
+  "True while LISTING-TEXT renders its cycles column.")
 
 (defparameter *listing-cycles-width* 5
   "Width of the cycles column, its trailing gap included.")
@@ -306,7 +306,7 @@ with the source column omitted entirely."
                (%listing-text-from-unit assembly stream digits child index t)))))
 
 (defun listing-text (assembly &key stream cycles)
-  "Render ASSEMBLY's LISTING (assembler.lisp, #25) as a conventional
+  "Render ASSEMBLY's LISTING (assembler.lisp) as a conventional
 assembler listing: address, encoded cells, and (when ASSEMBLY-SOURCE is
 present) the original source line, one row per source line. See this file's
 header comment for how a line with no LISTING-LINE entry (a comment, .ORG,
@@ -316,7 +316,7 @@ this degrades to an entry-ordered listing with no source column when
 ASSEMBLY-SOURCE is NIL. Returns the text as a string when STREAM is NIL
 (default); otherwise writes to STREAM and returns NIL.
 
-CYCLES (#180), when true, adds a column after the address holding each
+CYCLES, when true, adds a column after the address holding each
 instruction's declared cycle cost (%DESCRIPTOR-CYCLE-COST), marked with a +
 when its semantics call ELAPSE, so the real cost is only
 known at run time. Data and non-emitting rows leave it blank."
@@ -342,7 +342,7 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
   (listing-text assembly :stream stream :cycles cycles)
   assembly)
 
-;;; Symbol table (#37) -- scope- and kind-aware lookup and listing over
+;;; Symbol table -- scope- and kind-aware lookup and listing over
 ;;; ASSEMBLY-SYMBOL-INFO, built alongside ASSEMBLY-SYMBOLS by the assembler
 ;;; (assembler.lisp) to answer "what's defined in this scope, and is it a
 ;;; label or an .EQU" without ASSEMBLY-SYMBOLS itself having to stop being a
@@ -361,8 +361,8 @@ PRINT-DISASSEMBLY (disassembler.lisp). Returns ASSEMBLY."
 ;;; and ASSEMBLY-SYMBOL-GROUPS additionally calls ASSEMBLY-SYMBOL (itself a
 ;;; hash lookup) once per scope from inside a SORT key function -- fine at
 ;;; the program sizes LASM currently targets, same tradeoff LISTING-LINE-AT
-;;; already makes (#88) and no worse; ticket 295 tracks an
-;;; address/scope-indexed structure if either ever shows up as a hot path.
+;;; already makes and no worse; an
+;;; address/scope-indexed structure would replace it if either ever shows up as a hot path.
 
 (defun assembly-symbol (assembly name &key scope)
   "Return SYMBOL-INFO for NAME. SCOPE selects a local under that global;
@@ -391,8 +391,8 @@ NIL or nothing matches."
     (sort result #'< :key #'symbol-info-order)))
 
 (defun assembly-symbol-groups (assembly)
-  "ASSEMBLY's symbols (#37) grouped by enclosing scope, as an alist of
-(GLOBAL-NAME . SYMBOL-INFO-LIST) -- the ticket's ask: a listing / source-map
+  "ASSEMBLY's symbols grouped by enclosing scope, as an alist of
+(GLOBAL-NAME . SYMBOL-INFO-LIST) -- so a listing / source-map
 pass can group locals under their enclosing global label rather than print
 a flat, ambiguous list. One entry per global label that has at least one
 local (or itself), the global's own SYMBOL-INFO heading its list followed
@@ -487,7 +487,7 @@ address, so hex width has no natural meaning)."
         site)))
 
 (defun symbols-text (assembly &key stream (offset 0))
-  "Render ASSEMBLY's symbol table (#37), grouped by scope
+  "Render ASSEMBLY's symbol table, grouped by scope
 (ASSEMBLY-SYMBOL-GROUPS): top-level symbols first, then each global label
 with its locals indented underneath, each row naming a symbol, its value
 (hex for a :LABEL, decimal for an assignment), its KIND, and its source

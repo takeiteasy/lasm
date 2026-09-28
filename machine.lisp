@@ -16,7 +16,7 @@
            (integerp (third value)) (>= (third value) 2))))
 
 (defun %check-endian (value name)
-  "#66: VALUE must be :LITTLE, :BIG, or (OUTER INNER GROUP) -- OUTER and INNER
+  "VALUE must be :LITTLE, :BIG, or (OUTER INNER GROUP) -- OUTER and INNER
 each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 %CELL-SIGNIFICANCE-ORDER, instruction.lisp)."
   (unless (%endian-valid-p value)
@@ -27,7 +27,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
   "The :LITTLE or :BIG order of the bytes inside one cell under ENDIAN."
   (if (consp endian) (second endian) endian))
 
-;; #300, #303: the :privilege key of a register, stack, flag or region. SPEC is a
+;; The :privilege key of a register, stack, flag or region. SPEC is a
 ;; level name gating every access in ACCESSES, or a plist (:read L :write L
 ;; :execute L) gating only the listed ones. Returns one level (or NIL) per
 ;; access in ACCESSES; the levels themselves are checked against the machine's
@@ -54,7 +54,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
       (t (%defmachine-error "~(~A~) ~S: :privilege must be a level name or a plist of ~{~S~^, ~} levels, got ~S"
                 kind name accesses spec)))))
 
-;; #314: (:fields ((MASK LEVEL [:on-write :violate/:ignore])...)) inside a
+;; (:fields ((MASK LEVEL [:on-write :violate/:ignore])...)) inside a
 ;; register's :privilege plist. Returns the plist without :FIELDS and the
 ;; parsed (MASK LEVEL POLICY) list; %FINISH-PRIVILEGE-MODEL checks the rest.
 (defun %split-field-privileges (spec name)
@@ -81,7 +81,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
       (values spec nil)))
 
 (defun parse-register-clause (name-form)
-  ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- #72: NAMES is
+  ;; (register NAME :width n [:count n] [:names (A B C ...)]) -- NAMES is
   ;; an optional list of alias symbols, one per bank cell in index order
   ;; (CHIP8's V0-VF, DCPU-16's A/B/C/X/Y/Z/I/J). COUNT defaults to (length
   ;; NAMES) when NAMES is given and COUNT is not; when both are given they
@@ -126,7 +126,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                              :read-privilege read-privilege
                              :write-privilege write-privilege))))
 
-;; #166: (stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width N]
+;; (stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width N]
 ;; [:bounds (LOW HIGH)]) -- binds
 ;; an existing scalar :register element as an address pointer into a :memory
 ;; element, for machines whose "stack" is a plain register indexed by
@@ -152,7 +152,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
     (make-stack-pointer-descriptor :register register :memory memory :grows grows
                                    :width width :bounds bounds)))
 
-;; #166: resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
+;; Resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
 ;; DESCRIPTOR's own ELEMENTS, once they're fully known -- same two-pass split
 ;; as %FINISH-INTERRUPT-MODEL. Populates MACHINE-DESCRIPTOR-STACK-POINTERS
 ;; (register name -> STACK-POINTER-DESCRIPTOR, with MEMORY resolved), and
@@ -197,12 +197,12 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
                                reg name bounds (storage-element-name memory) (storage-element-addr-width memory))))
         (setf (gethash reg (machine-descriptor-stack-pointers descriptor)) sp)))))
 
-;; #107: (region NAME start end [:kind :ram/:rom/:device] [:banks n] [:on-write
+;; (region NAME start end [:kind :ram/:rom/:device] [:banks n] [:on-write
 ;; :ignore/:error] [:read fn] [:write fn] [:device NAME]) -- one sub-range of a memory
 ;; element with distinct access behavior. NAME is validated as a symbol
 ;; here; PARSE-MEMORY-CLAUSE cross-checks it against every other name in the
 ;; machine's namespace (BUILD-MACHINE-DESCRIPTOR's SEEN table) once the whole
-;; clause is parsed, same as a register's #72 :NAMES aliases. START/END are
+;; clause is parsed, same as a register's :NAMES aliases. START/END are
 ;; both inclusive; validated against ADDR-WIDTH by PARSE-MEMORY-CLAUSE, which
 ;; alone knows the element's address range.
 (defun %parse-memory-region-form (form context)
@@ -248,7 +248,7 @@ function), got ~S" context name (car fn) (cdr fn))))
                            :read-privilege read-privilege :write-privilege write-privilege
                            :execute-privilege execute-privilege))))
 
-;; Cross-region checks (#107): unique names and non-overlapping ranges,
+;; Cross-region checks: unique names and non-overlapping ranges,
 ;; applied once every (region ...) form in the clause is parsed -- mirrors
 ;; PARSE-INSTRUCTION-WORD-CLAUSE's own cross-layout checks after parsing
 ;; every (layout ...) form.
@@ -268,9 +268,8 @@ function), got ~S" context name (car fn) (cdr fn))))
 (defun parse-memory-clause (form)
   ;; (memory NAME :width n :addr-width n [:cell-width n] [:endian :little/:big]
   ;;   (region NAME start end ...)...)
-  ;; #66: ENDIAN defaults to :LITTLE, matching every machine before this
-  ;; ticket -- see %ENCODE-VALUE-CELLS/%FETCH-CELLS for what it governs.
-  ;; #107: nested (region ...) forms are split out before DESTRUCTURING-BIND
+  ;; ENDIAN defaults to :LITTLE; see %ENCODE-VALUE-CELLS/%FETCH-CELLS for what it governs.
+  ;; Nested (region ...) forms are split out before DESTRUCTURING-BIND
   ;; sees the rest as a plain plist, same shape as PARSE-INSTRUCTION-WORD-
   ;; CLAUSE splitting out (layout ...) forms.
   (let* ((region-forms (remove-if-not (lambda (f) (and (consp f) (eq (first f) 'region))) form))
@@ -299,7 +298,7 @@ function), got ~S" context name (car fn) (cdr fn))))
 
 (defun parse-flags-clause (form)
   ;; (flags A B C ...) -- expands to one storage-element per flag, width 1.
-  ;; #300: an entry may be (NAME :privilege LEVEL).
+  ;; An entry may be (NAME :privilege LEVEL).
   (loop for entry in form
         collect (if (consp entry)
                     (%definition-bind (name &key privilege) entry
@@ -310,7 +309,7 @@ function), got ~S" context name (car fn) (cdr fn))))
                                               :write-privilege write-privilege)))
                     (make-storage-element :name entry :kind :flag :width 1))))
 
-;; #75: (clock-speed n) -- the machine's nominal rate in Hz, n a positive
+;; (clock-speed n) -- the machine's nominal rate in Hz, n a positive
 ;; integer. Optional; a machine with no such clause leaves MACHINE-
 ;; DESCRIPTOR-CLOCK-SPEED NIL (storage.lisp), which is what keeps
 ;; RUN-FOR-DURATION's wall-time-equivalent conversion opt-in rather than
@@ -320,7 +319,7 @@ function), got ~S" context name (car fn) (cdr fn))))
   (%definition-bind (hz) form
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
-;; #226: (reset-pc n) -- the value RESET (and MAKE-MACHINE) gives the PC
+;; (reset-pc n) -- the value RESET (and MAKE-MACHINE) gives the PC
 ;; register; n a non-negative integer that BUILD-MACHINE-DESCRIPTOR checks
 ;; against PC's width once the elements are known.
 (defun parse-reset-pc-clause (form)
@@ -329,10 +328,10 @@ function), got ~S" context name (car fn) (cdr fn))))
       (%defmachine-error "reset-pc must be a non-negative integer, got ~S" pc))
     pc))
 
-;; #108: (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
+;; (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
 ;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
-;;   [:read fn] [:write fn]) -- a bus-addressed peripheral. A #107 :DEVICE
-;; region may bind to it with :DEVICE (#158) to route MREF through :READ/
+;;   [:read fn] [:write fn]) -- a bus-addressed peripheral. A :DEVICE
+;; region may bind to it with :DEVICE to route MREF through :READ/
 ;; :WRITE; a device no region binds is bus-only. NAME is validated as a symbol here;
 ;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
 ;; machine's namespace, same as a region's or a register alias's name.
@@ -361,7 +360,7 @@ function), got ~S" name (car fn) (cdr fn))))
                              :save save :load load :read read :write write
                              :priority priority :non-maskable non-maskable)))
 
-;; #109: (interrupts :vector NAME :message NAME :save (NAME...)
+;; (interrupts :vector NAME :message NAME :save (NAME...)
 ;;   [:nmi-vector NAME] [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
 ;;   [:mask-flag name] [:mask-level place] [:mask-level-when fn]
 ;;   [:mask-level-on-deliver t/nil] [:cycles n] [:drop-on-zero-vector t/nil]
@@ -378,7 +377,7 @@ function), got ~S" name (car fn) (cdr fn))))
 ;; so BUILD-MACHINE-DESCRIPTOR's SEEN table never needs to know about it.
 (defun %interrupt-place-designator-p (place)
   "A scalar element name, or (NAME INDEX) naming one cell of a banked
-register (#163)."
+register."
   (or (symbolp place)
       (and (consp place) (= (length place) 2)
            (symbolp (first place)) (integerp (second place)))))
@@ -443,12 +442,12 @@ function), got ~S" mask-level-when))
                                 :nesting nesting :max-depth max-depth
                                 :deliver-level deliver-level)))
 
-;; #164: (idle [:cycles n]) -- the cycle cost of one idle step.
+;; (idle [:cycles n]) -- the cycle cost of one idle step.
 (defun parse-idle-clause (form)
   (%definition-bind (&key (cycles 1)) form
     (%check-positive cycles ":cycles" 'idle)))
 
-;; #109/#166: resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or,
+;; Resolves an INTERRUPT-DESCRIPTOR's :STACK -- explicit or,
 ;; absent one, the machine's sole declared stack element -- exactly the way
 ;; WITH-MACHINE-BINDINGS's PUSH/POP macrolets do at macroexpansion time
 ;; (semantics.lisp), just resolved once here at DEFMACHINE time instead,
@@ -491,7 +490,7 @@ element or stack-pointer is declared -- name one explicitly with :stack" name))
             (t (%defmachine-error "interrupts on machine ~S: more than one stack element declared ~
 (~{~S~^ ~}) -- name one explicitly with :stack" name (mapcar #'storage-element-name stacks))))))))
 
-;; #109: resolves an INTERRUPT-DESCRIPTOR's symbolic names -- :VECTOR/
+;; Resolves an INTERRUPT-DESCRIPTOR's symbolic names -- :VECTOR/
 ;; :MESSAGE/:SAVE/:STACK/:MASK-FLAG -- against DESCRIPTOR's own ELEMENTS,
 ;; once they're fully known (BUILD-MACHINE-DESCRIPTOR, below, after the
 ;; ELEMENTS loop). Mutates DESCRIPTOR-INTERRUPTS in place (its :STACK slot
@@ -513,7 +512,7 @@ element or stack-pointer is declared -- name one explicitly with :stack" name))
 got ~S" name what n kinds (storage-element-kind e)))
                  ;; A bare banked register is ambiguous (which bank cell?) and
                  ;; rejected at DEFMACHINE time rather than at first delivery.
-                 ;; #163: (NAME INDEX) names one cell of a banked register,
+                 ;; (NAME INDEX) names one cell of a banked register,
                  ;; read/written through REGREF; a bare banked NAME stays
                  ;; ambiguous and rejected.
                  (if (consp place)
@@ -540,25 +539,25 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
       (setf (interrupt-descriptor-stack-kind interrupts) stack-kind))))
 
 ;; (instruction-word :width n (field name width) (field name width) ...)
-;; (#20, M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
+;; (M4) -- a DCPU-16-shaped machine's whole instruction is one N-bit word
 ;; split into bit fields rather than a cell-per-operand stream. FIELDS is
 ;; parsed MSB-first as declared: the first field named occupies the highest
 ;; bits, mirroring how (opcode n)/(operand ...) subclauses already read
 ;; top-down in the mockups this is modeled on (LASM-plan.md sec. 3.8).
 ;;
 ;; The whole-cell check (WIDTH must be a multiple of the machine's own memory
-;; cell width, #53) can't happen here -- a MEMORY clause may be declared after
+;; cell width) can't happen here -- a MEMORY clause may be declared after
 ;; INSTRUCTION-WORD in source order, and DEFMACHINE parses clauses one at a
 ;; time. BUILD-MACHINE-DESCRIPTOR finishes the layout (WIDTH-CELLS,
 ;; CELL-WIDTH) once every element is known.
 ;;
-;; #64: an optional (layout NAME (field name width)...) form declares an
+;; An optional (layout NAME (field name width)...) form declares an
 ;; alternate bit-field split sharing this clause's own :WIDTH and OPCODE
 ;; field -- a per-instruction DEFINSTRUCTION names which layout it encodes
 ;; against (its (layout NAME) encoding subclause), so a machine can express
 ;; e.g. CHIP8's 1NNN (4/12) alongside 6XNN (4/4/8) in one 16-bit word. See
 ;; PARSE-INSTRUCTION-WORD-CLAUSE for the cross-layout checks.
-;; #64: FIELD-FORMS is one layout's (field name width) forms -- the default
+;; FIELD-FORMS is one layout's (field name width) forms -- the default
 ;; layout's own, or one (layout NAME ...) alternate's. Shared by both so the
 ;; per-layout rules (at least one field, FIELD head, no duplicate names
 ;; *within* this layout, positive widths, exactly one OPCODE field, widths
@@ -598,7 +597,7 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
                   (list name field-width shift)))
               fields))))
 
-;; #64: (layout NAME (field name width)...) -- one alternate bit-field split
+;; (layout NAME (field name width)...) -- one alternate bit-field split
 ;; for a subset of a word-encoded machine's opcodes, e.g. CHIP8's 1NNN
 ;; (4/12) vs. 6XNN (4/4/8) sharing one 16-bit word. Parsed here into a bare
 ;; INSTRUCTION-WORD-LAYOUT (ALTERNATES always NIL -- only the default layout
@@ -634,10 +633,10 @@ instruction-word clause, which every layout shares" name))
          (rest-forms (if endian-pos
                          (append (subseq body 0 endian-pos) (subseq body (+ endian-pos 2)))
                          body))
-         ;; #64: (layout ...) forms are the machine's alternates; everything
+         ;; (layout ...) forms are the machine's alternates; everything
          ;; else is the default layout's own (field ...) forms.
          (layout-forms (remove-if-not (lambda (f) (eq (first f) 'layout)) rest-forms))
-         ;; #191: (extra-word-order FIELD...) -- at most one, default layout only.
+         ;; (extra-word-order FIELD...) -- at most one, default layout only.
          (order-forms (remove-if-not (lambda (f) (eq (first f) 'extra-word-order)) rest-forms))
          (field-forms (remove-if (lambda (f) (member (first f) '(layout extra-word-order))) rest-forms)))
     (unless width (%defmachine-error "instruction-word requires :width"))
@@ -648,7 +647,7 @@ instruction-word clause, which every layout shares" name))
            (opcode-field (find 'opcode fields :key #'first))
            (extra-word-order (rest (first order-forms)))
            (alternates (mapcar (lambda (f) (%parse-instruction-word-layout-form f width)) layout-forms)))
-      ;; Cross-layout checks (#64): alternate names unique and non-NIL
+      ;; Cross-layout checks: alternate names unique and non-NIL
       ;; (NIL always names the default), each alternate held to the same
       ;; :WIDTH as the default (%PARSE-INSTRUCTION-WORD-FIELDS' own
       ;; fields-sum-to-width check, applied per layout), and each alternate's
@@ -656,7 +655,7 @@ instruction-word clause, which every layout shares" name))
       ;; reads the OPCODE field off the machine's *default* layout alone
       ;; (%DECODE-WORD-INSTRUCTION), so every candidate must agree on where
       ;; it lives regardless of which layout actually encoded it. These two
-      ;; checks are also what makes #140's relaxed co-tenancy check sound: a
+      ;; checks are also what makes the relaxed co-tenancy check sound: a
       ;; descriptor's WORD-FIELD-CHOICE/WORD-CONSTANT entries carry absolute
       ;; bit positions within one shared word size, so two co-tenants naming
       ;; different layouts can still be compared bit-for-bit
@@ -689,9 +688,9 @@ default layout's OPCODE field ~S -- every layout must place OPCODE identically"
        :alternates alternates))))
 
 (defun %finish-instruction-word-layout (layout cell-width endian)
-  "Fill in LAYOUT's WIDTH-CELLS, CELL-WIDTH and ENDIAN (#66) -- its own
+  "Fill in LAYOUT's WIDTH-CELLS, CELL-WIDTH and ENDIAN -- its own
 DECLARED-ENDIAN if it has one, else ENDIAN -- and recurse into
-its ALTERNATES (#64), once the machine's own memory cell width/endianness is
+its ALTERNATES, once the machine's own memory cell width/endianness is
 known (BUILD-MACHINE-DESCRIPTOR, after every MEMORY element has been parsed)
 -- see PARSE-INSTRUCTION-WORD-CLAUSE's docstring for why this can't happen at
 clause-parse time. Signals if the instruction word's bit width isn't a whole
@@ -712,7 +711,7 @@ means %DECODE-WORD-INSTRUCTION (decoder.lisp) needs no extra lookup."
 ;;; Memory / cell-width resolution
 ;;
 ;; Shared by DEFINSTRUCTION (default operand width), ASSEMBLE (the assembled
-;; output's element width, #53), and the emulator (LOAD-PROGRAM, STEP-MACHINE)
+;; output's element width), and the emulator (LOAD-PROGRAM, STEP-MACHINE)
 ;; -- one place decides which memory element a machine-level operation means
 ;; and how wide its cells are, so those three pipelines can't drift apart on
 ;; a machine with more than one memory element.
@@ -741,7 +740,7 @@ pass :MEMORY explicitly" (machine-descriptor-name descriptor)
           (t (storage-element-name (first mem-elements)))))))
 
 (defun %compute-descriptor-cell-width (descriptor)
-  "DESCRIPTOR's code cell width in bits (#53) when no MEMORY-NAME disambiguates
+  "DESCRIPTOR's code cell width in bits when no MEMORY-NAME disambiguates
 -- the sole memory element's, or, when DESCRIPTOR declares several, their
 shared width if every one agrees. The uncached body %DESCRIPTOR-CELL-WIDTH
 memoizes below."
@@ -762,14 +761,14 @@ different cell widths (~{~S~^, ~}) -- pass :MEMORY explicitly"
                               mem-elements))))))))
 
 (defun %descriptor-cell-width (descriptor &optional memory-name)
-  "DESCRIPTOR's code cell width in bits (#53): MEMORY-NAME's own CELL-WIDTH
+  "DESCRIPTOR's code cell width in bits: MEMORY-NAME's own CELL-WIDTH
 when given, else the sole memory element's (or their shared width, when
 DESCRIPTOR declares several that agree) -- otherwise the caller must specify
 which memory element it means, same as %DESCRIPTOR-RESOLVE-MEMORY's own
 ambiguity error. See %DESCRIPTOR-RESOLVE-MEMORY for why this takes a
 descriptor object rather than a machine name.
 
-#63: the no-MEMORY-NAME case is memoized on DESCRIPTOR's own
+The no-MEMORY-NAME case is memoized on DESCRIPTOR's own
 CELL-WIDTH-CACHE slot (storage.lisp) -- %COMPUTE-DESCRIPTOR-CELL-WIDTH
 otherwise reconses ELEMENTS' memory sublist and calls REMOVE-DUPLICATES on
 every call, and this is read once per ENCODE-INSTRUCTION plus several times
@@ -794,18 +793,18 @@ expansion (the assembler, the emulator, DEFINSTRUCTION)."
   (%descriptor-resolve-memory (find-machine-descriptor machine-name) memory))
 
 (defun %machine-cell-width (machine-name &optional memory-name)
-  "MACHINE-NAME's code cell width in bits (#53). Name-based wrapper around
+  "MACHINE-NAME's code cell width in bits. Name-based wrapper around
 %DESCRIPTOR-CELL-WIDTH for every caller outside DEFMACHINE's own expansion."
   (%descriptor-cell-width (find-machine-descriptor machine-name) memory-name))
 
-;;; Memory / endian resolution (#66) -- exact twin of the cell-width trio
+;;; Memory / endian resolution -- exact twin of the cell-width trio
 ;;; above, same rationale: one place decides a machine's cell ordering so
 ;;; the encoder (instruction.lisp), decoder (decoder.lisp) and assembler
 ;;; (assembler.lisp) can't drift apart on a machine with more than one
 ;;; memory element.
 
 (defun %compute-descriptor-endian (descriptor)
-  "DESCRIPTOR's cell endianness (#66) when no MEMORY-NAME disambiguates --
+  "DESCRIPTOR's cell endianness when no MEMORY-NAME disambiguates --
 the sole memory element's, or, when DESCRIPTOR declares several, their
 shared endianness if every one agrees. The uncached body %DESCRIPTOR-ENDIAN
 memoizes below."
@@ -827,12 +826,12 @@ different endianness (~{~S~^, ~}) -- pass :MEMORY explicitly"
                               mem-elements))))))))
 
 (defun %descriptor-endian (descriptor &optional memory-name)
-  "DESCRIPTOR's cell endianness (#66): MEMORY-NAME's own ENDIAN when given,
+  "DESCRIPTOR's cell endianness: MEMORY-NAME's own ENDIAN when given,
 else the sole memory element's (or their shared endianness, when DESCRIPTOR
 declares several that agree) -- otherwise the caller must specify which
 memory element it means, same as %DESCRIPTOR-CELL-WIDTH's own ambiguity
 error. Memoized on DESCRIPTOR's own ENDIAN-CACHE slot (storage.lisp), same
-rationale as CELL-WIDTH-CACHE (#63)."
+rationale as CELL-WIDTH-CACHE."
   (if memory-name
       (storage-element-endian (descriptor-element descriptor memory-name))
       (let ((cached (machine-descriptor-endian-cache descriptor)))
@@ -842,7 +841,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
             cached))))
 
 (defun %machine-endian (machine-name &optional memory-name)
-  "MACHINE-NAME's cell endianness (#66). Name-based wrapper around
+  "MACHINE-NAME's cell endianness. Name-based wrapper around
 %DESCRIPTOR-ENDIAN for every caller outside DEFMACHINE's own expansion."
   (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
 
@@ -852,7 +851,7 @@ rationale as CELL-WIDTH-CACHE (#63)."
       (%defmachine-error "undefined-opcode must be :FAULT, :NOP or :TRAP, got ~S" policy))
     policy))
 
-;; #111: (privilege :level NAME [:shift N] [:width N] :levels (LEVEL...)
+;; (privilege :level NAME [:shift N] [:width N] :levels (LEVEL...)
 ;;   [:on-violation :fault/:trap/(:interrupt DATA [:priority N] [:non-maskable t/nil])]).
 ;; Each LEVEL is NAME or (NAME VALUE); VALUE defaults to the entry's index.
 ;; :LEVEL itself is resolved against the machine's elements later, in
@@ -1084,7 +1083,7 @@ DESCRIPTOR's finished elements."
         (setf (gethash (storage-element-name element) seen) t)
         (setf (gethash (storage-element-name element) (machine-descriptor-table descriptor))
               element)
-        ;; #72: an aliased register's :names share the same namespace as
+        ;; An aliased register's :names share the same namespace as
         ;; every storage element name -- SEEN also catches an alias
         ;; colliding with another element (or another register's alias),
         ;; not just with a bare element name.
@@ -1098,7 +1097,7 @@ DESCRIPTOR's finished elements."
                   (setf (gethash (symbol-name alias)
                                  (machine-descriptor-register-alias-elements descriptor))
                         element))
-        ;; #107: a memory element's region names share the same namespace too
+        ;; A memory element's region names share the same namespace too
         ;; -- SEEN also catches a region colliding with an element name, a
         ;; register alias, or another region, e.g. (region ram ...) inside
         ;; (memory ram ...) itself.
@@ -1106,7 +1105,7 @@ DESCRIPTOR's finished elements."
           (when (gethash (memory-region-name region) seen)
             (%defmachine-error "Duplicate storage element name ~S in machine ~S" (memory-region-name region) name))
           (setf (gethash (memory-region-name region) seen) t)))
-      ;; #108: a declared device's name joins the same namespace -- SEEN also
+      ;; A declared device's name joins the same namespace -- SEEN also
       ;; catches a device colliding with an element name, register alias, or
       ;; region name, and two devices sharing a name.
       (dolist (device-descriptor devices)
@@ -1114,7 +1113,7 @@ DESCRIPTOR's finished elements."
           (%defmachine-error "Duplicate storage element name ~S in machine ~S"
                  (device-descriptor-name device-descriptor) name))
         (setf (gethash (device-descriptor-name device-descriptor) seen) t))
-      ;; #158: a region's :DEVICE resolves to the device's fixed bus index --
+      ;; A region's :DEVICE resolves to the device's fixed bus index --
       ;; its position among the (merged) declared devices.
       (dolist (element elements)
         (dolist (region (storage-element-regions element))
@@ -1134,7 +1133,7 @@ DESCRIPTOR's finished elements."
             (%defmachine-error "reset-pc ~S on machine ~S does not fit PC's ~D-bit width"
                    reset-pc name (storage-element-width pc)))))
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
-      ;; now that every MEMORY element is known (#53, #66) -- see
+      ;; now that every MEMORY element is known -- see
       ;; PARSE-INSTRUCTION-WORD-CLAUSE and %FINISH-INSTRUCTION-WORD-LAYOUT.
       ;; A machine with no memory element at all (e.g. SIXTYFOO's
       ;; instruction-less ancestor) or more than one with disagreeing cell
@@ -1145,12 +1144,12 @@ DESCRIPTOR's finished elements."
         (%finish-instruction-word-layout instruction-word (%descriptor-cell-width descriptor)
                                           (or (instruction-word-layout-declared-endian instruction-word)
                                               (%descriptor-endian descriptor))))
-      ;; #166: STACK-POINTERS' REGISTER/MEMORY must resolve before
+      ;; STACK-POINTERS' REGISTER/MEMORY must resolve before
       ;; %FINISH-INTERRUPT-MODEL, since an (interrupts ...) clause naming a
       ;; register as its :stack looks that register up in
       ;; MACHINE-DESCRIPTOR-STACK-POINTERS below.
       (%finish-stack-pointers descriptor stack-pointers)
-      ;; #109: INTERRUPTS' :VECTOR/:MESSAGE/:SAVE/:STACK/:MASK-FLAG can only
+      ;; INTERRUPTS' :VECTOR/:MESSAGE/:SAVE/:STACK/:MASK-FLAG can only
       ;; be resolved against real storage elements now that ELEMENTS is
       ;; known -- same deferred-finishing reason as INSTRUCTION-WORD above.
       (when interrupts
@@ -1440,7 +1439,7 @@ add. Further clauses are valid only on an extending machine:
      (without-devices NAME...)    ; later devices' bus indices shift down
 See docs/machine-families.md.
 
-A register's :names (#72) gives each bank cell of a banked (:count > 1)
+A register's :names gives each bank cell of a banked (:count > 1)
 register a symbolic alias -- e.g. CHIP8's V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J
 -- resolving to that cell's index. :count defaults to (length names) when
 :names is given alone. An alias folds like a plain symbol in assembly source
@@ -1449,7 +1448,7 @@ semantics (WITH-MACHINE-BINDINGS, semantics.lisp). Every alias shares one
 machine-wide namespace with every storage element name -- see MACHINE-
 DESCRIPTOR-REGISTER-ALIASES (storage.lisp).
 
-A memory element's :REGION forms (#107) declare sub-ranges with distinct
+A memory element's :REGION forms declare sub-ranges with distinct
 access behavior -- :RAM (the default, ordinary storage), :ROM (writes
 dropped or, with :ON-WRITE :ERROR, signal MEMORY-WRITE-PROTECTED), and
 :DEVICE (reads/writes forwarded to :READ/:WRITE instead of touching backing
@@ -1473,14 +1472,14 @@ survives quoting unevaluated and FUNCALL resolves it at call time, which
 also means the function need not be defined yet at DEFMACHINE time, only by
 first access.
 
-INSTRUCTION-WORD (#20, M4) declares a fixed-width instruction word split into
+INSTRUCTION-WORD (M4) declares a fixed-width instruction word split into
 named bit fields (MSB-first, one of them named OPCODE) instead of the
 default opcode-byte-plus-operand-bytes encoding -- see DEFINSTRUCTION's
 (operand NAME :field F (variant ...)) clause for how an instruction fills
 those fields. Optional; a machine with no such clause keeps the default
 byte encoding.
 
-An optional (layout NAME (field name width)...) form (#64) declares an
+An optional (layout NAME (field name width)...) form declares an
 alternate field split for a subset of the machine's opcodes -- every layout
 shares :WIDTH and an identical OPCODE field, and a DEFINSTRUCTION names which
 one it encodes against via a (layout NAME) encoding subclause. Lets one
@@ -1488,7 +1487,7 @@ machine express per-instruction non-uniform word layouts, e.g. a CHIP8-shaped
 16-bit word whose opcode nibble alone decides whether the rest splits 4/12,
 4/4/8, or 4/4/4/4.
 
-A memory element's :ENDIAN (#66) declares which end of a multi-cell value
+A memory element's :ENDIAN declares which end of a multi-cell value
 its low-order cell occupies -- :LITTLE (the default) or :BIG. Governs
 %ENCODE-VALUE-CELLS/%FETCH-CELLS (instruction.lisp/decoder.lisp), so an
 instruction operand, an INSTRUCTION-WORD's own encoded word, and a
@@ -1498,16 +1497,16 @@ operation ambiguous about which one it means (no explicit :MEMORY, and the
 elements disagree) signals the same way %MACHINE-CELL-WIDTH's own ambiguity
 does.
 
-CLOCK-SPEED (#75) declares the machine's nominal rate in Hz, used by
+CLOCK-SPEED declares the machine's nominal rate in Hz, used by
 RUN-FOR-DURATION (emulator.lisp) to convert accumulated cycles to
 wall-time-equivalent seconds. Optional; a machine with no such clause can
 still use RUN-FOR-CYCLES and read MACHINE-CYCLES, just not RUN-FOR-DURATION.
 
-RESET-PC (#226) declares the value MAKE-MACHINE and RESET give the PC register
+RESET-PC declares the value MAKE-MACHINE and RESET give the PC register
 instead of zero. Optional; the machine must have a single register named PC
 that the value fits. LOAD-PROGRAM still sets PC to the load origin.
 
-DEVICE (#108) declares a bus-addressed peripheral -- identity (an ID/
+DEVICE declares a bus-addressed peripheral -- identity (an ID/
 VERSION/MANUFACTURER triple, an HWQ-style instruction's own semantics decide
 which registers it lands in) plus optional INIT/TICK/RECEIVE/DETACH hooks,
 each a function designator for the same reason a :DEVICE region's :READ/
@@ -1520,7 +1519,7 @@ DEVICE-INFO, DEVICE-SEND, DETACH-DEVICE) -- deliberately not bound inside
 WITH-MACHINE-BINDINGS, the same way :MEMORY elements aren't; an instruction's
 semantics call these directly with MACHINE, same as MREF.
 
-STACK-POINTER (#166) binds an existing scalar REGISTER as an address pointer
+STACK-POINTER binds an existing scalar REGISTER as an address pointer
 into a :MEMORY element, for machines (DCPU-16, ANIMA-16) whose stack is a
 plain register indexed by push/pop convention rather than a lasm (stack ...)
 element. :MEMORY defaults to the machine's sole declared memory element (an
@@ -1532,17 +1531,17 @@ pre-decrements then loads. PUSH/POP (semantics.lisp) and an (interrupts ...)
 clause's :STACK both accept a stack-pointer register wherever they accept a
 (stack ...) element's name. :WIDTH (default :MEMORY's cell width) is the
 bits per push/pop/ref slot; a wider slot spans several cells in :MEMORY's
-own endianness (#167). :BOUNDS (LOW HIGH) is an inclusive cell-address
+own endianness. :BOUNDS (LOW HIGH) is an inclusive cell-address
 window outside which a push, pop or ref signals STACK-OVERFLOW,
 STACK-UNDERFLOW or STACK-INDEX-OUT-OF-RANGE before anything changes
-(#168); without it there is no condition -- a wrapping register is the
+; without it there is no condition -- a wrapping register is the
 machine's own business, same as the hardware it models. The indexed
 address is masked to :MEMORY's :ADDR-WIDTH so REGISTER may be wider than
 the address space.
 
-INTERRUPTS (#109) declares the machine's interrupt-delivery model:
+INTERRUPTS declares the machine's interrupt-delivery model:
 :VECTOR names the register holding the handler address, written to PC on
-delivery (:NMI-VECTOR, #311, names a second one used for non-maskable
+delivery (:NMI-VECTOR, names a second one used for non-maskable
 signals, and is what :DROP-ON-ZERO-VECTOR checks for them);
 :MESSAGE names the register a delivered signal's data is written to; :SAVE names the registers/flags pushed, in order, before MESSAGE/VECTOR
 are written -- INTERRUPT-RETURN (semantics.lisp) pops them in reverse.

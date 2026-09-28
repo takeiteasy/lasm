@@ -15,7 +15,7 @@
 ;;;; machine's memory, or a bare sequence of cells (e.g. an ASSEMBLY).
 ;;;;
 ;;;; Lifted from what were %STEP-BYTE-MACHINE/%STEP-WORD-MACHINE in
-;;;; emulator.lisp before this ticket (#21) -- STEP-MACHINE now calls
+;;;; emulator.lisp -- STEP-MACHINE calls
 ;;;; DECODE-INSTRUCTION-AT and only handles the PC write and EXECUTE-INSTRUCTION
 ;;;; itself.
 
@@ -26,14 +26,14 @@
 (defun machine-cell-reader (machine memory)
   "A READ-CELL closure (DECODE-INSTRUCTION-AT's ADDRESS -> cell contract)
 reading MACHINE's MEMORY element via MREF (storage.lisp) as instruction
-fetches (#303) -- the source used by STEP-MACHINE (emulator.lisp)."
+fetches -- the source used by STEP-MACHINE (emulator.lisp)."
   (lambda (address) (%mref machine memory address :execute)))
 
 (defun machine-peek-reader (machine memory)
   "A READ-CELL closure reading MACHINE's MEMORY element via MPEEK
 (storage.lisp) rather than MREF -- the source used by DISASSEMBLE-MEMORY
 (disassembler.lisp), which inspects memory rather than executing it and so
-must not trigger a #107 :DEVICE region's :READ side effects just by
+must not trigger a :DEVICE region's :READ side effects just by
 disassembling across one."
   (lambda (address) (mpeek machine memory address)))
 
@@ -55,8 +55,7 @@ can use one HANDLER-CASE for both cell sources."
 
 (defun %fetch-cells (read-cell address width-cells cell-width &optional (endian :little))
   "Read WIDTH-CELLS cells starting at ADDRESS through READ-CELL as one
-unsigned integer, each cell CELL-WIDTH bits wide, in ENDIAN order (#66:
-:LITTLE, the default, :BIG, or an (OUTER INNER GROUP) list) -- the exact inverse of %ENCODE-VALUE-CELLS
+unsigned integer, each cell CELL-WIDTH bits wide, in ENDIAN order (:LITTLE, the default, :BIG, or an (OUTER INNER GROUP) list) -- the exact inverse of %ENCODE-VALUE-CELLS
 (instruction.lisp). Shared by an instruction word itself, every extra word
 following it, and %DECODE-CELL-INSTRUCTION's ordinary operand fetch.
 Formerly %FETCH-WORD (emulator.lisp), generalized to read through any
@@ -74,7 +73,7 @@ never run backward or past a rejected candidate's own bounds."
         do (setf v (logior v (ash (funcall read-cell (+ address i)) (* cell-width shift))))
         finally (return v)))
 
-;; %WORD-CHOICE-MATCHES-P now lives in instruction.lisp (#105) -- registration
+;; %WORD-CHOICE-MATCHES-P now lives in instruction.lisp -- registration
 ;; (REGISTER-INSTRUCTION-VARIANTS!'s %CHECK-OPCODE-DECODABLE!) needs it too,
 ;; and decoder.lisp loads after instruction.lisp in the :SERIAL T system.
 
@@ -227,23 +226,22 @@ field choices rather than the descriptor's encoding-size variant."
         (values :decode-failure nil nil))))
 
 (defun %decode-cell-instruction (read-cell address machine-name cell-width endian)
-  "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- unchanged in shape
-from before #20/#21, only reading through READ-CELL rather than always MREF,
-plus #125's sub-opcode cell and #126's hole-selected CHOICES below. Each
+  "DECODE-INSTRUCTION-AT's ordinary cell-encoded path -- reading through READ-CELL rather than always MREF,
+plus the sub-opcode cell and the hole-selected CHOICES below. Each
 operand's cells are reassembled via %FETCH-CELLS (the same routine the
-word-encoded path below uses), which is what makes ENDIAN (#66) apply here
+word-encoded path below uses), which is what makes ENDIAN apply here
 too -- previously a second, hand-rolled little-endian-only copy of that
 loop lived here.
 
-A SIGNED operand (mode.lisp, #30 -- RELATIVE, #23, implies SIGNEDP) was
+A SIGNED operand (mode.lisp -- RELATIVE implies SIGNEDP) was
 assembled as a signed quantity (a RELATIVE operand specifically as an
 offset, assembler.lisp's %RELATIVE-OFFSET) but is fetched here as an
 unsigned WIDTH-cell quantity, like every other operand -- reinterpret each
 hole by its own width so callers see a plain signed integer. Per hole, not
-per whole mode (#124/#127): DESCRIPTOR's own OPERAND-SIGNEDNESS
+per whole mode: DESCRIPTOR's own OPERAND-SIGNEDNESS
 (instruction.lisp, precomputed at DEFINSTRUCTION time) says which holes are
 signed -- for an ungoverned hole this is just MODE's own SIGNEDP (unchanged
-from before #124), but a ONE-OF hole whose alternatives disagree can differ
+from before), but a ONE-OF hole whose alternatives disagree can differ
 by which alternative a hole-selected (variant (choice m) (sub s)) selector
 resolved to, which is exactly what OPERAND-SIGNEDNESS bakes in per
 descriptor. A NIL OPERAND-SIGNEDNESS (a word-encoded descriptor never
@@ -251,7 +249,7 @@ reaches this function at all, so in practice always non-NIL here, but
 guarded the same way assembler.lisp's readers are) is treated as
 all-unsigned, not an error.
 
-#125: OPCODE's bucket (FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE) holds more than
+OPCODE's bucket (FIND-INSTRUCTION-DESCRIPTORS-BY-OPCODE) holds more than
 one candidate only when every one of them declares its own SUB-OPCODE
 (REGISTER-INSTRUCTION-VARIANTS! guarantees they're pairwise distinct when it
 does) -- in that case the cell right after OPCODE is read and matched against
@@ -259,14 +257,13 @@ each candidate's SUB-OPCODE to pick the one to decode, and operands start one
 cell later than usual. A bucket with no SUB-OPCODE at all (the ordinary case)
 has exactly one candidate, unaffected by any of this.
 
-#126: the matched descriptor's own SUB-CHOICES (non-NIL only when its
+The matched descriptor's own SUB-CHOICES (non-NIL only when its
 SUB-OPCODE was selected by a hole-selected (variant (choice m) (sub s))
 rather than a plain (opcode n :sub s)) is returned as this function's own
 fourth CHOICES value -- already hole-aligned and already a list of bare
 mode-name symbols/NILs, exactly the shape %MATCHED-CHOICE-NAME expects, so
 no further conversion is needed here. NIL throughout for a descriptor with no
-hole-selected sub-opcode selector at all -- the same NIL a caller saw
-unconditionally before #126."
+hole-selected sub-opcode selector at all -- NIL."
   (let* ((opcode (funcall read-cell address))
          (candidates (handler-case (find-instruction-descriptors-by-opcode machine-name opcode)
                        (unknown-instruction () nil))))
@@ -310,25 +307,25 @@ they cannot decode the same encoding two different ways.
 Returns (VALUES descriptor values size choices) on success: the matched
 INSTRUCTION-DESCRIPTOR, its decoded operand VALUES in hole order (already
 sign-extended per hole where applicable -- see %DECODE-CELL-INSTRUCTION's
-OPERAND-SIGNEDNESS on a byte-encoded machine, #124/#127, and
+OPERAND-SIGNEDNESS on a byte-encoded machine, and
 %TRY-DECODE-WORD-CANDIDATE's WORD-FIELD-CHOICE-SIGNEDP on a word-encoded
 one), and
 SIZE, the instruction's width in cells, accumulated during decode rather than
 taken from INSTRUCTION-DESCRIPTOR-SIZE (see %DECODE-WORD-INSTRUCTION's
 docstring for why that matters on a word-encoded machine). CHOICES is the
-matched WORD-FIELD-CHOICE per hole on a word-encoded machine (#104, see
+matched WORD-FIELD-CHOICE per hole on a word-encoded machine (see
 %DECODE-WORD-INSTRUCTION), or the matched descriptor's own SUB-CHOICES on a
-byte-encoded machine (#126, see %DECODE-CELL-INSTRUCTION) -- NIL throughout
+byte-encoded machine (see %DECODE-CELL-INSTRUCTION) -- NIL throughout
 when the descriptor declares no hole-selected sub-opcode selector, which
-includes every byte-encoded descriptor before #126. Existing callers
+includes every byte-encoded descriptor that declares none. Existing callers
 (STEP-MACHINE, emulator.lisp) that only bind the first three values are
-unaffected; DISASSEMBLE-CELLS (disassembler.lisp, #117) and a (semantics ...)
-body's CHOICE-CASE (instruction.lisp, #73/#122) both read it to see which
+unaffected; DISASSEMBLE-CELLS (disassembler.lisp) and a (semantics ...)
+body's CHOICE-CASE (instruction.lisp) both read it to see which
 ONE-OF alternative was actually encoded, on either encoding scheme alike.
 
 Returns (VALUES :DECODE-FAILURE NIL NIL) on an unregistered opcode, on a
 byte-encoded machine's opcode whose candidates all declare a SUB-OPCODE
-(#125) when the fetched sub-opcode cell matches none of them, or, on a
+ when the fetched sub-opcode cell matches none of them, or, on a
 word-encoded machine, a raw operand field matching none of the descriptor's
 WORD-ALTERNATIVES -- an encoding no DEFINSTRUCTION on this machine declared.
 
@@ -338,7 +335,7 @@ truncated trailing instruction is a stop condition or a decodable-as-data
 byte is the caller's policy, not this function's.
 
 MEMORY, when given, is only used to resolve MACHINE-NAME's INSTRUCTION-WORD
-layout, cell width and endianness (#66) when the machine declares more than
+layout, cell width and endianness when the machine declares more than
 one memory element (see %RESOLVE-MEMORY, machine.lisp); READ-CELL itself
 already knows which memory it reads. A word-encoded machine instead reads
 ENDIAN off LAYOUT's own slot, set once at DEFMACHINE time -- see

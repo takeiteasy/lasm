@@ -1,5 +1,5 @@
 ;;;; snapshot.lisp
-;;;; #112 (M7): versioned machine-state snapshots -- capture a MACHINE's
+;;;; Versioned machine-state snapshots -- capture a MACHINE's
 ;;;; runtime state as plain readable data, restore it later, and persist it as
 ;;;; an s-expression or compact binary file. Covers the same state RESET clears (storage.lisp);
 ;;;; MACHINE-INTERRUPT-HOOK is host wiring and is neither saved nor touched.

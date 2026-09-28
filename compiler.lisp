@@ -1,5 +1,5 @@
 ;;;; compiler.lisp
-;;;; #319: a small Lisp-like source language compiled to items through a
+;;;; A small Lisp-like source language compiled to items through a
 ;;;; backend (backend.lisp, items.lisp). Values are plain machine words. Every
 ;;;; expression leaves its value in the backend's first :RETURN register, the
 ;;;; accumulator, and binary operators combine it with a second register
@@ -14,57 +14,57 @@
 ;;;;   (aref A I), (aset A I V), (aref-byte S I), (aset-byte S I V), (return [E]), (asm ITEM...), (function F),
 ;;;;   (funcall E ARG...), (F ARG...)
 ;;;;
-;;;; #365: (function F) is F's address, a value; (funcall E ARG...) calls
+;;;; (function F) is F's address, a value; (funcall E ARG...) calls
 ;;;; through any expression, going straight to F's label when E is literally
-;;;; (function F). #366: (defarray ...) and (defstring ...) are initialised,
+;;;; (function F). (defarray ...) and (defstring ...) are initialised,
 ;;;; addressed data; the name is its address, never peeked through like a
 ;;;; global. (peek-byte A)/(poke-byte A V) are the backend's optional
 ;;;; :peek-byte/:poke-byte, byte-addressing within a word, for a machine whose
 ;;;; registers are wider than its cells.
 ;;;;
-;;;; #379: (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
-;;;; as fit (a .packz directive, #398), byte order from the memory's endianness; (aref-byte S I)/(aset-byte
+;;;; (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
+;;;; as fit (a .packz directive), byte order from the memory's endianness; (aref-byte S I)/(aset-byte
 ;;;; S I V) reach one through :peek-byte/:poke-byte.
 ;;;;
-;;;; #368: a word is *CC-WORD-CELLS* cells (BACKEND-WORD-CELLS, backend.lisp),
-;;;; the split #167's (stack-pointer ... :width n) already gives a stack slot.
+;;;; A word is *CC-WORD-CELLS* cells (BACKEND-WORD-CELLS, backend.lisp),
+;;;; the split the (stack-pointer ... :width n) already gives a stack slot.
 ;;;; A DEFVAR is *CC-WORD-CELLS* cells (.res); DEFARRAY indexes and sizes by
 ;;;; it, and (aref A I)/(aset A I V) step a word, not a cell.
 ;;;;
-;;;; #374: a binary operator's right operand that is a leaf goes straight into
+;;;; A binary operator's right operand that is a leaf goes straight into
 ;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
 ;;;; operation when it defines one, instead of loading into the temp register.
 ;;;;
-;;;; #388: a leaf left operand swaps to the right when that lets a variant
+;;;; A leaf left operand swaps to the right when that lets a variant
 ;;;; apply and the right operand has none: a commutative operator keeps its
 ;;;; name, a comparison flips its direction.
 ;;;;
-;;;; #375: an if/while condition that is a comparison, or an and/or/not of
+;;;; An if/while condition that is a comparison, or an and/or/not of
 ;;;; them, jumps on the backend's optional :BRANCH-cmp (a b target) operation,
 ;;;; and its -imm/-slot variants, instead of computing a 0 or 1 first.
 ;;;;
-;;;; #389: a jump on a true value with no comparison of its own uses the
+;;;; A jump on a true value with no comparison of its own uses the
 ;;;; backend's optional :BRANCH-NE-IMM (a 0 target) rather than skipping a :jump.
 ;;;;
-;;;; #390: an and/or whose value is used jumps on its comparisons into a
+;;;; An and/or whose value is used jumps on its comparisons into a
 ;;;; shared 0/1 landing when the operands save more than the landing costs.
-;;;; #391: so does a nested not/and/or operand, by its estimated saving
-;;;; (%CC-COSTS). #392: that estimate counts the :cmp or :branch-cmp variant
+;;;; So does a nested not/and/or operand, by its estimated saving
+;;;; (%CC-COSTS). That estimate counts the :cmp or :branch-cmp variant
 ;;;; each side would use (%CC-PAIR-COST).
 ;;;;
-;;;; #376: an operand holds a :callee-saved register across a call only inside a
+;;;; An operand holds a :callee-saved register across a call only inside a
 ;;;; loop, or when the function already saves that register; otherwise the
-;;;; stack costs less than the prologue/epilogue pair. #394: with :optimize
+;;;; stack costs less than the prologue/epilogue pair. With :optimize
 ;;;; :speed, a first compile counts the call sites per register and a register
-;;;; claimed by more than one run is held outside loops too. #400: an if arm
-;;;; and each and/or operand after the first halve a site; a while multiplies it by 4 (#401).
-;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
-;;;; writes, so an operand holding another register may reach it. #393: a
+;;;; claimed by more than one run is held outside loops too. An if arm
+;;;; and each and/or operand after the first halve a site; a while multiplies it by 4.
+;;;; (asm (:clobbers REG...) ITEM...) declares the registers the asm
+;;;; writes, so an operand holding another register may reach it. A
 ;;;; declared :callee-saved one is added to the function's :save.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
-;;;; #367, #380: a defmacro call, in an expression or at top level, is
+;;;; A defmacro call, in an expression or at top level, is
 ;;;; replaced by its BODY evaluated at compile time (%CC-META-EVAL), with each
 ;;;; parameter bound to the call's argument form, unevaluated, and &rest to
 ;;;; the remaining argument forms as a list; a QUASIQUOTE/UNQUOTE/UNQUOTE-
@@ -73,17 +73,17 @@
 ;;;; before the call, like an ordinary function. %CC-EXPAND-ALL expands a
 ;;;; function body, and %CC-COLLECT a top-level call, once every macro and
 ;;;; helper (from anywhere in the file) is registered.
-;;;; #382: each expansion marks the names its templates write, so its own
+;;;; Each expansion marks the names its templates write, so its own
 ;;;; variables and a caller's never capture one another; a marked free name
-;;;; must be a global. #395: so does a name QUOTE or INTERN makes, and
+;;;; must be a global. So does a name QUOTE or INTERN makes, and
 ;;;; (unmark FORM) is the way to the caller's variable.
-;;;; #384: the evaluator adds and/or/cond/when/unless, lambda and function
+;;;; The evaluator adds and/or/cond/when/unless, lambda and function
 ;;;; values (funcall/apply/mapcar), and list, string, symbol and integer
 ;;;; operators.
 
 (in-package #:lasm)
 
-;; #362: a LASM-SYNTAX-ERROR so DIAGNOSTIC-TEXT renders FILE:LINE:COLUMN and,
+;; A LASM-SYNTAX-ERROR so DIAGNOSTIC-TEXT renders FILE:LINE:COLUMN and,
 ;; when the program's source text is known (READ-SOURCE, READ-SOURCE-FROM-
 ;; STRING), the offending line with a caret. DETAIL, FORM and FUNCTION are
 ;; the plain message parts; MESSAGE (on LASM-SYNTAX-ERROR) is all of them
@@ -101,27 +101,27 @@
 (defvar *cc-temp* nil "The register operand that holds a right operand.")
 (defvar *cc-acc-name* nil "The accumulator's name, for the operations that take register names.")
 (defvar *cc-temp-name* nil "The temporary register's name.")
-(defvar *cc-volatile* nil "Upcased names the register allocator (#373) may hold a value in across ordinary code, least-preferred last.")
+(defvar *cc-volatile* nil "Upcased names the register allocator may hold a value in across ordinary code, least-preferred last.")
 (defvar *cc-preserved* nil "Upcased names the allocator may hold a value in across a call, saving it in the function's prologue.")
 (defvar *cc-saves* nil "Upcased names from *CC-PRESERVED* the function being compiled has used, for its :save option.")
-(defvar *cc-optimize* :size "The compile-program :optimize option: :SIZE, or :SPEED to share a preserved register between call sites (#394).")
-(defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that the function being compiled's call sites claim more than once a call (#400), so a site outside a loop may claim them too (#394).")
-(defvar *cc-counting* nil "NIL, or during the counting pass an EQUAL hash table, upcased register name -> the call sites that would claim it (#394).")
-(defvar *cc-site-weight* 1 "How often, relative to the function's entry, the code being compiled runs: halved by each if arm and each and/or operand after the first (#400), and multiplied by 4 inside each while (#401).")
+(defvar *cc-optimize* :size "The compile-program :optimize option: :SIZE, or :SPEED to share a preserved register between call sites.")
+(defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that the function being compiled's call sites claim more than once a call, so a site outside a loop may claim them too.")
+(defvar *cc-counting* nil "NIL, or during the counting pass an EQUAL hash table, upcased register name -> the call sites that would claim it.")
+(defvar *cc-site-weight* 1 "How often, relative to the function's entry, the code being compiled runs: halved by each if arm and each and/or operand after the first, and multiplied by 4 inside each while.")
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
-(defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING (#366).")
-(defvar *cc-word-cells* 1 "Cells a word spans on the target backend (BACKEND-WORD-CELLS, #368).")
-(defvar *cc-value-arities* nil "Argument counts of every function a (function F) has made a value (#378).")
-(defvar *cc-indirect-calls* nil "(ARITY FORM FUNCTION SOURCES NAME), reversed, for each funcall through a computed target, checked once every function is compiled (#378, #397, #402).")
-(defvar *cc-holdings* nil "An EQ table from a binding (a local's environment cell, a global's label, a parameter or an array element) to the sources of what is put in it, or :UNKNOWN (#397, #402).")
-(defvar *cc-let-sources* nil "An EQ table from a LET form to the sources of its value (#402).")
-(defvar *cc-parameters* nil "Upcased function name -> the bindings of its parameters, that callers put their arguments in (#402).")
-(defvar *cc-label-keys* nil "Upcased function label -> upcased function name, for an (asm) that spells a label (#402).")
-(defvar *cc-taken* nil "Upcased names of the functions a call cannot account for every caller of: made a value, or spelled in an (asm) (#402).")
-(defvar *cc-arrays* nil "An EQ table from a DEFARRAY's label to the vector of its elements' bindings (#402).")
-(defvar *cc-escaped* nil "Upcased names of the DEFARRAYs used other than as the base of an AREF or ASET, so any element may change (#402).")
+(defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING.")
+(defvar *cc-word-cells* 1 "Cells a word spans on the target backend (BACKEND-WORD-CELLS).")
+(defvar *cc-value-arities* nil "Argument counts of every function a (function F) has made a value.")
+(defvar *cc-indirect-calls* nil "(ARITY FORM FUNCTION SOURCES NAME), reversed, for each funcall through a computed target, checked once every function is compiled.")
+(defvar *cc-holdings* nil "An EQ table from a binding (a local's environment cell, a global's label, a parameter or an array element) to the sources of what is put in it, or :UNKNOWN.")
+(defvar *cc-let-sources* nil "An EQ table from a LET form to the sources of its value.")
+(defvar *cc-parameters* nil "Upcased function name -> the bindings of its parameters, that callers put their arguments in.")
+(defvar *cc-label-keys* nil "Upcased function label -> upcased function name, for an (asm) that spells a label.")
+(defvar *cc-taken* nil "Upcased names of the functions a call cannot account for every caller of: made a value, or spelled in an (asm).")
+(defvar *cc-arrays* nil "An EQ table from a DEFARRAY's label to the vector of its elements' bindings.")
+(defvar *cc-escaped* nil "Upcased names of the DEFARRAYs used other than as the base of an AREF or ASET, so any element may change.")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -129,25 +129,25 @@
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
 (defvar *cc-labels* 0 "Control labels made so far.")
-(defvar *cc-loop-depth* 0 "While loops enclosing the expression being compiled (#376).")
+(defvar *cc-loop-depth* 0 "While loops enclosing the expression being compiled.")
 (defvar *cc-depth* 0 "Temporaries the compiler has pushed since the function's entry.")
-(defvar *cc-positions* nil "EQ hash table, form -> character offset, or NIL without one (#362).")
+(defvar *cc-positions* nil "EQ hash table, form -> character offset, or NIL without one.")
 (defvar *cc-source* nil "The program's source text, or NIL.")
 (defvar *cc-file* nil "The program's path, or NIL.")
-(defvar *cc-macros* nil "Upcased name -> (NAMES REST BODY): REST is a &rest parameter's key, or NIL (#367, #380).")
-(defvar *cc-meta-functions* nil "Upcased name -> (NAMES REST BODY), for a DEFUN-FOR-SYNTAX compile-time helper (#380).")
-(defvar *cc-expansions* 0 "Macro expansions performed so far in this program (#367).")
+(defvar *cc-macros* nil "Upcased name -> (NAMES REST BODY): REST is a &rest parameter's key, or NIL.")
+(defvar *cc-meta-functions* nil "Upcased name -> (NAMES REST BODY), for a DEFUN-FOR-SYNTAX compile-time helper.")
+(defvar *cc-expansions* 0 "Macro expansions performed so far in this program.")
 (defparameter +cc-expansion-limit+ 10000
   "Total macro expansions a program may perform; a budget, not a nesting-depth
-limit, so it also catches a macro that expands into a call to itself (#367).")
-(defvar *cc-meta-steps* 0 "Compile-time evaluation steps performed so far in this program (#380).")
+limit, so it also catches a macro that expands into a call to itself.")
+(defvar *cc-meta-steps* 0 "Compile-time evaluation steps performed so far in this program.")
 (defparameter +cc-meta-step-limit+ 1000000
   "Total %CC-META-EVAL steps a program's macros and DEFUN-FOR-SYNTAX helpers
-may take; catches runaway compile-time recursion (#380).")
-(defvar *cc-rename-serial* 0 "Fresh names and expansion marks handed out so far (#367, #380, #382).")
-(defvar *cc-expansion-mark* nil "The serial marking every name the running macro expansion's templates write, or NIL outside one (#382).")
-(defvar *cc-caller-mark* nil "The mark of the running macro call's own head name, or NIL when it was written in plain source; what UNMARK gives a name (#395).")
-(defvar *cc-expand-position* nil "The *CC-POSITIONS* offset a macro expansion's fresh conses are attributed to (#367).")
+may take; catches runaway compile-time recursion.")
+(defvar *cc-rename-serial* 0 "Fresh names and expansion marks handed out so far.")
+(defvar *cc-expansion-mark* nil "The serial marking every name the running macro expansion's templates write, or NIL outside one.")
+(defvar *cc-caller-mark* nil "The mark of the running macro call's own head name, or NIL when it was written in plain source; what UNMARK gives a name.")
+(defvar *cc-expand-position* nil "The *CC-POSITIONS* offset a macro expansion's fresh conses are attributed to.")
 
 (defun %cc-line-column (form)
   "(VALUES LINE COLUMN) of FORM, when its position and the source text are known."
@@ -179,7 +179,7 @@ may take; catches runaway compile-time recursion (#380).")
 (defun %cc-local-key (x form)
   "The environment key of the local variable X: its plain key, plus its
 expansion's mark when a macro template wrote it. The space makes it a key no
-source name can spell, so a template's own variable and a caller's never meet (#382)."
+source name can spell, so a template's own variable and a caller's never meet."
   (let ((key (%cc-key x form)) (mark (get x 'cc-mark)))
     (if mark (format nil "~A ~D" key mark) key)))
 
@@ -238,7 +238,7 @@ cannot be a register alias or a generated label."
 
 (defun %cc-lookup (symbol)
   "The location of the variable SYMBOL: (:LOCAL i), (:ARG i), (:GLOBAL LABEL),
-(:CONSTANT n) or (:ADDRESS LABEL), a DEFARRAY or DEFSTRING (#366)."
+(:CONSTANT n) or (:ADDRESS LABEL), a DEFARRAY or DEFSTRING."
   (let ((key (%cc-key symbol *cc-form*)))
     (or (cdr (%cc-local-cell symbol))
         (let ((label (gethash key *cc-globals*)))
@@ -250,7 +250,7 @@ cannot be a register alias or a generated label."
         (%cc-fail *cc-form* "unknown variable ~A" (%source-name symbol nil)))))
 
 (defun %cc-function-form-p (form)
-  "T when FORM is (function NAME) (#365)."
+  "T when FORM is (function NAME)."
   (and (consp form) (%cc-name-p (first form)) (equal (%designator-name (first form)) "FUNCTION")))
 
 (defun %cc-function-label (form)
@@ -263,7 +263,7 @@ cannot be a register alias or a generated label."
     (pushnew key *cc-taken* :test #'string=)
     (car entry)))
 
-;; #397, #402: what a variable can hold, by its binding: a local's environment
+;; What a variable can hold, by its binding: a local's environment
 ;; cell, a global's label, a function's parameter, or a DEFARRAY's element. A
 ;; binding holds sources, each an argument count (a literal (function F)) or
 ;; another binding whose holdings flow in, or :UNKNOWN for any other value.
@@ -394,7 +394,7 @@ escaped, and each function whose label it spells as taken."
   (%cc-const (%cc-function-label form)))
 
 ;; A leaf (an integer, a variable name, or (function NAME)) loads straight
-;; into any register with :const/:get/:peek (#364), instead of always going
+;; into any register with :const/:get/:peek, instead of always going
 ;; through the accumulator and the stack.
 (defun %cc-leaf-p (form)
   (or (integerp form) (%cc-name-p form) (%cc-function-form-p form)))
@@ -443,7 +443,7 @@ escaped, and each function whose label it spells as taken."
 (defun %cc-hazards (tree)
   "(VALUES CLOBBERS CALL-P): the registers the (asm ...) blocks in TREE, an
 operand's source form, can write -- :ALL when one declares none -- and
-whether it calls a function, which clobbers the volatile pool (#373): a
+whether it calls a function, which clobbers the volatile pool: a
 call's target may not preserve a :caller-saved register the way it preserves
 :callee-saved ones."
   (if (not (consp tree))
@@ -461,13 +461,13 @@ call's target may not preserve a :caller-saved register the way it preserves
 
 (defun %cc-take (form)
   "A register from the pool to hold a value across compiling FORM, an
-operand not yet compiled, or NIL to fall back to the stack (#373). Registers
-an (asm ...) in FORM may clobber (%CC-HAZARDS) are skipped (#377). When FORM
+operand not yet compiled, or NIL to fall back to the stack. Registers
+an (asm ...) in FORM may clobber (%CC-HAZARDS) are skipped. When FORM
 calls a function the pick is a *CC-PRESERVED* register, recorded in
 *CC-SAVES* for the function's prologue and epilogue to save and restore: one
-already saved, else a new one only inside a loop (#376) or when it is in
-*CC-SHARED* (#394). The counting pass (*CC-COUNTING*) takes the first free one
-and counts the site at *CC-SITE-WEIGHT* (#400). Otherwise the pick is a
+already saved, else a new one only inside a loop or when it is in
+*CC-SHARED*. The counting pass (*CC-COUNTING*) takes the first free one
+and counts the site at *CC-SITE-WEIGHT*. Otherwise the pick is a
 *CC-VOLATILE* register, since a call is the only thing a compiled operand
 can do that a :caller-saved register does not survive."
   (multiple-value-bind (clobbers call) (%cc-hazards form)
@@ -548,7 +548,7 @@ could change it."
 
 (defun %cc-operands (left right)
   "Compile LEFT into the accumulator and RIGHT into the temp register, in
-whichever order avoids the stack (#364): RIGHT first, when LEFT is safe to
+whichever order avoids the stack: RIGHT first, when LEFT is safe to
 load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
   (if (and (not (%cc-leaf-p right)) (%cc-swappable-p left right))
       (progn (%cc-expr right)
@@ -581,7 +581,7 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
 
 (defun %cc-direct (op form)
   "(VARIANT ARGUMENT) when the leaf FORM, an operator's right operand, can go
-straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
+straight into the backend's OP-IMM or OP-SLOT variant, else NIL."
   (flet ((variant (suffix)
            (let ((name (intern (format nil "~A-~A" op suffix) :keyword)))
              (and (%cc-op-p name) name))))
@@ -599,8 +599,8 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
 
 (defun %cc-pair-plan (op swapped left right)
   "(KIND . OPERATION) for the operation OP on LEFT and RIGHT: :DIRECT with RIGHT's
-variant (#374); else :SWAP with SWAPPED, OP with its operands swapped, on LEFT's
-variant when RIGHT is safe to evaluate first (#388); else :OPERANDS, OP on the
+variant; else :SWAP with SWAPPED, OP with its operands swapped, on LEFT's
+variant when RIGHT is safe to evaluate first; else :OPERANDS, OP on the
 temp register, with no OPERATION."
   (let ((direct (%cc-direct op right))
         (swap (and swapped (%cc-direct swapped left))))
@@ -688,7 +688,7 @@ its operands swapped. NIL when the backend has no such :BRANCH-cmp."
          (list name (%cc-branch-name (cdr (assoc op +cc-flips+)))))))
 
 (defun %cc-branch-nonzero (target)
-  "Jump to TARGET when the accumulator is not 0 (#389)."
+  "Jump to TARGET when the accumulator is not 0."
   (if (%cc-op-p :branch-ne-imm)
       (%cc-op :branch-ne-imm *cc-acc* 0 target)
       (let ((skip (%cc-new-label)))
@@ -703,7 +703,7 @@ its operands swapped. NIL when the backend has no such :BRANCH-cmp."
 
 (defun %cc-branch (form sense target)
   "Jump to TARGET when FORM is true if SENSE, or false if not, else fall
-through (#375). A comparison uses the backend's :BRANCH-cmp when it has one; an
+through. A comparison uses the backend's :BRANCH-cmp when it has one; an
 and, or and not of conditions jump between their operands and produce no value."
   (let* ((head (%cc-head form))
          (args (and head (rest form)))
@@ -754,7 +754,7 @@ and, or and not of conditions jump between their operands and produce no value."
     (%cc-const 0)))
 
 (defun %cc-jump-cost (sense)
-  "Instructions to jump on the accumulator's value, when true if SENSE (#389)."
+  "Instructions to jump on the accumulator's value, when true if SENSE."
   (if (and sense (not (%cc-op-p :branch-ne-imm))) 2 1))
 
 (defun %cc-boolean-p (form)
@@ -770,8 +770,8 @@ and, or and not of conditions jump between their operands and produce no value."
   "Estimated instructions FORM needs to compute its value, to jump when it is
 false and to jump when it is true, as three values. A leaf operand's load counts,
 and a comparison or not counts the :cmp or :branch-cmp variant %CC-PAIR would
-use (#392); a non-leaf operand's own cost is left out, as every way of computing
-FORM shares it. Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT (#391)."
+use; a non-leaf operand's own cost is left out, as every way of computing
+FORM shares it. Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT."
   (let* ((head (%cc-head form))
          (args (and head (rest form)))
          (comparison (%cc-comparison form)))
@@ -819,7 +819,7 @@ that ends the and/or; an or's landing loads 1, so its operand must be 0 or 1."
 
 (defun %cc-fuses-p (args sense)
   "True when jumping on the and/or operands ARGS into a shared 0/1 landing
-(#390, #391) is shorter: it saves more than the landing's :jump and :const."
+ is shorter: it saves more than the landing's :jump and :const."
   (> (loop for arg in (butlast args) sum (%cc-fused-saving arg sense))
      2))
 
@@ -901,7 +901,7 @@ comparison, to a landing that loads the result."
   (%cc-op :poke *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
 
-;; #366: (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
+;; (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
 ;; backend's optional :peek-byte/:poke-byte, for a machine whose registers are
 ;; wider than its cells; a machine byte-addresses A as it defines those ops.
 (defun %cc-peek-byte (form)
@@ -915,10 +915,10 @@ comparison, to a landing that loads the result."
   (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)
   (%cc-op :move *cc-acc* *cc-temp*))
 
-;; #366, #368: (aref A I)/(aset A I V) index by word, sugar for
+;; (aref A I)/(aset A I V) index by word, sugar for
 ;; (peek (+ A (* I W))) and (poke (+ A (* I W)) V), W = *CC-WORD-CELLS*.
 ;; %CC-PEEK/%CC-POKE already give the address expression the same leaf and
-;; operand-ordering treatment as any other (#364). A literal I folds to a
+;; operand-ordering treatment as any other. A literal I folds to a
 ;; literal offset at compile time; a computed I scales by a shift when W is a
 ;; power of two, so scaling a variable index never newly requires :mul.
 (defun %cc-scaled-index (index &optional (factor *cc-word-cells*))
@@ -937,7 +937,7 @@ comparison, to a landing that loads the result."
   (%cc-poke (list 'poke (list '+ (second form) (%cc-scaled-index (third form))) (fourth form)))
   (%cc-hold-element (second form) (third form) (fourth form)))
 
-;; #379: (aref-byte S I)/(aset-byte S I V) reach character I of a :packed
+;; (aref-byte S I)/(aset-byte S I V) reach character I of a :packed
 ;; string, S's byte address plus I, through :peek-byte/:poke-byte. A cell that
 ;; holds one character (and a one-cell word) needs no byte access: the
 ;; character is a word, so these are AREF/ASET. Otherwise S's byte address is
@@ -968,7 +968,7 @@ comparison, to a landing that loads the result."
       (%cc-aset (list* 'aset (rest form)))
       (%cc-poke-byte (list 'poke-byte (list '+ (list +cc-byte-address+ (second form)) (third form)) (fourth form)))))
 
-;; #363: an early return. Pending temporaries (each binary operator's left
+;; An early return. Pending temporaries (each binary operator's left
 ;; operand, or a POKE's address) sit on the stack above the frame's own
 ;; locals, which (:return) cannot see -- pop them back off first, then leave
 ;; the rest of the body's depth tracking (ITEMS-FRAME-DEPTH) where it was
@@ -1037,7 +1037,7 @@ accumulator or a register (docs/language.md#backend-requirements)."
       (%cc-emit (list* :call (car entry) slots))
       (%cc-free-slots slots))))
 
-;; #365: (function F) is a value, F's label; (funcall E ARG...) calls through
+;; (function F) is a value, F's label; (funcall E ARG...) calls through
 ;; any expression. A literal (function F) target compiles the same direct
 ;; (:call LABEL ...) a plain (F ARG...) call does, arity-checked; any other E
 ;; is held in a frame slot across compiling ARG..., as each of those is
@@ -1073,20 +1073,20 @@ accumulator or temp register when neither is a call argument register, since
 the callee's value already ends up in the accumulator; otherwise the first of
 the volatile pool that is not one. With none free, the accumulator anyway --
 a target in an argument register is copied to a free :scratch register, or is
-items-malformed, as any call target is (#335, docs/conventions.md)."
+items-malformed, as any call target is (docs/conventions.md)."
   (let ((args (%cc-call-arg-registers))
         (candidates (list* (symbol-name *cc-acc-name*) (symbol-name *cc-temp-name*) *cc-volatile*)))
     (or (find-if (lambda (name) (not (member name args :test #'string=))) candidates)
         (symbol-name *cc-acc-name*))))
 
 (defun %cc-raw-address-p (callee)
-  "T when CALLEE is an integer or a constant, an address the program did not take with (function F) (#378)."
+  "T when CALLEE is an integer or a constant, an address the program did not take with (function F)."
   (or (integerp callee)
       (and (%cc-name-p callee) (eq (first (%cc-lookup callee)) :constant))))
 
 (defun %cc-check-indirect-calls ()
   "Fail on the first funcall through a computed target whose argument count no
-function value takes (#378), or that the function values reaching its target do not (#397, #402)."
+function value takes, or that the function values reaching its target do not."
   (%cc-widen-untraced)
   (loop for (arity form function sources name) in (reverse *cc-indirect-calls*)
         for held = (%cc-resolve sources)
@@ -1132,7 +1132,7 @@ function value takes (#378), or that the function values reaching its target do 
     ("AREF-BYTE" . %cc-aref-byte) ("ASET-BYTE" . %cc-aset-byte) ("BYTE ADDRESS" . %cc-byte-address)
     ("ASM" . %cc-asm) ("RETURN" . %cc-return) ("FUNCTION" . %cc-function-expr) ("FUNCALL" . %cc-funcall)))
 
-;;; Macros (#367, #380)
+;;; Macros
 
 (defun %cc-parse-macro-params (params form)
   "(VALUES NAMES REST) for a defmacro/defun-for-syntax PARAM list: NAMES are
@@ -1168,7 +1168,7 @@ so DEFMACRO/DEFUN-FOR-SYNTAX can't shadow it."
 (defun %cc-meta-built-in-p (key)
   "T when KEY also names a compile-time special form or builtin, which a
 DEFUN-FOR-SYNTAX can't shadow but a DEFMACRO can: a macro body calls operators,
-never macros, and a program calls macros, never operators (#384)."
+never macros, and a program calls macros, never operators."
   (or (%cc-language-name-p key)
       (assoc key *cc-meta-specials* :test #'string=) (assoc key *cc-meta-builtins* :test #'string=)))
 
@@ -1191,21 +1191,21 @@ checked against a built-in name and a previous definition."
 
 (defun %cc-parse-defmacro (form)
   "Register FORM, a (defmacro NAME (PARAM... [&rest R]) BODY...), in
-*CC-MACROS*: BODY is evaluated at compile time when NAME is called (#380)."
+*CC-MACROS*: BODY is evaluated at compile time when NAME is called."
   (multiple-value-bind (key names rest body) (%cc-parse-syntax-definition form "defmacro")
     (setf (gethash key *cc-macros*) (list names rest body))))
 
 (defun %cc-parse-defun-for-syntax (form)
   "Register FORM, a (defun-for-syntax NAME (PARAM... [&rest R]) BODY...), in
 *CC-META-FUNCTIONS*: a compile-time helper a macro or another helper can call
-from %CC-META-EVAL (#380)."
+from %CC-META-EVAL."
   (multiple-value-bind (key names rest body) (%cc-parse-syntax-definition form "defun-for-syntax")
     (setf (gethash key *cc-meta-functions*) (list names rest body))))
 
 (defun %cc-fresh-name (template-name)
   "A fresh name for a GENSYM: its printed name has a space, which no source
 symbol can spell, so it can never collide with a caller's variable of the same
-name (#380)."
+name."
   (%cc-symbol (format nil "~A ~D" (string-downcase (%source-name template-name nil)) (incf *cc-rename-serial*))))
 
 (defun %cc-form-position (form)
@@ -1214,24 +1214,24 @@ name (#380)."
 (defun %cc-remember-position (node)
   "NODE, a fresh cons a macro expansion built, attributed to the enclosing
 call's position (*CC-EXPAND-POSITION*), so an error inside it reports the
-call's line and column, not the template's own (#367, #362)."
+call's line and column, not the template's own."
   (when (and *cc-positions* *cc-expand-position* (consp node))
     (setf (gethash node *cc-positions*) *cc-expand-position*))
   node)
 
-;;; Compile-time evaluation (#380)
+;;; Compile-time evaluation
 ;;;
 ;;; %CC-META-EVAL runs a macro or DEFUN-FOR-SYNTAX helper's BODY over plain
 ;;; source data: integers, strings, symbols (compared by name, never
 ;;; interned) and lists. () is false; anything else, including the symbol T,
 ;;; is true. QUOTE returns its argument with every name marked, as a template
-;;; would (#395); QUASIQUOTE (%CC-QQ) walks its template, evaluating each UNQUOTE and splicing each UNQUOTE-
+;;; would; QUASIQUOTE (%CC-QQ) walks its template, evaluating each UNQUOTE and splicing each UNQUOTE-
 ;;; SPLICING, and marks every bare name the template writes with the
 ;;; expansion's own mark (%CC-MARK-NAME), so a binding it makes can't capture a
 ;;; caller's variable and a caller's binding can't capture a free name it uses
-;;; (#367, #382) -- including inside a literal (asm ...), since %CC-QQ walks
+;;; -- including inside a literal (asm ...), since %CC-QQ walks
 ;;; every symbol in a template alike. A nested quasiquote raises the depth
-;;; an UNQUOTE needs to reach the outer level, as in Common Lisp (#383).
+;;; an UNQUOTE needs to reach the outer level, as in Common Lisp.
 
 (defun %cc-qq-tagged-p (form tag)
   (and (consp form) (%cc-name-p (first form)) (equal (%designator-name (first form)) tag)
@@ -1261,7 +1261,7 @@ by identity, since source is read without interning."
 
 (defun %cc-mark-name (symbol)
   "SYMBOL, a bare name a template wrote, as a fresh symbol of the same name
-tagged with the running expansion's mark, or SYMBOL itself outside one (#382)."
+tagged with the running expansion's mark, or SYMBOL itself outside one."
   (if *cc-expansion-mark*
       (let ((marked (make-symbol (symbol-name symbol))))
         (setf (get marked 'cc-mark) *cc-expansion-mark*)
@@ -1283,7 +1283,7 @@ tagged with the running expansion's mark, or SYMBOL itself outside one (#382)."
     (walk datum)))
 
 (defun %cc-unmark-name (symbol)
-  "SYMBOL as a fresh name carrying the running call's own mark, if it has one (#395)."
+  "SYMBOL as a fresh name carrying the running call's own mark, if it has one."
   (let ((copy (make-symbol (symbol-name symbol))))
     (when *cc-caller-mark* (setf (get copy 'cc-mark) *cc-caller-mark*))
     copy))
@@ -1292,7 +1292,7 @@ tagged with the running expansion's mark, or SYMBOL itself outside one (#382)."
   "FORM, a quasiquote template nested DEPTH quasiquotes deep, with each
 UNQUOTE at depth 0 evaluated in ENV, each UNQUOTE-SPLICING's value spliced in,
 and each bare name marked (%CC-MARK-NAME). A nested QUASIQUOTE raises DEPTH by
-one and an UNQUOTE below depth 0 lowers it, both kept literal (#383)."
+one and an UNQUOTE below depth 0 lowers it, both kept literal."
   (cond
     ((and (%cc-qq-tagged-p form "UNQUOTE") (zerop depth)) (%cc-meta-eval (second form) env))
     ((and (%cc-qq-tagged-p form "UNQUOTE-SPLICING") (zerop depth))
@@ -1579,7 +1579,7 @@ builtin, ARGS already evaluated.")
   "FORM, source data from a macro or DEFUN-FOR-SYNTAX helper's BODY,
 evaluated in ENV ((NAME . VALUE)...). Symbols are looked up by name; NIL and
 T are self-evaluating; a list dispatches on its head, a *CC-META-SPECIALS*
-name, a *CC-META-BUILTINS* name, or another macro/helper's name (#380)."
+name, a *CC-META-BUILTINS* name, or another macro/helper's name."
   (%cc-meta-step form)
   (cond
     ((integerp form) form)
@@ -1622,7 +1622,7 @@ its arguments unevaluated."
 
 (defun %cc-expand-call (name entry form)
   "FORM, a call (NAME ARG...) matching macro ENTRY = (NAMES REST BODY), with
-BODY evaluated at compile time (#380): each parameter is bound to the call's
+BODY evaluated at compile time: each parameter is bound to the call's
 own argument form, unevaluated, and &rest to the remaining argument forms as
 a list. A STORAGE-CONDITION from runaway recursion becomes a positioned
 error, same as the step and expansion budgets."
@@ -1651,7 +1651,7 @@ position, or the enclosing expansion's when it has none of its own."
 
 (defun %cc-rebuild-if-changed (original elements)
   "ORIGINAL, a list, given its own ELEMENTS (mapped from it): ORIGINAL itself
-when every element is EQ to its own, so an unexpanded form keeps its #362
+when every element is EQ to its own, so an unexpanded form keeps its
 position; otherwise a fresh list, carrying ORIGINAL's own position, since a
 form with a macro call somewhere inside still needs one for the rest of it."
   (if (every #'eq original elements)
@@ -1686,7 +1686,7 @@ place name is left alone."
 
 (defun %cc-expand-all (form)
   "FORM with every macro call macro-expanded, keeping the original cons
-wherever nothing inside changed, so #362 positions survive. A `let`'s
+wherever nothing inside changed, so source positions survive. A `let`'s
 binding names, a `set`'s place, and an `asm` block are left alone: those
 names must stay literal for the rest of the compiler to resolve."
   (if (not (and (consp form) (%cc-name-p (first form))))
@@ -1744,7 +1744,7 @@ names must stay literal for the rest of the compiler to resolve."
     (%cc-progn body)
     (list* :function label
            (append (list :args (length params) :locals *cc-max*)
-                   ;; A preserved register %CC-TAKE used (#373); the backend's
+                   ;; A preserved register %CC-TAKE used; the backend's
                    ;; own :callee-saved convention pushes and pops it, which
                    ;; also restores it correctly across an early (return).
                    (and *cc-saves* (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
@@ -1753,8 +1753,8 @@ names must stay literal for the rest of the compiler to resolve."
 
 (defun %cc-shared-registers (name params body label)
   "The upcased names of the preserved registers whose call sites, weighted by
-how often they run (#400), total more than one run: the save and restore cost
-a push and a pop a call, and each site saves one (#394). Counted by compiling
+how often they run, total more than one run: the save and restore cost
+a push and a pop a call, and each site saves one. Counted by compiling
 the function once and discarding the items."
   (let ((*cc-counting* (make-hash-table :test 'equal))
         (*cc-labels* *cc-labels*)
@@ -1767,7 +1767,7 @@ the function once and discarding the items."
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
-           ;; first), regardless of where NAME's DEFUN sits relative to them (#367).
+           ;; first), regardless of where NAME's DEFUN sits relative to them.
            (body (mapcar #'%cc-expand-all body))
            (*cc-shared* (and (eq *cc-optimize* :speed)
                              (%cc-shared-registers name params body label))))
@@ -1776,7 +1776,7 @@ the function once and discarding the items."
 
 (defun %cc-registers ()
   "Set the accumulator, the temporary register, and the volatile and
-preserved pools the register allocator (#373) holds operands in, all from
+preserved pools the register allocator holds operands in, all from
 the backend's register roles. An operation writes only its destination
 register, so any of these are free once nothing above still needs them."
   (let* ((registers (backend-descriptor-registers *cc-backend*))
@@ -1821,7 +1821,7 @@ DEFSTRING's own name."
 
 (defun %cc-register-array (label values)
   "Give each element of the DEFARRAY LABEL, laid out from VALUES, a binding holding
-what it starts as: a (function F)'s argument count, nothing for 0, else :UNKNOWN (#402)."
+what it starts as: a (function F)'s argument count, nothing for 0, else :UNKNOWN."
   (setf (gethash label *cc-arrays*)
         (map 'vector
              (lambda (value)
@@ -1836,20 +1836,20 @@ what it starts as: a (function F)'s argument count, nothing for 0, else :UNKNOWN
 
 (defun %cc-word-data (values)
   "The directive item laying VALUES out as *CC-WORD-CELLS*-cell words: .cell
-for a one-cell word, else .emit with the width first (#386)."
+for a one-cell word, else .emit with the width first."
   (if (= *cc-word-cells* 1)
       (list* :directive (%cc-symbol "cell") values)
       (list* :directive (%cc-symbol "emit") *cc-word-cells* values)))
 
 (defun %cc-check-packable (string form)
-  "Fail unless every character of STRING is 8 bits, as .PACKZ packs (#379, #398)."
+  "Fail unless every character of STRING is 8 bits, as .PACKZ packs."
   (when (find-if (lambda (char) (> (char-code char) 255)) string)
     (%cc-fail form "a :packed string holds 8-bit characters only")))
 
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
-constants, DEFARRAY/DEFSTRING data (#366), macros and DEFUN-FOR-SYNTAX
-helpers (#367, #380), in file order. A top-level macro call expands in
+constants, DEFARRAY/DEFSTRING data, macros and DEFUN-FOR-SYNTAX
+helpers, in file order. A top-level macro call expands in
 place, and a (progn DEF...) it (or the source) produces flattens. A DEFUN's
 own body is expanded later, in %CC-FUNCTION, once every macro and helper
 here is registered. DATA's array/string values are resolved only once every
@@ -1939,7 +1939,7 @@ defined later in FORMS."
                                   (list :directive (%cc-symbol "res") (* payload *cc-word-cells*)))
                                  (:values (prog1 (%cc-word-data (mapcar (lambda (value) (%cc-array-value value form)) payload))
                                             (%cc-register-array label payload)))
-                                 ;; #368: W=1 keeps .asciz's own terminator; a
+                                 ;; W=1 keeps .asciz's own terminator; a
                                  ;; wider word has no terminated-string
                                  ;; directive, so the trailing 0 is emitted as
                                  ;; a value alongside the string's characters.
@@ -1954,9 +1954,9 @@ defined later in FORMS."
 (defconstant ...) forms, for BACKEND. A stub at the start stores the
 globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR.
 POSITIONS, SOURCE and FILE, as READ-SOURCE and READ-SOURCE-FROM-STRING set
-them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362). OPTIMIZE
+them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN. OPTIMIZE
 is :SIZE, the fewest instructions, or :SPEED, which also holds an operand
-across calls in a preserved register shared by two or more sites (#394)."
+across calls in a preserved register shared by two or more sites."
   (unless backend
     (%cc-fail nil "compiling needs a backend"))
   (unless (member optimize '(:size :speed))
@@ -2021,7 +2021,7 @@ across calls in a preserved register shared by two or more sites (#394)."
 (defun %read-source-forms (stream path)
   "(VALUES FORMS POSITIONS) for STREAM, as READ-SOURCE and READ-SOURCE-FROM-
 STRING read it. POSITIONS maps each form to a character offset into the text
-STREAM reads from, for #362."
+STREAM reads from."
   (let ((positions (make-hash-table :test 'eq)))
     (values (read-restricted-forms stream #'%source-fail path :bare :uninterned :positions positions :quotes t)
             positions)))

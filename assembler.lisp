@@ -40,19 +40,19 @@
 ;;;; label with no enclosing global label is an ASSEMBLY-ERROR. See
 ;;;; %QUALIFY-LOCAL/%QUALIFY-LOCALS! below.
 ;;;;
-;;;; The location-counter symbol ("*" in an operand, #15) folds to the
+;;;; The location-counter symbol ("*" in an operand) folds to the
 ;;;; address of the statement (or, for a multi-value .BYTE/.WORD, the value)
 ;;;; it appears in -- see EVAL-EXPR's :PC argument (instruction.lisp) and
 ;;;; %CHOOSE-VARIANT/%ENCODE below, both of which now pass an ADDRESS/PC
 ;;;; through even though pass 1 has no symbol table yet, since a statement's
 ;;;; own address is already known at that point.
 ;;;;
-;;;; ASSEMBLE-STATEMENTS runs EXPAND-MACROS (macro.lisp, #33) before %LAYOUT
+;;;; ASSEMBLE-STATEMENTS runs EXPAND-MACROS (macro.lisp) before %LAYOUT
 ;;;; ever sees the statement list -- a .macro/.endm block is collected and
 ;;;; every invocation replaced by its substituted body first, so neither
 ;;;; %LAYOUT nor %ENCODE below has any notion of a macro at all.
 ;;;;
-;;;; Directives (directive.lisp, #14) are dispatched in %LAYOUT before a
+;;;; Directives (directive.lisp) are dispatched in %LAYOUT before a
 ;;;; mnemonic reaches FIND-INSTRUCTION-VARIANTS (which signals on an
 ;;;; unregistered name, so directive lookup can't be a fallback after that
 ;;;; call). .ORG (a DIRECTIVE-DESCRIPTOR with ACTION :SET-ORIGIN) moves the
@@ -73,7 +73,7 @@
 ;;;; provisional forward labels while layout settles.
 ;;;;
 ;;;; %LAYOUT's SIZED-ENTRIES already *is* the address<->statement mapping a
-;;;; listing/source map needs (#25) -- ASSEMBLE-STATEMENTS used to let it
+;;;; listing/source map needs -- ASSEMBLE-STATEMENTS used to let it
 ;;;; fall on the floor once %ENCODE had consumed it. %BUILD-LISTING (below,
 ;;;; near the entry points) instead keeps a LISTING-LINE per entry (address,
 ;;;; size, source line, kind) as ASSEMBLY-LISTING, without duplicating the
@@ -107,12 +107,12 @@ UNKNOWN-INSTRUCTION."))
 
 (defun %assembly-error-at (token fmt &rest args)
   "Like %ASSEMBLY-ERROR, but anchored at TOKEN (a token, or NIL) rather than
-a bare line number -- gives the resulting ASSEMBLY-ERROR a COLUMN (#74), so
+a bare line number -- gives the resulting ASSEMBLY-ERROR a COLUMN, so
 DIAGNOSTIC-TEXT can point a caret at the offending operand instead of only
 naming its line."
   (%signal-assembly-error (and token (token-line token)) (and token (token-column token)) fmt args))
 
-;;; Operand/mode diagnostic text (#74)
+;;; Operand/mode diagnostic text
 
 (defun %operand-text (tokens)
   "Join TOKENS' (a simple-vector, e.g. a STATEMENT's OPERAND-TOKENS) verbatim
@@ -125,7 +125,7 @@ between tokens), just enough to name what was given."
   "MODE's own pattern (mode.lisp), rendered back to the syntax a program
 would write to select it, e.g. IMMEDIATE -> \"#expr\", INDIRECT-Y ->
 \"(expr),Y\" -- an :EXPR hole prints as the literal word \"expr\", and a
-:ONE-OF element (#103) as its alternatives' own syntax joined with \"|\",
+:ONE-OF element as its alternatives' own syntax joined with \"|\",
 e.g. \"expr|[expr]\"."
   (format nil "~{~A~}"
           (mapcar (lambda (el)
@@ -153,7 +153,7 @@ operand\" instead."
 ;;; Result
 
 (defstruct listing-line
-  "One address-occupying statement's entry in an ASSEMBLY's LISTING (#25) --
+  "One address-occupying statement's entry in an ASSEMBLY's LISTING --
 enough to look a statement back up by ADDRESS (LISTING-LINE-AT) or by LINE
 (LISTING-LINES-FOR-SOURCE-LINE, listing.lisp) and to slice its own encoded
 cells out of ASSEMBLY-CELLS at render time, without duplicating them here.
@@ -170,7 +170,7 @@ ever non-NIL for :INSTRUCTION."
   (descriptor nil :type (or null instruction-descriptor))
   (choices nil :type list)              ; (MODE-NAME START END) per ONE-OF
                                         ; alternative the operand matched, as
-                                        ; token indices into its operands (#326)
+                                        ; token indices into its operands
   (region nil :type (or null symbol))   ; banked region and bank the entry
   (bank nil :type (or null (integer 0)))) ; is placed in; NIL for the main image
 
@@ -211,7 +211,7 @@ body site when applicable. ORDER is the binding sequence across all files."
 
 (defstruct assembly
   (cells nil :type (or null vector))  ; (unsigned-byte cell-width), the
-                                       ; machine's own code cell width (#53)
+                                       ; machine's own code cell width
                                        ; -- not declared (vector (unsigned-byte
                                        ; n)) here: under SBCL a specialized
                                        ; array type is not a subtype of
@@ -224,18 +224,18 @@ body site when applicable. ORDER is the binding sequence across all files."
   (banks nil :type list)                ; BANK-IMAGEs, by region then bank
   (symbols nil :type (or null hash-table))  ; string -> final value
   (symbol-info nil :type (or null hash-table))  ; internal key -> SYMBOL-INFO
-                                                 ; (#37) -- scope/kind metadata
+                                                 ; -- scope/kind metadata
                                                  ; for every ASSEMBLY-SYMBOLS
                                                  ; entry, built alongside it
                                                  ; and keyed the same way
   (listing nil :type list)            ; LISTING-LINE list, ascending by
-                                       ; address (#25) -- see listing.lisp
+                                       ; address -- see listing.lisp
   source-unit
   (parameters nil :type list)           ; (:ORIGIN :MEMORY :LEXER) it was assembled with
   (source nil :type (or null string)))  ; the original source text, or NIL
                                          ; when ASSEMBLE-STATEMENTS was
                                          ; called directly with no :SOURCE
-                                         ; (#25) -- LISTING-TEXT degrades to
+                                         ; -- LISTING-TEXT degrades to
                                          ; an entry-ordered listing with no
                                          ; source column in that case
 
@@ -264,9 +264,9 @@ the region's edge or the selected bank does not exist."
   "T if VALUE (a folded constant) fits in WIDTH cells of CELL-WIDTH bits
 each, either as an unsigned or a two's-complement signed value -- e.g. both
 255 and -1 fit one 8-bit cell, so an operand that hasn't declared itself
-SIGNED (mode.lisp, #30) isn't rejected just because it folds negative.
+SIGNED (mode.lisp) isn't rejected just because it folds negative.
 Accepts the full unsigned range too, so this is NOT the right predicate for
-a SIGNED mode's operand (a RELATIVE branch offset, #23, included) -- see
+a SIGNED mode's operand (a RELATIVE branch offset, included) -- see
 %FITS-SIGNED-WIDTH-P."
   (and (>= value (- (ash 1 (1- (* cell-width width)))))
        (< value (ash 1 (* cell-width width)))))
@@ -276,7 +276,7 @@ a SIGNED mode's operand (a RELATIVE branch offset, #23, included) -- see
 CELL-WIDTH bits per cell, i.e. -(2^(cell-width*width-1)) <= VALUE <
 2^(cell-width*width-1). Unlike %FITS-WIDTH-P, this rejects the unsigned-only
 range (e.g. +200 does not fit one 8-bit cell) -- used to range-check any
-SIGNED mode's operand (mode.lisp, #30), a RELATIVE mode's offset (#23)
+SIGNED mode's operand (mode.lisp), a RELATIVE mode's offset
 included, where wrapping silently instead of erroring would run the wrong
 (or a wrapped) value."
   (let ((bound (ash 1 (1- (* cell-width width)))))
@@ -290,15 +290,15 @@ the *next* instruction, not this one's own. Used by %CHOOSE-VARIANT's value
 filter so a RELATIVE candidate can compete on width like any other once an
 address is available to compute its offset from, rather than always winning
 by default as the widest candidate. This is the byte/cell-encoded branch of
-that filter only -- %CHOOSE-VARIANT's word-encoded branch (#20) reaches this
+that filter only -- %CHOOSE-VARIANT's word-encoded branch reaches this
 function's DESCRIPTOR only when WORD-FIELDS is NIL, since a word-encoded
 relative hole is range-checked against its own WORD-FIELD-CHOICE instead
-(%WORD-RELATIVE-OFFSET-FITS-P, #62) -- so DESCRIPTOR here is always
+(%WORD-RELATIVE-OFFSET-FITS-P) -- so DESCRIPTOR here is always
 cell-encoded, by construction of the caller, not because a word-encoded
 :RELATIVE is unsupported.
 
 WIDTH is deliberately the relative hole's *own* OPERAND-WIDTHS entry, not
-INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (the sum across every hole, #130):
+INSTRUCTION-DESCRIPTOR-TOTAL-OPERAND-WIDTH (the sum across every hole):
 a multi-hole descriptor with, say, a 1-cell relative hole beside a 2-cell
 plain one would otherwise let a 3-cell-wide offset silently pass this filter
 and then fail %RELATIVE-OFFSET's own (correctly 1-cell) check at encode
@@ -349,22 +349,22 @@ actually fits."
 (defun %choices-eligible-p (descriptor choices &optional selections)
   "T if DESCRIPTOR is eligible given CHOICES -- mode.lisp's hole-aligned
 per-hole list of the ONE-OF alternative each operand hole actually matched,
-NIL for a hole not governed by any ONE-OF (#104). Covers both encoding
+NIL for a hole not governed by any ONE-OF. Covers both encoding
 schemes with one predicate (formerly %WORD-CHOICES-ELIGIBLE-P, word-only,
-before #126 gave a byte-encoded descriptor's operand holes their own
+before a byte-encoded descriptor's operand holes had their own
 selector to filter by): a word-encoded DESCRIPTOR's per-hole selector is its
 WORD-FIELDS' own WORD-FIELD-CHOICE-CHOICE; a byte-encoded one's is its
-SUB-CHOICES (#126) entry, already a bare mode-name symbol or NIL, hole-
+SUB-CHOICES entry, already a bare mode-name symbol or NIL, hole-
 aligned the same way. For each hole, paired positionally with CHOICES: a
 hole whose own selector is non-NIL is eligible only when that hole's CHOICES
 entry is the same mode M actually matched; a hole with no selector of its
-own at all is always eligible regardless of CHOICES. #118: a word-encoded
+own at all is always eligible regardless of CHOICES. A word-encoded
 field mixing CHOICE-selected (CHOICE M) variants with value-selected
 (RANGE/:ELSE) ones has every variant's own WORD-FIELD-CHOICE-CHOICE stamped
 by %CHECK-WORD-VARIANT-CHOICES! (instruction.lisp) -- the value-selected
 ones with the one ONE-OF alternative no CHOICE-selected variant already
 claims -- so this function sees a uniformly non-NIL selector across a mixed
-field's whole menu and needs no separate mixed-field case. #126's byte path
+field's whole menu and needs no separate mixed-field case. the byte path
 has no such mixed case at all: %CHECK-BYTE-SUB-VARIANTS! (instruction.lisp)
 requires every alternative of a sub-selected hole to be claimed, so a
 byte-encoded hole's selector is either NIL (no selector on this hole) or
@@ -373,10 +373,10 @@ non-NIL for every descriptor expanded from it, never a mix within one hole.
 A byte-encoded DESCRIPTOR with no SUB-CHOICES entry anywhere, and a
 word-encoded one with no CHOICE-selected field anywhere, are both vacuously
 eligible for any CHOICES, including the all-NIL CHOICES of a program using no
-ONE-OF at all -- neither #104 nor #126 changes selection for a DEFINSTRUCTION
+ONE-OF at all -- selection is unchanged for a DEFINSTRUCTION
 that doesn't use them.
 
-#120: a word-encoded mode whose ONE-OF alternatives disagree on hole count
+A word-encoded mode whose ONE-OF alternatives disagree on hole count
 now registers sibling descriptors of *different* WORD-FIELDS lengths at one
 opcode -- SELECTORS and CHOICES can then legitimately differ in length, and
 the LOOP below pairs them positionally only as far as the shorter one, which
@@ -407,7 +407,7 @@ its own hole count actually matches CHOICES' length."
 
 (defvar *operand-cache* nil
   "Bound by %LAYOUT to an EQ table so each statement's operands parse once
-across every layout pass (#39); NIL elsewhere, where nothing is cached.")
+across every layout pass; NIL elsewhere, where nothing is cached.")
 
 (defun %cached-operands (statement key compute)
   "Return COMPUTE's values, memoised under KEY (an EQ-comparable tag) for
@@ -480,7 +480,7 @@ operands are forced with a mnemonic suffix~;accepted prefixes: ~:*~{~A~^, ~}~]"
                                                  (match (lambda (mode) (try-match-operand-mode tokens mode))))
   "(VARIANT ASTS CHOICES SELECTIONS HOLE-PREFIXES TIES SCORE PICKS) for each of VARIANTS whose
 mode matches TOKENS, is at least FLOOR cells, and is eligible for the ONE-OF alternatives
-matched (#104/#126) and the forcing prefixes written. MATCH maps a mode to
+matched and the forcing prefixes written. MATCH maps a mode to
 TRY-MATCH-OPERAND-MODE's values."
   (loop for v in variants
         for mode = (instruction-descriptor-mode v)
@@ -502,7 +502,7 @@ TRY-MATCH-OPERAND-MODE's values."
 
 (defvar *unresolved-width* :narrowest
   "The width an operand naming a label the assembly never defines is sized at:
-:NARROWEST, or :WIDEST (ITEMS-SIZE, #324).")
+:NARROWEST, or :WIDEST (ITEMS-SIZE).")
 
 (defvar *layout-defined-names* nil
   "The label and assignment tables of the layout in progress, or NIL.")
@@ -554,7 +554,7 @@ instruction.lisp) STATEMENT's operand tokens select, and the parsed hole ASTs
 for that variant's mode. ADDRESS is this statement's own address; SYMBOLS,
 when given, is the provisional (or, on the final layout pass, complete)
 symbol table built so far -- passed to EVAL-EXPR alongside ADDRESS as :PC so
-both a label reference and a location-counter hole (\"*\", #15) can fold to a
+both a label reference and a location-counter hole (\"*\") can fold to a
 real value and take part in the value filter below. FLOOR is the narrowest
 total operand width this statement is still allowed to choose -- relaxation
 only ever widens a statement across layout passes (see %LAYOUT), so a
@@ -581,7 +581,7 @@ ones that also match their syntax (e.g. zero-page before absolute):
    rather than committing to the widest mode up front. A RELATIVE candidate's
    hole folds to an absolute target, not the offset actually encoded, so its
    fit test goes through %RELATIVE-FITS-P instead of %FITS-WIDTH-P. A
-   non-RELATIVE SIGNED candidate (mode.lisp, #30) fits against
+   non-RELATIVE SIGNED candidate (mode.lisp) fits against
    %FITS-SIGNED-WIDTH-P instead of %FITS-WIDTH-P, so e.g. #200 no longer
    fits a signed byte and the filter moves on to a wider candidate; every
    other mode is unaffected. Ties, in every branch, keep declaration order.
@@ -591,15 +591,15 @@ ones that also match their syntax (e.g. zero-page before absolute):
    one-immediate mode), so whether their holes resolve is not the same
    question for each.
 
-1.5 (#104/#126) Mode-choice -- after the syntax and floor filters above (the
+1.5 Mode-choice -- after the syntax and floor filters above (the
    candidate loop below applies it last of the three, though as a pure
    predicate with no side effects its position relative to floor is
    immaterial to the result): on
-   a word-encoded candidate (instruction.lisp, #20) whose fields include a
-   (CHOICE M) variant, or a byte-encoded candidate (#126) expanded from a
+   a word-encoded candidate (instruction.lisp) whose fields include a
+   (CHOICE M) variant, or a byte-encoded candidate expanded from a
    hole-selected (variant (choice m) (sub s)) selector, drop it unless M is
    the alternative each such hole actually matched (mode.lisp's hole-aligned
-   MATCH-OPERAND-MODE CHOICES, #103/#104 -- see %CHOICES-ELIGIBLE-P). A
+   MATCH-OPERAND-MODE CHOICES -- see %CHOICES-ELIGIBLE-P). A
    candidate with no such selector anywhere is always eligible, so a program
    using no ONE-OF at all is unaffected. On the word path, a CHOICE-narrowed
    field's matched-but-out-of-range value has no wider CHOICE-selected
@@ -627,7 +627,7 @@ hole forcing prefix (\"#w:5\") additionally keeps only candidates whose word
 field for that hole declares the named :SUFFIX. Neither reads SYMBOLS, so
 both keep the choice constant across passes, trivially monotone.
 
-FINALP (#74), like %LAYOUT-PASS's own, defers a check that only makes sense
+FINALP, like %LAYOUT-PASS's own, defers a check that only makes sense
 once relaxation has converged: when two or more syntax-matching candidates
 tie on total operand width, declaration order alone decides between them --
 genuinely ambiguous mode selection, unlike e.g. ZERO-PAGE/ABSOLUTE sharing
@@ -638,8 +638,8 @@ produces a spurious or duplicate warning -- see %LAYOUT-PASS's own FINALP
 for the parallel deferral.
 
 Returns (VALUES chosen-descriptor hole-asts choices) -- and, after the
-ties and score the candidates carry, PICKS (#326), the (MODE-NAME START END)
-list TRY-MATCH-OPERAND-MODE reported for the chosen match. CHOICES (#115) is
+ties and score the candidates carry, PICKS, the (MODE-NAME START END)
+list TRY-MATCH-OPERAND-MODE reported for the chosen match. CHOICES is
 the hole-aligned MODE-DESCRIPTOR list TRY-MATCH-OPERAND-MODE reported for
 CHOSEN's own match (NIL entries for a hole not governed by any ONE-OF, NIL
 throughout for a no-operand statement), carried through so
@@ -654,7 +654,7 @@ alternative's :STRICT once a value exists to check it against."
          (candidates
            (mapcar (lambda (c)
                      (destructuring-bind (v asts &rest more) c
-                       ;; #115: CHOICES rides along with each candidate (not just
+                       ;; CHOICES rides along with each candidate (not just
                        ;; used to filter) so %CHECK-STRICT-OPERAND-RANGE! can read
                        ;; a hole's own matched ONE-OF alternative's :STRICT once
                        ;; ENCODE has a value to check it against.
@@ -697,7 +697,7 @@ accepts ~A"
            (fitting (find-if (lambda (c) (eq t (funcall resolvedp c))) candidates))
            (any-unresolvedp (some (lambda (c) (eq :unresolved (funcall resolvedp c))) candidates))
            (any-externalp (some (lambda (c) (eq :external (funcall resolvedp c))) candidates))
-           ;; #104: the first remaining CANDIDATE (if any) whose word-fields
+           ;; The first remaining CANDIDATE (if any) whose word-fields
            ;; include a CHOICE-selected one -- i.e. the eligibility filter
            ;; above actually narrowed by syntax for this statement, so a
            ;; value that doesn't fit has no wider CHOICE-selected sibling to
@@ -725,13 +725,13 @@ accepts ~A"
 
 (defun %word-choice-overflow-values (candidate symbols address cell-width)
   "CANDIDATE is (descriptor asts), a word-encoded %CHOOSE-VARIANT candidate
-(#104) none of whose CHOICE-selected variants fit. Evaluates ASTS and finds
+ none of whose CHOICE-selected variants fit. Evaluates ASTS and finds
 the first field whose value falls outside its own bound -- an :INLINE
-field's (biased) RANGE, or, #135, an :EXTRA-WORD field's own EXTRA-CELLS
+field's (biased) RANGE, or, an :EXTRA-WORD field's own EXTRA-CELLS
 width (via %OPERAND-RANGE, signed when the field is SIGNEDP). Returns
 (VALUES hole-index value lo hi choice-name), or NIL if every field does fit
 (not reachable from %CHOOSE-VARIANT's own call site, which only calls this
-once %WORD-VARIANT-FITS-P has already said no). #62: %RELATIVE-ADJUSTED-
+once %WORD-VARIANT-FITS-P has already said no). %RELATIVE-ADJUSTED-
 VALUES folds relative targets down to raw offsets first (a
 no-op when DESCRIPTOR has none), so a relative hole's own overflow, if
 that's the one that doesn't fit, is reported as the offset it actually
@@ -748,12 +748,12 @@ tried to encode, not the absolute branch target."
                  (return (values i value lo hi (word-field-choice-choice field-choice))))))))
 
 (defun %signal-word-choice-overflow (statement candidate symbols address anchor cell-width)
-  "Signal ASSEMBLY-ERROR (#104) for CANDIDATE (a word-encoded %CHOOSE-VARIANT
-candidate, instruction.lisp's #20), whose matched CHOICE-selected addressing
+  "Signal ASSEMBLY-ERROR for CANDIDATE (a word-encoded %CHOOSE-VARIANT
+candidate, instruction.lisp's), whose matched CHOICE-selected addressing
 form's own operand value doesn't fit that form's declared :RANGE -- see
 %CHOOSE-VARIANT's docstring, point 1.5, for why this is an error rather than
 the value filter's usual silent WRAP-VALUE fallback. ANCHOR anchors the
-diagnostic at the whole operand's first token (#74), same as every other
+diagnostic at the whole operand's first token, same as every other
 mode-mismatch error in this file -- there is no per-hole token position kept
 this far from parsing to point at just the offending hole."
   (multiple-value-bind (hole value lo hi choice-name)
@@ -771,7 +771,7 @@ this far from parsing to point at just the offending hole."
     (and unit (source-unit-file unit))))
 
 (defun %maybe-warn-ambiguous-mode (statement candidates chosen)
-  "WARN with an AMBIGUOUS-MODE condition (#74) if CANDIDATES (the full
+  "WARN with an AMBIGUOUS-MODE condition if CANDIDATES (the full
 syntax-and-floor-matching list %CHOOSE-VARIANT built, one (descriptor asts)
 pair per entry) has another candidate tied with CHOSEN on total operand
 width but naming a different mode -- the one case neither relaxation nor
@@ -822,7 +822,7 @@ decided -- see TRY-MATCH-OPERAND-MODE's tie records."
                                   (mapcar #'mode-descriptor-name runners-up)
                                   (mode-descriptor-name alt)))))
 
-;;; Directives (directive.lisp, #14) -- operand parsing and argument folding
+;;; Directives (directive.lisp) -- operand parsing and argument folding
 
 (defun %directive-operand-ast (operand)
   "Parse OPERAND's (parser.lisp) TOKENS as a single expression, signalling
@@ -878,7 +878,7 @@ operand is always one bare expression, never an addressing-mode pattern."
 per operand, after checking their count against DIRECTIVE's arity: exactly
 one for a (:FIXED 1) directive (e.g. .ORG, .RES), any number (zero
 included) for a :VARIADIC one (e.g. .BYTE, .WORD), at least one for a
-(:LEADING 1) one (.EMIT, #386)."
+(:LEADING 1) one (.EMIT)."
   (let ((operands (statement-operands statement)))
     (let ((arity (directive-descriptor-arity directive)))
       (unless (eq arity :variadic)
@@ -891,12 +891,12 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD), at least one for a
                       (lambda () (mapcar #'%directive-operand-ast operands)))))
 
 (defvar *byte-order* :little
-  "The order of the 8-bit characters within one cell of the memory being assembled (#398).")
+  "The order of the 8-bit characters within one cell of the memory being assembled.")
 
 (defun %pack-characters (codes cell-width byte-order)
   "CODES, 8-bit characters, packed into cells of CELL-WIDTH bits, as many whole
 characters a cell as fit, the first in the low bits when BYTE-ORDER is :LITTLE
-and the high bits when :BIG. A short last cell is zero-filled (#398)."
+and the high bits when :BIG. A short last cell is zero-filled."
   (let ((bytes (max 1 (floor cell-width 8))))
     (loop while codes
           collect (let ((cell 0))
@@ -925,7 +925,7 @@ through."
 
 (defun %emit-value-args (statement directive)
   "The operand ASTs an :EMIT directive lays down: all of them, less a leading
-width operand (.EMIT, #386)."
+width operand (.EMIT)."
   (let ((args (%directive-args statement directive)))
     (if (eq (directive-descriptor-width directive) :operand) (rest args) args)))
 
@@ -970,7 +970,7 @@ guessing, but only when FINALP: an earlier statement growing on a later
 layout pass (see %LAYOUT) can turn what was a legal forward pad into an
 apparent backward move, and that must not fail until the widths have
 actually converged -- a trial pass instead clamps forward (MAX VALUE ADDRESS)
-so layout can keep iterating. A \"*\" in the operand (#15) resolves against
+so layout can keep iterating. A \"*\" in the operand resolves against
 ADDRESS -- the counter's value *before* this .ORG moves it. EMITTED-P and
 MAIN-END describe the main image only: a .ORG into a banked region (see
 %BANK-REGION-AT) may move anywhere and never moves the assembly's origin."
@@ -985,7 +985,7 @@ MAIN-END describe the main image only: a .ORG into a banked region (see
                                 main-end value))
       (t (values main-end asm-origin)))))
 
-;;; Local-label scoping (#16) -- qualify a local name against its nearest
+;;; Local-label scoping -- qualify a local name against its nearest
 ;;; preceding global label before it ever reaches the (flat) symbol table.
 
 (defun %qualify-local (scope name line)
@@ -1001,7 +1001,7 @@ MAIN-END describe the main image only: a .ORG into a banked region (see
   "Destructively rewrite every local EXPR-LABEL node (LOCALP true) reachable
 from AST to its SCOPE-qualified name (%QUALIFY-LOCAL), leaving every other
 node untouched. Clears LOCALP afterwards, so qualifying an AST again (a
-cached operand AST, #39) is a no-op: the first scope wins."
+cached operand AST) is a no-op: the first scope wins."
   (etypecase ast
     ((or expr-number expr-string expr-location))
     (expr-label
@@ -1052,8 +1052,8 @@ cached operand AST, #39) is a no-op: the first scope wins."
 
 (defun %bind-label! (statement symbols info address scope directive-symbols)
   "Bind STATEMENT's own label (if any) to ADDRESS in SYMBOLS (and its
-SYMBOL-INFO in INFO, #37), qualifying it against SCOPE first if it's local
-(#16). Returns the SCOPE in effect for any later statement: a global label
+SYMBOL-INFO in INFO), qualifying it against SCOPE first if it's local
+. Returns the SCOPE in effect for any later statement: a global label
 definition becomes the new scope; a local one, or no label at all, leaves
 SCOPE unchanged."
   (let ((label (statement-label statement))
@@ -1099,8 +1099,7 @@ symbol ~S is not yet defined"
 
 (defun %capture-set-values (ast symbols set-names line)
   "Return AST with references to reassignable names replaced by their value at
-this statement. AST itself is never modified (it may be a cached operand AST,
-#39); unchanged subtrees are shared."
+this statement. AST itself is never modified (it may be a cached operand AST); unchanged subtrees are shared."
   (etypecase ast
     ((or expr-number expr-string expr-location) ast)
     (expr-label
@@ -1304,14 +1303,14 @@ UNKNOWN-MNEMONIC at STATEMENT's line, or yields no variants when STATEMENT is NI
 final-address asm-origin new-floors widths info effects banks). SYMBOLS is a fresh string ->
 value hash table built by this pass alone (a label's address or an
 assignment's current value). INFO is a fresh, parallel qualified-name -> SYMBOL-INFO
-table (#37), built and keyed the same way, carrying the scope/kind metadata
+table, built and keyed the same way, carrying the scope/kind metadata
 SYMBOLS itself cannot. SIZED-ENTRIES is, in order, one tagged
 entry per
 mnemonic-bearing statement that occupies address space:
   (:instruction address descriptor asts line choices picks forcedp definition-line unit definition-unit)
   (:emit        address width endian asts line definition-line unit definition-unit)
   (:reserve     address count line definition-line unit definition-unit)
-CHOICES (#115) is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
+CHOICES is :INSTRUCTION's own trailing element -- %CHOOSE-VARIANT's
 hole-aligned matched-alternative list for the chosen descriptor, threaded
 through so %ENCODE can read a hole's own matched ONE-OF alternative's
 :STRICT once a value exists to check it against.
@@ -1338,7 +1337,7 @@ FINALP defers two checks that only make sense once relaxation has converged:
 an .ORG backward move (%APPLY-ORIGIN-DIRECTIVE) can be a false positive
 mid-relaxation, when an earlier statement hasn't finished widening yet.
 
-SCOPE (the nearest preceding global label's name, #16) is threaded statement
+SCOPE (the nearest preceding global label's name) is threaded statement
 to statement so %BIND-LABEL! can qualify a local label definition and so a
 statement's own operands (its own label bound first -- \"loop: bne .x\"'s .x
 is scoped to LOOP, not whatever preceded it) can be qualified via
@@ -1347,7 +1346,7 @@ is scoped to LOOP, not whatever preceded it) can be qualified via
 LABELS identifies forward label names for directive operands. EFFECTS records
 the resulting .ORG addresses and .RES counts for convergence checks.
 
-CELL-WIDTH is MACHINE's own code cell width (#53, %MACHINE-CELL-WIDTH) --
+CELL-WIDTH is MACHINE's own code cell width (%MACHINE-CELL-WIDTH) --
 every operand-width fit check below (%CHOOSE-VARIANT) is counted in cells of
 this width, resolved once by %LAYOUT rather than per pass or per statement."
   (let ((symbols (make-hash-table :test 'equal))
@@ -1382,7 +1381,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                      (*current-definition-line* (statement-definition-line statement))
                      (*current-source-unit* (statement-source-unit statement))
                      (*current-definition-unit* (statement-definition-unit statement)))
-               ;; A forced addressing-mode suffix (#40) names an addressing
+               ;; A forced addressing-mode suffix names an addressing
                ;; mode, which only means something for an instruction
                ;; statement -- a directive has no addressing mode to force.
                (when (and directive (statement-mode-suffix statement))
@@ -1481,7 +1480,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                            (declare (ignore selections prefixes ties score))
                            (setf asts (mapcar (lambda (ast)
                                                 (%capture-set-values ast symbols set-names line)) asts))
-                           ;; #115: CHOICES rides along in the sized entry so
+                           ;; CHOICES rides along in the sized entry so
                            ;; %ENCODE can read a hole's own matched ONE-OF
                            ;; alternative's :STRICT (%CHECK-STRICT-OPERAND-
                            ;; RANGE!) once a value exists to check it against.
@@ -1501,7 +1500,7 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
 
 (defun %layout (statements machine origin cell-width)
   "Returns (VALUES symbols sized-entries final-address asm-origin info) --
-see %LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES/INFO (#37). A
+see %LAYOUT-PASS for the shape of SYMBOLS/SIZED-ENTRIES/INFO. A
 label-bearing (or RELATIVE-mode) operand's addressing-mode width can't be
 decided in one walk over STATEMENTS, since it depends on an address that
 isn't known until layout has placed it -- so %LAYOUT-PASS runs repeatedly,
@@ -1509,8 +1508,8 @@ re-choosing every statement's variant against the previous pass's complete
 symbol table, each pass only ever widening a statement that no longer fits.
 The loop stops when widths, directive effects, and symbols all agree across
 passes. One final pass checks that layout still agrees.
-CELL-WIDTH is MACHINE's own code cell width (#53), resolved once here and
-threaded through every pass. Operands parse once, into *OPERAND-CACHE* (#39)."
+CELL-WIDTH is MACHINE's own code cell width, resolved once here and
+threaded through every pass. Operands parse once, into *OPERAND-CACHE*."
   (let ((*operand-cache* (make-hash-table :test 'eq)))
     (%layout-passes statements machine origin cell-width)))
 
@@ -1568,10 +1567,10 @@ threaded through every pass. Operands parse once, into *OPERAND-CACHE* (#39)."
 
 (defun %word-relative-offset-fits-p (offset choice cell-width)
   "T if OFFSET -- a word-encoded RELATIVE hole's already-computed signed
-offset (#62) -- fits CHOICE, the relative hole's own WORD-FIELD-CHOICE:
+offset -- fits CHOICE, the relative hole's own WORD-FIELD-CHOICE:
 membership in its own (pre-bias) RANGE for an :INLINE choice, exactly
 %WORD-VARIANT-FITS-P's own :INLINE test (above) applied to this one field in
-isolation; signed fit within CHOICE's own extra-word width (#135; CHOICE's
+isolation; signed fit within CHOICE's own extra-word width (CHOICE's
 own EXTRA-CELLS * CELL-WIDTH bits, not always the instruction word's own
 WIDTH-CELLS) for an :EXTRA-WORD choice, mirroring %RELATIVE-FITS-P's
 byte-path bound but sized to the chosen extra word rather than an
@@ -1678,7 +1677,7 @@ field (must be between ~D and ~D)"
 (defun %ensure-cells-length (cells n)
   "Grow the adjustable vector CELLS (%MAKE-GROWABLE-CELLS) to at least N
 elements, zero-filling the new tail -- a directive statement can leave a
-gap (a forward .ORG, #14) that no earlier entry ever writes, so the
+gap (a forward .ORG) that no earlier entry ever writes, so the
 accumulator can't be a flat push-then-reverse list the way M1/M2's
 contiguous instruction stream could."
   (when (> n (length cells))
@@ -1688,16 +1687,16 @@ contiguous instruction stream could."
 (defun %encode (sized-entries symbols origin final-address cell-width endian)
   "Evaluate SIZED-ENTRIES (%LAYOUT's tagged output) against the completed
 symbol table SYMBOLS and write each entry's cells at its own address (minus
-ORIGIN) into a cell vector, CELL-WIDTH bits per element (#53), sized to
+ORIGIN) into a cell vector, CELL-WIDTH bits per element, sized to
 FINAL-ADDRESS - ORIGIN. A gap between entries -- a forward .ORG, or a
 .RESERVE's run -- is left zero-filled by %ENSURE-CELLS-LENGTH's growth
-rather than written explicitly. A location-counter reference (\"*\", #15) in
+rather than written explicitly. A location-counter reference (\"*\") in
 an operand resolves against the address of the entry it's *in* -- for
 :INSTRUCTION that's the whole statement's address (further adjusted by
 %RELATIVE-OFFSET for a RELATIVE mode, same as gas's \"bne *\" branching to
 itself); for :EMIT (e.g. \".byte 1, *, 3\") each value gets *its own*
 element address, not the directive statement's address, so \".word *, *\"
-emits two different words. ENDIAN (#66) governs :EMIT's own
+emits two different words. ENDIAN governs :EMIT's own
 %ENCODE-VALUE-CELLS call and :INSTRUCTION's encoding.
 
 A :BANK entry (.BANK) selects the bank for the entries after it. An entry
@@ -1807,7 +1806,7 @@ ordered by region then bank; overlapping output in one bank is an error."
                                        collect (car entry))
                                #'< :key #'bank-image-bank)))))
 
-;;; Listing (#25) -- retain %LAYOUT's address<->statement mapping instead of
+;;; Listing -- retain %LAYOUT's address<->statement mapping instead of
 ;;; discarding it once %ENCODE has run. See listing.lisp for the rendering
 ;;; and lookup entry points built on this.
 
@@ -1918,24 +1917,24 @@ UNRESOLVED-LABEL (via EVAL-EXPR) on a reference to a label that is never
 defined anywhere in STATEMENTS. ORIGIN is the assembly's starting address
 unless a leading .ORG (before any other statement occupies an address)
 moves it -- see ASSEMBLY-ORIGIN. MEMORY names which of MACHINE's memory
-elements this assembly is targeting, resolving its CELL-WIDTH (#53) -- the
+elements this assembly is targeting, resolving its CELL-WIDTH -- the
 bit width of the assembled ASSEMBLY-CELLS vector's own elements; defaults
 per %MACHINE-CELL-WIDTH (MACHINE's sole memory element, or its shared
 cell-width across several), same rule as LOAD-PROGRAM's own :MEMORY. A
 machine with no memory element at all cannot be assembled -- its code cell
 width is undefined -- and signals the same error %MACHINE-CELL-WIDTH gives
-any other caller in that position. MEMORY's declared :ENDIAN (#66) governs
+any other caller in that position. MEMORY's declared :ENDIAN governs
 .BYTE/.WORD data the same way it governs instruction operands -- resolved
-via %MACHINE-ENDIAN, same rule. SOURCE (#25), when given, is the
+via %MACHINE-ENDIAN, same rule. SOURCE, when given, is the
 original source text this STATEMENTS list came from -- ASSEMBLE passes its
 own SOURCE argument through automatically; a caller building STATEMENTS by
 hand (e.g. from PARSE directly, or synthesizing them) may pass it too, or
 leave it NIL, in which case the returned ASSEMBLY's LISTING (below) is
 still complete but ASSEMBLY-SOURCE is NIL and LISTING-TEXT (listing.lisp)
 renders without a source column. Retains the address<->statement mapping
-%LAYOUT computes -- discarded before #25 -- as ASSEMBLY-LISTING, a
+%LAYOUT computes, as ASSEMBLY-LISTING, a
 LISTING-LINE list in address order; see listing.lisp for how it's rendered
-and looked up. Also retains %LAYOUT's scope/kind metadata (#37) as
+and looked up. Also retains %LAYOUT's scope/kind metadata as
 ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
   (%with-laid-out-statements (statements machine lexer origin memory source)
       (symbols sized final-address asm-origin info label-banks cell-width endian)

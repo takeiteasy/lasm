@@ -1,13 +1,13 @@
 ;;;; device.lisp
-;;;; #108: the device bus -- enumeration, attach/detach, the CPU-facing
+;;;; The device bus -- enumeration, attach/detach, the CPU-facing
 ;;;; message and tick API, and the interrupt signal seam.
 ;;;;
 ;;;; A device is addressed by instruction and bus index (HWN/HWQ/HWI-style).
-;;;; It may also be memory-mapped: a #107 :DEVICE region naming it with
-;;;; :DEVICE (#158) routes MREF through its :READ/:WRITE hooks. A region's own
+;;;; It may also be memory-mapped: a :DEVICE region naming it with
+;;;; :DEVICE routes MREF through its :READ/:WRITE hooks. A region's own
 ;;;; :READ/:WRITE remain for a peripheral that needs no bus identity.
 ;;;;
-;;;; DEVICE-SIGNAL below is unchanged by #109's interrupt subsystem --
+;;;; DEVICE-SIGNAL below is unchanged by the interrupt subsystem --
 ;;;; it still only calls whatever MACHINE-INTERRUPT-HOOK is installed, and
 ;;;; drops the signal when none is. What changed is what's installed there:
 ;;;; MAKE-MACHINE (storage.lisp) now auto-wires the hook to the real
@@ -22,7 +22,7 @@
 
 (defun %device-name-taken-p (machine name)
   "T when NAME already names something on MACHINE -- a storage element, a
-register alias, a #107 region, or another device (declared or attached).
+register alias, a region, or another device (declared or attached).
 ATTACH-DEVICE checks a fresh name against this before appending it, so a
 runtime-attached device's name can't shadow anything DEFMACHINE's own SEEN
 table (machine.lisp) would have rejected at DEFMACHINE time."
@@ -79,7 +79,7 @@ Signals NO-SUCH-DEVICE on an already-vacant or out-of-range INDEX."
     (setf (aref (machine-devices machine) index) nil))
   (values))
 
-;;; Region binding (#264)
+;;; Region binding
 
 (defun %bindable-region (machine region-name)
   "The :DEVICE memory region named REGION-NAME on MACHINE that has no :READ/
@@ -165,7 +165,7 @@ via DEVICE-AT."
 cost of the instruction step that just ran (STEP-MACHINE, emulator.lisp),
 zero-cost when a device declares no :TICK. Called once per STEP-MACHINE for the
 instruction's declared cost (before its semantics run) and once per (elapse n)
-call (#159), in bus index order, skipping holes."
+call, in bus index order, skipping holes."
   (loop for device across (machine-devices machine)
         when device
           do (let ((tick (device-descriptor-tick (device-descriptor device))))
@@ -173,18 +173,18 @@ call (#159), in bus index order, skipping holes."
   (values))
 
 (defun %elapse (machine cycles)
-  "The (elapse n) semantics primitive (#159): account CYCLES to MACHINE-CYCLES
+  "The (elapse n) semantics primitive: account CYCLES to MACHINE-CYCLES
 and tick devices for them now, mid-instruction."
   (incf (machine-cycles machine) cycles)
   (tick-devices machine cycles))
 
-;;; Interrupt seam (#109's queue is what's installed here now)
+;;; Interrupt seam (the queue is what's installed here now)
 
 (defun device-signal (machine device &optional data)
-  "The #108 interrupt seam, unchanged: calls MACHINE-INTERRUPT-HOOK
+  "The interrupt seam: calls MACHINE-INTERRUPT-HOOK
 (storage.lisp) with MACHINE, DEVICE and DATA when one is installed,
 otherwise drops the signal. On a machine declaring an (interrupts ...)
-clause, that hook is #109's real delivery queue -- see docs/interrupts.md
+clause, that hook is the real delivery queue -- see docs/interrupts.md
 for the full model (SIGNAL-INTERRUPT, masking, overflow policy). This
 function itself still only gives a device a way to raise its hand."
   (let ((hook (machine-interrupt-hook machine)))

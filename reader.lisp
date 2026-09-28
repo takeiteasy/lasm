@@ -105,7 +105,7 @@ marker and exponent (capped at 10^12); NIL for anything else."
   (unwind-protect (call-next-method)
     (decf (client-depth client))))
 
-;;; Position tracking (#362): a second client, mixing in Eclector's
+;;; Position tracking: a second client, mixing in Eclector's
 ;;; parse-result protocol, records where each cons or symbol started without
 ;;; changing what is read -- MAKE-EXPRESSION-RESULT returns its RESULT
 ;;; unchanged, so callers that don't ask for positions see plain data.
@@ -140,7 +140,7 @@ under READ-RESTRICTED-FORMS' :POSITIONS.")
 
 (defun %restricted-readtable ()
   "The readtable for snapshots and item files: no #X dispatch beyond numbers/
-characters/keywords, and ' ` , are rejected outright (#380: a source file's
+characters/keywords, and ' ` , are rejected outright (a source file's
 readtable, %SOURCE-READTABLE, allows them instead)."
   (or *restricted-readtable*
       (let ((table (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*))))
@@ -154,7 +154,7 @@ readtable, %SOURCE-READTABLE, allows them instead)."
 (defvar *source-readtable* nil)
 
 (defun %source-readtable ()
-  "The readtable for source files (#380): like %RESTRICTED-READTABLE, but
+  "The readtable for source files: like %RESTRICTED-READTABLE, but
 ' ` , ,@ read as quote/quasiquote/unquote/unquote-splicing (WRAP-IN-QUOTE and
 friends, specialized on RESTRICTED-SOURCE-CLIENT, build their lists headed by
 an uninterned symbol instead of interning CL:QUOTE &c.)."
@@ -162,7 +162,7 @@ an uninterned symbol instead of interning CL:QUOTE &c.)."
       (setf *source-readtable*
             (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))))
 
-;;; Quote/quasiquote for source files only (#380): RESTRICTED-SOURCE-CLIENT
+;;; Quote/quasiquote for source files only: RESTRICTED-SOURCE-CLIENT
 ;;; overrides Eclector's WRAP-IN-* so a quoted form's head is an uninterned
 ;;; symbol, matching every other symbol the restricted reader hands back.
 ;;; %SOURCE-READTABLE leaves ' ` , ,@ at their standard Eclector meaning, so
@@ -189,7 +189,7 @@ an uninterned symbol instead of interning CL:QUOTE &c.)."
   "Call FUNCTION with a thunk that reads the next form of STREAM, or returns
 its second argument's unique end marker, under the restricted reader's
 limits. POSITIONS, an EQ hash table or NIL, records each cons or symbol's
-starting character offset. QUOTES allows ' ` , ,@ (#380), and requires
+starting character offset. QUOTES allows ' ` , ,@, and requires
 POSITIONS."
   (handler-case
       (with-standard-io-syntax

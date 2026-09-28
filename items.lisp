@@ -1,5 +1,5 @@
 ;;;; items.lisp
-;;;; #113: structured assembly items -- a program as data rather than source
+;;;; Structured assembly items -- a program as data rather than source
 ;;;; text. Each item becomes the tokens of one source line, which
 ;;;; %PARSE-LINE turns into a STATEMENT for ASSEMBLE-STATEMENTS. Operands are
 ;;;; built from addressing-mode patterns (mode.lisp), named through the
@@ -21,7 +21,7 @@
 
 (in-package #:lasm)
 
-;; #372: a LASM-SYNTAX-ERROR, as PROGRAM-COMPILE-ERROR is (#362), so
+;; A LASM-SYNTAX-ERROR, as PROGRAM-COMPILE-ERROR is, so
 ;; DIAGNOSTIC-TEXT renders FILE:LINE:COLUMN and, when the item's position and
 ;; the program's source text are known (READ-ITEMS, READ-ITEMS-FROM-STRING),
 ;; the offending line with a caret.
@@ -32,7 +32,7 @@
 (define-condition items-malformed (items-error) ())
 (define-condition items-operand-mismatch (items-error) ())
 
-(defvar *items-positions* nil "EQ hash table, item -> character offset, or NIL without one (#372).")
+(defvar *items-positions* nil "EQ hash table, item -> character offset, or NIL without one.")
 (defvar *items-source-text* nil "The program's source text, or NIL.")
 (defvar *items-file* nil "The program's path, or NIL.")
 
@@ -51,10 +51,10 @@
 
 (defstruct items-program
   items backend machine origin memory lexer
-  optimize ; :SIZE or :SPEED, from a .lsp header only (#399)
+  optimize ; :SIZE or :SPEED, from a .lsp header only
   source   ; source text, for a program a reader with positions made
   file     ; its path, or NIL for a *-FROM-STRING reader
-  positions) ; EQ hash table, form -> character offset in SOURCE, for #362, #372
+  positions) ; EQ hash table, form -> character offset in SOURCE
 
 ;;; Context
 
@@ -363,7 +363,7 @@ its string, except an instruction's mnemonic."
 
 (defun %entry-matches-args-p (entry args)
   "T when ARGS fit ENTRY's params: as many as its params, and an argument at a
-typed (NAME KIND) position (#365) is an operand of that kind."
+typed (NAME KIND) position is an operand of that kind."
   (let ((kinds (third entry)))
     (and (= (length kinds) (length args))
          (every (lambda (kind arg) (or (null kind) (and (consp arg) (%same-name-p (first arg) kind))))
@@ -374,7 +374,7 @@ typed (NAME KIND) position (#365) is an operand of that kind."
 The forms may include the operation's (:label NAME) forms; RENAME, when given,
 maps each such NAME to the string that replaces it, before the arguments are
 substituted so an argument is never mistaken for a label. Several clauses may
-share NAME, dispatched by ARGS's operand kinds (#365); with only one, its
+share NAME, dispatched by ARGS's operand kinds; with only one, its
 plain argument-count mismatch is reported instead."
   (let* ((backend (find-backend backend))
          (item (list* :op name args))
@@ -432,13 +432,13 @@ to the enclosing label when one has been defined and the lexer has local labels.
 (defun %op-lines (name args item)
   (%template-lines (%expand-op *items-backend* name args #'%fresh-label) item))
 
-;;; Convention lowering (#320, #322)
+;;; Convention lowering
 ;;;
 ;;; (:function NAME (:args n :locals n :save (reg...)) ITEM...), (:call F ARG... [:keep (reg...)]),
 ;;; (:return), (:push X), (:pop X) and the operands (:arg i) and (:local i) lower to
 ;;; the backend's reserved operations (+BACKEND-HOOK-ARITIES+), following its
 ;;; call and frame clauses. A frame slot is addressed by its distance from the
-;;; top of the stack, or from the frame pointer when the frame has one (#321); a
+;;; top of the stack, or from the frame pointer when the frame has one; a
 ;;; function body must keep the stack balanced between items, or use (:push)
 ;;; and (:pop), for a stack-pointer distance to hold.
 
@@ -1196,8 +1196,8 @@ layout is left to ASSEMBLE-ITEMS."
     (multiple-value-bind (statements text unit lines) (%items-source items)
       (when (some #'item-line-stack-check lines)
         (handler-case (%check-laid-out-stack-lines statements text unit lines origin :widest)
-          ;; ITEMS-ERROR is a real modeling error (e.g. a stack-writer mismatch,
-          ;; #372) and must still reach the caller -- only the assembler's own
+          ;; ITEMS-ERROR is a real modeling error (e.g. a stack-writer mismatch)
+          ;; and must still reach the caller -- only the assembler's own
           ;; layout ambiguity, at a WIDEST guess, is deferred to ASSEMBLE-ITEMS.
           (items-error (c) (error c))
           (lasm-syntax-error () nil)))
@@ -1212,7 +1212,7 @@ is not well formed and ITEMS-OPERAND-MISMATCH for an operand that does not
 match its mode, or that the assembler read as another alternative of the
 instruction's modes; the assembler's own conditions otherwise. POSITIONS and
 SOURCE, as READ-ITEMS and READ-ITEMS-FROM-STRING set them on an ITEMS-PROGRAM,
-let such an error report FILE:LINE:COLUMN (#372)."
+let such an error report FILE:LINE:COLUMN."
   (let ((*items-positions* positions) (*items-source-text* source)
         (*items-file* (and file (namestring (pathname file)))))
     (%with-items-context (backend machine lexer memory)
@@ -1279,7 +1279,7 @@ ASSEMBLE-ITEMS's."
 (defun %read-items-form (stream path)
   "(VALUES FORM POSITIONS) for STREAM, as READ-ITEMS and READ-ITEMS-FROM-
 STRING read it. POSITIONS maps each item to a character offset into the text
-STREAM reads from, for #372."
+STREAM reads from."
   (let ((positions (make-hash-table :test 'eq)))
     (values (read-restricted-form stream (lambda (control &rest args)
                                            (apply #'%program-fail control args))

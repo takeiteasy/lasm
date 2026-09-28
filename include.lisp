@@ -1,5 +1,5 @@
 ;;;; include.lisp
-;;;; .include statement helpers (#78). Like .macro (macro.lisp), .include
+;;;; .include statement helpers. Like .macro (macro.lisp), .include
 ;;;; splices a range of statements into the program, which no DEFDIRECTIVE
 ;;;; action can express, so it is recognized by mnemonic text instead of being
 ;;;; registered in *DIRECTIVES*. PREPROCESS (preprocess.lisp) expands it when

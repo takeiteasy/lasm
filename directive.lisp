@@ -1,13 +1,13 @@
 ;;;; directive.lisp
 ;;;; DEFDIRECTIVE: a declarative assembler-directive grammar (LASM-plan.md
-;;;; sec. 3.6, #14). A directive is a named parameter list plus exactly one
+;;;; sec. 3.6). A directive is a named parameter list plus exactly one
 ;;;; action form from a fixed vocabulary (SET-ORIGIN!, EMIT, RESERVE, ASSIGN,
 ;;;; REASSIGN)
 ;;;; -- restricting the body to one action, rather than arbitrary Lisp, is
 ;;;; what lets the assembler (assembler.lisp) derive a directive statement's
 ;;;; layout size *statically*, the same way it already knows an instruction
 ;;;; statement's size from its chosen INSTRUCTION-DESCRIPTOR without running
-;;;; any semantics. ASSIGN (#35's .EQU) is zero-size like SET-ORIGIN!, but
+;;;; any semantics. ASSIGN (.EQU) is zero-size like SET-ORIGIN!, but
 ;;;; binds a name in the symbol table instead of moving the address counter
 ;;;; -- see assembler.lisp for the layout-time binding path. REASSIGN is the
 ;;;; corresponding rebinding action used by .SET.
@@ -34,7 +34,7 @@
   name        ; string, upcased, prefix included (e.g. ".ORG")
   arity       ; (:fixed n) | (:leading 1) | :variadic
   action      ; :set-origin | :select-bank | :emit | :reserve | :assign | :reassign
-  width       ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
+  width       ; element width, in cells -- 1 for .byte, 2 for .word;
               ; :OPERAND when the directive's first operand gives it (.emit);
               ; NIL for :set-origin / :select-bank / :reserve / :assign / :reassign
   endian      ; :emit only: overrides the machine's endian order, or NIL
@@ -58,9 +58,9 @@ instruction one, so a miss is an ordinary outcome, not a caller error."
 
 (defun %parse-directive-params (params)
   "PARAMS is DEFDIRECTIVE's parameter list: (name) for a fixed single
-argument, (name value) for a fixed two-argument directive (#35's .EQU),
+argument, (name value) for a fixed two-argument directive (.EQU),
 (&rest name) for a variadic directive, or (width &rest name) for a variadic
-one led by a width operand (#386). Returns (VALUES arity param-names)
+one led by a width operand. Returns (VALUES arity param-names)
 where ARITY is (:FIXED 1), (:FIXED 2), :VARIADIC or (:LEADING 1) and
 PARAM-NAMES is a list of the parameter symbols in order -- checked for &REST
 first since (&rest name) and (name value) are both length 2."
@@ -102,10 +102,10 @@ SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
   "EMIT is one of the two actions taking two arguments (a width, then the
 variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's one-argument
 shape -- handled separately. The width is a literal, or the directive's own
-leading width parameter (#386), in which case it returns :OPERAND. Optional trailing :ENDIAN and
+leading width parameter, in which case it returns :OPERAND. Optional trailing :ENDIAN and
 :TERMINATOR specs (each at most once) override the machine's endian order and
 name the cell appended after each string operand; :PACK T packs a string's
-8-bit characters several to a cell (#398). Returns
+8-bit characters several to a cell. Returns
 (VALUES :emit width endian terminator pack)."
   (%definition-bind (head width-form values-sym &rest options) action-form
     (unless (and (eq head 'emit)
@@ -157,7 +157,7 @@ name the cell appended after each string operand; :PACK T packs a string's
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
 (VALUE-NAME) for a directive with exactly one argument, (NAME-NAME
-VALUE-NAME) for one with exactly two (#35's .EQU), or (&rest VALUES-NAME)
+VALUE-NAME) for one with exactly two (.EQU), or (&rest VALUES-NAME)
 for a variadic one (e.g. \".byte\"). BODY must be exactly one action form
 referencing PARAMS' own parameter name(s), in order:
 
@@ -169,18 +169,18 @@ referencing PARAMS' own parameter name(s), in order:
                               banked region is placed in; must fold to a
                               label-free constant. Zero layout size.
   (reserve count)          -- advance the address counter by COUNT cells
-                              (#53 -- a machine's own addressable unit, not
+                              (a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
                               also fold label-free.
   (emit width values [:endian order] [:terminator cell] [:pack t])
                            -- lay down (length VALUES) WIDTH-cell fields,
                               one per value in VALUES, in the machine's own
-                              endian order (#66), or in ORDER (:little, :big
+                              endian order, or in ORDER (:little, :big
                               or (outer inner group)) when :endian is given;
                               layout size is WIDTH *
                               (length VALUES), or, given (width &rest values)
                               params, the first operand's own constant
-                              positive cell count (.emit, #386); each value may reference a
+                              positive cell count (.emit); each value may reference a
                               label (resolved in pass 2, like an ordinary
                               instruction operand). A quoted string value
                               expands to one field per character, followed
@@ -224,7 +224,7 @@ anything -- see this file's header comment."
 
 ;;; Built-in directives
 
-;; .BYTE/.WORD's widths are in cells (#53), not bits -- 1 and 2 cells
+;; .BYTE/.WORD's widths are in cells, not bits -- 1 and 2 cells
 ;; respectively, same as they always meant 1 and 2 8-bit bytes on every
 ;; byte-addressed machine so far. On a word-addressed machine (:CELL-WIDTH
 ;; 16), ".byte 1, 2" lays down two 16-bit cells, not two 8-bit bytes -- the
@@ -233,10 +233,10 @@ anything -- see this file's header comment."
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
 (defdirective ".long" (&rest values) (emit 4 values))
-;; .EMIT (#386): a field width in cells given as the first operand, for a
+;; .EMIT: a field width in cells given as the first operand, for a
 ;; width no fixed directive has -- ".emit 3, 1, 2" lays down two 3-cell fields.
 (defdirective ".emit" (width &rest values) (emit width values))
-;; .RES's count is also in cells (#53) -- on a word-addressed machine
+;; .RES's count is also in cells -- on a word-addressed machine
 ;; ".res 4" reserves 4 cells, not 4 bytes. .ORG's operand was always an
 ;; address, and addresses were always cell-indexed, so .ORG itself needs no
 ;; change at all.
@@ -244,7 +244,7 @@ anything -- see this file's header comment."
 (defdirective ".bank" (n)            (select-bank! n))
 (defdirective ".equ"  (name value)   (assign name value))
 (defdirective ".set"  (name value)   (reassign name value))
-;; .CELL/.DAT (#65): plain aliases for .BYTE -- same width-1 :EMIT action, so
+;; .CELL/.DAT: plain aliases for .BYTE -- same width-1 :EMIT action, so
 ;; a word-addressed machine's source can name "one of the machine's own
 ;; cells" without reading the byte-addressed-flavored ".byte". Both spellings
 ;; are offered since DCPU-16 assemblers call this "dat" while other
@@ -253,11 +253,11 @@ anything -- see this file's header comment."
 ;; machines, and -- like every other directive -- take the mnemonic
 ;; namespace, so no machine may define an instruction named .CELL or .DAT.
 (defdirective ".cell" (&rest values) (emit 1 values))
-;; .ASCII/.ASCIZ (#34): strings are accepted by every :EMIT directive, so these
+;; .ASCII/.ASCIZ: strings are accepted by every :EMIT directive, so these
 ;; differ from .BYTE only in the terminator .ASCIZ appends to each string.
 (defdirective ".ascii" (&rest values) (emit 1 values))
 (defdirective ".asciz" (&rest values) (emit 1 values :terminator 0))
 (defdirective ".dat"  (&rest values) (emit 1 values))
-;; .PACK/.PACKZ (#398): .ASCII/.ASCIZ with the characters packed several a cell.
+;; .PACK/.PACKZ: .ASCII/.ASCIZ with the characters packed several a cell.
 (defdirective ".pack" (&rest values) (emit 1 values :pack t))
 (defdirective ".packz" (&rest values) (emit 1 values :pack t :terminator 0))

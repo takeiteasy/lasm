@@ -1,5 +1,5 @@
 ;;;; backend.lisp
-;;;; #113: DEFBACKEND -- a declarative compiler-target description for a
+;;;; DEFBACKEND -- a declarative compiler-target description for a
 ;;;; machine: register roles, a calling convention, frame layout, the operand
 ;;;; kinds a front end may name (each an addressing mode) and primitive
 ;;;; operations expanding to instruction forms. items.lisp assembles programs
@@ -8,9 +8,9 @@
 ;;;; Clause heads, mnemonics, registers and modes are matched by name, so a
 ;;;; backend can be written in any package.
 ;;;;
-;;;; #323: (:extends PARENT) merges the parent's clauses under the child's, by
+;;;; (:extends PARENT) merges the parent's clauses under the child's, by
 ;;;; key, and checks the result against the child's machine. Redefining a
-;;;; parent rebuilds its children, all or none (#330).
+;;;; parent rebuilds its children, all or none.
 
 (in-package #:lasm)
 
@@ -114,14 +114,14 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
   "The register name (or list of names) BACKEND assigns to ROLE, or NIL."
   (getf (backend-descriptor-registers (find-backend backend)) role))
 
-;; #368: a word is BACKEND-WORD-CELLS cells, the same split #167's
+;; A word is BACKEND-WORD-CELLS cells, the same split that a
 ;; (stack-pointer ... :width n) gives a stack slot -- the source language
 ;; (compiler.lisp) lays globals, DEFARRAY/DEFSTRING data and AREF/ASET
 ;; strides out by it.
 (defun backend-cell-bytes (backend)
   "(VALUES BYTES ENDIAN): whole 8-bit characters a cell of BACKEND's machine
 holds (at least 1), and the machine's memory endianness, which orders them
-within a cell (#379)."
+within a cell."
   (let* ((backend (find-backend backend))
          (descriptor (find-machine-descriptor (backend-descriptor-machine backend))))
     (values (max 1 (floor (%descriptor-cell-width descriptor) 8))
@@ -129,7 +129,7 @@ within a cell (#379)."
 
 (defun backend-word-cells (backend)
   "Cells a word spans on BACKEND's machine: its declared stack pointer's slot
-width (#167), which defaults to the memory's own cell width, divided by that
+width, which defaults to the memory's own cell width, divided by that
 cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
   (let* ((backend (find-backend backend))
          (machine-descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
@@ -301,11 +301,11 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
   "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 
 (defparameter +backend-comparison-ops+ '("EQ" "NE" "LT" "GT" "LE" "GE")
-  "The comparisons; each also has a BRANCH- form (#375).")
+  "The comparisons; each also has a BRANCH- form.")
 
 (defparameter +backend-binary-ops+
   (append '("ADD" "SUB" "MUL" "DIV" "MOD" "AND" "OR" "XOR" "SHL" "SHR") +backend-comparison-ops+)
-  "The arithmetic and comparison operations; each may have -IMM and -SLOT variants (#374).")
+  "The arithmetic and comparison operations; each may have -IMM and -SLOT variants.")
 
 (defparameter +backend-language-op-arities+
   (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
@@ -339,7 +339,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
 
 (defun %parse-param-specs (key params)
   "(VALUES NAMES KINDS) for PARAMS: each item a name, or (NAME KIND) restricting
-NAME to an operand of the declared kind KIND (#365) -- several clauses for one
+NAME to an operand of the declared kind KIND -- several clauses for one
 operation, tried in order, let a backend template a call target or other
 operand differently by kind, such as a register versus a label."
   (let (names kinds)
@@ -589,7 +589,7 @@ not another register the convention uses."
 (defun %merge-entries (parent child)
   "PARENT's entries with CHILD's in place of those of the same name, then CHILD's new
 ones. Several PARENT or CHILD entries may share a name -- an OPS clause's operand-kind
-clauses (#365) -- and CHILD's whole group for a name replaces PARENT's whole group, at
+clauses -- and CHILD's whole group for a name replaces PARENT's whole group, at
 its first position."
   (let ((child-keys (remove-duplicates (mapcar #'%entry-key child) :test #'equal))
         (result '()) (done '()))
@@ -788,7 +788,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
        ; a param is a name, or (NAME KIND) restricting it to an operand of that
-       ; declared kind (#365); NAME may repeat across several clauses of one
+       ; declared kind; NAME may repeat across several clauses of one
        ; operation, tried in the order written, the first whose arguments
        ; match its params winning
      (branches mnemonic...)

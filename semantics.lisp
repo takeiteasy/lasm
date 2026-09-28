@@ -19,7 +19,7 @@
 (defun (setf %semantics-mref) (value machine name address)
   (setf (mref machine name address) value))
 
-;; #307: inside semantics, SREF, REGREF, FLAG and the stack functions are local
+;; Inside semantics, SREF, REGREF, FLAG and the stack functions are local
 ;; macros (WITH-MACHINE-BINDINGS) that expand to the %PLAIN-* accessors, or to
 ;; the %CHECKED-* ones when the named element may be gated. The macros' own
 ;; expansions call %PLAIN-* so they are never captured again.
@@ -53,7 +53,7 @@ with KIND defaulting to the element's own."
 
 ;; TODO: the element is looked up on every call; a quoted, gated name could
 ;; resolve its level at macroexpansion time (#307 follow-up if it ever shows in a profile).
-;; #314: VALUE after NAME's field gates; OLD is called only when it has any.
+;; VALUE after NAME's field gates; OLD is called only when it has any.
 (defun %gate-fields (machine name value old)
   (let ((fields (storage-element-field-privileges (descriptor-element (machine-descriptor machine) name))))
     (if fields
@@ -117,7 +117,7 @@ with no gate, otherwise CHECKED, which looks the gate up at run time."
 
 (defun %gate-stack-form (machine-var gates target accesses form)
   "FORM, preceded by a privilege check per access in ACCESSES (:READ, :WRITE)
-when TARGET (a stack or a stack-pointer register) is gated (#300)."
+when TARGET (a stack or a stack-pointer register) is gated."
   (destructuring-bind (&optional read write &rest fields) (cdr (assoc target gates))
     (declare (ignore fields))
     (let ((checks (loop for access in accesses
@@ -166,7 +166,7 @@ a machine instance the emulator already owns rather than a fresh one.
 PUSH/POP's STACK-NAME argument is optional: when omitted, it resolves to the
 machine's sole :stack element, mirroring emulator.lisp's %RESOLVE-MEMORY
 convention for the sole :memory element; only when the machine declares no
-:stack element does the sole (stack-pointer ...)-bound register (#166) become
+:stack element does the sole (stack-pointer ...)-bound register become
 the default instead. A machine declaring more than one candidate of whichever
 kind applies (or none at all) signals an error at macroexpansion time, since
 the descriptor is already known here. STACK-NAME, given or defaulted, may
@@ -178,14 +178,14 @@ STACK-POINTER, STACK-DEPTH, and STACK-REF operate on fixed :stack elements.
 Their stack name defaults only when exactly one fixed stack is declared;
 STACK-REF takes the offset before an optional bare stack name.
 
-Storage elements with :count > 1 (banked registers, #13) are bound as a
+Storage elements with :count > 1 (banked registers) are bound as a
 local macro instead of a symbol-macro -- symbol-macrolet can't express an
 indexed form like (V 3) with a run-time index. So (V idx) reads bank IDX of
 V (expanding to REGREF), and (set! (V idx) val) writes it (through SET!'s
 plain SETF expansion to (SETF (REGREF ...) VAL)). See the storage-element
 :count docstring in storage.lisp.
 
-A banked register's own :names (#72) additionally bind one ordinary
+A banked register's own :names additionally bind one ordinary
 symbol-macro per alias, each with its bank index baked in -- e.g. DCPU-16's
 I becomes (REGREF MACHINE-VAR 'REG 6), no run-time index needed, so
 (set! I val) reaches (SETF (REGREF ...) VAL) exactly like any scalar
@@ -225,7 +225,7 @@ these for a run-time-computed index."
           (:stack (cl:push (storage-element-name element) stack-names))
           (:memory (cl:push (storage-element-name element) memory-names))))
       (setf stack-names (nreverse stack-names))
-      ;; #166: PUSH/POP also accept a register bound by a (stack-pointer ...)
+      ;; PUSH/POP also accept a register bound by a (stack-pointer ...)
       ;; clause -- POINTER-ALIST is (register memory grows), embedded as
       ;; literal data below (ASSOC) so each call-site's macroexpansion can
       ;; tell a :stack target from a :pointer one without a runtime lookup.
@@ -268,7 +268,7 @@ declared (~{~S~^ ~}) -- name one explicitly" machine-name stack-names))
                             ((and (null stack-names) (> (length pointer-names) 1))
                              (format nil "PUSH/POP on machine ~S: more than one stack-pointer ~
 declared (~{~S~^ ~}) -- name one explicitly" machine-name pointer-names))))
-             ;; #109: everything INTERRUPT-RETURN needs -- which places to
+             ;; Everything INTERRUPT-RETURN needs -- which places to
              ;; pop, in what order, off which stack -- is already resolved
              ;; on the descriptor (%FINISH-INTERRUPT-MODEL, machine.lisp),
              ;; unlike PUSH/POP's SOLE-STACK, which is only a *default*
@@ -279,8 +279,8 @@ declared (~{~S~^ ~}) -- name one explicitly" machine-name pointer-names))))
              (interrupt-error (unless interrupts
                                  (format nil "INTERRUPT-RETURN on machine ~S: no (interrupts ...) ~
 clause declared" machine-name)))
-             ;; #166: a :POINTER interrupt stack pops through SP-POP, each place at
-             ;; its own width (#167); the memory and direction come from the
+             ;; A :POINTER interrupt stack pops through SP-POP, each place at
+             ;; its own width; the memory and direction come from the
              ;; bound register's (stack-pointer ...) clause at run time.
              (interrupt-pop-form
                (when interrupts
@@ -291,9 +291,9 @@ clause declared" machine-name)))
                      (lambda (place)
                        (declare (ignore place))
                        `(%plain-stack-pop ,machine-var ',(interrupt-descriptor-stack-name interrupts))))))
-             ;; #301: the privilege level is restored last, so the other pops
+             ;; The privilege level is restored last, so the other pops
              ;; still run at the handler's level, and every restore goes
-             ;; through %INTERRUPT-PLACE so it bypasses register gates (#300).
+             ;; through %INTERRUPT-PLACE so it bypasses register gates.
              (interrupt-form
                (when interrupts
                  (let* ((privilege (machine-descriptor-privilege descriptor))
@@ -389,15 +389,15 @@ clause declared" machine-name)))
                                            assignments)))
                       (trap (tag &optional data)
                         `(error 'lasm-trap :tag ,tag :data ,data))
-                      ;; #110: unlike TRAP, IDLE does not unwind -- it just
+                      ;; Unlike TRAP, IDLE does not unwind -- it just
                       ;; sets a flag STEP-MACHINE (emulator.lisp) checks
                       ;; next step, so the rest of this semantics body (and
                       ;; the instruction's own cycle cost) still runs to
                       ;; completion.
                       (idle ()
                         `(setf (machine-idle ,',machine-var) t))
-                      ;; #159: counts and ticks devices now, so a trapping
-                      ;; step's devices stay in lockstep with MACHINE-CYCLES (#178).
+                      ;; Counts and ticks devices now, so a trapping
+                      ;; step's devices stay in lockstep with MACHINE-CYCLES.
                       (elapse (n)
                         `(%elapse ,',machine-var ,n))
                       (interrupt-return ()

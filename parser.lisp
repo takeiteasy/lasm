@@ -9,7 +9,7 @@
 ;;;; -- no symbol table and no expression evaluation here; those belong to
 ;;;; instruction.lisp (EVAL-EXPR) and assembler.lisp (label resolution), and
 ;;;; addressing-mode matching / operand encoding belong to instruction.lisp.
-;;;; The location-counter symbol "*" (EXPR-LOCATION, #15) is likewise left
+;;;; The location-counter symbol "*" (EXPR-LOCATION) is likewise left
 ;;;; unresolved here -- EVAL-EXPR folds it against the assembler's current
 ;;;; address.
 ;;;;
@@ -21,7 +21,7 @@
 ;;;;   operands  := operand ("," operand)*
 ;;;; Blank and comment-only lines produce no statement.
 ;;;;
-;;;; A mnemonic's trailing "separator identifier" piece (#40, e.g. the ".w"
+;;;; A mnemonic's trailing "separator identifier" piece (e.g. the ".w"
 ;;;; in "lda.w") is a forced addressing-mode suffix, not part of the
 ;;;; mnemonic proper -- %SPLIT-MNEMONIC-SUFFIX below splits it off (using
 ;;;; the active lexer's MODE-SUFFIX-SEPARATOR, lexer.lisp) into STATEMENT's
@@ -30,11 +30,11 @@
 ;;;; the "identifier = expr-tokens" sugar and label/symbol-name positions
 ;;;; are untouched.
 ;;;;
-;;;; The second line form ("name = value", #35) is pure surface sugar for
+;;;; The second line form ("name = value") is pure surface sugar for
 ;;;; ".equ name, value" -- %PARSE-LINE below recognizes an identifier
 ;;;; followed by "=" and rewrites it to a statement whose mnemonic is
 ;;;; +ASSIGNMENT-DIRECTIVE-NAME+ with two operands (the name, then whatever
-;;;; follows "="), so the assembler (assembler.lisp, #35) has exactly one
+;;;; follows "="), so the assembler (assembler.lisp) has exactly one
 ;;;; .EQU code path regardless of which spelling a program uses.
 
 (in-package #:lasm)
@@ -44,7 +44,7 @@
 (defstruct statement
   label           ; string, or nil
   label-localp    ; T if LABEL starts with the lexer's local-label prefix --
-                   ; the assembler (assembler.lisp, #16) scopes a local label
+                   ; the assembler (assembler.lisp) scopes a local label
                    ; definition to the nearest preceding non-local one.
   mnemonic        ; string, or nil (label-only line)
   operands        ; list of OPERAND, split on top-level commas -- a general
@@ -54,7 +54,7 @@
                    ; own literal commas would be unmatchable if this split
                    ; were applied first, so the assembler doesn't read this
                    ; field to match an addressing mode (below). A directive
-                   ; statement (directive.lisp, #14) reads this field instead
+                   ; statement (directive.lisp) reads this field instead
                    ; -- e.g. .byte 1, 2, 3's three comma-separated operands.
   (operand-tokens #() :type simple-vector)  ; every token after the mnemonic,
                    ; commas included -- addressing-mode matching (mode.lisp)
@@ -64,7 +64,7 @@
                    ; mnemonic or no operand tokens
   mode-suffix     ; string, or nil -- a gas-style forced addressing-mode
                    ; suffix split off the mnemonic by %SPLIT-MNEMONIC-SUFFIX
-                   ; below (e.g. "w" from "lda.w", #40), naming the mode
+                   ; below (e.g. "w" from "lda.w"), naming the mode
                    ; (mode.lisp's DEFMODE :SUFFIX) the assembler must use for
                    ; this statement's operand regardless of what it folds
                    ; to -- see assembler.lisp's %CHOOSE-VARIANT. NIL when
@@ -94,12 +94,11 @@
                                              ; (lexer.lisp's TOKEN-LOCALP) --
                                              ; scoping the reference to its
                                              ; enclosing global label is the
-                                             ; assembler's job (assembler.lisp,
-                                             ; #16).
+                                             ; assembler's job (assembler.lisp).
 (defstruct expr-location)                   ; the location-counter symbol "*"
                                              ; in operand position -- folds to
                                              ; the current statement's address
-                                             ; (#15). No slots; it IS the
+                                             ;. No slots; it IS the
                                              ; value, resolved by EVAL-EXPR's
                                              ; :PC argument (instruction.lisp).
 (defstruct expr-unary op operand)           ; OP one of :neg :pos :lognot :not :lo :hi
@@ -183,7 +182,7 @@
                             (and close (token-text close))))
            (values (make-expr-unary :op (token-value tok) :operand inner) (1+ next-i)))))
       ((eq (%punct-value tok) :star)
-       ;; The location-counter symbol (#15): "*" in operand/primary position
+       ;; The location-counter symbol: "*" in operand/primary position
        ;; is the current address, not multiplication -- precedence climbing
        ;; only reaches %PARSE-PRIMARY where an operand is expected, so this
        ;; never shadows "*" as the binary multiply operator once a left
@@ -229,7 +228,7 @@ malformed input."
 ;;; Statement grammar
 
 (defparameter +assignment-directive-name+ ".equ"
-  "The directive mnemonic %PARSE-LINE rewrites \"name = value\" (#35) to --
+  "The directive mnemonic %PARSE-LINE rewrites \"name = value\" to --
 kept as its own name (rather than a literal string at the call site) so the
 one place that couples the \"=\" sugar to the .EQU directive is visible from
 its name. Matched case-insensitively by FIND-DIRECTIVE-DESCRIPTOR
@@ -239,7 +238,7 @@ case a program's own \".equ\" spelling uses.")
 (defun %split-operands (tokens)
   "Split a list of TOKENS on top-level commas (commas nested inside
 parentheses or brackets do not split) into a list of token-lists, one per
-operand. Bracket depth (#103) shares DEPTH with paren depth -- a mode
+operand. Bracket depth shares DEPTH with paren depth -- a mode
 pattern's own literal \"[\"/\"]\" (e.g. an indirect \"[\" expr \"]\" hole) is
 just as entitled to hide a comma as a literal \"(\"/\")\" already is."
   (let (groups current (depth 0))
@@ -256,7 +255,7 @@ just as entitled to hide a comma as a literal \"(\"/\")\" already is."
 
 (defun %split-mnemonic-suffix (mnemonic-text separator)
   "Split MNEMONIC-TEXT on the last occurrence of SEPARATOR (a non-empty
-string, or NIL to disable mode-suffix syntax entirely, #40), returning
+string, or NIL to disable mode-suffix syntax entirely), returning
 (VALUES base suffix) -- SUFFIX is NIL and BASE is MNEMONIC-TEXT unchanged
 when SEPARATOR is NIL, doesn't occur, or occurs only at position 0 (an
 empty base is never a suffix split -- there is no bare mnemonic to its
@@ -306,7 +305,7 @@ from START on, with one :HOLE-PREFIX token whose value is the identifier."
     (setf tokens (%collapse-hole-prefixes tokens pos hole-prefix-separator)
           len (length tokens))
     (cond
-      ;; "name = value" (#35): sugar for ".equ name, value" -- checked before
+      ;; "name = value": sugar for ".equ name, value" -- checked before
       ;; the ordinary mnemonic case below, since an identifier followed by
       ;; "=" would otherwise be read as a bare mnemonic with a stray "="
       ;; operand token.
@@ -330,7 +329,7 @@ from START on, with one :HOLE-PREFIX token whose value is the identifier."
            (setf operands
                  (mapcar (lambda (group)
                            (when (null group)
-                             ;; #74: a stray comma (e.g. "lda 1,,2") leaves no
+                             ;; A stray comma (e.g. "lda 1,,2") leaves no
                              ;; token of its own to point at -- the mnemonic
                              ;; token is the closest anchor this line has.
                              (%parse-error mnemonic-tok

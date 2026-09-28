@@ -18,8 +18,8 @@ any program LASM realistically assembles, so this needn't be smarter."
 
 (defun %offset-line-column (text offset)
   "1-based (VALUES LINE COLUMN) of the character OFFSET in TEXT -- used by a
-reader that records a form's position as an offset (compiler.lisp, items.lisp,
-#362, #372) rather than tracking line and column as it goes, as the lexer does."
+reader that records a form's position as an offset (compiler.lisp, items.lisp)
+rather than tracking line and column as it goes, as the lexer does."
   (let ((line 1) (column 1))
     (dotimes (i (min offset (length text)))
       (if (char= (char text i) #\Newline)
@@ -83,7 +83,7 @@ a line, only the message appears. Without a column, the caret is omitted."
 
 ;; Named LASM-SYNTAX-ERROR rather than PARSE-ERROR because CL:PARSE-ERROR is
 ;; a standard condition type and this package :USEs #:CL. Moved here from
-;; storage.lisp (#74) so the condition and its renderer live together.
+;; storage.lisp so the condition and its renderer live together.
 ;;; Definition errors: a malformed DEFMACHINE/DEFINSTRUCTION/DEFMODE/DEFLEXER/
 ;;; DEFDIRECTIVE form, as opposed to a program's own source (LASM-SYNTAX-ERROR).
 
@@ -259,7 +259,7 @@ through untouched."
 (define-condition parse-failure (lasm-syntax-error) ()
   (:documentation "Signalled by PARSE/PARSE-EXPRESSION on a malformed token stream."))
 
-;; #74: a warning, not an error -- assembly continues once WARN returns
+;; A warning, not an error -- assembly continues once WARN returns
 ;; (SBCL's default handler prints and resumes). Signalled by ASSEMBLER.LISP's
 ;; %CHOOSE-VARIANT when two or more syntax-matching candidates of an
 ;; instruction have the *same* total operand width, so width-based
@@ -344,13 +344,13 @@ condition's slot as it was."
              ,@body)
            (progn ,@body)))))
 
-;;; Strict operand range (#74, absorbing #28 and #43)
+;;; Strict operand range
 
 (defvar *strict-operand-range* nil
   "When bound to T, every instruction operand is range-checked at encode
 time against its addressing mode's own width -- an out-of-range value
 signals ASSEMBLY-ERROR instead of being masked by WRAP-VALUE. Default NIL
-preserves #28/#43's original wrap-on-overflow behavior (a fantasy CPU may
+preserves the original wrap-on-overflow behavior (a fantasy CPU may
 define wraparound as intended). A single addressing mode can opt in without
 this global switch via DEFMODE's :STRICT T (mode.lisp) -- see %ENCODE's
 :INSTRUCTION branch (assembler.lisp) for where both are checked. This global

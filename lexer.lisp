@@ -27,7 +27,7 @@
   line
   column
   localp) ; :identifier only -- T if TEXT starts with the lexer descriptor's
-          ; LOCAL-LABEL-PREFIX (#16); NIL for every other token type
+          ; LOCAL-LABEL-PREFIX; NIL for every other token type
 
 ;;; Descriptor structures
 
@@ -58,7 +58,7 @@
                         ; -- separates a suffix name from the operand it
                         ; forces, e.g. the ":" in "#w:5". Must lex as its
                         ; own token, never inside an identifier.
-  mode-suffix-separator); string, or nil to disable mode-suffix syntax (#40)
+  mode-suffix-separator); string, or nil to disable mode-suffix syntax
                         ; -- separates a mnemonic from a forced addressing-
                         ; mode suffix, e.g. the "." in "lda.w" (mode.lisp's
                         ; DEFMODE :SUFFIX option). Every character of it must
@@ -116,12 +116,12 @@ identifier: __LASM_N, or LASMN when its identifiers exclude _."
 ;; their single-char prefixes, so "<<"/"<=" win maximal munch over "<").
 ;; "#" has no meaning to the lexer or expression parser -- it is here so
 ;; addressing-mode literal patterns (LASM-plan.md sec. 3.4's immediate mode,
-;; "#" expr) have a token to match against once #9 implements DEFMODE. "="
+;; "#" expr) have a token to match against once DEFMODE is implemented. "="
 ;; likewise has no meaning to the expression parser (it's absent from both
 ;; *BINARY-PRECEDENCE* and *UNARY-OPS*, parser.lisp) -- it exists only so
-;; %PARSE-LINE (parser.lisp, #35) can recognize "name = value" as sugar for
+;; %PARSE-LINE (parser.lisp) can recognize "name = value" as sugar for
 ;; ".equ name, value".
-;; "[" / "]" (#103) have no meaning to the lexer or expression parser either,
+;; "[" / "]" have no meaning to the lexer or expression parser either,
 ;; same as "#" above -- they exist so an addressing-mode pattern (defmode,
 ;; mode.lisp's ONE-OF alternatives) has tokens to match e.g. an indirect
 ;; "[" expr "]" operand form against.
@@ -249,7 +249,7 @@ token. Omitted disables them all.
 HOLE-PREFIX-SEPARATOR separates a suffix name from the operand hole it
 forces, e.g. the \":\" in \"#w:5\". It must be the label-suffix, \"#\" or \"=\".
 
-MODE-SUFFIX-SEPARATOR (#40) separates a mnemonic from a forced addressing-
+MODE-SUFFIX-SEPARATOR separates a mnemonic from a forced addressing-
 mode suffix, e.g. the \".\" in \"lda.w\" (mode.lisp's DEFMODE :SUFFIX
 option) -- every character of it must already appear in IDENT-CHARS's
 extra-chars string, or building this descriptor signals an error.
@@ -489,7 +489,7 @@ FIND-LEXER-DESCRIPTOR and usable as the :LEXER argument to TOKENIZE/PARSE."
 (defun tokenize (string &key (lexer 'default))
   "Tokenize STRING with the syntax registered under LEXER (default 'DEFAULT).
 Returns a SIMPLE-VECTOR of TOKEN structs, terminated by a single :EOF token.
-Signals LEX-ERROR on malformed input -- carrying STRING as its SOURCE (#74,
+Signals LEX-ERROR on malformed input -- carrying STRING as its SOURCE (see
 WITH-SOURCE-CONTEXT) so DIAGNOSTIC-TEXT can render the offending line."
   (with-source-context string
    (%tokenize-1 string lexer)))

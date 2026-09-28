@@ -19,7 +19,7 @@
 ;;;; optional per-machine table: (DEFMODE (NAME (:MACHINE M)) ...) registers a
 ;;;; mode only M and its descendants see, shadowing a global of the same name.
 ;;;; Names resolve through *MODE-SCOPE*, the machine being defined, assembled
-;;;; or decoded (#29).
+;;;; or decoded.
 
 (in-package #:lasm)
 
@@ -34,22 +34,22 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defstruct mode-descriptor
     name       ; symbol, upcased on lookup like instruction mnemonics
-    machine    ; machine name for a machine-local mode (#29), or nil for a global one
+    machine    ; machine name for a machine-local mode, or nil for a global one
     pattern    ; list of (:literal "text") | (:expr), in match order
     width      ; default operand byte width, or nil (caller/machine decides)
-    relativep  ; T if this mode's operand is a PC-relative offset (#23), not
+    relativep  ; T if this mode's operand is a PC-relative offset, not
                ; an absolute value -- the assembler computes the offset from
                ; the branch's own address at encode time (assembler.lisp).
                ; Implies SIGNEDP (below); a RELATIVE mode is always signed,
                ; since a branch offset can go either direction.
-    signedp    ; T if this mode's operand is a signed quantity (#30, split off
+    signedp    ; T if this mode's operand is a signed quantity (split off
                ; RELATIVE): the decoder sign-extends the fetched operand
                ; (decoder.lisp) before handing it to semantics, and the
                ; assembler's mode selector range-checks candidate values
                ; against the signed range rather than the unsigned one
                ; (assembler.lisp's %CHOOSE-VARIANT).
     suffix     ; string, or nil -- a gas-style mnemonic suffix (e.g. "w" for
-               ; ABSOLUTE, "z" for ZERO-PAGE, #40) a program can append to a
+               ; ABSOLUTE, "z" for ZERO-PAGE) a program can append to a
                ; mnemonic (lda.w target) to force this mode regardless of
                ; what the operand's value folds to, bypassing relaxation's
                ; floor and value filters entirely (assembler.lisp's
@@ -59,12 +59,12 @@
                ; LASM's built-ins give one only to ZERO-PAGE/ABSOLUTE.
     strictp    ; T if an operand encoded through this mode that doesn't fit
                ; its own width is an ASSEMBLY-ERROR rather than silently
-               ; wrapping (#74, absorbing #28/#43) -- checked at encode time
+               ; wrapping (absorbing) -- checked at encode time
                ; by %ENCODE's :INSTRUCTION branch (assembler.lisp), alongside
                ; the *STRICT-OPERAND-RANGE* global switch (diagnostic.lisp)
                ; that makes every mode strict, including a mode-less
-               ; instruction's bare operand. Default NIL preserves #28/#43's
-               ; original wrap-on-overflow behavior.
+               ; instruction's bare operand. Default NIL wraps on
+               ; overflow.
     shape-cache)  ; (GENERATION SCOPE VARYING KEYED STRICTP), read through %MODE-SHAPE
   )
 
@@ -81,7 +81,7 @@
   ;; that reference a redefined one.
   (defvar *mode-generation* 0)
   (defvar *shape-in-progress* nil)
-  ;; Machine name -> (mode name -> descriptor) for machine-local modes (#29).
+  ;; Machine name -> (mode name -> descriptor) for machine-local modes.
   (defvar *machine-modes* (make-hash-table :test 'eq))
   (defvar *mode-scope* nil
     "The machine whose local modes shadow the global ones, or NIL for globals only."))
@@ -133,7 +133,7 @@ a global one. Signals an error if none is registered."
 ;; guaranteed callable at load time) would be too late.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun find-mode-by-suffix (suffix &optional (scope *mode-scope*))
-    "Look up the MODE-DESCRIPTOR visible from SCOPE whose :SUFFIX (a string, #40)
+    "Look up the MODE-DESCRIPTOR visible from SCOPE whose :SUFFIX (a string)
 equals SUFFIX case-insensitively, or NIL if none declares one. A linear scan
 rather than a second suffix -> descriptor table -- there are only a handful
 of modes registered at once, and a parallel table would need its own
@@ -172,13 +172,13 @@ check would spuriously reject a mode reclaiming its own suffix."
 ;;;
 ;;; %MODE-HOLE-COUNT and %PATTERN-HOLE-COUNT (below) also live in this
 ;;; EVAL-WHEN, not just at top level like a plain accessor would -- ONE-OF
-;;; validation (%CHECK-ONE-OF-ELEMENTS!, #103) calls %MODE-HOLE-COUNT at
+;;; validation (%CHECK-ONE-OF-ELEMENTS!) calls %MODE-HOLE-COUNT at
 ;;; DEFMODE's own :COMPILE-TOPLEVEL time, the same reason everything else
 ;;; here needs one.
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun %one-of-element-p (el)
-    "T if EL is a raw DEFMODE pattern element spelled (ONE-OF mode...) (#103)
+    "T if EL is a raw DEFMODE pattern element spelled (ONE-OF mode...)
 -- a list headed by a symbol named ONE-OF, matched case-insensitively like
 EXPR below."
     (and (consp el) (symbolp (first el)) (string-equal (symbol-name (first el)) "ONE-OF")))
@@ -196,7 +196,7 @@ EXPR below."
 
   (defun %parse-mode-pattern (elements)
     "ELEMENTS is DEFMODE's pattern spine: a mix of string literals, the
-symbol EXPR, and (ONE-OF mode...) alternations (#103). Returns a list of
+symbol EXPR, and (ONE-OF mode...) alternations. Returns a list of
 (:literal string) | (:expr) | (:one-of mode-name...) pattern elements, plus
 any trailing keyword options untouched by this function (the caller splits
 those off first)."
@@ -385,9 +385,9 @@ that differ in hole count or in a per-hole attribute."
 
   (defun %pattern-one-of-min-hole-count (alt-names &optional seen)
     "The minimum MODE-HOLE-COUNT across ALT-NAMES (a :ONE-OF element's own
-alternative mode-name symbols) -- since #120, an alternative may contribute
+alternative mode-name symbols) -- an alternative may contribute
 more holes than its siblings, so a :ONE-OF element's own contribution to a
-hole count is its *shortest* alternative, not (as before #120) simply its
+hole count is its *shortest* alternative, not (as before) simply its
 first one; %CHECK-ONE-OF-ELEMENTS! no longer requires every alternative to
 agree."
     (reduce #'min (mapcar (lambda (n) (%mode-hole-count (find-mode-descriptor n) seen)) alt-names)))
@@ -395,7 +395,7 @@ agree."
   (defun %pattern-hole-count (pattern &optional seen)
     "Total :EXPR holes in PATTERN (a MODE-DESCRIPTOR's own pattern list, or a
 DEFMODE-in-progress's) at its *minimum* shape -- a :ONE-OF element
-contributes its shortest alternative's own hole count (#120,
+contributes its shortest alternative's own hole count (see
 %PATTERN-ONE-OF-MIN-HOLE-COUNT); MODE-HOLE-TUPLES (below) is what a caller
 wanting every alternative shape, not just the minimum, should use instead.
 SEEN is the list of mode names already on this recursion path -- signals an
@@ -422,7 +422,7 @@ later, unrelated call."
   (defun %pattern-hole-alternatives (pattern &optional seen)
     "One entry per hole in PATTERN, in hole order -- NIL for a plain :EXPR
 hole, or the list of :ONE-OF alternative mode-name symbols governing a
-:ONE-OF-produced hole (#104). A multi-hole :ONE-OF element repeats its own
+:ONE-OF-produced hole. A multi-hole :ONE-OF element repeats its own
 alt-names list once per hole it contributes -- the whole element's choice of
 alternative governs each of its holes alike, mirroring the hole-alignment
 %MATCH-MODE-ELEMENTS' CHOICES return value now uses. A nested :ONE-OF (inside
@@ -601,7 +601,7 @@ alternatives instead"
 
   (defun %mode-hole-count-range (mode &optional seen)
     "(VALUES MIN MAX) hole count across every one of MODE's alternative-tuples
-(#120, %MODE-HOLE-TUPLES) -- MIN equals %MODE-HOLE-COUNT; both equal it for
+(%MODE-HOLE-TUPLES) -- MIN equals %MODE-HOLE-COUNT; both equal it for
 a mode with no varying :ONE-OF element."
     (let ((counts (mapcar (lambda (tuple) (length (mode-hole-tuple-hole-alternatives tuple)))
                            (%mode-hole-tuples mode seen))))
@@ -786,7 +786,7 @@ position I (bounded by END). Returns (VALUES asts choices next-i okp
 failure-token message selections score): on success ASTS is the list of EXPR-* ASTs parsed
 from each :EXPR hole and CHOICES the parallel, HOLE-ALIGNED list -- one entry
 per hole in ASTS, NIL for a hole not governed by any :ONE-OF, or the chosen
-MODE-DESCRIPTOR for a hole that came from one (#104) -- both in pattern
+MODE-DESCRIPTOR for a hole that came from one -- both in pattern
 order, and NEXT-I the token position just past the match; on failure OKP is
 NIL and FAILURE-TOKEN/MESSAGE describe why.
 
@@ -808,7 +808,7 @@ descriptor followed by one entry for each of its keyed ONE-OFs
 
 A hand-written DEFMODE cycle -- redefining a mode that some :ONE-OF already
 references so the reference loops back to it -- is guarded against
-elsewhere: %MODE-HOLE-COUNT (#115) signals rather than recursing forever
+elsewhere: %MODE-HOLE-COUNT signals rather than recursing forever
 when a mode name reappears on its own recursion path. A plain file reload
 can't create a cycle, since it replays the same patterns in the same order.
 
@@ -994,7 +994,7 @@ OKP is T; on failure OKP is NIL and FAILURE-TOKEN/MESSAGE describe why --
 FAILURE-TOKEN is NIL only when the underlying PARSE-FAILURE (an :EXPR hole's
 own malformed expression) itself carried no token to point at (e.g. an empty
 expression at end of input), never as a way of discarding a position that
-was available. CHOICES (#103, hole-aligned per #104) is the list of chosen
+was available. CHOICES (hole-aligned per) is the list of chosen
 MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
 :ONE-OF -- see %MATCH-MODE-ELEMENTS -- a trailing value existing callers
 that only bind the first four are unaffected by."
@@ -1017,7 +1017,7 @@ that only bind the first four are unaffected by."
 (VALUES NIL NIL NIL) on a mismatch instead of signalling -- the assembler's
 mode candidate filter (assembler.lisp) uses this to try several modes in
 turn. MODE, like MATCH-OPERAND-MODE's, may be a MODE-DESCRIPTOR or a symbol
-naming one. CHOICES (#103, hole-aligned per #104) is the list of chosen
+naming one. CHOICES (hole-aligned per) is the list of chosen
 MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
 see %MATCH-MODE-ELEMENTS. The fifth value is the hole-aligned list of
 forcing-prefix names written before each hole (a string, or NIL). The sixth
@@ -1041,11 +1041,11 @@ STATEMENT's OPERAND-TOKENS) against addressing MODE's pattern (a
 MODE-DESCRIPTOR, or a symbol naming one): consume MODE's literal tokens in
 order and parse each :EXPR hole as an expression. Returns (VALUES first-ast
 all-asts choices) -- FIRST-AST alone is what every current single-hole mode
-needs; CHOICES (#103, hole-aligned per #104) is the list of chosen
+needs; CHOICES (hole-aligned per) is the list of chosen
 MODE-DESCRIPTORs, one per hole, NIL for a hole not governed by any :ONE-OF --
 see %MATCH-MODE-ELEMENTS. Signals PARSE-FAILURE
 if TOKENS don't match MODE or leave a trailing token unconsumed -- with the
-failing token's own line/column (#74), not just its message, even when the
+failing token's own line/column, not just its message, even when the
 failure came from a nested :EXPR hole's own PARSE-FAILURE rather than a
 literal mismatch."
   (let ((mode (if (mode-descriptor-p mode) mode (find-mode-descriptor mode))))
@@ -1059,7 +1059,7 @@ literal mismatch."
 ;;; exactly this purpose.
 
 (defmode immediate "#" expr :width 1)
-;; ZERO-PAGE/ABSOLUTE (#40): the only two built-in modes that share operand
+;; ZERO-PAGE/ABSOLUTE: the only two built-in modes that share operand
 ;; syntax (a bare expr) and so are the only pair relaxation ever has to pick
 ;; between -- each gets a suffix ("z"/"w") so a program can force one over
 ;; the other. IMMEDIATE/INDEXED-X/INDIRECT-Y/RELATIVE below are already
@@ -1069,18 +1069,18 @@ literal mismatch."
 (defmode indexed-x expr "," "X")
 (defmode indirect-y "(" expr ")" "," "Y")
 
-;; RELATIVE (#23): syntactically identical to ABSOLUTE (a bare expr), but its
+;; RELATIVE: syntactically identical to ABSOLUTE (a bare expr), but its
 ;; operand is a signed offset from the address of the *next* instruction, not
 ;; an absolute target -- computed by the assembler once layout has placed
 ;; both the branch and its target (assembler.lisp's %ENCODE). :RELATIVE T
-;; implies :SIGNED T (#30): the emulator sign-extends it on fetch
+;; implies :SIGNED T: the emulator sign-extends it on fetch
 ;; (emulator.lisp's STEP-MACHINE) so semantics can write (set! pc (+ pc
 ;; operand)) with no width of its own to worry about. :WIDTH 1 is only this
 ;; mode's default -- a machine with wider branches overrides it per
 ;; instruction via the existing (operand :width n).
 (defmode relative expr :width 1 :relative t)
 
-;; STACK-RELATIVE (#50): syntactically "n,S" -- an expr hole followed by the
+;; STACK-RELATIVE: syntactically "n,S" -- an expr hole followed by the
 ;; literal ",S", 6502/65816-flavoured like INDEXED-X/INDIRECT-Y above. Like
 ;; every mode, this is pure operand *syntax*: the parsed value is just an
 ;; offset, and it says nothing about which stack it indexes into or what that

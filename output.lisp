@@ -1,8 +1,8 @@
 ;;;; output.lisp
-;;;; #79 (M7): serializes an ASSEMBLY's cells to a standalone file -- raw
+;;;; Serializes an ASSEMBLY's cells to a standalone file -- raw
 ;;;; bytes or Intel HEX -- for tools outside the Lisp image. A cell wider than
-;;;; 8 bits splits into bytes ordered by the machine's :endian (#66), the same
-;;;; convention %ENCODE-VALUE-CELLS and %FETCH-CELLS use. #174: a width that is
+;;;; 8 bits splits into bytes ordered by the machine's :endian, the same
+;;;; convention %ENCODE-VALUE-CELLS and %FETCH-CELLS use. A width that is
 ;;;; not a multiple of 8 is written either padded to whole bytes per cell
 ;;;; (:PAD) or as one continuous bitstream (:BITS).
 

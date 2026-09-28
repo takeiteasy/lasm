@@ -17,12 +17,12 @@
 ;;;; reports as a stop reason. A generalized interrupt/exception model
 ;;;; replacing this is M6.
 ;;;;
-;;;; #21: the actual fetch/decode step (byte-encoded and word-encoded alike)
+;;;; The actual fetch/decode step (byte-encoded and word-encoded alike)
 ;;;; now lives in decoder.lisp's DECODE-INSTRUCTION-AT, shared with the
 ;;;; disassembler -- STEP-MACHINE below only resolves PC/MEMORY, decodes,
 ;;;; advances PC, and executes.
 ;;;;
-;;;; #75: cycle-cost model, clock speed, and cycle-accurate execution.
+;;;; cycle-cost model, clock speed, and cycle-accurate execution.
 ;;;; STEP-MACHINE accumulates each executed instruction's (cycles n) cost
 ;;;; (instruction.lisp) -- defaulting to 1 when undeclared -- onto MACHINE-
 ;;;; CYCLES (storage.lisp) regardless of whether the machine declares a
@@ -34,7 +34,7 @@
 ;;;; overshot by at most one instruction's own cost (its cost isn't known
 ;;;; until the instruction has already been decoded and run).
 ;;;;
-;;;; #108: STEP-MACHINE also ticks every live device on the machine's bus
+;;;; STEP-MACHINE also ticks every live device on the machine's bus
 ;;;; (TICK-DEVICES, device.lisp) with each step's own cost, once per step,
 ;;;; regardless of which of the five entry points into STEP-MACHINE ran it
 ;;;; (RUN/RUN-FOR-CYCLES/RUN-FOR-DURATION via %RUN-LOOP, or the debugger's
@@ -42,7 +42,7 @@
 
 (in-package #:lasm)
 
-;;; Idle/sleep (#110)
+;;; Idle/sleep
 
 (defun machine-idle-p (machine)
   "T when MACHINE is currently idle (the IDLE semantics primitive,
@@ -52,7 +52,7 @@ semantics.lisp, has run and no interrupt has been delivered since)."
 (defun wake-machine (machine)
   "Clear MACHINE's idle state directly, without an interrupt. For a host
 driving a machine that declares no (interrupts ...) clause -- IDLE's own
-macroexpansion never signals on such a machine (#110), so this is the only
+macroexpansion never signals on such a machine, so this is the only
 way such a machine wakes back up."
   (setf (machine-idle machine) nil)
   machine)
@@ -77,12 +77,12 @@ to ORIGIN. MEMORY defaults per %RESOLVE-MEMORY. ORIGIN defaults to CELLS'
 own ASSEMBLY-ORIGIN when CELLS is an ASSEMBLY (so a program assembled with
 :ORIGIN #x200 always loads where its labels were computed against),
 otherwise 0. Signals if CELLS is an ASSEMBLY whose own ASSEMBLY-CELL-WIDTH
-does not match MEMORY's declared :CELL-WIDTH (#53) -- e.g. a program
+does not match MEMORY's declared :CELL-WIDTH -- e.g. a program
 assembled against a byte-addressed memory element loaded into a
 word-addressed one would otherwise place every assembled cell one address
 too far apart with no other symptom.
 
-#107: writes via %POKE, not MREF -- a ROM image is burned in here, not
+Writes via %POKE, not MREF -- a ROM image is burned in here, not
 stored by the CPU, so this ignores any :ROM region's write protection at
 ORIGIN. A :DEVICE region's :WRITE is likewise never called.
 
@@ -94,7 +94,7 @@ An ASSEMBLY loaded without BANK is retained as a LOADED-PROGRAM, newest first
 in MACHINE-PROGRAMS, so runtime conditions can name the source line; where
 images overlap the newest wins. A load drops the retained programs in that
 memory it covers wholly, and a load of raw cells the ones it overlaps. RESET
-keeps those loaded wholly into :ROM regions (#157).
+keeps those loaded wholly into :ROM regions.
 
 An ASSEMBLY that placed output in banks with .BANK also has each of those
 banks filled, without changing the mapping, when BANK is not given. Signals
@@ -194,9 +194,9 @@ loaded at ORIGIN overlap."
 ;;; Cycle cost
 
 (defun %descriptor-cycle-cost (descriptor)
-  "DESCRIPTOR's cycle cost (#75): its own (cycles n), or 1 when undeclared.
+  "DESCRIPTOR's cycle cost: its own (cycles n), or 1 when undeclared.
 The one place this default lives, so STEP-MACHINE's accumulation and the
-listing's cycles column (#180) can't disagree on it."
+listing's cycles column can't disagree on it."
   (or (instruction-descriptor-cycles descriptor) 1))
 
 ;;; Step
@@ -243,11 +243,10 @@ RESULT is the executed INSTRUCTION-DESCRIPTOR, or :DECODE-FAILURE (without
 advancing PC or executing anything, COST 0) when the byte(s) at PC do not
 decode to a registered instruction -- distinguishable from an UNKNOWN-
 INSTRUCTION signal so RUN can treat it as an ordinary stop reason rather
-than a crash. COST is the executed instruction's cycle cost (#75,
-%DESCRIPTOR-CYCLE-COST), already added to MACHINE-CYCLES by the time this
+than a crash. COST is the executed instruction's cycle cost (%DESCRIPTOR-CYCLE-COST), already added to MACHINE-CYCLES by the time this
 returns.
 
-#159, #178: an instruction's semantics may add cycles beyond its declared
+An instruction's semantics may add cycles beyond its declared
 cost with (elapse n) (semantics.lisp) -- a page-crossing or branch-taken
 penalty, say. It ticks devices for N cycles immediately, mid-body, so a
 device observes the time before the semantics' later side effects. Elapsed
@@ -264,14 +263,14 @@ after -- so an instruction whose semantics signal LASM-TRAP still counts
 its own cost, the same way RUN still counts a trapping step (its semantics
 ran to completion before signalling).
 
-#108: TICK-DEVICES (device.lisp) runs for the same reason, in the same
+TICK-DEVICES (device.lisp) runs for the same reason, in the same
 place -- before EXECUTE-INSTRUCTION, not after, so a trapping instruction's
 devices still tick instead of that step silently going missing from device
 time (EXECUTE-INSTRUCTION's LASM-TRAP unwinds straight past anything placed
 after it). Called with this step's own COST, not on the :DECODE-FAILURE
 early return below, where nothing executed and no time elapsed.
 
-#109: DELIVER-PENDING-INTERRUPT (interrupt.lisp) runs first, before PC is
+DELIVER-PENDING-INTERRUPT (interrupt.lisp) runs first, before PC is
 even read -- a pending, unmasked signal is delivered by pushing state,
 writing the vector into PC, and (if the machine's (interrupts ...) clause
 gives delivery a non-zero cost) ticking devices for it, all before this
@@ -285,21 +284,21 @@ debugger.lisp) sees delivery too, not just RUN. A machine declaring no
 (interrupts ...) clause pays nothing here -- DELIVER-PENDING-INTERRUPT is a
 single NULL test on MACHINE-DESCRIPTOR-INTERRUPTS.
 
-#110: if MACHINE is still idle after that delivery attempt (the IDLE
+If MACHINE is still idle after that delivery attempt (the IDLE
 semantics primitive, semantics.lisp, ran on some earlier step and nothing
 has woken it since), this step ticks devices and accounts one cycle but
 does not fetch, decode, execute, or advance PC -- returning (VALUES :IDLE
-COST) instead, COST being the machine's declared (idle :cycles n) (#164), 1
+COST) instead, COST being the machine's declared (idle :cycles n), 1
 by default. Checked after DELIVER-PENDING-INTERRUPT, not before, so a
 signal delivered this same step both wakes the machine and executes the
-handler's first instruction, exactly the same one-step coincidence #109's
-own delivery gets against an ordinary fetch.
+handler's first instruction, exactly the same one-step coincidence an ordinary
+interrupt delivery gets against an ordinary fetch.
 
-The fetch/decode step itself -- byte-encoded and word-encoded (#20) alike --
+The fetch/decode step itself -- byte-encoded and word-encoded alike --
 is shared with the disassembler through the decoder. This function advances
 PC by the decoded SIZE, accounts cycles, and executes.
 
-DECODE-INSTRUCTION-AT's fourth value, CHOICES (#73) -- the matched ONE-OF
+DECODE-INSTRUCTION-AT's fourth value, CHOICES -- the matched ONE-OF
 alternative per operand hole -- is forwarded straight to EXECUTE-INSTRUCTION,
 so a (semantics ...) body's CHOICE-CASE sees exactly what was actually
 decoded, not just the values."
@@ -338,7 +337,7 @@ decoded, not just the values."
     (and privilege (eq (privilege-descriptor-on-violation privilege) :interrupt))))
 
 (defun %execute-restartable (machine pc address execute)
-  "Run EXECUTE; when it raises a privilege exception (#302), point PC back at
+  "Run EXECUTE; when it raises a privilege exception, point PC back at
 the violating instruction at ADDRESS and return (VALUES :PRIVILEGE-VIOLATION
 COST), the cycles the attempt cost. The interrupt is already queued."
   (let ((start-cycles (machine-cycles machine)))
@@ -354,7 +353,7 @@ COST), the cycles the attempt cost. The interrupt is already queued."
   "Execute one instruction, returning its descriptor and cycle cost, or
 :DECODE-FAILURE and zero cost. A machine whose undefined-opcode policy is :NOP
 returns :NOP and the skipped cost instead. A privilege violation raised as an
-interrupt (#302) returns :PRIVILEGE-VIOLATION. MEMORY and PC select the
+interrupt returns :PRIVILEGE-VIOLATION. MEMORY and PC select the
 fetch location."
   (let* ((descriptor (machine-descriptor machine))
          (machine-name (machine-descriptor-name descriptor))
@@ -380,7 +379,7 @@ DURATION. Repeatedly STEP-MACHINE against MACHINE until one of:
                       step successfully executes, once its cost is already
                       on MACHINE-CYCLES) returned true. NIL/NIL is RUN's own
                       \"no extra budget\" case, where this never trips.
-  :IDLE           -- #110: see below. Only when IDLE-STOP is true.
+  :IDLE           -- see below. Only when IDLE-STOP is true.
   :MAX-STEPS      -- MAX-STEPS instructions executed without stopping
                       otherwise (a runaway-program guard, not a real timer).
 Returns (VALUES reason steps [condition]).
@@ -391,7 +390,7 @@ known until the instruction has already been decoded and run. ON-STEP, when
 given, is called with the step's cost after it executes but before STOP-P
 is checked (RUN-FOR-DURATION's :THROTTLE hook).
 
-#110: an :IDLE step from STEP-MACHINE is otherwise an ordinary executed
+An :IDLE step from STEP-MACHINE is otherwise an ordinary executed
 step -- ON-STEP/STOP-P still run, so a cycle/duration budget still
 terminates normally (as its own STOP-REASON, e.g. :MAX-CYCLES) on a
 sleeping machine, checked before and entirely unaffected by the idle-
@@ -451,11 +450,11 @@ exactly as it already can after :TRAP."
 
 (defun run (machine &key pc memory (max-steps 10000))
   "Repeatedly STEP-MACHINE against MACHINE until :TRAP, :FAULT, :DECODE-FAILURE,
-:IDLE (#110 -- the machine went idle with nothing left that could wake it,
+:IDLE (the machine went idle with nothing left that could wake it,
 see %RUN-LOOP), or :MAX-STEPS. Returns (VALUES reason steps [condition])."
   (%run-loop machine :pc pc :memory memory :max-steps max-steps :idle-stop t))
 
-;;; Cycle-accurate execution (#75)
+;;; Cycle-accurate execution
 
 (defun run-for-cycles (machine cycles &key pc memory (max-steps 10000))
   "Like RUN, but also stops with :MAX-CYCLES once MACHINE-CYCLES has

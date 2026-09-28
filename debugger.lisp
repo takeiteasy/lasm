@@ -1,5 +1,5 @@
 ;;;; debugger.lisp
-;;;; #76 (M7): a gdb-like interactive debugger built on the emulator's
+;;;; A gdb-like interactive debugger built on the emulator's
 ;;;; existing STEP-MACHINE/%RUN-LOOP primitives -- not a second execution
 ;;;; engine. A DEBUG-SESSION wraps a live MACHINE (and, optionally, the
 ;;;; ASSEMBLY that produced its program) with breakpoints, step/continue
@@ -13,8 +13,8 @@
 ;;;; command dispatcher (DEBUG-COMMAND, string in -> text out, mirroring
 ;;;; LISTING-TEXT/SYMBOLS-TEXT/DISASSEMBLY-TEXT's own :STREAM NIL -> string
 ;;;; convention) sits on top of it, and DEBUGGER-REPL is a thin read/
-;;;; dispatch/print loop over that dispatcher -- the reference front end the
-;;;; ticket asks for, not the primary interface.
+;;;; dispatch/print loop over that dispatcher -- the reference front end,
+;;;; not the primary interface.
 ;;;;
 ;;;; CONTINUE REUSES %RUN-LOOP (emulator.lisp) RATHER THAN WRITING A SECOND
 ;;;; LOOP -- it already takes a no-argument STOP-P checked after each step
@@ -81,7 +81,7 @@
 (defstruct (debug-session (:constructor %make-debug-session))
   (machine nil :type machine)
   (assemblies nil :type list)   ; ASSEMBLYs, newest first -- symbols + source context
-  (pc nil :type symbol)         ; resolved once, not re-resolved per command (#70's shape)
+  (pc nil :type symbol)         ; resolved once, not re-resolved per command (the shape)
   (memory nil :type symbol)
   (cell-width nil :type (integer 1))
   (hex-digits nil :type (integer 1))   ; digits for one MEMORY cell's value (%listing-hex-digits)
@@ -176,7 +176,7 @@ resolved through %SESSION-SYMBOL against SESSION's attached ASSEMBLY. A label de
 qualifies an integer address instead, and must agree with a label's own bank.
 Signals a plain error when SESSION has no ASSEMBLY, when the name is
 unbound, or when it names an assignment rather than a :LABEL -- its value is
-not an address (the #81 ambiguity SYMBOL-INFO's KIND already resolves; a
+not an address (the ambiguity SYMBOL-INFO's KIND already resolves; a
 bare ASSEMBLY-SYMBOLS lookup would reintroduce it here)."
   (etypecase where
     (integer
@@ -1276,7 +1276,7 @@ to SESSION's own HEX-DIGITS, sized from the memory's actual cell width.
 Returns a string when STREAM is NIL
 (default); otherwise writes to STREAM and returns NIL.
 
-#107: reads via MPEEK, not MREF -- a hex dump is inspection, not an actual
+Reads via MPEEK, not MREF -- a hex dump is inspection, not an actual
 CPU access, so it must not trigger a :DEVICE region's :READ side effects
 merely by displaying memory.
 
@@ -1768,8 +1768,8 @@ leading `--binary`, then PATH."
         (values line :sexp))))
 
 (defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-dbg) "))
-  "A thin read/dispatch/print loop over DEBUG-COMMAND -- the ticket's
-reference command-line front end. Reads one line at a time from INPUT,
+  "A thin read/dispatch/print loop over DEBUG-COMMAND -- the reference
+command-line front end. Reads one line at a time from INPUT,
 dispatches it through DEBUG-COMMAND, writes the response to OUTPUT, and
 exits on \"quit\" or end of input. Returns SESSION."
   (loop

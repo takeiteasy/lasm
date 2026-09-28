@@ -1,5 +1,5 @@
 ;;;; cli.lisp
-;;;; #80 (M7): the command-line front end. RUN-CLI is a pure function over an
+;;;; The command-line front end. RUN-CLI is a pure function over an
 ;;;; argument list so it can be tested without a shell; roswell/lasm.ros is
 ;;;; the thin executable around it.
 

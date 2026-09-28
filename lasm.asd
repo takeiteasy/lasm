@@ -6,13 +6,13 @@
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
   :version "0.2.3"
-  ;; #75: lasm's first dependency -- RUN-FOR-DURATION's :THROTTLE T path
+  ;; Lasm's first dependency -- RUN-FOR-DURATION's :THROTTLE T path
   ;; (emulator.lisp) needs a monotonic clock finer than CL:GET-INTERNAL-
   ;; REAL-TIME's portable-but-coarse resolution to pace cycle-accurate
   ;; execution against a declared CLOCK-SPEED. Resolves via
   ;; ~/quicklisp/local-projects, not the Quicklisp dist -- see
   ;; docs/getting-started.md.
-  ;; #288, #113: ECLECTOR reads untrusted snapshot and items files without
+  ;; ECLECTOR reads untrusted snapshot and items files without
   ;; interning symbols or running reader macros; from the Quicklisp dist.
   :depends-on (#:trivial-high-precision-timer #:eclector)
   :serial t
@@ -57,7 +57,7 @@
   :description "Tests for lasm"
   :author "George Watson <gigolo@hotmail.co.uk>"
   :license "GPL-3.0-or-later"
-  ;; #171: closer-mop walks condition-class-precedence-lists to check
+  ;; closer-mop walks condition-class-precedence-lists to check
   ;; every slot reader is exported -- test-only.
   :depends-on (#:lasm #:fiveam #:closer-mop)
   :pathname "tests/"

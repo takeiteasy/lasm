@@ -1,5 +1,5 @@
 ;;;; disassembler.lisp
-;;;; #21 (M7): a disassembler derived from the same DEFINSTRUCTION specs used
+;;;; A disassembler derived from the same DEFINSTRUCTION specs used
 ;;;; for assembly, built on DECODE-INSTRUCTION-AT (decoder.lisp) -- the same
 ;;;; pure decode step STEP-MACHINE (emulator.lisp) uses, so this cannot
 ;;;; decode an encoding differently than the emulator does.
@@ -34,7 +34,7 @@
 ;;;; readable, so these never consolidate. The resulting cells are still
 ;;;; exactly re-assemblable.
 ;;;;
-;;;; DATA REGIONS (#82): a caller may declare (START . END) cell ranges, END
+;;;; DATA REGIONS: a caller may declare (START . END) cell ranges, END
 ;;;; exclusive, as data. Every cell inside one renders as data with no decode
 ;;;; attempted. A decode that succeeds but would run into a region is
 ;;;; discarded for a ".byte" line as well, so an instruction never spans the
@@ -42,7 +42,7 @@
 ;;;; own .byte/.word/.res statements, so this straddle case only arises for
 ;;;; hand-declared regions.
 ;;;;
-;;;; #179, #269: on a word-encoded machine whose instruction word is an even
+;;;; On a word-encoded machine whose instruction word is an even
 ;;;; number of cells, a region renders as ".word" lines (2 cells), or ".long"
 ;;;; lines (4 cells, then a trailing ".word" for the remainder) when the word is
 ;;;; a multiple of four cells wide. Cells group from the region's start in the
@@ -80,14 +80,14 @@
   (descriptor nil :type (or null instruction-descriptor))   ; NIL = undecodable data
   (values nil :type list)                                  ; decoded operand values, hole order
   ;; DECODE-INSTRUCTION-AT's matched per-hole record, hole order -- a
-  ;; WORD-FIELD-CHOICE on a word-encoded machine (#104), the descriptor's own
+  ;; WORD-FIELD-CHOICE on a word-encoded machine, the descriptor's own
   ;; SUB-CHOICES bare mode-name symbols on a byte-encoded one with a
-  ;; hole-selected sub-opcode (#126), or NIL throughout for undecodable data
+  ;; hole-selected sub-opcode, or NIL throughout for undecodable data
   ;; or a descriptor with no such selector, same as VALUES.
   ;; %RENDER-OPERAND-TEXT reads a hole's own matched ONE-OF alternative (via
   ;; %MATCHED-CHOICE-NAME, instruction.lisp, which normalizes either shape)
   ;; to render that alternative's own syntax instead of always a ONE-OF's
-  ;; first one -- see #117/#126.
+  ;; first one.
    (choices nil :type list)
   (choice-selections nil :type list)
   (label nil :type (or null string))                        ; a symbol bound to this address, or NIL
@@ -200,12 +200,12 @@ to the disassembled range, has an even length; else one cell."
 (defun %reverse-symbols (symbols line-starts &optional symbol-info)
   "Value -> name, for substituting a symbol name into rendered output.
 
-When SYMBOL-INFO (an ASSEMBLY-SYMBOL-INFO table, #37) is given, it alone is
+When SYMBOL-INFO (an ASSEMBLY-SYMBOL-INFO table) is given, it alone is
 reversed -- each entry already carries its own QUALIFIED-NAME and VALUE, so
 SYMBOLS is not even consulted here, and a caller may pass SYMBOL-INFO with
 SYMBOLS NIL and still get every real label. Only entries whose
 SYMBOL-INFO-KIND is :LABEL are reversed, so an .EQU's folded value never
-aliases onto an instruction address that happens to equal it (#81) --
+aliases onto an instruction address that happens to equal it --
 LINE-STARTS is not consulted in this case either, since a real label's
 address is correct to render regardless of whether it starts a decoded
 line.
@@ -288,12 +288,12 @@ carry any punctuation (e.g. INDIRECT-Y's pattern renders \"($10),Y\", not
 INSTRUCTION-DESCRIPTOR-OPERAND-NAMES -- an unnamed field's entry there is
 NIL.
 
-HOLE-ELEMENTS, when given, is #143's own hole-aligned record -- one
+HOLE-ELEMENTS, when given, is the own hole-aligned record -- one
 STORAGE-ELEMENT (or NIL) per hole, from a (operand ... :register ELEM)
 subclause's own ELEM (instruction.lisp's INSTRUCTION-DESCRIPTOR-OPERAND-
 REGISTERS, resolved once by %HOLE-ELEMENTS below), popped at each :EXPR in
 lockstep with RENDER-VALUES/HOLE-CHOICES, :ONE-OF recursion included. A
-non-NIL element's #72 alias for the hole's own decoded value
+non-NIL element's :NAMES alias for the hole's own decoded value
 (REGISTER-ALIAS-AT, storage.lisp) wins over a label of the same numeric
 value -- an ordinary label bound to the address 0 or 5 is otherwise
 indistinguishable from a register index of 0 or 5 -- and an out-of-range
@@ -301,9 +301,9 @@ index (REGISTER-ALIAS-AT returning NIL, e.g. a field wider than the bank)
 falls through to hex like any unaliased value, never blank.
 
 HOLE-CHOICES, when given, is DECODE-INSTRUCTION-AT's own hole-aligned matched
-per-hole record -- a WORD-FIELD-CHOICE list on a word-encoded machine (#104)
+per-hole record -- a WORD-FIELD-CHOICE list on a word-encoded machine
 or a bare mode-name-symbol/NIL list (the descriptor's own SUB-CHOICES) on a
-byte-encoded one with a hole-selected sub-opcode (#126) -- one entry per hole
+byte-encoded one with a hole-selected sub-opcode -- one entry per hole
 in RENDER-VALUES, parallel to it, NIL for a hole with no such record. A
 :ONE-OF element peeks the entry for its own first hole before recursing,
 via %MATCHED-CHOICE-NAME (instruction.lisp), which normalizes either shape:
@@ -316,18 +316,18 @@ chosen alternative -- pops one entry off HOLE-CHOICES in lockstep with
 RENDER-VALUES, keeping both lists aligned to the same hole position
 throughout the walk.
 
-Falls back to always rendering the first alternative -- #103's original
+Falls back to always rendering the first alternative -- the original
 behaviour -- whenever HOLE-CHOICES is NIL (the default, and still true on a
 byte-encoded machine whose descriptor declares no hole-selected sub-opcode
 selector, where no per-hole record exists at all) or carries no non-NIL
 entry for this particular hole -- a decoded word simply carries no record to
-disambiguate with. #118: a word-encoded field mixing CHOICE-selected and
+disambiguate with. A word-encoded field mixing CHOICE-selected and
 value-selected variants stamps every variant's own WORD-FIELD-CHOICE-CHOICE
 (instruction.lisp's %CHECK-WORD-VARIANT-CHOICES!), so a value-selected row on
 a *mixed* field still names its own alternative here, same as a CHOICE-
 selected one -- only a field with no CHOICE variant at all still leaves this
 NIL, and a hole with a CHOICE-selected field elsewhere in the same
-instruction but no record of its own is unaffected either way. #126's byte
+instruction but no record of its own is unaffected either way. the byte
 path has no mixed case: every alternative of a sub-selected hole is claimed
 by construction (%CHECK-BYTE-SUB-VARIANTS!).
 
@@ -399,7 +399,7 @@ lists every site that declares a prefix, whatever the policy."
 ;; would skip the lookup there; left as the straightforward version since
 ;; %RENDER-LINE is not the emulator's hot path.
 (defun %hole-elements (descriptor)
-  "DESCRIPTOR's own OPERAND-REGISTERS (#143), hole-aligned, resolved from
+  "DESCRIPTOR's own OPERAND-REGISTERS, hole-aligned, resolved from
 storage-element names to STORAGE-ELEMENTs -- NIL throughout for a descriptor
 with no :REGISTER hole, same shape as OPERAND-NAMES/OPERAND-WIDTHS."
   (let ((table (machine-descriptor-table (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
@@ -502,7 +502,7 @@ selects it. Each line declaring a prefix is re-parsed and re-selected."
 (defun %render-lines! (lines lexer labels suffixes symbols &optional symbol-info)
   "Destructively fill in each of LINES' TEXT (always) and LABEL (only when
 LABELS is true and SYMBOLS names this line's address -- restricted to
-%REVERSE-SYMBOLS' line-start rule unless SYMBOL-INFO (#37) is given, in
+%REVERSE-SYMBOLS' line-start rule unless SYMBOL-INFO is given, in
 which case only real :LABEL entries are reversed and the line-start
 restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
   (let* ((line-starts (%line-starts lines))
@@ -535,16 +535,16 @@ element, MEMORY selects which one's word layout/cell width apply.
 SYMBOLS, when given (e.g. an ASSEMBLY-SYMBOLS table), supplies label names
 for LABELS (default T) to substitute into a line's own label and into any
 operand value that names another line's address -- see %REVERSE-SYMBOLS.
-SYMBOL-INFO, when given (an ASSEMBLY-SYMBOL-INFO table, #37), is self-
+SYMBOL-INFO, when given (an ASSEMBLY-SYMBOL-INFO table), is self-
 sufficient -- SYMBOLS need not be passed alongside it -- and resolves the
 label/.EQU ambiguity SYMBOLS alone cannot: only real :LABEL entries
 substitute, and the line-start restriction %REVERSE-SYMBOLS otherwise
 applies is dropped, since a real label's address is always correct to
-render (#81). Pass it whenever available; DISASSEMBLE-ASSEMBLY does so
+render. Pass it whenever available; DISASSEMBLE-ASSEMBLY does so
 automatically. SUFFIXES (default T) renders a gas-style forced mode suffix
 (e.g. \"lda.w\") when needed for re-assembly fidelity; LEXER (default
 'DEFAULT) selects the surface syntax operand numbers and suffixes render in.
-DATA-REGIONS (#82), a list of (START . END) absolute cell ranges with END
+DATA-REGIONS, a list of (START . END) absolute cell ranges with END
 exclusive, are rendered as \".byte\" lines without decoding.
 
 Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
@@ -684,14 +684,14 @@ ASSEMBLY, with only that image's labels, its lines tagged with the image."
 (defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
                                            (data-regions :auto) bank region)
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
-ORIGIN, SYMBOLS, and SYMBOL-INFO (#37) off it directly -- the natural way to
+ORIGIN, SYMBOLS, and SYMBOL-INFO off it directly -- the natural way to
 round-trip ASSEMBLE's own output, and the reason its label substitution
-never suffers the .EQU-aliasing ambiguity #81 tracks for a bare-SYMBOLS
+never suffers the .EQU-aliasing ambiguity of a bare-SYMBOLS
 caller. Signals if ASSEMBLY's own ASSEMBLY-CELL-WIDTH does not match
 MACHINE's declared cell width, mirroring LOAD-PROGRAM's own check
 (emulator.lisp) for the same mismatch.
 
-DATA-REGIONS (#82) defaults to :AUTO, ASSEMBLY-DATA-REGIONS (listing.lisp);
+DATA-REGIONS defaults to :AUTO, ASSEMBLY-DATA-REGIONS (listing.lisp);
 pass NIL to decode everything, or an explicit list to override.
 
 Only the labels defined in the decoded image are used. BANK (with REGION,
@@ -725,16 +725,16 @@ storage.lisp) from address START through START + COUNT (exclusive). START
 and COUNT are both required -- unlike DISASSEMBLE-CELLS' END, there is no
 sane default for \"the whole address space\" of a live machine. MEMORY
 defaults per %RESOLVE-MEMORY, same convention as LOAD-PROGRAM/STEP-MACHINE.
-SYMBOL-INFO (#37), when available (e.g. from the ASSEMBLY that produced this
+SYMBOL-INFO, when available (e.g. from the ASSEMBLY that produced this
 memory's contents), resolves the label/.EQU ambiguity and works standalone,
 without SYMBOLS -- see DISASSEMBLE-CELLS.
 
-ASSEMBLY (#181) supplies SYMBOL-INFO and DATA-REGIONS (#82) when those are
+ASSEMBLY supplies SYMBOL-INFO and DATA-REGIONS when those are
 not given: the main image's, at the address ASSEMBLY was loaded to, except that inside a banked region whose mapped
-bank has an image in ASSEMBLY, that bank's (#234). DATA-REGIONS defaults to
+bank has an image in ASSEMBLY, that bank's. DATA-REGIONS defaults to
 :AUTO, which is NIL without ASSEMBLY; pass NIL to decode everything.
 
-#107: reads via MACHINE-PEEK-READER, not MACHINE-CELL-READER -- disassembly
+Reads via MACHINE-PEEK-READER, not MACHINE-CELL-READER -- disassembly
 is inspection, not execution, so it must not trigger a :DEVICE region's
 :READ side effects merely by disassembling across it."
   (unless (and start count)

@@ -48,7 +48,7 @@
                      (address-out-of-range-address c)
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #107: signalled by (SETF MREF) for a store into a :ROM region declaring
+;; Signalled by (SETF MREF) for a store into a :ROM region declaring
 ;; :ON-WRITE :ERROR -- the default :ON-WRITE :IGNORE silently drops the
 ;; store instead (a ROM's writes are just discarded, matching real ROM
 ;; behavior); :ERROR is the opt-in for catching a program that shouldn't be
@@ -61,11 +61,11 @@ memory ~S on machine ~S"
                      (memory-write-protected-address c)
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #111: signalled when the current privilege level is below a region's,
-;; instruction's or (#300) register's, flag's or stack's :PRIVILEGE. KIND is
+;; Signalled when the current privilege level is below a region's,
+;; instruction's or register's, flag's or stack's :PRIVILEGE. KIND is
 ;; :MEMORY, :INSTRUCTION, :REGISTER, :FLAG or :STACK; NAME is the element, or
 ;; the mnemonic for an instruction. ADDRESS is set only for :MEMORY. ACCESS
-;; (#303) is :READ, :WRITE or :EXECUTE, or NIL for an instruction.
+;; is :READ, :WRITE or :EXECUTE, or NIL for an instruction.
 ;; REQUIRED and CURRENT are level names; CURRENT is NIL when the level
 ;; register holds a value no level maps to.
 (define-condition privilege-violation (storage-error)
@@ -101,7 +101,7 @@ memory ~S on machine ~S"
              (format s "Stack underflow on ~S (machine ~S)"
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #50: signalled by STACK-REF/(SETF STACK-REF) for an OFFSET outside the
+;; Signalled by STACK-REF/(SETF STACK-REF) for an OFFSET outside the
 ;; stack's live region -- distinct from STACK-UNDERFLOW (which is specifically
 ;; "popped an empty stack") since an out-of-range indexed access is a
 ;; different program bug, e.g. reading three deep into a stack that only has
@@ -120,7 +120,7 @@ memory ~S on machine ~S"
                      (stack-pointer-out-of-range-value c)
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #13: signalled by REGREF/(SETF REGREF) for an INDEX outside a banked
+;; Signalled by REGREF/(SETF REGREF) for an INDEX outside a banked
 ;; register's [0, count) range. Mirrors STACK-INDEX-OUT-OF-RANGE's shape.
 (define-condition register-index-out-of-range (storage-error)
   ((index :initarg :index :reader register-index-out-of-range-index))
@@ -138,7 +138,7 @@ memory ~S on machine ~S"
                      (bank-out-of-range-bank c)
                      (storage-error-name c) (storage-error-machine c))))))
 
-;; #108: signalled by DEVICE-AT's checked callers (DETACH-DEVICE, DEVICE-
+;; Signalled by DEVICE-AT's checked callers (DETACH-DEVICE, DEVICE-
 ;; INFO, DEVICE-SEND) for a bus INDEX that is out of range or a detached
 ;; hole (DETACH-DEVICE leaves one rather than compacting the bus, so a
 ;; running program's cached indices stay valid -- see device.lisp). Not a
@@ -159,7 +159,7 @@ memory ~S on machine ~S"
    (data :initarg :data :initform nil :reader lasm-trap-data))
   (:report (lambda (c s) (%with-location-suffix (c s) (format s "Trap: ~S ~S" (lasm-trap-tag c) (lasm-trap-data c))))))
 
-;; #109: signalled by SIGNAL-INTERRUPT (interrupt.lisp) when a machine's
+;; Signalled by SIGNAL-INTERRUPT (interrupt.lisp) when a machine's
 ;; (interrupts ...) clause declares :ON-OVERFLOW :ERROR (the default) and
 ;; the pending queue is already at its declared :QUEUE depth. Mirrors
 ;; STACK-OVERFLOW's shape -- MACHINE names the machine, no further detail is
@@ -172,7 +172,7 @@ memory ~S on machine ~S"
 
 ;; LASM-SYNTAX-ERROR, LEX-ERROR and PARSE-FAILURE (formerly defined here) now
 ;; live in diagnostic.lisp, loaded immediately after this file -- they moved
-;; there to sit alongside DIAGNOSTIC-TEXT, their shared report renderer (#74).
+;; there to sit alongside DIAGNOSTIC-TEXT, their shared report renderer.
 
 ;;; Storage element descriptors
 
@@ -180,7 +180,7 @@ memory ~S on machine ~S"
   (name nil :type symbol)
   (kind nil :type (member :register :stack :memory :flag))
   (width nil :type (or null (integer 1)))
-  ;; :count > 1 marks a banked/array register (e.g. CHIP8's V0-VF, #13). A
+  ;; :count > 1 marks a banked/array register (e.g. CHIP8's V0-VF). A
   ;; banked register allocates :count cells (MAKE-STORAGE-SLOT) and is
   ;; accessed by runtime index through REGREF/(SETF REGREF), not SREF --
   ;; SREF is scalar-only and errors on a banked element. WITH-MACHINE-
@@ -188,7 +188,7 @@ memory ~S on machine ~S"
   ;; but a :count > 1 register as a MACROLET expanding to REGREF, since
   ;; symbol-macrolet can't express an indexed form like (V x).
   (count 1 :type (integer 1))
-  ;; #72: an optional :names (A B C ...) on a banked register clause, one
+  ;; An optional :names (A B C ...) on a banked register clause, one
   ;; alias symbol per bank cell in index order -- CHIP8's V0-VF, DCPU-16's
   ;; A/B/C/X/Y/Z/I/J. NIL when the clause declares none. MACHINE-DESCRIPTOR-
   ;; REGISTER-ALIASES (below) is the flat name -> index table built from
@@ -199,25 +199,24 @@ memory ~S on machine ~S"
   (depth nil :type (or null (integer 1)))       ; stacks
   (addr-width nil :type (or null (integer 1)))  ; memory
   (cell-width nil :type (or null (integer 1)))  ; memory
-  (endian nil :type (or null keyword cons))     ; memory, :little/:big or (outer inner group), #66
-  ;; #107: sub-ranges of a memory element with distinct access behavior --
+  (endian nil :type (or null keyword cons))     ; memory, :little/:big or (outer inner group)
+  ;; sub-ranges of a memory element with distinct access behavior --
   ;; ROM (writes discarded or rejected), a device window (reads/writes
-  ;; forwarded to handlers instead of touching backing storage). NIL on every
-  ;; machine before this ticket and on any memory element declaring no
-  ;; (region ...) forms, which is what keeps MREF/(SETF MREF)'s no-region
+  ;; forwarded to handlers instead of touching backing storage). NIL on any
+  ;; memory element declaring no (region ...) forms, which is what keeps MREF/(SETF MREF)'s no-region
   ;; path a single NULL test with no added indirection. Kept in declaration
   ;; order for MACHINE-MODEL.MD's rendering; %REGION-AT searches REGION-INDEX.
   (regions nil :type list)
-  ;; #156: REGIONS sorted by start address, binary-searched by %REGION-AT.
+  ;; REGIONS sorted by start address, binary-searched by %REGION-AT.
   (region-index nil :type (or null simple-vector))
-  ;; #300, #303: minimum privilege level for semantics reads and writes of a
+  ;; Minimum privilege level for semantics reads and writes of a
   ;; register, flag or stack, or NIL for an ungated access.
   (read-privilege nil :type (or null symbol))
   (write-privilege nil :type (or null symbol))
-  ;; #314: bit-field write gates on a register, a list of (MASK LEVEL POLICY).
+  ;; bit-field write gates on a register, a list of (MASK LEVEL POLICY).
   (field-privileges nil :type list))
 
-;; #107: one declared (region NAME start end ...) form inside a memory
+;; One declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
 ;; form becomes this. START/END are both inclusive and within the memory
 ;; element's own address range; regions never overlap (machine.lisp checks
@@ -229,7 +228,7 @@ memory ~S on machine ~S"
 ;;              :IGNORE, the default) or signal MEMORY-WRITE-PROTECTED
 ;;              (:ON-WRITE :ERROR). LOAD-PROGRAM/the debugger burn a ROM
 ;;              image in via %POKE, which bypasses this -- a ROM image is
-;;              burned, not stored by the CPU. RESET leaves it intact (#157).
+;;              burned, not stored by the CPU. RESET leaves it intact.
 ;;   :DEVICE -- reads and writes are forwarded to READ/WRITE instead of
 ;;              touching backing storage at all; a device region with no
 ;;              READ reads as 0, one with no WRITE discards the store. READ
@@ -245,7 +244,7 @@ memory ~S on machine ~S"
 ;;              FUNCALL resolves it to the live function at call time. Kept
 ;;              to a plain function-designator pair, so a region needs no
 ;;              device object.
-;;              DEVICE (#158) instead names a declared (device ...) clause and
+;;              DEVICE instead names a declared (device ...) clause and
 ;;              routes the region through that device's own READ/WRITE hooks
 ;;              (see DEVICE-DESCRIPTOR), so one object is both bus-addressed
 ;;              and memory-mapped. DEVICE-INDEX is its fixed bus index,
@@ -265,30 +264,30 @@ memory ~S on machine ~S"
   (write nil :type (or null symbol function))          ; :device only
   (device nil :type (or null symbol))                  ; :device only, exclusive with read/write
   (device-index nil :type (or null (integer 0)))       ; bus index DEVICE resolves to
-  ;; #111, #303: minimum level for CPU reads, writes and instruction fetches, or NIL.
+  ;; Minimum level for CPU reads, writes and instruction fetches, or NIL.
   (read-privilege nil :type (or null symbol))
   (write-privilege nil :type (or null symbol))
   (execute-privilege nil :type (or null symbol)))
 
-;; #111: a machine's (privilege ...) clause. LEVEL names the flag or scalar
+;; A machine's (privilege ...) clause. LEVEL names the flag or scalar
 ;; register holding the current level's value. LEVELS and VALUES are
 ;; parallel, ordered least to most privileged: a level's rank is its index,
 ;; and VALUES[i] is what LEVEL holds while at rank i.
 (defstruct privilege-descriptor
   (level nil :type symbol)
-  ;; #299: the level occupies WIDTH bits of LEVEL's register from bit SHIFT.
+  ;; The level occupies WIDTH bits of LEVEL's register from bit SHIFT.
   ;; WIDTH is NIL until %FINISH-PRIVILEGE-MODEL resolves it.
   (shift 0 :type (integer 0))
   (width nil :type (or null (integer 1)))
   (levels nil :type list)
   (values nil :type list)
   (on-violation :fault :type (member :fault :trap :interrupt))
-  ;; #302, #305: the :INTERRUPT policy's signal data, priority and maskability.
+  ;; The :INTERRUPT policy's signal data, priority and maskability.
   (violation-data nil :type (or null (integer 0)))
   (violation-priority 0 :type integer)
   (violation-non-maskable nil :type boolean))
 
-;; #302: true while a step runs on a machine whose :ON-VIOLATION is
+;; True while a step runs on a machine whose :ON-VIOLATION is
 ;; :INTERRUPT. Outside a step, a violation faults, since nothing would catch
 ;; the exception and restart the instruction.
 (defvar *privilege-interrupt-step* nil)
@@ -299,9 +298,9 @@ memory ~S on machine ~S"
   "When NIL, region and instruction privilege gates are not enforced. Bound
 to NIL by host actions (the debugger's write) that must reach gated memory.")
 
-;; #108: a machine's declared (device ...) clause (machine.lisp) -- identity
+;; A machine's declared (device ...) clause (machine.lisp) -- identity
 ;; (the ID/VERSION/MANUFACTURER triple an HWQ-style instruction reads back,
-;; #135's confirmed shape) plus four hooks, each a function *designator*
+;; the confirmed shape) plus four hooks, each a function *designator*
 ;; (a bare symbol, not #'NAME) for the same quoting reason MEMORY-REGION's
 ;; READ/WRITE are (see that struct's comment and DEFMACHINE's docstring,
 ;; machine.lisp). INIT/TICK/RECEIVE/DETACH are all optional -- a device
@@ -321,8 +320,8 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
 ;;           INIT'd device with the data SAVE returned. A device without
 ;;           both hooks is re-INIT'd on restore and carries no saved state.
 ;;   READ    (machine device address) -> value, WRITE (machine device
-;;           address value) -- MREF/(SETF MREF) hooks for a #107 :DEVICE
-;;           region bound to this device with :DEVICE (#158); ADDRESS is
+;;           address value) -- MREF/(SETF MREF) hooks for a :DEVICE
+;;           region bound to this device with :DEVICE; ADDRESS is
 ;;           absolute. Unused unless a region binds the device.
 (defstruct device-descriptor
   (name nil :type symbol)
@@ -337,12 +336,12 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (load nil :type (or null symbol function))
   (read nil :type (or null symbol function))
   (write nil :type (or null symbol function))
-  ;; #161: interrupt priority of this device's signals; higher delivers first.
+  ;; Interrupt priority of this device's signals; higher delivers first.
   (priority 0 :type integer)
-  ;; #305: this device's signals ignore every mask.
+  ;; This device's signals ignore every mask.
   (non-maskable nil :type boolean))
 
-;; #109: a machine's declared (interrupts ...) clause (machine.lisp) -- the
+;; A machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
 ;; PARSE-INTERRUPTS-CLAUSE, then resolved against the machine's own storage
 ;; elements by %FINISH-INTERRUPT-MODEL once ELEMENTS is known (the same
@@ -351,7 +350,7 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
 ;; those names are already valid.
 ;;   VECTOR       register holding the handler address written to PC.
 ;;   NMI-VECTOR   register used instead of VECTOR for non-maskable signals
-;;                (#311); NIL shares VECTOR.
+;;; NIL shares VECTOR.
 ;;   MESSAGE      register a delivered signal's DATA is written to.
 ;;   SAVE         list of register/flag names pushed, in order, before
 ;;                MESSAGE/VECTOR are written -- INTERRUPT-RETURN (semantics.
@@ -376,15 +375,15 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
 ;;                knob exists because masking alone can't express "off"
 ;;                without risking a queue that fills and hits ON-OVERFLOW.
 ;;   STACK-KIND   :STACK (STACK-NAME names a lasm :STACK element, pushed/
-;;                popped via STACK-PUSH/STACK-POP -- the original #109
+;;                popped via STACK-PUSH/STACK-POP -- the original
 ;;                behavior) or :POINTER (STACK-NAME names a register bound by
 ;;                a (stack-pointer ...) clause, pushed/popped via SP-PUSH/
-;;                SP-POP against that clause's own memory/direction; #166).
+;;                SP-POP against that clause's own memory/direction).
 (defstruct interrupt-descriptor
   ;; A place is a scalar register/flag name, or (NAME INDEX) for one cell of
-  ;; a banked register (#163).
+  ;; a banked register.
   (vector nil :type (or symbol list))
-  ;; #311: handler-address place for non-maskable signals, or NIL to share VECTOR.
+  ;; handler-address place for non-maskable signals, or NIL to share VECTOR.
   (nmi-vector nil :type (or symbol list))
   (message nil :type (or symbol list))
   (save nil :type list)
@@ -394,7 +393,7 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (on-overflow :error :type (member :error :trap :drop :drop-oldest))
   (mask-when nil :type (or null symbol function))
   (mask-flag nil :type (or null symbol))
-  ;; #305: MASK-LEVEL is a register place (or MASK-LEVEL-WHEN a function)
+  ;; MASK-LEVEL is a register place (or MASK-LEVEL-WHEN a function)
   ;; whose value holds back signals of priority <= it.
   (mask-level nil :type (or symbol list))
   (mask-level-when nil :type (or null symbol function))
@@ -402,15 +401,15 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   (cycles 0 :type (integer 0))
   (drop-on-zero-vector t :type boolean)
   (mask-on-deliver nil :type boolean)
-  ;; #161: :PRIORITY lets a running handler be preempted by a strictly
+  ;; :PRIORITY lets a running handler be preempted by a strictly
   ;; higher-priority signal; MAX-DEPTH caps nested handlers. Either one makes
   ;; delivery track handler depth in MACHINE-INTERRUPT-ACTIVE.
   (nesting :allow :type (member :allow :priority))
   (max-depth nil :type (or null (integer 1)))
-  ;; #301: privilege level delivery switches to before pushing, or NIL.
+  ;; Privilege level delivery switches to before pushing, or NIL.
   (deliver-level nil :type (or null symbol)))
 
-;; #166: a (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
+;; A (stack-pointer REG [:memory NAME] [:grows :down/:up]) clause --
 ;; binds an existing scalar :register element as an address pointer into a
 ;; :memory element, for machines (DCPU-16, ANIMA-16) whose "stack" is a plain
 ;; register indexed by push/pop convention rather than a lasm :stack element.
@@ -424,11 +423,11 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
 ;;              pre-decrements then stores, pop loads then post-increments.
 ;;              :UP -- REGISTER points one PAST the top item: push stores
 ;;              then post-increments, pop pre-decrements then loads.
-;;   WIDTH      bits per push/pop/ref slot (#167); defaults to MEMORY's
+;;   WIDTH      bits per push/pop/ref slot; defaults to MEMORY's
 ;;              cell width, and a wider slot spans several cells in MEMORY's
 ;;              own endianness.
 ;;   BOUNDS     NIL, or (LOW HIGH): the inclusive cell-address window the
-;;              stack may touch (#168). A push, pop or ref outside it signals
+;;              stack may touch. A push, pop or ref outside it signals
 ;;              before anything changes.
 (defstruct stack-pointer-descriptor
   (register nil :type symbol)
@@ -458,7 +457,7 @@ common case (no REGIONS at all) so an unregioned memory element's MREF/
                          ((> address (memory-region-end region)) (setf low (1+ mid)))
                          (t (return region)))))))))
 
-;; A machine-level fixed instruction-word bit layout (#20, M4): declared via
+;; A machine-level fixed instruction-word bit layout (M4): declared via
 ;; DEFMACHINE's (instruction-word :width n (field name width) ...) clause
 ;; (machine.lisp) for a DCPU-16-shaped machine whose whole instruction is one
 ;; WIDTH-bit word split into named bit fields rather than a cell-per-operand
@@ -467,10 +466,10 @@ common case (no REGIONS at all) so an unregioned memory element's MREF/
 ;; word's LSB, derived once here so encode/decode never recompute it.
 ;; WIDTH-CELLS is WIDTH/CELL-WIDTH, checked to be a whole number at parse
 ;; time (machine.lisp) since the word is emitted as CELL-WIDTH-wide cells
-;; (#53 -- the assembler pipeline is typed to the target machine's own
+;; (the assembler pipeline is typed to the target machine's own
 ;; memory cell width, not fixed at 8 bits), in the machine's own ENDIAN
-;; order (#66).
-;; #64: NAME is NIL on the default (machine-wide) layout, and a symbol on an
+;; order.
+;; NAME is NIL on the default (machine-wide) layout, and a symbol on an
 ;; alternate declared by a (layout NAME (field ...)...) form. ALTERNATES holds
 ;; the machine's other layouts (each its own INSTRUCTION-WORD-LAYOUT, NAME
 ;; non-NIL) and is non-NIL only on the default -- an alternate's own
@@ -484,12 +483,12 @@ common case (no REGIONS at all) so an unregioned memory element's MREF/
   (width nil :type (integer 1))
   (width-cells nil :type (integer 1))
   (cell-width nil :type (integer 1))
-  (endian nil :type (or null keyword cons)) ; :little/:big or (outer inner group), #66
-  ;; #216: the default layout's own (instruction-word :endian ORDER), which
+  (endian nil :type (or null keyword cons)) ; :little/:big or (outer inner group)
+  ;; The default layout's own (instruction-word :endian ORDER), which
   ;; overrides the memory's endian for the word and its extra cells.
   (declared-endian nil :type (or null keyword cons))
   (fields nil :type list)           ; (name width shift), MSB-first as declared
-  ;; #191: field names, in the order their trailing words follow the
+  ;; Field names, in the order their trailing words follow the
   ;; instruction word. NIL (the default) is operand-hole order. Default
   ;; layout only -- it applies machine-wide, resolved per descriptor by
   ;; field name (%WORD-EMIT-ORDER, instruction.lisp).
@@ -503,7 +502,7 @@ common case (no REGIONS at all) so an unregioned memory element's MREF/
 (defun instruction-word-layout-named (layout name)
   "LAYOUT itself when NAME is NIL, else the alternate in LAYOUT's ALTERNATES
 named NAME, or NIL if no such alternate exists. LAYOUT is always the
-machine's default layout -- callers hold no other kind (#64)."
+machine's default layout -- callers hold no other kind."
   (if (null name)
       layout
       (find name (instruction-word-layout-alternates layout) :key #'instruction-word-layout-name)))
@@ -521,7 +520,7 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; mnemonic's list has exactly one element.
   (instructions (make-hash-table :test 'equal))
   ;; opcode -> list of instruction-descriptor, one per co-tenant decode-
-  ;; distinguishable descriptor sharing that opcode (#105) -- more than one
+  ;; distinguishable descriptor sharing that opcode -- more than one
   ;; entry only on a word-encoded machine, where %CHECK-OPCODE-DECODABLE!
   ;; (instruction.lisp) requires every pair sharing a list to disagree on
   ;; some operand field's accepted raw bits so DECODE-INSTRUCTION-AT
@@ -532,45 +531,45 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; opcode outright there, regardless of mnemonic or mode.
   (opcodes (make-hash-table :test 'eql))
   (word-decode-table nil :type (or null simple-vector))
-  ;; NIL for an ordinary byte-encoded machine (every machine before #20) --
+  ;; NIL for an ordinary byte-encoded machine (every machine before) --
   ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
   ;; vs. an INSTRUCTION-WORD-LAYOUT to pick between the two encoding schemes.
   (instruction-word nil :type (or null instruction-word-layout))
-  ;; #75: NIL unless DEFMACHINE declares a (clock-speed n) clause -- the
+  ;; NIL unless DEFMACHINE declares a (clock-speed n) clause -- the
   ;; machine's nominal rate in Hz. NIL is what keeps cycle-accurate execution
   ;; a zero-cost opt-in subsystem (LASM-plan.md sec. 1, pillar 4):
   ;; RUN-FOR-DURATION requires this to be set (it has no other way to convert
   ;; cycles to seconds), while RUN-FOR-CYCLES and the plain cycle count on
   ;; MACHINE-CYCLES below need no clock speed at all.
   (clock-speed nil :type (or null (integer 1)))
-  ;; #226: NIL unless DEFMACHINE declares (reset-pc n) -- the value MAKE-MACHINE
+  ;; NIL unless DEFMACHINE declares (reset-pc n) -- the value MAKE-MACHINE
   ;; and RESET give the PC register instead of zero.
   (reset-pc nil :type (or null (integer 0)))
-  ;; #108: DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
+  ;; DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
   ;; order -- that order is a runtime MACHINE's initial bus index order (see
   ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
   ;; declaring none.
   (devices nil :type list)
-  ;; #109: NIL unless DEFMACHINE declares an (interrupts ...) clause -- the
+  ;; NIL unless DEFMACHINE declares an (interrupts ...) clause -- the
   ;; machine's whole interrupt model (vector/message/save registers, queue
   ;; depth/overflow policy, masking, delivery cost). NIL is what keeps
   ;; DELIVER-PENDING-INTERRUPT (interrupt.lisp, called from STEP-MACHINE) a
   ;; single NULL test on a machine declaring no interrupt model, the same
   ;; way DEVICES being NIL keeps TICK-DEVICES a no-op loop.
   (interrupts nil :type (or null interrupt-descriptor))
-  ;; #164: cycle cost of one idle step; declared by (idle :cycles n).
+  ;; Cycle cost of one idle step; declared by (idle :cycles n).
   (idle-cycles 1 :type (integer 1))
-  ;; #111: NIL unless DEFMACHINE declares a (privilege ...) clause. NIL keeps
+  ;; NIL unless DEFMACHINE declares a (privilege ...) clause. NIL keeps
   ;; every region access and instruction step free of privilege work.
   (privilege nil :type (or null privilege-descriptor))
-  ;; #166: register name -> STACK-POINTER-DESCRIPTOR, one entry per declared
+  ;; Register name -> STACK-POINTER-DESCRIPTOR, one entry per declared
   ;; (stack-pointer ...) clause. Consulted by %RESOLVE-INTERRUPT-STACK
   ;; (machine.lisp) when (interrupts ...)'s :stack names a register rather
   ;; than a :stack element, and by WITH-MACHINE-BINDINGS's PUSH/POP
   ;; (semantics.lisp) so a stack-pointer works with or without an
   ;; (interrupts ...) clause. Empty (never NIL) on a machine declaring none.
   (stack-pointers (make-hash-table :test 'eq))
-  ;; #72: alias name (upcased string) -> bank index, flattened across every
+  ;; Alias name (upcased string) -> bank index, flattened across every
   ;; banked register's :names -- one machine-wide table, since an alias is
   ;; unique across the whole machine (BUILD-MACHINE-DESCRIPTOR's SEEN check),
   ;; so the index alone is enough for EVAL-EXPR (instruction.lisp) to resolve
@@ -582,7 +581,7 @@ machine's default layout -- callers hold no other kind (#64)."
    ;; Alias name -> owning register storage element, for alias-qualified mode
    ;; holes and disassembly of per-alternative register forms.
    (register-alias-elements (make-hash-table :test 'equalp))
-  ;; #63: lazy memo for %DESCRIPTOR-CELL-WIDTH's no-MEMORY-NAME case
+  ;; Lazy memo for %DESCRIPTOR-CELL-WIDTH's no-MEMORY-NAME case
   ;; (machine.lisp) -- that path rebuilds ELEMENTS' memory sublist and calls
   ;; REMOVE-DUPLICATES on every call otherwise, and it's read once per
   ;; ENCODE-INSTRUCTION and several times per assembler relaxation pass. Two
@@ -593,7 +592,7 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; on redefinition (%BUILD-MACHINE-DESCRIPTOR), so there is no stale
   ;; instance for this slot to drift against.
   (cell-width-cache :unset)
-  ;; #66: same memoization rationale as CELL-WIDTH-CACHE above, for
+  ;; Same memoization rationale as CELL-WIDTH-CACHE above, for
   ;; %DESCRIPTOR-ENDIAN's no-MEMORY-NAME case.
   (endian-cache :unset)
   ;; Machine families: PARENT is the name of the machine this one extends
@@ -606,7 +605,7 @@ machine's default layout -- callers hold no other kind (#64)."
   (own-instructions (make-hash-table :test 'equal))
   ;; Upcased mnemonics removed from this machine, including inherited removals.
   (removed-instructions nil :type list)
-  ;; #223: names of the registers and flags this machine removed from its
+  ;; Names of the registers and flags this machine removed from its
   ;; parent, kept so %CHECK-INHERITANCE-COMPATIBLE can re-run against the parent.
   (removed-storage nil :type list)
   ;; Alist of upcased mnemonic -> cycle cost overriding inherited variants.
@@ -651,7 +650,7 @@ machine's default layout -- callers hold no other kind (#64)."
   "The value of KEY in DESCRIPTOR's (properties ...), or DEFAULT."
   (getf (machine-descriptor-properties descriptor) key default))
 
-;; #108: a live device on a MACHINE's bus -- DESCRIPTOR is the DEVICE-
+;; A live device on a MACHINE's bus -- DESCRIPTOR is the DEVICE-
 ;; DESCRIPTOR it was attached from (a declared one, or one built inline by
 ;; ATTACH-DEVICE, device.lisp); INDEX is its bus position, fixed for the
 ;; device's lifetime (DETACH-DEVICE leaves a hole rather than renumbering
@@ -665,7 +664,7 @@ machine's default layout -- callers hold no other kind (#64)."
 
 ;;; Runtime machine state
 
-;; #252: the memory pages written since a debugger's last checkpoint. BITS maps
+;; The memory pages written since a debugger's last checkpoint. BITS maps
 ;; a cell array to its page bit-vector, QUEUE lists each dirty (ARRAY . PAGE)
 ;; once, and ALL means a bulk write made the queue incomplete.
 (defconstant +dirty-page-bits+ 6
@@ -694,19 +693,19 @@ machine's default layout -- callers hold no other kind (#64)."
 (defstruct (machine (:constructor %make-machine (descriptor)))
   (descriptor nil :type machine-descriptor)
   (slots (make-hash-table :test 'eq))     ; name -> slot representation
-  ;; #75: total cycles consumed by every instruction STEP-MACHINE has
+  ;; Total cycles consumed by every instruction STEP-MACHINE has
   ;; executed on this machine since the last RESET. Accumulated regardless of
   ;; whether the machine's descriptor declares a CLOCK-SPEED -- the count
   ;; itself is always meaningful, only the cycles-to-seconds conversion needs
   ;; one.
   (cycles 0 :type unsigned-byte)
-  ;; #108: the device bus -- an adjustable, fill-pointered vector of DEVICE
+  ;; The device bus -- an adjustable, fill-pointered vector of DEVICE
   ;; or NIL (a detached hole, see DEVICE struct above). Seeded from the
   ;; descriptor's own DEVICES by MAKE-MACHINE/RESET below; ATTACH-DEVICE
   ;; (device.lisp) extends it, DETACH-DEVICE clears a slot in place rather
   ;; than shrinking it.
   (devices (make-array 0 :adjustable t :fill-pointer 0))
-  ;; #108/#109: NIL, or a function (machine device data) called by
+  ;; NIL, or a function (machine device data) called by
   ;; DEVICE-SIGNAL (device.lisp). MAKE-MACHINE below auto-installs
   ;; #'%DEFAULT-INTERRUPT-HOOK (interrupt.lisp) when the descriptor declares
   ;; an (interrupts ...) clause; a signal with no hook installed at all is
@@ -725,9 +724,9 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; NIL, or the DIRTY-PAGES a debug session's checkpoints read. Host wiring
   ;; like ACCESS-HOOK -- RESET leaves it alone, snapshots do not save it.
   (dirty nil :type (or null dirty-pages))
-  ;; #109/#304: pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp)
+  ;; Pending signals raised by SIGNAL-INTERRUPT (interrupt.lisp)
   ;; but not yet delivered, held as INTERRUPT-BUCKETs -- one per distinct
-  ;; pending priority, highest first (#161). Each bucket keeps arrival-order
+  ;; pending priority, highest first. Each bucket keeps arrival-order
   ;; FIFOs of PENDING-INTERRUPT entries, split by maskability. COUNT is the
   ;; total pending; SEQUENCE stamps arrivals so the two FIFOs of one bucket
   ;; merge in arrival order. Capped at the descriptor's INTERRUPT-DESCRIPTOR-
@@ -736,14 +735,14 @@ machine's default layout -- callers hold no other kind (#64)."
   (interrupt-buckets nil :type list)
   (interrupt-count 0 :type (integer 0))
   (interrupt-sequence 0 :type (integer 0))
-  ;; #161: priorities of the handlers currently running, innermost first.
+  ;; Priorities of the handlers currently running, innermost first.
   ;; Only maintained on a machine whose (interrupts ...) declares :NESTING
   ;; :PRIORITY or :MAX-DEPTH; popped by INTERRUPT-RETURN. RESET clears it.
   (interrupt-active nil :type list)
-  ;; #302: details of the last violation raised as an interrupt, or NIL.
+  ;; Details of the last violation raised as an interrupt, or NIL.
   ;; RESET clears it.
   (privilege-violation nil :type list)
-  ;; #110: set by the IDLE semantics primitive (semantics.lisp) -- STEP-
+  ;; Set by the IDLE semantics primitive (semantics.lisp) -- STEP-
   ;; MACHINE (emulator.lisp) skips fetch/decode/execute while this is true,
   ;; but still ticks devices and accounts cycles. Cleared by DELIVER-
   ;; PENDING-INTERRUPT (interrupt.lisp) on delivery, or by WAKE-MACHINE
@@ -756,7 +755,7 @@ machine's default layout -- callers hold no other kind (#64)."
   ;; Banked region name -> the bank LOAD-PROGRAM's unbanked image was written
   ;; into (whichever was mapped then). Cleared by RESET; not snapshotted.
   (loaded-banks (make-hash-table :test 'eq))
-  ;; #264: :DEVICE region name -> bus index of the device BIND-REGION
+  ;; :DEVICE region name -> bus index of the device BIND-REGION
   ;; (device.lisp) bound to it at runtime, overriding a declared :DEVICE
   ;; binding. Cleared by RESET, like every runtime-attached device; saved by
   ;; snapshots.
@@ -841,7 +840,7 @@ PDP-endian."
   (ecase (storage-element-kind element)
     (:register
      ;; :count cells -- 1 for an ordinary scalar register, more for a
-     ;; banked register (#13, e.g. CHIP8's 16 V registers).
+     ;; banked register (e.g. CHIP8's 16 V registers).
      (make-array (storage-element-count element) :initial-element 0))
     (:flag
      (make-array 1 :initial-element 0))
@@ -849,8 +848,8 @@ PDP-endian."
      (cons (make-array (storage-element-depth element) :initial-element 0)
            0))
     (:memory
-     ;; Eager allocation of 2^addr-width cells, unconditionally -- #107's
-     ;; region overlays (STORAGE-ELEMENT-REGIONS) change what MREF/(SETF
+     ;; Eager allocation of 2^addr-width cells, unconditionally -- region
+     ;; overlays (STORAGE-ELEMENT-REGIONS) change what MREF/(SETF
      ;; MREF) do with a range of this array, not how the array itself is
      ;; allocated, so a ROM or device region still occupies backing cells
      ;; here even though ordinary reads/writes route around them.
@@ -858,7 +857,7 @@ PDP-endian."
                  :element-type `(unsigned-byte ,(storage-element-cell-width element))
                  :initial-element 0))))
 
-;; #304: the pending queue -- see MACHINE-INTERRUPT-BUCKETS. A FIFO is a
+;; The pending queue -- see MACHINE-INTERRUPT-BUCKETS. A FIFO is a
 ;; (HEAD . TAIL) cons pair over a shared list, so push and pop are O(1).
 (defstruct (pending-interrupt (:conc-name pending-))
   (device nil)
@@ -957,13 +956,13 @@ NON-MASKABLE, in delivery order: highest priority first, then arrival order."
                           (pending-priority entry) (pending-non-maskable entry)))))))
 
 (defun %interrupt-vector (interrupts non-maskable)
-  "The place holding the handler address for a signal of the given maskability (#311)."
+  "The place holding the handler address for a signal of the given maskability."
   (or (and non-maskable (interrupt-descriptor-nmi-vector interrupts))
       (interrupt-descriptor-vector interrupts)))
 
 (defun %evict-oldest-pending (machine incoming)
   "Make room for INCOMING under :DROP-OLDEST. Evicts the oldest entry of the
-lowest priority, maskable ones first (#305). The incoming signal counts as
+lowest priority, maskable ones first. The incoming signal counts as
 newest, so it is dropped itself (returns NIL) when it ranks below every
 candidate -- except a non-maskable one, which displaces a maskable entry
 regardless."
@@ -1006,7 +1005,7 @@ policy. Lives here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below
       (%push-pending machine pending)))
   t)
 
-;; #109: the hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
+;; The hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
 ;; HOOK when the descriptor declares (interrupts ...) -- DEVICE-SIGNAL
 ;; (device.lisp) reaches this indirectly through the hook; a software
 ;; INT-style instruction's semantics call SIGNAL-INTERRUPT (interrupt.lisp)
@@ -1027,7 +1026,7 @@ policy. Lives here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below
   (%enqueue-interrupt machine (list device data (%device-interrupt-priority device)
                                     (%device-interrupt-non-maskable device))))
 
-;; #108: instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
+;; Instantiate one live DEVICE from DESCRIPTOR at bus INDEX, running
 ;; its INIT hook (if any). Shared by MAKE-MACHINE/RESET below (seeding the
 ;; declared bus) and ATTACH-DEVICE (device.lisp, appending a runtime one) --
 ;; the one place that "run INIT, wrap the result in a DEVICE" happens, so
@@ -1077,15 +1076,15 @@ machine descriptor or a machine name -- or DEFAULT."
         (setf (gethash (storage-element-name element) (machine-slots m))
               (make-storage-slot element)))
       (%allocate-banks m)
-      ;; #108: seed the bus from every declared (device ...) clause, in
+      ;; Seed the bus from every declared (device ...) clause, in
       ;; declaration order -- that order becomes each device's fixed index.
       (dolist (device-descriptor (machine-descriptor-devices descriptor))
         (vector-push-extend
          (%instantiate-device m device-descriptor (fill-pointer (machine-devices m)))
          (machine-devices m)))
-      ;; #109: auto-wire the real delivery hook when the descriptor declares
+      ;; auto-wire the real delivery hook when the descriptor declares
       ;; an (interrupts ...) clause -- no host boilerplate needed. A machine
-      ;; declaring no such clause gets no hook, exactly as #108 left it.
+      ;; declaring no such clause gets no hook, exactly as before.
       (when (machine-descriptor-interrupts descriptor)
         (setf (machine-interrupt-hook m) #'%default-interrupt-hook))
       (%apply-reset-pc m)
@@ -1131,30 +1130,30 @@ main image and every .BANK image."
                 (assembly-banks assembly)))))
 
 (defun reset (machine)
-  "Zero all storage on MACHINE, including the #75 cycle counter -- which
+  "Zero all storage on MACHINE, including the cycle counter -- which
 lives on the MACHINE struct itself rather than as a storage element, so the
 loop below (driven off MACHINE-DESCRIPTOR-ELEMENTS) never sees it and must
 be told separately.
 
-#157: the cells of every :ROM region -- every bank of a banked one -- survive,
+The cells of every :ROM region -- every bank of a banked one -- survive,
 as a burned-in image does on hardware; bank selection still returns to 0.
 Each retained LOADED-PROGRAM survives too when it was loaded wholly into ROM,
 so runtime errors in ROM code keep naming source lines.
 
-#108: also restores the device bus to its *declared* shape -- any runtime-
+Also restores the device bus to its *declared* shape -- any runtime-
 attached device (ATTACH-DEVICE, device.lisp) is dropped along with any
-BIND-REGION binding (#264), every hole is
+BIND-REGION binding, every hole is
 refilled, and every declared device's INIT hook runs again, exactly as if a
 fresh MAKE-MACHINE had built the bus. MACHINE-INTERRUPT-HOOK is untouched --
 it's host wiring (who the bus signals), not machine state, so it survives a
-RESET the same way a DEBUG-SESSION's breakpoints do; this holds for #109's
+RESET the same way a DEBUG-SESSION's breakpoints do; this holds for the
 auto-installed #'%DEFAULT-INTERRUPT-HOOK exactly as for a host's own hook,
 so a host that replaced it (including with NIL, to disable delivery) keeps
-that choice across a RESET. #109's pending INTERRUPT-QUEUE, unlike the
+that choice across a RESET. the pending INTERRUPT-QUEUE, unlike the
 hook, *is* machine state and is cleared unconditionally below -- and so is
-#110's IDLE flag.
+the IDLE flag.
 
-#226: PC is set to the machine's (reset-pc n) value, when it declares one,
+PC is set to the machine's (reset-pc n) value, when it declares one,
 rather than left at zero."
   (%mark-all-dirty machine)
   (dolist (element (machine-descriptor-elements (machine-descriptor machine)))
@@ -1219,7 +1218,7 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
     (unless (member (storage-element-kind element) '(:register :flag))
       (error 'unknown-storage :machine (machine-descriptor-name (machine-descriptor machine))
                                :name name))
-    ;; SREF/(SETF SREF) are the scalar accessor -- a banked register (#13)
+    ;; SREF/(SETF SREF) are the scalar accessor -- a banked register
     ;; has no single cell 0 answer, so treat it as unaddressable by this
     ;; path rather than silently aliasing every index to one cell.
     (when (> (storage-element-count element) 1)
@@ -1238,7 +1237,7 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
       (%notify-access machine name nil :write wrapped)
       (setf (aref slot 0) wrapped))))
 
-;; #13: indexed access into a banked (:count > 1) register, e.g. CHIP8's
+;; Indexed access into a banked (:count > 1) register, e.g. CHIP8's
 ;; V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J. INDEX is evaluated at run time --
 ;; unlike STACK-REF's top-relative OFFSET, this is a plain 0-based bank
 ;; index (0 = the register's first element) since a banked register has no
@@ -1262,7 +1261,7 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
       (%notify-access machine name index :write wrapped)
       (setf (aref slot index) wrapped))))
 
-;; #163: an interrupt :VECTOR/:MESSAGE/:SAVE place -- a scalar name read
+;; An interrupt :VECTOR/:MESSAGE/:SAVE place -- a scalar name read
 ;; through SREF, or (NAME INDEX) naming one bank cell read through REGREF.
 (defun %interrupt-place (machine place)
   (if (consp place)
@@ -1274,14 +1273,14 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
       (setf (regref machine (first place) (second place)) value)
       (setf (sref machine place) value)))
 
-;; #143: the read direction of #72's NAMES -- resolving a decoded bank INDEX
-;; back to its alias, for the disassembler (and #144's debugger) to render
+;; The read direction of the NAMES -- resolving a decoded bank INDEX
+;; back to its alias, for the disassembler (and the debugger) to render
 ;; symbolically instead of as a bare integer. Takes the STORAGE-ELEMENT
 ;; itself, not a machine/name pair, since a caller here typically already has
 ;; it (e.g. off an INSTRUCTION-DESCRIPTOR's own machine) and REGREF's
 ;; MACHINE/NAME indirection would be pure overhead.
 (defun register-alias-at (element index)
-  "ELEMENT's #72 :NAMES alias at bank INDEX, downcased, or NIL when ELEMENT
+  "ELEMENT's :NAMES alias at bank INDEX, downcased, or NIL when ELEMENT
 declares no NAMES or INDEX is outside them."
   (let ((names (storage-element-names element)))
     (and names (>= index 0) (< index (length names))
@@ -1302,10 +1301,10 @@ declares no NAMES or INDEX is outside them."
       (%notify-access machine name nil :write bit)
       (setf (aref slot 0) bit))))
 
-;; #107: shared bounds-checked lookup for MREF/(SETF MREF)/MPEEK/%POKE --
+;; Shared bounds-checked lookup for MREF/(SETF MREF)/MPEEK/%POKE --
 ;; keeps the ADDRESS-OUT-OF-RANGE check and %SLOT call in one place so the
 ;; four memory accessors below can't drift on it. Returns (VALUES SLOT
-;; ELEMENT REGION), REGION being the #107 MEMORY-REGION covering ADDRESS (or
+;; ELEMENT REGION), REGION being the MEMORY-REGION covering ADDRESS (or
 ;; NIL).
 (defun %memory-slot-checked (machine name address)
   (multiple-value-bind (slot element) (%slot machine name :memory)
@@ -1319,7 +1318,7 @@ declares no NAMES or INDEX is outside them."
   (let ((entry (gethash (memory-region-name region) (machine-banks machine))))
     (svref (cdr entry) (car entry))))
 
-;; #158/#264: the bus index a :DEVICE REGION is bound to -- a runtime
+;; The bus index a :DEVICE REGION is bound to -- a runtime
 ;; BIND-REGION first, else the declared :DEVICE -- or NIL for a region with its
 ;; own hooks (or none).
 (defun %region-device-index (machine region)
@@ -1350,7 +1349,7 @@ declares no NAMES or INDEX is outside them."
         (let ((write (memory-region-write region)))
           (when write (funcall write machine address value))))))
 
-;; #299: the level's value, read from and written to its bit field.
+;; The level's value, read from and written to its bit field.
 (defun %level-value (machine privilege)
   (ldb (byte (privilege-descriptor-width privilege) (privilege-descriptor-shift privilege))
        (%sref machine (privilege-descriptor-level privilege))))
@@ -1362,7 +1361,7 @@ declares no NAMES or INDEX is outside them."
                (%sref machine name)))
     value))
 
-;; #111: rank of the level VALUE names, or -1 for a value no level maps to.
+;; Rank of the level VALUE names, or -1 for a value no level maps to.
 (defun %privilege-rank (privilege value)
   (or (position value (privilege-descriptor-values privilege)) -1))
 
@@ -1374,7 +1373,7 @@ declares no NAMES or INDEX is outside them."
       (let ((rank (%privilege-rank privilege (%level-value machine privilege))))
         (and (>= rank 0) (nth rank (privilege-descriptor-levels privilege)))))))
 
-;; #314: the write to apply after gating the masked fields of a register.
+;; The write to apply after gating the masked fields of a register.
 ;; A :VIOLATE field whose bits change below its level signals; an :IGNORE
 ;; one keeps its old bits.
 (defun %apply-field-gates (machine name fields old new)
@@ -1397,8 +1396,8 @@ declares no NAMES or INDEX is outside them."
   "Signal, per the machine's :ON-VIOLATION policy, unless the current level
 ranks at least as high as REQUIRED. NAME is the memory element accessed at
 ADDRESS, an instruction's mnemonic with ADDRESS NIL, or a register, flag or
-stack (#300) named by KIND. KIND defaults to :MEMORY with an ADDRESS and
-:INSTRUCTION without. ACCESS (#303) is :READ, :WRITE or :EXECUTE. MASK (#315) is the gated field of a register. Checked
+stack named by KIND. KIND defaults to :MEMORY with an ADDRESS and
+:INSTRUCTION without. ACCESS is :READ, :WRITE or :EXECUTE. MASK is the gated field of a register. Checked
 before any access-hook notification, so a rejected access is not reported as one."
   (let* ((descriptor (machine-descriptor machine))
          (privilege (machine-descriptor-privilege descriptor))
@@ -1431,12 +1430,12 @@ before any access-hook notification, so a rejected access is not reported as one
 
 (defun privilege-violation-info (machine)
   "The plist (:PC :KIND :NAME :ADDRESS :REQUIRED :CURRENT :ACCESS :MASK) of MACHINE's last
-privilege violation raised as an interrupt (#302), or NIL."
+privilege violation raised as an interrupt, or NIL."
   (machine-privilege-violation machine))
 
-;; #300: what a gated register, flag or stack name expands to inside
+;; What a gated register, flag or stack name expands to inside
 ;; instruction semantics (WITH-MACHINE-BINDINGS). Explicit SREF, REGREF, FLAG
-;; and stack calls in semantics are gated there too (#307); host calls are not.
+;; and stack calls in semantics are gated there too; host calls are not.
 (defmacro %check-gate (machine required name kind access)
   `(when ,required (%check-privilege ,machine ,required ,name nil ,kind ,access)))
 
@@ -1474,8 +1473,8 @@ privilege violation raised as an interrupt (#302), or NIL."
 
 (defun %mref (machine name address &optional (access :read))
   "MREF without access notification. Read memory element NAME on MACHINE at ADDRESS.
-ACCESS is :READ, or :EXECUTE (#303) for an instruction fetch. #107: an address falling
-in a :DEVICE region calls that region's READ (or its bound device's, #158)
+ACCESS is :READ, or :EXECUTE for an instruction fetch. An address falling
+in a :DEVICE region calls that region's READ (or its bound device's)
 instead of touching backing storage (0 when there is none); an address in a banked region
 reads the live bank; every other address -- including one in an unbanked
 :RAM or :ROM region -- reads backing storage directly. A device read is
@@ -1504,10 +1503,10 @@ the machine's ACCESS-HOOK."
     value))
 
 (defun (setf mref) (value machine name address)
-  "Write memory element NAME on MACHINE at ADDRESS. #107: a store into a
+  "Write memory element NAME on MACHINE at ADDRESS. A store into a
 :ROM region is dropped (:ON-WRITE :IGNORE, the default) or signals
 MEMORY-WRITE-PROTECTED (:ON-WRITE :ERROR); a store into a :DEVICE region
-calls that region's WRITE (or its bound device's, #158) instead of touching
+calls that region's WRITE (or its bound device's) instead of touching
 backing storage (discarded when there is none), passed the same cell-width-wrapped
 value every other memory write receives; a store into a banked :RAM region
 writes the live bank. Use %POKE to bypass region write policy entirely --
@@ -1537,7 +1536,7 @@ contract."
 
 (defun mpeek (machine name address)
   "Read memory element NAME on MACHINE at ADDRESS directly from storage,
-bypassing any #107 region policy -- a :DEVICE region's READ is never called
+bypassing any region policy -- a :DEVICE region's READ is never called
 (returning 0, since a device region has no backing cell of its own), and a
 :ROM region's read-only status is irrelevant since this never writes. An
 address in a banked region reads the live bank. For inspection paths (the
@@ -1554,7 +1553,7 @@ side effects merely by displaying memory."
 
 (defun %poke (machine name address value)
   "Write memory element NAME on MACHINE at ADDRESS directly into storage,
-bypassing any #107 region's write policy -- a :ROM region accepts this
+bypassing any region's write policy -- a :ROM region accepts this
 store and a :DEVICE region's WRITE is never called. An address in a banked
 region writes the live bank. For LOAD-PROGRAM and the debugger: a ROM image
 is burned in, not stored by the CPU."
@@ -1637,12 +1636,12 @@ of banked region REGION, bypassing the region's write policy."
         (setf (cdr slot) (1+ sp))
         wrapped))))
 
-;; #166: register-indexed push/pop for a (stack-pointer ...) clause -- REG
+;; register-indexed push/pop for a (stack-pointer ...) clause -- REG
 ;; holds an address into MEMORY rather than indexing a lasm :stack element.
 ;; Without :BOUNDS there is no overflow/underflow condition: a wrapping REG is
 ;; the machine's own business, same as the hardware it models. Addresses are
 ;; masked to MEMORY's :addr-width, so REG may be wider than the address space.
-;; A slot wider than a cell (#167) is one block of ascending addresses laid
+;; A slot wider than a cell is one block of ascending addresses laid
 ;; out in MEMORY's endianness, exactly as an operand is.
 (defun %sp-descriptor (machine reg)
   (let ((machine-descriptor (machine-descriptor machine)))
@@ -1711,7 +1710,7 @@ mirror of SP-PUSH. Signals STACK-UNDERFLOW when the slot leaves the clause's :BO
              (setf (sref machine reg) (- top cells))
              (%sp-read machine sp addresses))))))
 
-;; #169: top-relative access without popping, the SP counterpart of
+;; top-relative access without popping, the SP counterpart of
 ;; %STACK-REF. OFFSET counts slots of the clause's :width from the top (0 =
 ;; what SP-POP would return). Only :BOUNDS can bound it; without them any
 ;; offset addresses memory, wrapping at the address width.
@@ -1773,7 +1772,7 @@ mirror of SP-PUSH. Signals STACK-UNDERFLOW when the slot leaves the clause's :BO
 (defun stack-depth (machine name)
   (%stack-pointer machine name))
 
-;; #50: indexed access into a stack, for a stack-relative addressing mode
+;; Indexed access into a stack, for a stack-relative addressing mode
 ;; (mode.lisp's STACK-RELATIVE) or any semantics body that needs to look past
 ;; the top without popping. OFFSET is top-relative and unsigned: 0 is the
 ;; top (the most recently pushed value, same as STACK-POP would return), 1 is

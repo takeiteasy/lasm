@@ -1,8 +1,8 @@
 ;;;; interrupt.lisp
-;;;; #109: interrupt delivery -- masking, and the step-machine hook that
+;;;; Interrupt delivery -- masking, and the step-machine hook that
 ;;;; pulls a pending signal off the queue and dispatches it.
 ;;;;
-;;;; #108's device-signal/machine-interrupt-hook seam is unchanged by this
+;;;; the device-signal/machine-interrupt-hook seam is unchanged by this
 ;;;; file: MAKE-MACHINE (storage.lisp) auto-installs #'%default-interrupt-
 ;;;; hook when a machine declares (interrupts ...), and that hook -- along
 ;;;; with %enqueue-interrupt, the shared enqueue mechanics -- lives in
@@ -28,8 +28,8 @@ devices.md). DEVICE-SIGNAL (device.lisp) reaches the same queue through
 MACHINE-INTERRUPT-HOOK instead, for a device rather than an instruction
 raising its hand -- both funnel into %ENQUEUE-INTERRUPT (storage.lisp).
 
-#161: PRIORITY (an integer, higher delivers first) defaults to DEVICE's
-declared :PRIORITY, or 0 for a software-raised signal. #305: NON-MASKABLE
+PRIORITY (an integer, higher delivers first) defaults to DEVICE's
+declared :PRIORITY, or 0 for a software-raised signal. NON-MASKABLE
 ignores every mask; it defaults to DEVICE's declared :NON-MASKABLE."
   (%enqueue-interrupt machine (list device data (or priority (%device-interrupt-priority device))
                                     (if non-maskable-p
@@ -40,7 +40,7 @@ ignores every mask; it defaults to DEVICE's declared :NON-MASKABLE."
 
 (defun %interrupt-mask-state (machine interrupts)
   "What currently holds back maskable signals: T when :MASK-WHEN/:MASK-FLAG masks
-everything, otherwise the #305 mask level (:MASK-LEVEL/:MASK-LEVEL-WHEN) -- an
+everything, otherwise the mask level (:MASK-LEVEL/:MASK-LEVEL-WHEN) -- an
 integer holding back priorities at or below it -- or NIL. Evaluated once per
 delivery attempt. Masking gates delivery only, never enqueueing -- a masked
 machine still queues incoming signals (subject to :QUEUE/:ON-OVERFLOW)."
@@ -72,7 +72,7 @@ a priority, or NIL. A non-maskable entry is never masked."
       (interrupt-descriptor-max-depth interrupts)))
 
 (defun %interrupt-nesting-blocked-p (machine interrupts priority)
-  "T when a signal of PRIORITY may not start a handler now (#161): the
+  "T when a signal of PRIORITY may not start a handler now: the
 handler depth is at :MAX-DEPTH, or :NESTING :PRIORITY and it does not
 outrank the running handler."
   (let ((active (machine-interrupt-active machine))
@@ -95,7 +95,7 @@ since a child machine can add nesting to a parent's compiled RFI."
 ;;; Delivery
 
 (defun %enter-delivery-level (machine interrupts)
-  "Switch MACHINE to INTERRUPTS' :DELIVER-LEVEL (#301), if it declares one.
+  "Switch MACHINE to INTERRUPTS' :DELIVER-LEVEL, if it declares one.
 The caller has already read the :SAVE places, so a saved level register keeps
 the interrupted level."
   (let ((level (interrupt-descriptor-deliver-level interrupts)))
@@ -114,21 +114,21 @@ name STEP-MACHINE is about to fetch through, so delivery sets the same
 register STEP-MACHINE reads next, honoring any :PC override the same way
 STEP-MACHINE itself does. Pushes every :SAVE place in declared order,
 writes the signal's DATA into :MESSAGE, sets :VECTOR's value (:NMI-VECTOR's for a
-non-maskable signal that has one, #311) into PC, adds
+non-maskable signal that has one) into PC, adds
 :CYCLES to MACHINE-CYCLES, and ticks devices with that delivery cost -- but
 only when it's non-zero, so the default :CYCLES 0 doesn't add a second,
 redundant TICK-DEVICES call to every delivering step. Does nothing when
 the machine declares no (interrupts ...) clause, the queue is empty, or
 every queued signal is currently masked.
 
-#301: a violation while delivering is located at the interrupted instruction
+A violation while delivering is located at the interrupted instruction
 (MEMORY selects where to look up its source line and label).
 
-#161, #305: the delivered signal is the highest-priority unmasked one, and it
+The delivered signal is the highest-priority unmasked one, and it
 is held back while :NESTING/:MAX-DEPTH forbid another handler
 (%INTERRUPT-NESTING-BLOCKED-P), which even a non-maskable signal obeys.
 
-#110: also clears MACHINE-IDLE (storage.lisp) -- delivery is the only thing
+Also clears MACHINE-IDLE (storage.lisp) -- delivery is the only thing
 that wakes an idling machine; a masked machine's queue still fills, but it
 stays idle until unmasked, same as delivery itself."
   (let* ((interrupts (machine-descriptor-interrupts (machine-descriptor machine)))
@@ -145,7 +145,7 @@ stays idle until unmasked, same as delivery itself."
         (handler-bind ((runtime-location
                          (lambda (c) (%locate-runtime-condition c machine interrupted memory))))
           (%enter-delivery-level machine interrupts)
-          ;; #166: a :POINTER stack pushes through SP-PUSH, each place at its own width (#167).
+          ;; A :POINTER stack pushes through SP-PUSH, each place at its own width.
           (if (eq (interrupt-descriptor-stack-kind interrupts) :pointer)
               (loop for place in (interrupt-descriptor-save interrupts)
                     for value in saved

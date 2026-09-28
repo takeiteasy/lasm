@@ -88,7 +88,7 @@
    #:parse-failure
    #:unresolved-location
 
-   ;; Diagnostics (#74)
+   ;; Diagnostics
    #:diagnostic-text
    #:with-source-context
    #:lasm-warning
@@ -217,7 +217,7 @@
    #:register-alias-at
    #:wrap-value
 
-   ;; Devices (#108)
+   ;; Devices
    #:attach-device
    #:detach-device
    #:device-at
@@ -231,7 +231,7 @@
    #:machine-interrupt-hook
    #:machine-access-hook
 
-   ;; Snapshots (#112)
+   ;; Snapshots
    #:machine-snapshot
    #:restore-snapshot
    #:write-snapshot
@@ -246,7 +246,7 @@
    #:snapshot-device-unknown
    #:snapshot-unwritable
 
-   ;; Backends and items (#113)
+   ;; Backends and items
    #:defbackend
    #:find-backend
    #:backend-descriptor
@@ -290,7 +290,7 @@
    #:read-restricted-form
    #:read-restricted-forms
 
-   ;; Language compiler (#319)
+   ;; Language compiler
    #:compile-program
    #:read-source
    #:read-source-from-string
@@ -303,7 +303,7 @@
    #:program-compile-error-form
    #:program-compile-error-function
 
-   ;; Interrupts (#109)
+   ;; Interrupts
    #:signal-interrupt
    #:deliver-pending-interrupt
    #:machine-interrupt-pending-count
@@ -531,17 +531,17 @@
    #:run-for-duration
    #:machine-elapsed-seconds
 
-   ;; Idle/sleep (#110)
+   ;; Idle/sleep
    #:wake-machine
    #:machine-idle-p
 
-   ;; Decoder (#21)
+   ;; Decoder
    #:decode-instruction-at
    #:machine-cell-reader
    #:vector-cell-reader
    #:machine-peek-reader
 
-   ;; Disassembler (#21)
+   ;; Disassembler
    #:disassemble-cells
    #:disassemble-assembly
    #:disassemble-memory
@@ -559,7 +559,7 @@
    #:disassembly-line-label
    #:disassembly-line-text
 
-   ;; Listing (#25)
+   ;; Listing
    #:listing-text
    #:print-listing
    #:listing-line-at
@@ -579,17 +579,17 @@
    #:listing-lines-for-source-line
    #:*listing-max-cells-shown*
 
-   ;; Binary output (#79)
+   ;; Binary output
    #:assembly-bytes
    #:bytes-to-cells
    #:write-binary
    #:hex-text
    #:write-intel-hex
 
-   ;; CLI (#80)
+   ;; CLI
    #:run-cli
 
-   ;; Symbol table (#37)
+   ;; Symbol table
    #:assembly-symbol
    #:assembly-symbols-list
    #:assembly-data-regions
@@ -597,7 +597,7 @@
    #:symbols-text
    #:print-symbols
 
-   ;; Debugger (#76)
+   ;; Debugger
    #:make-debug-session
    #:debug-session
    #:debug-session-p
