@@ -999,7 +999,7 @@ tagged with the running expansion's mark, or SYMBOL itself outside one (#382)."
   "A copy of DATUM with FUNCTION applied to each name in it."
   (labels ((attribute (new old)
              (let ((position (%cc-form-position old)))
-               (when position (setf (gethash new *cc-positions*) position)))
+               (when (and position new) (setf (gethash new *cc-positions*) position)))
              new)
            (walk (x)
              (cond ((%cc-name-p x) (attribute (funcall function x) x))
@@ -1054,10 +1054,11 @@ UNQUOTE-SPLICING occupying an element position at depth 0 splices its value in."
 compile-time special form.")
 
 (defun %cc-meta-quote (form env)
-  "FORM's datum with each name marked (%CC-MARK-NAME)."
+  "FORM's datum with each name marked (%CC-MARK-NAME), and each NIL as (), as in Common Lisp."
   (declare (ignore env))
   (unless (= (length form) 2) (%cc-fail form "expected (quote FORM)"))
-  (%cc-map-names #'%cc-mark-name (second form)))
+  (%cc-map-names (lambda (name) (and (string/= (%designator-name name) "NIL") (%cc-mark-name name)))
+                   (second form)))
 
 (defun %cc-meta-and (form env)
   (let ((value (%cc-meta-boolean t)))

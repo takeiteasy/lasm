@@ -96,7 +96,7 @@
        (:call (f) (call f))
        (:return () (ret))))
 
-(defparameter +cv-sp+ #x100)
+(defparameter +cv-sp+ #x800)
 
 (defun %cv-run (items backend &key (machine 'callfoo) setup)
   "Assemble and run ITEMS with the stack at +CV-SP+; returns the machine."

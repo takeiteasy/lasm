@@ -68,11 +68,11 @@
 (defun %cl-compile (source backend)
   (compile-program (items-program-items (read-source-from-string source)) :backend backend))
 
-(defun %cl-run (source backend &optional (machine 'callfoo) (sp +cv-sp+))
-  "Compile, assemble and run SOURCE, with the stack at SP; returns the machine."
+(defun %cl-run (source backend &optional (machine 'callfoo))
+  "Compile, assemble and run SOURCE, with the stack at +CV-SP+; returns the machine."
   (let ((m (make-machine machine)))
     (load-program m (assemble-items (%cl-compile source backend) :backend backend))
-    (setf (sref m 'sp) sp)
+    (setf (sref m 'sp) +cv-sp+)
     (run m :max-steps 100000)
     m))
 
@@ -248,6 +248,9 @@
     ("(defmacro defgetter (n v) `(defun ,(intern (concat \"get-\" (symbol-name n))) () ,v))
       (defgetter x 7)
       (defun main () (get-x))" . 7)
+    ;; a quoted nil is (), as in Common Lisp.
+    ("(defmacro nils () (if (or 'nil (car '(nil)) (cdr '(1))) 0 (if (null 'nil) 7 9)))
+      (defun main () (nils))" . 7)
     ;; a macro can be named for a compile-time operator.
     ("(defmacro cond (c a b) `(if ,c ,a ,b))
       (defun main () (cond 1 5 6))" . 5)
@@ -982,7 +985,7 @@
     (fiveam:is (search "stopped" out))))
 
 (fiveam:test cli-run-executes-the-macros-example
-  (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi 'callfoo #x800)))
+  (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi)))
     (fiveam:is (= 287 (%cv-a m)))))
 
 (fiveam:test cli-compile-writes-an-items-program-that-run-accepts

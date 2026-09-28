@@ -3,7 +3,7 @@ functions. `()` is false; anything else, including `t`, is true.
 
 | Form | Does |
 | --- | --- |
-| `(quote FORM)`, `'FORM` | FORM itself, each name in it marked. |
+| `(quote FORM)`, `'FORM` | FORM itself, each name in it marked; a `nil` in it is `()`. |
 | `` (quasiquote FORM) ``, `` `FORM `` | FORM as a template; see above. |
 | `(if TEST THEN [ELSE])` | THEN when TEST is true, else ELSE (`()` if omitted). |
 | `(let ((NAME VALUE)...) BODY...)`, `let*` | As the language's own `let`, but at compile time. |
