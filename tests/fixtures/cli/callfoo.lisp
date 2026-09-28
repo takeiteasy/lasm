@@ -139,6 +139,15 @@
                 (logior (logand word #xFF00) byte)
                 (logior (logand word #x00FF) (ash byte 8)))))))
 
+;; A load and store by address, for a backend's :peek-label/:poke-label.
+(definstruction callfoo ldm (modes call-rt)
+  (encoding (opcode 250) (operand dst :width 1) (operand addr :width 1))
+  (semantics (set! (r dst) (mref machine 'ram addr))))
+
+(definstruction callfoo stm (modes call-rt)
+  (encoding (opcode 251) (operand src :width 1) (operand addr :width 1))
+  (semantics (set! (mref machine 'ram addr) (r src))))
+
 (definstruction callfoo jmp (modes absolute)
   (encoding (opcode 66) (operand :mode))
   (semantics (set! pc operand)))

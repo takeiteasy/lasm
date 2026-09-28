@@ -177,6 +177,16 @@ definition, and a backend defines those its programs use; `:peek-byte`/
 the byte address those take; without it, the address is multiplied by the
 8-bit characters a cell holds.
 
+Optional `:peek-label (d label)` and `:poke-label (label s)` read and write the
+word at a label in one operation. The compiler uses them for a global and a
+static frame slot, in place of `:const` then `:peek`/`:poke`.
+
+```lisp
+(ops (:peek-label (d label) (ldwm (:hi d) (:lo d) label))
+     (:poke-label (label s) (stwm (:hi s) (:lo s) label)))
+;; (+ g 1)  ->  :peek-label a gvg, :add-imm a 1
+```
+
 Each arithmetic and comparison operation may also have an `-imm` and a `-slot`
 variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler
 uses [when the right operand allows](language.md#backend-requirements).

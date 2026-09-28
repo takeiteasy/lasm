@@ -34,8 +34,9 @@ mode; a program can still ask for `stack` when the backend defines them.
 
 None of `:get` `:set` `:alloc` `:free` `:push` `:pop`, nor the `-slot` variants,
 nor a `(frame :slot ...)` operand kind: a backend with no slot operand omits it.
-A static slot is read with `:const` and `:peek`, and written with `:const` and
-`:poke`, so those are needed, as is `:call`, `:return` and the rest of the
+A static slot is read with `:peek-label` and written with `:poke-label`, or
+with `:const` then `:peek`/`:poke` when the backend has no such operations, so
+those are needed, as is `:call`, `:return` and the rest of the
 [backend requirements](language.md#backend-requirements). The registers and
 `:save` of the stack convention are unused: no register is held across a call.
 
@@ -113,7 +114,6 @@ taken to be any entered function that takes as many arguments.
 | --- | --- |
 | A recursive function is an error; it cannot keep a stack frame. | [#420](https://todo.sr.ht/~takeiteasy/lasm/420) |
 | No value is held across a call in a callee-saved register. | [#421](https://todo.sr.ht/~takeiteasy/lasm/421) |
-| A global or static word takes two instructions to read or write, `:const` and `:peek`/`:poke`. | [#422](https://todo.sr.ht/~takeiteasy/lasm/422) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been

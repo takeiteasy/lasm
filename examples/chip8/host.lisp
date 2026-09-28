@@ -80,6 +80,19 @@
   (encoding (opcode 6) (operand ah :width 1) (operand al :width 1) (operand src :width 1))
   (semantics (set! (mref machine 'ram (byte-pair (r ah) (r al))) (r src))))
 
+;;; `ldwm`/`stwm` take the address as an immediate instead of a register pair.
+(definstruction host ldwm (modes h-rrt)
+  (encoding (opcode 36) (operand dh :width 1) (operand dl :width 1) (operand address :width 2))
+  (semantics
+    (set! (r dl) (mref machine 'ram address))
+    (set! (r dh) (mref machine 'ram (wrap-value (1+ address) 16)))))
+
+(definstruction host stwm (modes h-rrt)
+  (encoding (opcode 37) (operand sh :width 1) (operand sl :width 1) (operand address :width 2))
+  (semantics
+    (set! (mref machine 'ram address) (r sl))
+    (set! (mref machine 'ram (wrap-value (1+ address) 16)) (r sh))))
+
 ;;; Control flow. A call pushes the return address a byte at a time, high byte
 ;;; first, so it lies in memory as a little-endian word.
 (definstruction host jmp (modes h-addr)
@@ -240,6 +253,8 @@
        (:move (d s) (mov (:lo d) (:lo s)) (mov (:hi d) (:hi s)))
        (:peek (d a) (ldw (reg (:hi d)) (reg (:lo d)) (reg (:hi a)) (reg (:lo a))))
        (:poke (a s) (stw (reg (:hi a)) (reg (:lo a)) (reg (:hi s)) (reg (:lo s))))
+       (:peek-label (d label) (ldwm (:hi d) (:lo d) label))
+       (:poke-label (label s) (stwm (:hi s) (:lo s) label))
        ;; The byte is read before the high half is cleared: D may be A.
        (:peek-byte (d a) (ldb (reg (:lo d)) (reg (:hi a)) (reg (:lo a))) (ldi (:hi d) (imm 0)))
        (:poke-byte (a s) (stb (reg (:hi a)) (reg (:lo a)) (reg (:lo s))))

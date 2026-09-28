@@ -1720,3 +1720,51 @@ two |#
     (declare (ignore out))
     (fiveam:is (/= 0 status))
     (fiveam:is (search "--frames must be static or stack" err))))
+
+;;; #429: a load and store by label
+
+(defbackend cl-label-abi (:extends cl-static-abi)
+  (ops (:peek-label (d label) (ldm d label))
+       (:poke-label (label s) (stm s label))))
+
+(defun %cl-label-op-counts (source backend)
+  (let ((names (%cl-op-names (%cl-compile source backend))))
+    (flet ((count-of (name) (count name names :test #'string-equal)))
+      (list (count-of "PEEK-LABEL") (count-of "POKE-LABEL") (count-of "PEEK") (count-of "POKE")))))
+
+(fiveam:test label-ops-run-the-static-programs
+  (loop for (source . expected) in +cl-static-programs+
+        do (let ((m (%cl-run source 'cl-label-abi)))
+             (fiveam:is (= expected (%cv-a m)) "~A" source))))
+
+(fiveam:test label-ops-replace-const-and-peek-poke-for-globals-and-static-slots
+  (let ((source "(defvar g 1) (defun f (x) (let ((y (+ x g))) (set g y) y)) (defun main () (f 2))"))
+    (destructuring-bind (peek-label poke-label peek poke) (%cl-label-op-counts source 'cl-label-abi)
+      (fiveam:is (plusp peek-label))
+      (fiveam:is (plusp poke-label))
+      (fiveam:is (= 0 peek))
+      (fiveam:is (= 0 poke)))
+    (destructuring-bind (peek-label poke-label peek poke) (%cl-label-op-counts source 'cl-static-abi)
+      (fiveam:is (= 0 peek-label))
+      (fiveam:is (= 0 poke-label))
+      (fiveam:is (plusp peek))
+      (fiveam:is (plusp poke)))
+    (fiveam:is (= 3 (%cv-a (%cl-run source 'cl-label-abi))))))
+
+(fiveam:test label-ops-leave-computed-addresses-to-peek-and-poke
+  (destructuring-bind (peek-label poke-label peek poke)
+      (%cl-label-op-counts "(defarray a 2) (defun main () (aset a 1 5) (aref a 1))" 'cl-label-abi)
+    (fiveam:is (= 0 peek-label))
+    (fiveam:is (= 0 poke-label))
+    (fiveam:is (plusp peek))
+    (fiveam:is (plusp poke))))
+
+(fiveam:test label-ops-initialise-a-nonzero-global-in-the-stub
+  (let ((m (%cl-run "(defvar g 7) (defun main () g)" 'cl-label-abi)))
+    (fiveam:is (= 7 (%cv-a m)))))
+
+(fiveam:test label-ops-must-take-two-parameters
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:machine callfoo) (ops (:peek-label (a b c) (ldi a b)))))
+                    'backend-definition-error))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:machine callfoo) (ops (:poke-label (a) (ldi a 1)))))
+                    'backend-definition-error)))

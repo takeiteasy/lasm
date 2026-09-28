@@ -371,6 +371,7 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
 
 (defparameter +backend-language-op-arities+
   (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
+            ("PEEK-LABEL" . 2) ("POKE-LABEL" . 2)
             ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2) ("BYTE-ADDRESS" . 1)
             ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0))
           (loop for name in +backend-binary-ops+

@@ -38,6 +38,10 @@
 ;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
 ;;;; operation when it defines one, instead of loading into the temp register.
 ;;;;
+;;;; A global or static slot loads and stores through the backend's optional
+;;;; :PEEK-LABEL (d label) and :POKE-LABEL (label s), one operation instead of
+;;;; :const then :peek/:poke.
+;;;;
 ;;;; A leaf left operand swaps to the right when that lets a variant
 ;;;; apply and the right operand has none: a commutative operator keeps its
 ;;;; name, a comparison flips its direction.
@@ -254,11 +258,24 @@ cannot be a register alias or a generated label."
 (defun %cc-const (value)
   (%cc-op :const *cc-acc* value))
 
+(defun %cc-load-label (label register register-name)
+  "The word at LABEL into REGISTER."
+  (if (%cc-op-p :peek-label)
+      (%cc-op :peek-label register label)
+      (progn (%cc-op :const register label)
+             (%cc-op :peek register-name register-name))))
+
+(defun %cc-store-label (label source source-name)
+  "SOURCE into the word at LABEL. Without :poke-label the address goes through the temp register."
+  (if (%cc-op-p :poke-label)
+      (%cc-op :poke-label label source)
+      (progn (%cc-op :const *cc-temp* label)
+             (%cc-op :poke *cc-temp-name* source-name))))
+
 (defun %cc-store (slot)
   "The accumulator into the frame SLOT. A static slot goes through the temp register."
   (if (eq (first slot) :static)
-      (progn (%cc-op :const *cc-temp* (second slot))
-             (%cc-op :poke *cc-temp-name* *cc-acc-name*))
+      (%cc-store-label (second slot) *cc-acc* *cc-acc-name*)
       (%cc-op :set slot *cc-acc*)))
 
 (defun %cc-register-operand (name)
@@ -460,8 +477,7 @@ escaped, and each function whose label it spells as taken."
     (t (let ((location (%cc-lookup form)))
          (ecase (first location)
            ((:local :arg) (%cc-op :get register location))
-           ((:global :static) (%cc-op :const register (second location))
-            (%cc-op :peek register-name register-name))
+           ((:global :static) (%cc-load-label (second location) register register-name))
            (:constant (%cc-op :const register (second location)))
            (:address (%cc-op :const register (second location))))))))
 
@@ -548,8 +564,7 @@ can do that a :caller-saved register does not survive."
 
 (defun %cc-load-leaf-slot (slot)
   "The static SLOT's value into the accumulator."
-  (%cc-op :const *cc-acc* (second slot))
-  (%cc-op :peek *cc-acc-name* *cc-acc-name*))
+  (%cc-load-label (second slot) *cc-acc* *cc-acc-name*))
 
 (defun %cc-to-temp (form)
   "FORM's value into the temp register, leaving the accumulator as it is.
@@ -691,7 +706,8 @@ its source."
   "Instructions to load FORM into a register: 0 for a non-leaf, whose cost
 every way of computing the pair shares."
   (cond ((not (%cc-leaf-p form)) 0)
-        ((and (%cc-name-p form) (member (first (%cc-lookup form)) '(:global :static))) 2)
+        ((and (%cc-name-p form) (member (first (%cc-lookup form)) '(:global :static)))
+         (if (%cc-op-p :peek-label) 1 2))
         (t 1)))
 
 (defun %cc-pair-cost (op swapped left right)
@@ -951,11 +967,14 @@ comparison, to a landing that loads the result."
       ((:local :arg :static) (%cc-expr (third form))
        (%cc-hold (%cc-local-cell (second form)) (third form))
        (%cc-store location))
-      (:global (%cc-value-to-temp (third form))
-       (%cc-hold (second location) (third form))
-       (%cc-op :const *cc-acc* (second location))
-       (%cc-op :poke *cc-acc-name* *cc-temp-name*)
-       (%cc-op :move *cc-acc* *cc-temp*))
+      (:global (%cc-hold (second location) (third form))
+       (if (%cc-op-p :poke-label)
+           (progn (%cc-expr (third form))
+                  (%cc-store-label (second location) *cc-acc* *cc-acc-name*))
+           (progn (%cc-value-to-temp (third form))
+                  (%cc-op :const *cc-acc* (second location))
+                  (%cc-op :poke *cc-acc-name* *cc-temp-name*)
+                  (%cc-op :move *cc-acc* *cc-temp*))))
       (:constant (%cc-fail form "~A is a constant" (%source-name (second form) nil)))
       (:address (%cc-fail form "~A is an array or string" (%source-name (second form) nil))))))
 
@@ -1241,8 +1260,7 @@ function value takes, or that the function values reaching its target do not."
            (target (%cc-register-operand register))
            (name (%cc-symbol (string-downcase register))))
       (if callee-slot
-          (progn (%cc-op :const target (second callee-slot))
-                 (%cc-op :peek name name))
+          (%cc-load-label (second callee-slot) target name)
           (%cc-load-leaf callee target name))
       (%cc-emit (list :call target))
       (dotimes (i held) (%cc-free)))
@@ -2220,9 +2238,12 @@ or NIL for what the backend's (frame :static t) says."
         (loop for (label value) in globals
               do (unless (zerop value)
                    (setf (gethash label *cc-holdings*) :unknown)
-                   (%cc-op :const *cc-acc* label)
-                   (%cc-op :const *cc-temp* value)
-                   (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
+                   (if (%cc-op-p :poke-label)
+                       (progn (%cc-const value)
+                              (%cc-store-label label *cc-acc* *cc-acc-name*))
+                       (progn (%cc-op :const *cc-acc* label)
+                              (%cc-op :const *cc-temp* value)
+                              (%cc-op :poke *cc-acc-name* *cc-temp-name*)))))
         (%cc-emit (list :call (car main)))
         (%cc-op :halt)
         (let ((stub (nreverse *cc-out*))

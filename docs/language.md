@@ -390,6 +390,7 @@ those registers is a pair.
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
 | `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
+| `:peek-label (d label)` `:poke-label (label s)` | Optional: a word at a label, for a global or a [static frame](static-frames.md) slot. Without them, `:const` then `:peek`/`:poke`. |
 | `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` and, on most machines, `aref-byte`/`aset-byte` (#366, #379). |
 | `:byte-address (d)` | Optional: `d`, a cell address, becomes the byte address `:peek-byte` takes. Default: times the characters a cell holds. |
 | `:jump (target)` `:branch-zero (r target)` | Jump; jump when `r` is `0`. |
