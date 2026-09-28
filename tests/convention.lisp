@@ -404,6 +404,12 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (search "not a declared operand kind"
                        (definition-error '(defbackend cv-bad-abi (:machine callfoo)
                                            (frame :slot nowhere) (operands (reg call-reg))))))
+    (fiveam:is (search "drop :slot"
+                       (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                                           (frame :static t :slot nowhere) (operands (reg call-reg))))))
+    (fiveam:is (not (search "drop :slot"
+                            (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                                                (frame :slot nowhere) (operands (reg call-reg)))))))
     (fiveam:is (search "takes 1 parameter"
                        (definition-error '(defbackend cv-bad-abi (:machine callfoo)
                                            (operands (reg call-reg)) (ops (:push (a b) (pushv a)))))))))

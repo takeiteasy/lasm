@@ -32,7 +32,8 @@ mode; a program can still ask for `stack` when the backend defines them.
 
 ## What a backend needs
 
-None of `:get` `:set` `:alloc` `:free` `:push` `:pop`, nor the `-slot` variants.
+None of `:get` `:set` `:alloc` `:free` `:push` `:pop`, nor the `-slot` variants,
+nor a `(frame :slot ...)` operand kind: a backend with no slot operand omits it.
 A static slot is read with `:const` and `:peek`, and written with `:const` and
 `:poke`, so those are needed, as is `:call`, `:return` and the rest of the
 [backend requirements](language.md#backend-requirements). The registers and

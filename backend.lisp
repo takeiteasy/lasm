@@ -512,7 +512,8 @@ operand differently by kind, such as a register versus a label."
                              ("frame :slot" ,(getf (backend-descriptor-frame descriptor) :slot))
                              ("frame :stack-slot" ,(getf (backend-descriptor-frame descriptor) :stack-slot)))
         when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
-          do (%backend-error "~A: ~A is not a declared operand kind" what kind)))
+          do (%backend-error "~A: ~A is not a declared operand kind~:[~;; with :static t and no slot operand, drop :slot~]"
+                             what kind (and (equal what "frame :slot") (getf (backend-descriptor-frame descriptor) :static)))))
 
 (defun %half-form-p (form)
   "True when FORM is (:hi X) or (:lo X): the high or low half of a register pair's word."
