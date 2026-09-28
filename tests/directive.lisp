@@ -165,3 +165,15 @@ end: .emit 1, 0" :machine 'instr-test-machine))))
                   (defdirective ".bad" (width &rest v) (emit v width))
                   (defdirective ".bad" (&rest v) (emit width v))))
     (fiveam:signals directive-definition-error (eval form))))
+
+;; #387 -- .EMIT's width is walked for layout cycles like .RES's count.
+(fiveam:test emit-width-depending-on-its-own-address-is-a-cycle
+  (fiveam:signals assembly-error
+    (assemble ".emit end - start, 1
+end:" :machine 'instr-test-machine))
+  (fiveam:signals assembly-error
+    (assemble ".emit end, 1
+end: .byte 0" :machine 'instr-test-machine))
+  (fiveam:is (equalp #(1 0 0)
+                     (assembly-cells (assemble "w = 3
+.emit w, 1" :machine 'instr-test-machine)))))

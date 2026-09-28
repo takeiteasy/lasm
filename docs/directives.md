@@ -71,7 +71,9 @@ fixed directives lack. `WIDTH` is a positive constant expression:
 .emit 3, "a", 0      ; 61 00 00  00 00 00
 ```
 
-Values and strings follow the same rules as `.word`. Its own definition is
+Values and strings follow the same rules as `.word`.
+`WIDTH` follows `.res`'s count rules: it may use earlier assignments or labels, and
+a cyclic address dependency is an error. Its own definition is
 `(defdirective ".emit" (width &rest values) (emit width values))`.
 
 ## `.cell` / `.dat`

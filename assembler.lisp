@@ -1217,6 +1217,12 @@ this statement. AST itself is never modified (it may be a cached operand AST,
                   (setf (aref directives i) statement)
                   (add (after i) (before i))
                   (operand statement directive i (after i)))
+                 (:emit
+                  (add (after i) (before i))
+                  (when (eq (directive-descriptor-width directive) :operand)
+                    (setf (aref directives i) statement)
+                    (operand statement directive i (after i)))
+                  (setf emitted-p t))
                  ((:assign :reassign)
                   (add (after i) (before i))
                   (walk-expr (%qualify-locals!
