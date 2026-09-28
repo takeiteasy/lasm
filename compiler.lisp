@@ -49,11 +49,14 @@
 ;;;; #390: an and/or whose value is used jumps on its comparisons into a
 ;;;; shared 0/1 landing when the operands save more than the landing costs.
 ;;;; #391: so does a nested not/and/or operand, by its estimated saving
-;;;; (%CC-COSTS).
+;;;; (%CC-COSTS). #392: that estimate counts the :cmp or :branch-cmp variant
+;;;; each side would use (%CC-PAIR-COST).
 ;;;;
 ;;;; #376: an operand holds a :callee-saved register across a call only inside a
 ;;;; loop, or when the function already saves that register; otherwise the
-;;;; stack costs less than the prologue/epilogue pair.
+;;;; stack costs less than the prologue/epilogue pair. #394: with :optimize
+;;;; :speed, a first compile counts the call sites per register and a register
+;;;; two or more claim (a loop site counts twice) is held outside loops too.
 ;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
 ;;;; writes, so an operand holding another register may reach it. #393: a
 ;;;; declared :callee-saved one is added to the function's :save.
@@ -100,6 +103,9 @@
 (defvar *cc-volatile* nil "Upcased names the register allocator (#373) may hold a value in across ordinary code, least-preferred last.")
 (defvar *cc-preserved* nil "Upcased names the allocator may hold a value in across a call, saving it in the function's prologue.")
 (defvar *cc-saves* nil "Upcased names from *CC-PRESERVED* the function being compiled has used, for its :save option.")
+(defvar *cc-optimize* :size "The compile-program :optimize option: :SIZE, or :SPEED to share a preserved register between call sites (#394).")
+(defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that two or more call sites of the function being compiled claim, so a site outside a loop may claim them too (#394).")
+(defvar *cc-counting* nil "NIL, or during the counting pass an EQUAL hash table, upcased register name -> the call sites that would claim it (#394).")
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
@@ -313,27 +319,34 @@ call's target may not preserve a :caller-saved register the way it preserves
             (when k (setf call t))))
         (values clobbers call))))
 
-;; TODO: a first preserved register is claimed only inside a loop, so one-off
-;; sites outside a loop never share one; a two-pass count of sites would
-;; recover the memory-access saving (#394).
 (defun %cc-take (form)
   "A register from the pool to hold a value across compiling FORM, an
 operand not yet compiled, or NIL to fall back to the stack (#373). Registers
 an (asm ...) in FORM may clobber (%CC-HAZARDS) are skipped (#377). When FORM
 calls a function the pick is a *CC-PRESERVED* register, recorded in
 *CC-SAVES* for the function's prologue and epilogue to save and restore: one
-already saved, else a new one only inside a loop (#376). Otherwise it is a
+already saved, else a new one only inside a loop (#376) or when it is in
+*CC-SHARED* (#394). The counting pass (*CC-COUNTING*) takes the first free one
+and counts the site, twice inside a loop. Otherwise the pick is a
 *CC-VOLATILE* register, since a call is the only thing a compiled operand
 can do that a :caller-saved register does not survive."
   (multiple-value-bind (clobbers call) (%cc-hazards form)
     (flet ((usable (pool)
              (remove-if (lambda (name) (or (eq clobbers :all) (member name clobbers :test #'string=)))
-                        pool)))
+                        pool))
+           (among (names pool)
+             (find-if (lambda (name) (member name names :test #'string=)) pool)))
       (if call
           (let* ((pool (usable *cc-preserved*))
-                 (register (or (find-if (lambda (name) (member name *cc-saves* :test #'string=)) pool)
-                               (and (plusp *cc-loop-depth*) (first pool)))))
-            (when register (pushnew register *cc-saves* :test #'string=))
+                 (register (if *cc-counting*
+                               (first pool)
+                               (or (among *cc-saves* pool)
+                                   (and (plusp *cc-loop-depth*) (first pool))
+                                   (among *cc-shared* pool)))))
+            (when register
+              (pushnew register *cc-saves* :test #'string=)
+              (when *cc-counting*
+                (incf (gethash register *cc-counting* 0) (if (plusp *cc-loop-depth*) 2 1))))
             register)
           (first (usable *cc-volatile*))))))
 
@@ -444,17 +457,44 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
                ((:constant :address) (let ((name (variant "IMM"))) (and name (list name (second location)))))
                (:global nil)))))))
 
-(defun %cc-pair (op swapped left right)
-  "Compile the operands of the operation OP, LEFT into the accumulator, and
-return (NAME ARGUMENT...): the operation to emit after the accumulator, and
-its source. That is RIGHT's variant (#374); else SWAPPED, OP with its operands
-swapped, on LEFT's variant when RIGHT is safe to evaluate first (#388); else OP
-on the temp register."
+(defun %cc-pair-plan (op swapped left right)
+  "(KIND . OPERATION) for the operation OP on LEFT and RIGHT: :DIRECT with RIGHT's
+variant (#374); else :SWAP with SWAPPED, OP with its operands swapped, on LEFT's
+variant when RIGHT is safe to evaluate first (#388); else :OPERANDS, OP on the
+temp register, with no OPERATION."
   (let ((direct (%cc-direct op right))
         (swap (and swapped (%cc-direct swapped left))))
-    (cond (direct (%cc-expr left) direct)
-          ((and swap (%cc-swappable-p left right)) (%cc-expr right) swap)
-          (t (%cc-operands left right) (list op *cc-temp*)))))
+    (cond (direct (cons :direct direct))
+          ((and swap (%cc-swappable-p left right)) (cons :swap swap))
+          (t (list :operands)))))
+
+(defun %cc-pair (op swapped left right)
+  "Compile the operands of the operation OP as %CC-PAIR-PLAN plans, and
+return (NAME ARGUMENT...): the operation to emit after the accumulator, and
+its source."
+  (destructuring-bind (kind . operation) (%cc-pair-plan op swapped left right)
+    (ecase kind
+      (:direct (%cc-expr left) operation)
+      (:swap (%cc-expr right) operation)
+      (:operands (%cc-operands left right) (list op *cc-temp*)))))
+
+(defun %cc-load-cost (form)
+  "Instructions to load FORM into a register: 0 for a non-leaf, whose cost
+every way of computing the pair shares."
+  (cond ((not (%cc-leaf-p form)) 0)
+        ((and (%cc-name-p form) (eq (first (%cc-lookup form)) :global)) 2)
+        (t 1)))
+
+(defun %cc-pair-cost (op swapped left right)
+  "Instructions, operation included, that %CC-PAIR emits for OP on LEFT and
+RIGHT, beyond computing a non-leaf operand."
+  (ecase (first (%cc-pair-plan op swapped left right))
+    (:direct (1+ (%cc-load-cost left)))
+    (:swap (1+ (%cc-load-cost right)))
+    (:operands (+ 1 (%cc-load-cost left)
+                  (cond ((%cc-leaf-p right) (%cc-load-cost right))
+                        ((%cc-swappable-p left right) 1)
+                        (t 3))))))
 
 (defun %cc-apply (op form)
   "The accumulator OP FORM, into the accumulator."
@@ -498,12 +538,14 @@ on the temp register."
     (and entry (assoc (second entry) +cc-negations+) (= (length form) 3)
          (list (second entry) (second form) (third form)))))
 
-(defun %cc-branch-op (comparison sense)
-  "The backend's :BRANCH-cmp that jumps when the COMPARISON, (OP LEFT RIGHT), is
-true if SENSE or false if not, or NIL when it has none."
-  (let ((name (%cc-branch-name (if sense (first comparison)
-                                   (cdr (assoc (first comparison) +cc-negations+))))))
-    (and name (%cc-op-p name) name)))
+(defun %cc-branch-plan (comparison sense)
+  "(BRANCH SWAPPED) for the jump when the COMPARISON, (OP LEFT RIGHT), is true if
+SENSE or false if not: the backend's :BRANCH-cmp, and the one it becomes with
+its operands swapped. NIL when the backend has no such :BRANCH-cmp."
+  (let* ((op (if sense (first comparison) (cdr (assoc (first comparison) +cc-negations+))))
+         (name (%cc-branch-name op)))
+    (and name (%cc-op-p name)
+         (list name (%cc-branch-name (cdr (assoc op +cc-flips+)))))))
 
 (defun %cc-branch-nonzero (target)
   "Jump to TARGET when the accumulator is not 0 (#389)."
@@ -526,7 +568,7 @@ and, or and not of conditions jump between their operands and produce no value."
   (let* ((head (%cc-head form))
          (args (and head (rest form)))
          (comparison (%cc-comparison form))
-         (branch (and comparison (%cc-branch-op comparison sense))))
+         (branch (and comparison (%cc-branch-plan comparison sense))))
     (cond ((and (equal head "NOT") (= (length args) 1))
            (%cc-branch (first args) (not sense) target))
           ((and (member head '("AND" "OR") :test #'equal) args)
@@ -539,10 +581,7 @@ and, or and not of conditions jump between their operands and produce no value."
              (when skip (%cc-emit (list :label skip)))))
           (branch
            (let* ((*cc-form* form)
-                  (op (if sense (first comparison)
-                          (cdr (assoc (first comparison) +cc-negations+))))
-                  (pair (%cc-pair branch (%cc-branch-name (cdr (assoc op +cc-flips+)))
-                                  (second comparison) (third comparison))))
+                  (pair (apply #'%cc-pair (append branch (rest comparison)))))
              (apply #'%cc-op (first pair) *cc-acc* (append (rest pair) (list target)))))
           (sense (%cc-expr form)
                  (%cc-branch-nonzero target))
@@ -583,18 +622,21 @@ and, or and not of conditions jump between their operands and produce no value."
           ((equal head "AND") (or (null args) (%cc-boolean-p (car (last args)))))
           ((equal head "OR") (every #'%cc-boolean-p args)))))
 
-;; TODO: a comparison counts as one instruction, ignoring -imm/-slot variants
-;; of :cmp and :branch-cmp; count the variants or trial-compile both ways (#392).
 (defun %cc-costs (form)
-  "Estimated instructions, beyond loading operands, FORM needs to compute its
-value, to jump when it is false and to jump when it is true, as three values.
-Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT (#391)."
+  "Estimated instructions FORM needs to compute its value, to jump when it is
+false and to jump when it is true, as three values. A leaf operand's load counts,
+and a comparison or not counts the :cmp or :branch-cmp variant %CC-PAIR would
+use (#392); a non-leaf operand's own cost is left out, as every way of computing
+FORM shares it. Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT (#391)."
   (let* ((head (%cc-head form))
          (args (and head (rest form)))
          (comparison (%cc-comparison form)))
     (cond ((and (equal head "NOT") (= (length args) 1))
            (multiple-value-bind (value false true) (%cc-costs (first args))
-             (values (1+ value) true false)))
+             (let ((*cc-form* form))
+               (values (+ (%cc-pair-cost :eq :eq (first args) 0)
+                          (if (%cc-leaf-p (first args)) 0 value))
+                       true false))))
           ((and (member head '("AND" "OR") :test #'equal) args)
            (let ((stop (equal head "OR")) (false 0) (true 0) (unfused 0) (saving 0))
              (loop for (arg . more) on args
@@ -608,10 +650,17 @@ Mirrors %CC-BRANCH and %CC-SHORT-CIRCUIT (#391)."
                                  (incf unfused v)))))
              (values (- unfused (max 0 (- saving 2))) false true)))
           (comparison
-           (flet ((jump (sense)
-                    (if (%cc-branch-op comparison sense) 1 (1+ (%cc-jump-cost sense)))))
-             (values 1 (jump nil) (jump t))))
-          (t (values 0 (%cc-jump-cost nil) (%cc-jump-cost t))))))
+           (let* ((*cc-form* form)
+                  (value (apply #'%cc-pair-cost (first comparison) (%cc-swapped (first comparison))
+                                (rest comparison))))
+             (flet ((jump (sense)
+                      (let ((plan (%cc-branch-plan comparison sense)))
+                        (if plan
+                            (apply #'%cc-pair-cost (append plan (rest comparison)))
+                            (+ value (%cc-jump-cost sense))))))
+               (values value (jump nil) (jump t)))))
+          (t (let ((load (%cc-load-cost form)))
+               (values load (+ load (%cc-jump-cost nil)) (+ load (%cc-jump-cost t))))))))
 
 (defun %cc-saving (arg sense value false true)
   "Instructions saved by jumping on the and/or operand ARG, given its %CC-COSTS,
@@ -1502,35 +1551,53 @@ names must stay literal for the rest of the compiler to resolve."
 
 ;;; Program
 
+(defun %cc-function-items (name params body label)
+  "The (:function LABEL ...) item for BODY, already macro-expanded."
+  (let* ((*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-saves* '())
+         (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
+                          (if (eq args :stack) 0 (length args)))))
+    (loop for param in params
+          for index from 0
+          do (let ((key (%cc-local-key param name)))
+               (when (assoc key *cc-env* :test #'string=)
+                 (%cc-fail name "~A is a parameter twice" (%source-name param nil)))
+               (if (< index arg-registers)
+                   (let ((slot (%cc-alloc)))
+                     (let ((*cc-form* name))
+                       (%cc-op :set slot (list :arg index)))
+                     (cl:push (cons key slot) *cc-env*))
+                   (cl:push (cons key (list :arg index)) *cc-env*))))
+    (%cc-progn body)
+    (list* :function label
+           (append (list :args (length params) :locals *cc-max*)
+                   ;; A preserved register %CC-TAKE used (#373); the backend's
+                   ;; own :callee-saved convention pushes and pops it, which
+                   ;; also restores it correctly across an early (return).
+                   (and *cc-saves* (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
+                                                        (reverse *cc-saves*)))))
+           (nreverse (cl:push (list :return) *cc-out*)))))
+
+;; TODO: every site counts once, a loop site twice; weight by branch and loop
+;; nesting instead (#400).
+(defun %cc-shared-registers (name params body label)
+  "The upcased names of the preserved registers two or more call sites of the
+function would claim (#394), counted by compiling it once and discarding the items."
+  (let ((*cc-counting* (make-hash-table :test 'equal))
+        (*cc-labels* *cc-labels*)
+        (*cc-indirect-calls* *cc-indirect-calls*))
+    (%cc-function-items name params body label)
+    (loop for register being the hash-keys of *cc-counting* using (hash-value sites)
+          when (>= sites 2) collect register)))
+
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
            ;; first), regardless of where NAME's DEFUN sits relative to them (#367).
            (body (mapcar #'%cc-expand-all body))
-           (*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-saves* '())
-           (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
-                            (if (eq args :stack) 0 (length args)))))
-      (loop for param in params
-            for index from 0
-            do (let ((key (%cc-local-key param name)))
-                 (when (assoc key *cc-env* :test #'string=)
-                   (%cc-fail name "~A is a parameter twice" (%source-name param nil)))
-                 (if (< index arg-registers)
-                     (let ((slot (%cc-alloc)))
-                       (let ((*cc-form* name))
-                         (%cc-op :set slot (list :arg index)))
-                       (cl:push (cons key slot) *cc-env*))
-                     (cl:push (cons key (list :arg index)) *cc-env*))))
-      (%cc-progn body)
-      (list* :function label
-             (append (list :args (length params) :locals *cc-max*)
-                     ;; A preserved register %CC-TAKE used (#373); the backend's
-                     ;; own :callee-saved convention pushes and pops it, which
-                     ;; also restores it correctly across an early (return).
-                     (and *cc-saves* (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
-                                                          (reverse *cc-saves*)))))
-             (nreverse (cl:push (list :return) *cc-out*))))))
+           (*cc-shared* (and (eq *cc-optimize* :speed)
+                             (%cc-shared-registers name params body label))))
+      (%cc-function-items name params body label))))
 
 (defun %cc-registers ()
   "Set the accumulator, the temporary register, and the volatile and
@@ -1692,15 +1759,20 @@ defined later in FORMS."
                                               (list :directive (%cc-symbol "asciz") payload)
                                               (%cc-word-data (list payload 0))))))))))
 
-(defun compile-program (forms &key backend positions source file)
+(defun compile-program (forms &key backend positions source file (optimize :size))
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and
 (defconstant ...) forms, for BACKEND. A stub at the start stores the
 globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR.
 POSITIONS, SOURCE and FILE, as READ-SOURCE and READ-SOURCE-FROM-STRING set
-them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
+them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362). OPTIMIZE
+is :SIZE, the fewest instructions, or :SPEED, which also holds an operand
+across calls in a preserved register shared by two or more sites (#394)."
   (unless backend
     (%cc-fail nil "compiling needs a backend"))
+  (unless (member optimize '(:size :speed))
+    (%cc-fail nil ":optimize must be :size or :speed, got ~S" optimize))
   (let ((*cc-backend* (find-backend backend))
+        (*cc-optimize* optimize) (*cc-shared* nil) (*cc-counting* nil)
         (*cc-functions* (make-hash-table :test 'equal))
         (*cc-globals* (make-hash-table :test 'equal))
         (*cc-constants* (make-hash-table :test 'equal))
@@ -1779,9 +1851,9 @@ optional leading (:program (option...)) as in a .lasm file."
                 (items-program-positions program) positions)
           program)))))
 
-(defun compile-source (program &key backend)
+(defun compile-source (program &key backend (optimize :size))
   "An ITEMS-PROGRAM of the items that compile the source PROGRAM, with its
-options. BACKEND overrides the program's."
+options. BACKEND overrides the program's; OPTIMIZE is as for COMPILE-PROGRAM."
   (let ((backend (or backend (items-program-backend program))))
     (unless backend
       (%source-fail "no backend: name one in (:program (:backend NAME)) or pass one"))
@@ -1790,17 +1862,18 @@ options. BACKEND overrides the program's."
             (compile-program (items-program-items program) :backend backend
                               :positions (items-program-positions program)
                               :source (items-program-source program)
-                              :file (items-program-file program))
+                              :file (items-program-file program)
+                              :optimize optimize)
             (items-program-backend compiled) backend)
       compiled)))
 
-(defun compile-source-file (path &key backend)
+(defun compile-source-file (path &key backend (optimize :size))
   "Compile the source file PATH to an ITEMS-PROGRAM."
-  (compile-source (read-source path) :backend backend))
+  (compile-source (read-source path) :backend backend :optimize optimize))
 
-(defun assemble-source-file (path &key backend machine lexer origin memory)
+(defun assemble-source-file (path &key backend machine lexer origin memory (optimize :size))
   "Compile the source file PATH and assemble it as ASSEMBLE-ITEMS-FILE does."
-  (%assemble-items-program (compile-source-file path :backend backend) path
+  (%assemble-items-program (compile-source-file path :backend backend :optimize optimize) path
                            :backend backend :machine machine :lexer lexer :origin origin :memory memory))
 
 ;;; Writing

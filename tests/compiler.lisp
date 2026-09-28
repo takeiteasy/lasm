@@ -65,13 +65,13 @@
   '((callfoo-lang-abi callfoo) (cl-reg-abi callfoo) (callfoo-lang-fp-abi callfoo-fp))
   "Backends, with their machines, that every language test runs on.")
 
-(defun %cl-compile (source backend)
-  (compile-program (items-program-items (read-source-from-string source)) :backend backend))
+(defun %cl-compile (source backend &optional (optimize :size))
+  (compile-program (items-program-items (read-source-from-string source)) :backend backend :optimize optimize))
 
-(defun %cl-run (source backend &optional (machine 'callfoo))
+(defun %cl-run (source backend &optional (machine 'callfoo) (optimize :size))
   "Compile, assemble and run SOURCE, with the stack at +CV-SP+; returns the machine."
   (let ((m (make-machine machine)))
-    (load-program m (assemble-items (%cl-compile source backend) :backend backend))
+    (load-program m (assemble-items (%cl-compile source backend optimize) :backend backend))
     (setf (sref m 'sp) +cv-sp+)
     (run m :max-steps 100000)
     m))
@@ -599,6 +599,73 @@
                                                  (defun main () (let ((i 0)) (while (< i 1)
                                                    (+ (f 1) (+ (f 2) (+ (f 3) (f 4)))) (set i 1)) 0))"
                                                'callfoo-lang-abi)))))
+
+;;; #394: :optimize :speed shares a preserved register between one-off sites
+
+(defparameter +cl-two-sites+
+  "(defun f (n) n)
+   (defun main () (let ((a (+ (f 1) (f 2))) (b (+ (f 3) (f 4)))) (+ (* a 10) b)))"
+  "Two call-holding sites outside any loop; main is 37.")
+
+(defun %cl-saved (items)
+  (mapcar #'%designator-name (getf (%cl-function-options items "main") :save)))
+
+(fiveam:test speed-shares-a-saved-register-between-one-off-sites
+  (let ((size (%cl-compile +cl-two-sites+ 'callfoo-lang-abi))
+        (speed (%cl-compile +cl-two-sites+ 'callfoo-lang-abi :speed)))
+    (fiveam:is (= 2 (%cl-push-count size)))
+    (fiveam:is (null (%cl-saved size)))
+    (fiveam:is (zerop (%cl-push-count speed)))
+    (fiveam:is (equal '("C") (%cl-saved speed)))))
+
+(fiveam:test speed-keeps-a-single-one-off-site-on-the-stack
+  (let ((items (%cl-compile "(defun f (n) n) (defun main () (+ (f 1) (f 2)))" 'callfoo-lang-abi :speed)))
+    (fiveam:is (= 1 (%cl-push-count items)))
+    (fiveam:is (null (%cl-saved items)))))
+
+(fiveam:test speed-shares-a-register-with-a-later-loop
+  (let ((source "(defun f (n) n)
+                 (defun main () (+ (f 3) (f 4))
+                   (let ((i 0)) (while (< i 1) (+ (f 1) (f 2)) (set i 1)) 0))"))
+    (fiveam:is (= 1 (%cl-push-count (%cl-compile source 'callfoo-lang-abi))))
+    (let ((items (%cl-compile source 'callfoo-lang-abi :speed)))
+      (fiveam:is (zerop (%cl-push-count items)))
+      (fiveam:is (equal '("C") (%cl-saved items))))))
+
+(fiveam:test speed-leaves-a-loop-and-a-call-free-program-as-size-has-them
+  (dolist (source (list +cl-loop-calls+ "(defun main () (+ (* 2 3) (- 9 4)))"))
+    (fiveam:is (equal (%cl-op-names (%cl-compile source 'callfoo-lang-abi))
+                      (%cl-op-names (%cl-compile source 'callfoo-lang-abi :speed)))
+               "~A" source)))
+
+(fiveam:test speed-runs-to-the-same-values
+  (dolist (backend +cl-backends+)
+    (destructuring-bind (name machine) backend
+      (fiveam:is (= 37 (%cv-a (%cl-run +cl-two-sites+ name machine :speed))) "~A" name)
+      (fiveam:is (= 37 (%cv-a (%cl-run +cl-two-sites+ name machine :size))) "~A" name))))
+
+(fiveam:test optimize-is-size-or-speed
+  (fiveam:is (search ":optimize" (or (handler-case (%cl-compile "(defun main () 1)" 'callfoo-lang-abi :fast)
+                                       (program-compile-error (c) (program-compile-error-detail c)))
+                                     ""))))
+
+(fiveam:test cli-optimize-compiles-and-runs-a-source-program
+  (let ((path (%cl-source-file +cl-two-sites+)))
+    (unwind-protect
+         (uiop:with-temporary-file (:pathname out :type "lasm")
+           (fiveam:is (= 0 (%cl-cli "compile" path "--backend" "callfoo-lang-abi" "--optimize" "speed" "-o" (namestring out))))
+           (fiveam:is (zerop (%cl-push-count (items-program-items (read-items out)))))
+           (fiveam:is (= 0 (%cl-cli "compile" path "--backend" "callfoo-lang-abi" "-o" (namestring out))))
+           (fiveam:is (= 2 (%cl-push-count (items-program-items (read-items out)))))
+           (multiple-value-bind (status out err)
+               (%cl-cli "compile" path "--backend" "callfoo-lang-abi" "--optimize" "fast")
+             (declare (ignore out))
+             (fiveam:is (/= 0 status))
+             (fiveam:is (search "--optimize must be size or speed" err))))
+      (%cl-delete path))
+    (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/fact.lsp") "--optimize" "speed")
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "stopped" out)))))
 
 ;;; #377: a declared clobber list keeps the register path
 
@@ -1200,6 +1267,7 @@
 
 (fiveam:test value-and-or-give-the-same-values-with-and-without-fusing
   (dolist (backend '((callfoo-lang-abi callfoo) (cl-no-ne-imm-abi callfoo) (cl-no-ge-abi callfoo)
+                     (cl-no-ge-variants-abi callfoo) (cl-no-eq-variants-abi callfoo)
                      (callfoo-lang-fp-abi callfoo-fp)))
     (loop for (name function) in '(("=" =) ("/=" /=) ("<" <) (">" >) ("<=" <=) (">=" >=))
           do (loop for (control . expected) in +cl-value-shapes+
@@ -1239,3 +1307,28 @@
 (fiveam:test a-value-or-does-not-fuse-an-operand-whose-value-is-not-0-or-1
   (let ((ops (%cl-value-ops "(or (and (< x 3) y) (and (< y 4) z) (and (< z 5) w) 9)" 'callfoo-lang-abi)))
     (fiveam:is (notany (lambda (name) (string= name "JUMP")) ops))))
+
+;;; #392: the fuse estimate counts the variant each operation uses
+
+(defbackend cl-no-ge-variants-abi (:extends callfoo-lang-abi)
+  (without-ops :branch-ge-imm :branch-ge-slot :branch-le-slot))
+
+(defbackend cl-no-eq-variants-abi (:extends callfoo-lang-abi)
+  (without-ops :eq-imm :eq-slot))
+
+(defun %cl-fuses-p (body backend)
+  (and (member "JUMP" (%cl-value-ops body backend) :test #'string=) t))
+
+(fiveam:test a-comparison-without-a-value-variant-saves-more-when-fused
+  (fiveam:is (not (%cl-fuses-p "(and (< x 3) (< y 4) w)" 'callfoo-lang-abi)))
+  (fiveam:is (%cl-fuses-p "(and (>= x 3) (>= y 4) w)" 'callfoo-lang-abi) ":ge has no -imm variant"))
+
+(fiveam:test a-comparison-without-a-branch-variant-does-not-fuse
+  (let ((body "(and (< x 3) (< y 4) (< z 5) w)"))
+    (fiveam:is (%cl-fuses-p body 'callfoo-lang-abi))
+    (fiveam:is (not (%cl-fuses-p body 'cl-no-ge-variants-abi)) "fusing is 12 instructions, not fusing 10")))
+
+(fiveam:test a-not-without-eq-variants-fuses-sooner
+  (let ((body "(and (not x) (not y) w)"))
+    (fiveam:is (not (%cl-fuses-p body 'callfoo-lang-abi)))
+    (fiveam:is (%cl-fuses-p body 'cl-no-eq-variants-abi))))

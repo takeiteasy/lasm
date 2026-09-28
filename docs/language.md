@@ -326,6 +326,28 @@ routine lists every register the routine changes.
      (:op :const (reg b) 3))                  ; a value held in c survives
 ```
 
+## Optimizing
+
+`:optimize :size` (the default) emits the fewest instructions. `:optimize
+:speed` also holds an operand across calls in a `:callee-saved` register that
+two or more call sites share, which costs two instructions in the function's
+prologue and epilogue and saves memory accesses at run time.[^speed]
+
+| `:optimize` | Holds an operand across calls in |
+| --- | --- |
+| `:size` | a saved register inside a `while`, else the stack |
+| `:speed` | a saved register inside a `while` or shared by two or more sites, else the stack |
+
+```lisp
+(defun main ()
+  (+ (f 1) (f 2))                    ; :speed holds (f 1) in c
+  (+ (f 3) (f 4)))                   ; and so does this one
+```
+
+```sh
+lasm compile prog.lsp -m callfoo.lisp --backend callfoo-lang-abi --optimize speed
+```
+
 ## Backend requirements
 
 The backend's first `:return` register is the accumulator, and the first
@@ -430,11 +452,11 @@ read without evaluation, as [items files](items.md#lasm-files) are, so `'`,
 
 | Function | Does |
 | --- | --- |
-| `(compile-program forms &key backend)` | Returns the items. |
+| `(compile-program forms &key backend optimize)` | Returns the items. `optimize` is [`:size` or `:speed`](#optimizing). |
 | `(read-source path)` `(read-source-from-string text)` | Returns an `items-program` whose items are the source forms. |
-| `(compile-source program &key backend)` | Returns an `items-program` of the compiled items; `backend` overrides the program's. |
-| `(compile-source-file path &key backend)` | Reads and compiles. |
-| `(assemble-source-file path &key backend machine lexer origin memory)` | Compiles and assembles as `assemble-items-file` does. |
+| `(compile-source program &key backend optimize)` | Returns an `items-program` of the compiled items; `backend` overrides the program's. |
+| `(compile-source-file path &key backend optimize)` | Reads and compiles. |
+| `(assemble-source-file path &key backend machine lexer origin memory optimize)` | Compiles and assembles as `assemble-items-file` does. |
 | `(write-items-program program stream)` | Writes a `.lasm` file `read-items` reads back. |
 
 The [command line](cli.md#source-programs) takes `.lsp` files.
@@ -443,8 +465,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| A first callee-saved register is claimed only inside a loop, so one-off call sites outside a loop never share one. | [#394](https://todo.sr.ht/~takeiteasy/lasm/394) |
-| The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
+| `:optimize :speed` counts every call site once, a loop site twice, however rarely it runs. | [#400](https://todo.sr.ht/~takeiteasy/lasm/400) |
+| A program cannot name its `:optimize` in a `(:program ...)` header. | [#399](https://todo.sr.ht/~takeiteasy/lasm/399) |
 | `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
 | A `:packed` string is emitted as packed `.cell` integers, not text, in a compiled `.lasm` file. | [#398](https://todo.sr.ht/~takeiteasy/lasm/398) |
 
@@ -460,7 +482,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   thing it could do that such a register does not survive; a
   `:callee-saved` one, added to the function's `:save`, when it calls a
   function inside a `while` or the function already saves that register,
-  since a first save costs a push and a pop that the stack would not (#376);
+  since a first save costs a push and a pop that the stack would not (#376),
+  or, with [`:optimize :speed`](#optimizing), when two or more sites share it;
   the stack when the pool has none free. An `(asm ...)` in the right operand
   rules out the registers it declares in `:clobbers`, or every register when
   it declares none (#377).
@@ -493,13 +516,24 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 [^fusing]: The landing costs a `:jump` and a `:const`. Each operand before the
   last saves its estimated cost of computing a value and jumping on it, less
   the cost of jumping on it directly; the operands fuse when the savings total
-  more than the landing costs. A comparison saves one instruction in an `and`,
-  and in an `or` one with `:branch-ne-imm` or two without it, so four
-  comparisons fuse in an `and`, or in an `or` with `:branch-ne-imm`, and
-  three in an `or` without it. `(not x)` saves one with `:branch-ne-imm` and
-  nothing without it. An operand that jumps is one the estimate says saves
-  something, and an `or` operand must also give only `0` or `1`, since the
-  landing loads `1`: `(or (and a b) ...)` keeps computing `b`'s value.
+  more than the landing costs. The estimate counts the loads of leaf operands
+  and the variant each operation uses (#392). On `callfoo-lang-abi`, `(< x 3)`
+  is `:get` `:lt-imm` `:branch-zero` against `:get` `:branch-ge-imm`, saving one
+  instruction in an `and`, so it takes three operands before the last to fuse;
+  `(>= x 3)` has no `:ge-imm`, loads `3` too, and saves two, so two do. A comparison with a
+  `:cmp` variant but no `:branch-cmp` one saves nothing. In an `or` each saves
+  one more without `:branch-ne-imm`, since a jump on a true value then costs
+  two. `(not x)` saves one with `:branch-ne-imm` and nothing without it, and
+  one more without `:eq-imm` and `:eq-slot`. An operand that jumps is one the
+  estimate says saves something, and an `or` operand must also give only `0`
+  or `1`, since the landing loads `1`: `(or (and a b) ...)` keeps computing
+  `b`'s value.
+
+[^speed]: Each function compiles twice. The first pass counts the call sites
+  that would claim each `:callee-saved` register, a site inside a `while`
+  counting twice; the second lets a site outside a loop claim a register
+  counted two or more times. A site in a rarely taken `if` branch counts as
+  much as one on the main path ([limitation](#limitations)).
 
 [^hygiene]: A mark is a number kept on a fresh uninterned copy of each name
   a quasiquote template writes; a local variable is looked up by name plus
