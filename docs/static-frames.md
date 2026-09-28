@@ -44,6 +44,7 @@ A static slot is read with `:const` and `:peek`, and written with `:const` and
 | A call pushes its arguments | A call stores each into the callee's parameter word |
 | A function allocates its slots on entry | Its words are reserved once, after the code |
 | Slots are live for one call | Functions that never run together share addresses |[^layout]
+| A computed call passes its arguments on the stack | It stores them in a shared block, `sfx0`…, and the target's entry thunk copies them |
 
 A function's words start after those of every function that calls it, so a
 function and its callees never overlap.
@@ -75,18 +76,35 @@ fact.lsp:14:8: fact calls itself; static frames do not support recursion (in (fa
 a calls b calls a is recursive; static frames do not support recursion
 ```
 
-An `(asm ...)` that writes a function's label counts as a call to it.
+An `(asm ...)` that writes a function's label counts as a call to it. A
+`funcall` through a computed target counts as a call to every function taken
+with `(function F)` that takes as many arguments.[^edges]
 
 ## Computed calls
 
-`(funcall (function F) ARG...)` is a plain call. A `funcall` through any other
-value is a compile error.[^funcall]
+`(funcall E ARG...)` works for any `E`: an array element, a variable or a
+computed value.
+
+```lisp
+(defarray ops ((function add) (function sub)))
+(defun add (a b) (+ a b))
+(defun sub (a b) (- a b))
+(defun main () (funcall (aref ops 1) 9 4))
+```
+
+`(function F)` is F's entry thunk, `sf`*f*`e`. The caller stores its arguments
+in the shared block, `sfx0`…, then calls the target. The thunk copies the block
+into F's parameter words and jumps to F.[^block] A raw address, such as an
+`(asm ...)` label, receives its arguments in the block the same way.
+
+`(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
 
 ## Limitations
 
 | Limitation | Ticket |
 | --- | --- |
-| `funcall` through a computed target is an error. | [#419](https://todo.sr.ht/~takeiteasy/lasm/419) |
+| A computed call is taken to reach every function of its arity, so recursion can be reported that no run takes. | [#425](https://todo.sr.ht/~takeiteasy/lasm/425) |
+| An entry thunk jumps to its function instead of falling through. | [#426](https://todo.sr.ht/~takeiteasy/lasm/426) |
 | A recursive function is an error; it cannot keep a stack frame. | [#420](https://todo.sr.ht/~takeiteasy/lasm/420) |
 | No value is held across a call in a callee-saved register. | [#421](https://todo.sr.ht/~takeiteasy/lasm/421) |
 | A global or static word takes two instructions to read or write, `:const` and `:peek`/`:poke`. | [#422](https://todo.sr.ht/~takeiteasy/lasm/422) |
@@ -100,5 +118,10 @@ value is a compile error.[^funcall]
 [^staging]: Only the arguments before the last one that may call are held; the
   rest are stored directly. A call, a `funcall` and any `(asm ...)` may call.
 
-[^funcall]: The caller cannot know where a taken function's parameters are, and
-  the call graph has no edge to it.
+[^edges]: The layout uses the same edges, so a function reached through a
+  computed call never shares addresses with its caller.
+
+[^block]: The block has as many words as the most arguments any computed call
+  passes. An argument that waits for a later one that may call is held in the
+  caller's frame first, as for a plain call, so a nested computed call cannot
+  overwrite the block.

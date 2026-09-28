@@ -137,6 +137,13 @@
                        (+ s (+ (g 3) (g 4)))))" . 19)
     ;; #365: function values and indirect calls.
     ("(defun f (x) (+ x 1)) (defun main () (funcall (function f) 5))" . 6)
+    ("(defarray tbl ((function f) (function g))) (defun f (x) (+ x 1)) (defun g (x) (* x 2)) (defun main () (+ (funcall (aref tbl 0) 5) (funcall (aref tbl 1) 5)))" . 16)
+    ("(defvar fp 0) (defun f (a b) (- a b)) (defun main () (set fp (function f)) (funcall fp 9 4))" . 5)
+    ("(defun f (a b) (- a b)) (defun main () (funcall (if 1 (function f) (function f)) 9 4))" . 5)
+    ("(defarray tbl ((function f))) (defun f (x) (+ x 1)) (defun g (x) (* x 10)) (defun main () (funcall (aref tbl 0) (g (funcall (aref tbl 0) 1))))" . 21)
+    ("(defarray tbl ((function f))) (defun f (a b) (- a b)) (defun g (x) x) (defun main () (funcall (aref tbl 0) (g 9) (g 4)))" . 5)
+    ("(defarray tbl ((function f) (function g))) (defun f () 3) (defun g () 4) (defun main () (funcall (aref tbl 1)))" . 4)
+    ("(defarray tbl ((function f))) (defun f (x) (let ((y (+ x 1))) y)) (defun main () (let ((k 7)) (+ k (funcall (aref tbl 0) k))))" . 15)
     ("(defvar g 0) (defun f (x) (* x 2))
       (defun main () (set g (function f)) (funcall g 21))" . 42)
     ("(defun g () 100) (defun f (x) x) (defun main () (+ (g) (funcall (function f) 1)))" . 101)
@@ -1606,7 +1613,7 @@ two |#
         unless (search ":op :set" source)
           do (let ((detail (%cl-static-fail source)))
                (if detail
-                   (fiveam:is (or (search "recurs" detail) (search "calls itself" detail) (search "computed target" detail))
+                   (fiveam:is (or (search "recurs" detail) (search "calls itself" detail))
                               "~A: ~A" source detail)
                    (fiveam:is (= expected (%cv-a (%cl-run source 'cl-static-abi))) "~A" source)))))
 
@@ -1638,9 +1645,21 @@ two |#
     (fiveam:is (typep c 'program-compile-error))
     (fiveam:is (eql 2 (lasm-syntax-error-line c)))))
 
-(fiveam:test static-frames-reject-a-computed-funcall
-  (let ((detail (%cl-static-fail "(defarray tbl ((function f))) (defun f (x) x) (defun main () (funcall (aref tbl 0) 1))")))
-    (fiveam:is (search "computed target" detail))))
+(fiveam:test static-frames-report-recursion-through-a-computed-funcall
+  (dolist (case '(("(defarray tbl ((function f))) (defun f (n) (if n (funcall (aref tbl 0) (- n 1)) 0)) (defun main () (f 3))" "f calls itself")
+                  ("(defarray tbl ((function b))) (defun a (n) (funcall (aref tbl 0) n)) (defun b (n) (a n)) (defun main () (a 1))" "is recursive")))
+    (let ((detail (%cl-static-fail (first case))))
+      (fiveam:is (and detail (search (second case) detail)) "~A: ~A" (first case) detail))))
+
+(fiveam:test static-frames-keep-a-computed-callee-apart-from-its-caller
+  (flet ((reserved (source)
+           (count-if (lambda (item) (and (consp item) (eq (first item) :directive) (string-equal (second item) "res")))
+                     (%cl-static-items source))))
+    (fiveam:is (= 4 (reserved "(defarray tbl ((function f))) (defun f (x) x) (defun g (y) (funcall (aref tbl 0) y)) (defun main () (g 1))"))
+               "g's slot, f's slot beyond it, main's temporary, and the argument block")))
+
+(fiveam:test static-frames-still-check-a-computed-funcall-arity
+  (fiveam:is (search "holds only function values" (%cl-static-fail "(defvar fp 0) (defun f (x) x) (defun main () (set fp (function f)) (funcall fp 1 2))"))))
 
 (fiveam:test the-program-header-and-the-key-choose-the-frames
   (flet ((items (header backend &optional frames)

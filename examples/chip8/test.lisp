@@ -220,3 +220,10 @@
     (fiveam:is (= 60 (i-reg machine)))
     (fiveam:is (equal '("####...." "#......." "#......." "#......." "####....")
                       (loop for y below 5 collect (row machine y))))))
+
+;;; The dispatch table calls through a computed target, which static frames
+;;; (docs/static-frames.md) support.
+(fiveam:test the-emulator-runs-under-static-frames
+  (let ((chip8::*image* (lasm:assemble-source-file (asdf:system-relative-pathname :chip8 "chip8.lsp")
+                                                    :backend 'chip8::host-lang :frames :static)))
+    (fiveam:is (equal '(5 8) (regs (run-rom '(#x6005 #x6107 #x7101 #x7101 #x71ff)) 0 1)))))

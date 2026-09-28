@@ -130,6 +130,9 @@
 (defvar *cc-caller* nil "The upcased name of the function being compiled.")
 (defvar *cc-frame-label* nil "The label of the function being compiled, which its static slots' labels are made from.")
 (defvar *cc-sizes* nil "Upcased function name -> the static slots its frame needs.")
+(defvar *cc-entered* nil "Upcased names of the functions taken with (function F) under static frames, each of which gets an entry thunk.")
+(defvar *cc-computed-calls* nil "(CALLER ARITY FORM FUNCTION), reversed, for each funcall through a computed target under static frames.")
+(defvar *cc-block-size* 0 "The most arguments any computed call passes, the words of the shared argument block.")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -230,6 +233,14 @@ cannot be a register alias or a generated label."
   "The label of slot INDEX in the static frame of the function labelled FUNCTION-LABEL."
   (%cc-symbol (string-downcase (format nil "sf~Ax~D" (subseq (symbol-name function-label) 2) index))))
 
+(defun %cc-block-label (index)
+  "The label of word INDEX of the argument block a computed call stores its arguments in."
+  (%cc-symbol (format nil "sfx~D" index)))
+
+(defun %cc-entry-label (function-label)
+  "The label of the entry thunk of the function labelled FUNCTION-LABEL."
+  (%cc-symbol (string-downcase (format nil "sf~Ae" (subseq (symbol-name function-label) 2)))))
+
 (defun %cc-alloc ()
   (prog1 (if (%cc-static-p)
              (list :static (%cc-slot-label *cc-frame-label* *cc-next*))
@@ -285,7 +296,10 @@ cannot be a register alias or a generated label."
       (%cc-fail form "unknown function ~A" (%source-name (second form) nil)))
     (pushnew (cdr entry) *cc-value-arities*)
     (pushnew key *cc-taken* :test #'string=)
-    (car entry)))
+    (cond ((%cc-static-p)
+           (pushnew key *cc-entered* :test #'string=)
+           (%cc-entry-label (car entry)))
+          (t (car entry)))))
 
 ;; What a variable can hold, by its binding: a local's environment
 ;; cell, a global's label, a function's parameter, or a DEFARRAY's element. A
@@ -1086,12 +1100,12 @@ accumulator or a register (docs/language.md#backend-requirements)."
 ;; slot. Frames of functions that do not call each other share addresses, so
 ;; an argument evaluated before a later one that may call is held in a slot of
 ;; the caller's own frame, and copied over once every argument is computed.
-(defun %cc-static-call (key label args form)
-  (%cc-note-call key form)
+(defun %cc-store-arguments (args parameters)
+  "Store each of ARGS in the matching static slot label of PARAMETERS. The number of caller slots held, to free after the call."
   (let ((staged '()))
     (loop for (arg . later) on args
-          for index from 0
-          for parameter = (list :static (%cc-slot-label label index))
+          for label in parameters
+          for parameter = (list :static label)
           do (%cc-expr arg)
              (if (some #'%cc-may-call-p later)
                  (let ((slot (%cc-alloc)))
@@ -1101,8 +1115,14 @@ accumulator or a register (docs/language.md#backend-requirements)."
     (loop for (slot . parameter) in staged
           do (%cc-load-leaf-slot slot)
              (%cc-store parameter))
+    (length staged)))
+
+(defun %cc-static-call (key label args form)
+  (%cc-note-call key form)
+  (let ((held (%cc-store-arguments args (loop for index below (length args)
+                                              collect (%cc-slot-label label index)))))
     (%cc-emit (list :call label))
-    (dotimes (i (length staged)) (%cc-free))))
+    (dotimes (i held) (%cc-free))))
 
 (defun %cc-call-callee (key label args form)
   "Call the function named KEY, labelled LABEL, with ARGS."
@@ -1190,9 +1210,35 @@ function value takes, or that the function values reaching its target do not."
                    (and (%cc-name-p callee) (%source-name callee nil)))
              *cc-indirect-calls*)))
 
+;; Under static frames a computed target is an entry thunk (or a raw address
+;; that expects the same): the arguments go in the shared block, sfx0.., and the
+;; thunk copies them into the function's own parameter words.
+(defun %cc-static-indirect-funcall (callee args)
+  (let ((form *cc-form*) (function *cc-function*)
+        (callee-slot (unless (%cc-leaf-p callee)
+                       (%cc-expr callee)
+                       (let ((slot (%cc-alloc)))
+                         (%cc-store slot)
+                         slot))))
+    (setf *cc-block-size* (max *cc-block-size* (length args)))
+    (cl:push (list *cc-caller* (length args) form function) *cc-computed-calls*)
+    (%cc-note-indirect-call callee args form function)
+    (let* ((held (%cc-store-arguments args (loop for index below (length args)
+                                                 collect (%cc-block-label index))))
+           (register (%cc-call-target-register))
+           (target (%cc-register-operand register))
+           (name (%cc-symbol (string-downcase register))))
+      (if callee-slot
+          (progn (%cc-op :const target (second callee-slot))
+                 (%cc-op :peek name name))
+          (%cc-load-leaf callee target name))
+      (%cc-emit (list :call target))
+      (dotimes (i held) (%cc-free)))
+    (when callee-slot (%cc-free))))
+
 (defun %cc-indirect-funcall (callee args)
   (when (%cc-static-p)
-    (%cc-fail *cc-form* "static frames call only (funcall (function F) ...), not a computed target"))
+    (return-from %cc-indirect-funcall (%cc-static-indirect-funcall callee args)))
   (let ((form *cc-form*) (function *cc-function*)
         (callee-slot (unless (%cc-leaf-p callee)
                        (%cc-expr callee)
@@ -1922,6 +1968,27 @@ register, so any of these are free once nothing above still needs them."
       (loop for (caller) in (reverse *cc-calls*)
             unless (gethash caller state) do (visit caller '())))))
 
+;; TODO: edges go by arity, so the recursion check can report a cycle no run takes; carry names in the holdings (#425)
+(defun %cc-computed-edges ()
+  "Add a call from each computed call's caller to every function with an entry thunk that takes as many arguments."
+  (loop for (caller arity form function) in (reverse *cc-computed-calls*)
+        do (dolist (key (reverse *cc-entered*))
+             (when (= arity (cdr (gethash key *cc-functions*)))
+               (cl:push (list caller key form function) *cc-calls*)))))
+
+;; TODO: the thunk jumps to its function; placed before it, it would fall through (#426)
+(defun %cc-entry-thunks ()
+  "The items of each entry thunk: copy the argument block into the function's parameter words, then run it."
+  (let ((*cc-out* '()))
+    (dolist (key (reverse *cc-entered*))
+      (destructuring-bind (label . arity) (gethash key *cc-functions*)
+        (%cc-emit (list :label (%cc-entry-label label)))
+        (dotimes (index arity)
+          (%cc-load-leaf-slot (list :static (%cc-block-label index)))
+          (%cc-store (list :static (%cc-slot-label label index))))
+        (%cc-op :jump label)))
+    (nreverse *cc-out*)))
+
 (defun %cc-static-area (definitions)
   "The items reserving every static frame. A function's frame starts after the
 frames of its callers, so two functions share the slots at an address."
@@ -1939,10 +2006,13 @@ frames of its callers, so two functions share the slots at an address."
                           append (loop for index below (gethash key *cc-sizes* 0)
                                        collect (cons (+ (offset key) index) (%cc-slot-label label index)))))
              (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
-        (loop for address below size
-              append (append (loop for (at . label) in slots
-                                   when (= at address) collect (list :label label))
-                             (list (list :directive (%cc-symbol "res") *cc-word-cells*))))))))
+        (append (loop for address below size
+                      append (append (loop for (at . label) in slots
+                                           when (= at address) collect (list :label label))
+                                     (list (list :directive (%cc-symbol "res") *cc-word-cells*))))
+                (loop for index below *cc-block-size*
+                      append (list (list :label (%cc-block-label index))
+                                   (list :directive (%cc-symbol "res") *cc-word-cells*))))))))
 
 (defun %cc-array-value (value form)
   "The integer VALUE, an element of a DEFARRAY's (VALUE...), resolves to: an
@@ -2111,6 +2181,7 @@ or NIL for what the backend's (frame :static t) says."
   (let ((*cc-backend* (find-backend backend))
         (*cc-frames* (or frames (if (getf (backend-descriptor-frame (find-backend backend)) :static) :static :stack)))
         (*cc-calls* '()) (*cc-caller* nil) (*cc-frame-label* nil) (*cc-sizes* (make-hash-table :test 'equal))
+        (*cc-entered* '()) (*cc-computed-calls* '()) (*cc-block-size* 0)
         (*cc-optimize* optimize) (*cc-shared* nil) (*cc-counting* nil)
         (*cc-functions* (make-hash-table :test 'equal))
         (*cc-globals* (make-hash-table :test 'equal))
@@ -2148,9 +2219,11 @@ or NIL for what the backend's (frame :static t) says."
               (functions (mapcar #'%cc-function definitions)))
           (%cc-check-indirect-calls)
           (when (%cc-static-p)
+            (%cc-computed-edges)
             (%cc-check-recursion))
           (append stub
                   functions
+                  (and (%cc-static-p) (%cc-entry-thunks))
                   (loop for (label) in globals
                         append (list (list :label label)
                                      (list :directive (%cc-symbol "res") *cc-word-cells*)))
