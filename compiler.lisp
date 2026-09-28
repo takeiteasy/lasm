@@ -31,6 +31,14 @@
 ;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
 ;;;; operation when it defines one, instead of loading into the temp register.
 ;;;;
+;;;; #388: a leaf left operand swaps to the right when that lets a variant
+;;;; apply and the right operand has none: a commutative operator keeps its
+;;;; name, a comparison flips its direction.
+;;;;
+;;;; #375: an if/while condition that is a comparison, or an and/or/not of
+;;;; them, jumps on the backend's optional :BRANCH-cmp (a b target) operation,
+;;;; and its -imm/-slot variants, instead of computing a 0 or 1 first.
+;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
 ;;;; #367, #380: a defmacro call, in an expression or at top level, is
@@ -342,6 +350,22 @@ load afterwards (%CC-SWAPPABLE-P); otherwise LEFT then %CC-TO-TEMP."
     ("=" :eq 2 2) ("/=" :ne 2 2) ("<" :lt 2 2) (">" :gt 2 2) ("<=" :le 2 2) (">=" :ge 2 2))
   "Operator name, the backend operation, and the fewest and most operands.")
 
+(defparameter +cc-negations+ '((:eq . :ne) (:ne . :eq) (:lt . :ge) (:ge . :lt) (:gt . :le) (:le . :gt))
+  "Each comparison and the one true exactly when it is false.")
+
+(defparameter +cc-flips+ '((:eq . :eq) (:ne . :ne) (:lt . :gt) (:gt . :lt) (:le . :ge) (:ge . :le))
+  "Each comparison and the one that gives the same result with its operands swapped.")
+
+(defparameter +cc-commutative+ '(:add :mul :and :or :xor)
+  "Operators that give the same result with their operands swapped.")
+
+(defun %cc-swapped (op)
+  "The operation that OP becomes with its operands swapped, or NIL."
+  (if (member op +cc-commutative+) op (cdr (assoc op +cc-flips+))))
+
+(defun %cc-branch-name (comparison)
+  (and comparison (intern (format nil "BRANCH-~A" comparison) :keyword)))
+
 (defun %cc-direct (op form)
   "(VARIANT ARGUMENT) when the leaf FORM, an operator's right operand, can go
 straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
@@ -360,6 +384,18 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
                ((:constant :address) (let ((name (variant "IMM"))) (and name (list name (second location)))))
                (:global nil)))))))
 
+(defun %cc-pair (op swapped left right)
+  "Compile the operands of the operation OP, LEFT into the accumulator, and
+return (NAME ARGUMENT...): the operation to emit after the accumulator, and
+its source. That is RIGHT's variant (#374); else SWAPPED, OP with its operands
+swapped, on LEFT's variant when RIGHT is safe to evaluate first (#388); else OP
+on the temp register."
+  (let ((direct (%cc-direct op right))
+        (swap (and swapped (%cc-direct swapped left))))
+    (cond (direct (%cc-expr left) direct)
+          ((and swap (%cc-swappable-p left right)) (%cc-expr right) swap)
+          (t (%cc-operands left right) (list op *cc-temp*)))))
+
 (defun %cc-apply (op form)
   "The accumulator OP FORM, into the accumulator."
   (let ((direct (%cc-direct op form)))
@@ -376,21 +412,15 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
       (cond ((and (eq op :sub) (null (rest args)))
              (%cc-operands 0 (first args))
              (%cc-op :sub *cc-acc* *cc-temp*))
-            ((%cc-direct op (second args))
-             (%cc-expr (first args))
-             (%cc-apply op (second args)))
-            (t (%cc-operands (first args) (second args))
-               (%cc-op op *cc-acc* *cc-temp*)))
+            (t (let ((pair (%cc-pair op (%cc-swapped op) (first args) (second args))))
+                 (apply #'%cc-op (first pair) *cc-acc* (rest pair)))))
       (dolist (arg (cddr args))
         (%cc-apply op arg)))))
 
 (defun %cc-not (form)
   (%cc-check-length form 2 2)
-  (if (%cc-direct :eq 0)
-      (progn (%cc-expr (second form))
-             (%cc-apply :eq 0))
-      (progn (%cc-operands 0 (second form))
-             (%cc-op :eq *cc-acc* *cc-temp*))))
+  (let ((pair (%cc-pair :eq :eq (second form) 0)))
+    (apply #'%cc-op (first pair) *cc-acc* (rest pair))))
 
 (defun %cc-check-length (form least most)
   (unless (and (listp (cdr form)) (null (cdr (last form)))
@@ -401,11 +431,54 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
   (%cc-check-length form 1 nil)
   (%cc-progn (rest form)))
 
+(defun %cc-comparison (form)
+  "(OP LEFT RIGHT) when FORM is a well-formed comparison, else NIL."
+  (let ((entry (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form)
+                    (assoc (%designator-name (first form)) *cc-operators* :test #'string=))))
+    (and entry (assoc (second entry) +cc-negations+) (= (length form) 3)
+         (list (second entry) (second form) (third form)))))
+
+;; TODO: a true-sense jump on an operand with no comparison of its own (an
+;; `or` condition, `(not x)`) skips over a :jump; a backend with :branch-ne-imm
+;; could branch on it directly (#389).
+(defun %cc-branch (form sense target)
+  "Jump to TARGET when FORM is true if SENSE, or false if not, else fall
+through (#375). A comparison uses the backend's :BRANCH-cmp when it has one; an
+and, or and not of conditions jump between their operands and produce no value."
+  (let* ((head (and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form)
+                    (%designator-name (first form))))
+         (args (and head (rest form)))
+         (comparison (%cc-comparison form)))
+    (cond ((and (equal head "NOT") (= (length args) 1))
+           (%cc-branch (first args) (not sense) target))
+          ((and (member head '("AND" "OR") :test #'equal) args)
+           (let* ((stop (if (equal head "AND") nil t))
+                  (skip (unless (eq sense stop) (%cc-new-label))))
+             (loop for (arg . more) on args
+                   do (if more
+                          (%cc-branch arg stop (if (eq sense stop) target skip))
+                          (%cc-branch arg sense target)))
+             (when skip (%cc-emit (list :label skip)))))
+          ((and comparison
+                (%cc-op-p (%cc-branch-name (if sense (first comparison)
+                                               (cdr (assoc (first comparison) +cc-negations+))))))
+           (let* ((*cc-form* form)
+                  (op (if sense (first comparison) (cdr (assoc (first comparison) +cc-negations+))))
+                  (pair (%cc-pair (%cc-branch-name op) (%cc-branch-name (cdr (assoc op +cc-flips+)))
+                                  (second comparison) (third comparison))))
+             (apply #'%cc-op (first pair) *cc-acc* (append (rest pair) (list target)))))
+          (sense (let ((skip (%cc-new-label)))
+                   (%cc-expr form)
+                   (%cc-op :branch-zero *cc-acc* skip)
+                   (%cc-op :jump target)
+                   (%cc-emit (list :label skip))))
+          (t (%cc-expr form)
+             (%cc-op :branch-zero *cc-acc* target)))))
+
 (defun %cc-if (form)
   (%cc-check-length form 3 4)
   (let ((else (%cc-new-label)) (end (%cc-new-label)))
-    (%cc-expr (second form))
-    (%cc-op :branch-zero *cc-acc* else)
+    (%cc-branch (second form) nil else)
     (%cc-expr (third form))
     (%cc-op :jump end)
     (%cc-emit (list :label else))
@@ -416,13 +489,15 @@ straight into the backend's OP-IMM or OP-SLOT variant (#374), else NIL."
   (%cc-check-length form 3 nil)
   (let ((top (%cc-new-label)) (end (%cc-new-label)))
     (%cc-emit (list :label top))
-    (%cc-expr (second form))
-    (%cc-op :branch-zero *cc-acc* end)
+    (%cc-branch (second form) nil end)
     (dolist (body (cddr form)) (%cc-expr body))
     (%cc-op :jump top)
     (%cc-emit (list :label end))
     (%cc-const 0)))
 
+;; TODO: an and/or whose value is used compares into the accumulator, then
+;; branches, per operand; fused :branch-cmp jumps into a shared 0/1 landing
+;; would save an instruction per comparison after the first (#390).
 (defun %cc-and (form)
   (%cc-check-length form 1 nil)
   (if (null (rest form))

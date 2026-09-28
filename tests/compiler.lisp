@@ -282,7 +282,7 @@
     (fiveam:is (member "CONST" ops :test #'string=))))
 
 (fiveam:test a-global-right-operand-does-not-use-a-variant
-  (let ((ops (%cl-op-names (%cl-compile "(defvar g 4) (defun main () (+ 10 g))" 'callfoo-lang-abi))))
+  (let ((ops (%cl-op-names (%cl-compile "(defvar g 4) (defun f () 1) (defun main () (+ (f) g))" 'callfoo-lang-abi))))
     (fiveam:is (member "ADD" ops :test #'string=))
     (fiveam:is (notany (lambda (name) (search "-IMM" name)) ops))))
 
@@ -315,6 +315,144 @@
   (dolist (name '(:add-imm :lt-slot))
     (fiveam:signals backend-definition-error
       (eval `(defbackend cl-variant-arity-abi (:machine callfoo) (ops (,name (a b c) (ldi a b))))))))
+
+;;; #388: a leaf left operand swaps to the right
+
+(fiveam:test a-leaf-left-operand-swaps-when-only-it-has-a-variant
+  (flet ((ops (source) (%cl-op-names (%cl-compile source 'callfoo-lang-abi))))
+    (let ((ops (ops "(defun g () 5) (defun main () (+ 1 (g)))")))
+      (fiveam:is (member "ADD-IMM" ops :test #'string=))
+      (fiveam:is (notany (lambda (name) (string= name "ADD")) ops)))
+    (let ((ops (ops "(defun g () 5) (defun main () (> 5 (g)))")))
+      (fiveam:is (member "LT-IMM" ops :test #'string=) "a comparison flips its direction"))
+    (let ((ops (ops "(defun g () 5) (defun main () (= 5 (g)))")))
+      (fiveam:is (member "EQ-IMM" ops :test #'string=)))))
+
+(fiveam:test a-left-operand-that-cannot-swap-stays-on-the-left
+  (flet ((ops (source) (%cl-op-names (%cl-compile source 'callfoo-lang-abi))))
+    (let ((ops (ops "(defun g () 5) (defun main () (- 1 (g)))")))
+      (fiveam:is (member "SUB" ops :test #'string=) "- is not commutative")
+      (fiveam:is (notany (lambda (name) (string= name "SUB-IMM")) ops)))
+    (let ((ops (ops "(defvar v 1) (defun g () 5) (defun main () (+ v (g)))")))
+      (fiveam:is (member "ADD" ops :test #'string=) "a global has no variant"))
+    (let ((ops (ops "(defun f (x) (+ x 1)) (defun main () (f 1))")))
+      (fiveam:is (member "ADD-IMM" ops :test #'string=) "a right operand with a variant is not swapped"))
+    (let ((ops (ops "(defun f (x) (+ 1 x)) (defun main () (f 1))")))
+      (fiveam:is (member "ADD-SLOT" ops :test #'string=) "both leaves: the right operand's variant is unchanged")
+      (fiveam:is (notany (lambda (name) (string= name "ADD-IMM")) ops)))))
+
+(fiveam:test a-swap-does-not-change-what-an-operand-sees
+  (%cl-each-backend (backend machine)
+    (loop for (source . expected)
+            in '(("(defun main () (let ((x 1)) (< x (set x 5))))" . 1)
+                 ("(defun main () (let ((x 1)) (+ x (set x 5))))" . 6)
+                 ("(defun main () (let ((x 1)) (if (< x (set x 5)) 1 0)))" . 1)
+                 ("(defun main () (let ((x 1)) (> (set x 5) x)))" . 0)
+                 ("(defvar g 1) (defun bump () (set g 9) 0) (defun main () (+ g (bump)))" . 1)
+                 ("(defun g () 5) (defun main () (+ 1 (g)))" . 6)
+                 ("(defun g () 5) (defun main () (- 1 (g)))" . 65532)
+                 ("(defun g () 5) (defun main () (+ (> 5 (g)) (+ (= 5 (g)) (< 9 (g)))))" . 1))
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend machine))) "~A on ~A" source backend))))
+
+;;; #375: a condition branches on a comparison
+
+(defun %cl-branch-names (ops)
+  "The fused BRANCH-cmp operation names in OPS, not BRANCH-ZERO."
+  (remove-if-not (lambda (name) (and (search "BRANCH-" name) (string/= name "BRANCH-ZERO"))) ops))
+
+(defbackend cl-no-ge-abi (:extends callfoo-lang-abi)
+  (without-ops :branch-ge))
+
+(fiveam:test a-comparison-condition-branches-on-the-comparison
+  (flet ((ops (source) (%cl-op-names (%cl-compile source 'callfoo-lang-abi))))
+    (let ((ops (ops "(defun f (x y) (if (< x y) 1 2)) (defun main () (f 1 2))")))
+      (fiveam:is (member "BRANCH-GE-SLOT" ops :test #'string=) "branches to else on the negation")
+      (fiveam:is (notany (lambda (name) (member name '("LT" "LT-SLOT" "BRANCH-ZERO") :test #'string=)) ops)))
+    (let ((ops (ops "(defun f (x) (while (< x 5) (set x (+ x 1)))) (defun main () (f 1))")))
+      (fiveam:is (member "BRANCH-GE-IMM" ops :test #'string=))
+      (fiveam:is (notany (lambda (name) (string= name "BRANCH-ZERO")) ops)))
+    (let ((ops (ops "(defun g () 1) (defun f () (if (= (g) (g)) 1 2)) (defun main () (f))")))
+      (fiveam:is (member "BRANCH-NE" ops :test #'string=) "a right operand with no variant goes through the temp register"))
+    (let ((ops (ops "(defun g () 1) (defun f () (if (> 5 (g)) 1 2)) (defun main () (f))")))
+      (fiveam:is (member "BRANCH-GE-IMM" ops :test #'string=) "the swapped left operand takes the flipped, negated branch"))))
+
+(fiveam:test and-or-and-not-conditions-jump-without-computing-a-value
+  (flet ((ops (source) (%cl-op-names (%cl-compile source 'callfoo-lang-abi))))
+    (dolist (source '("(defun f (a b c) (if (and (< a b) (not (= c 0))) 1 2)) (defun main () (f 1 2 3))"
+                      "(defun f (a b c) (if (or (< a b) (= c 0)) 1 2)) (defun main () (f 1 2 3))"
+                      "(defun f (a b c) (if (not (or (< a b) (and (= c 0) (> a c)))) 1 2)) (defun main () (f 1 2 3))"))
+      (let ((ops (ops source)))
+        (fiveam:is (%cl-branch-names ops) "~A" source)
+        (fiveam:is (notany (lambda (name) (member name '("BRANCH-ZERO" "EQ" "LT" "GT" "EQ-IMM") :test #'string=)) ops) "~A" source)))))
+
+(fiveam:test a-value-and-or-still-computes-its-comparisons
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (a b) (set a (and (< a b) 1))) (defun main () (f 1 2))"
+                                        'callfoo-lang-abi))))
+    (fiveam:is (member "LT-SLOT" ops :test #'string=))
+    (fiveam:is (member "BRANCH-ZERO" ops :test #'string=))))
+
+(fiveam:test a-backend-without-branch-operations-compiles-as-before
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (x) (if (< x 5) 1 2)) (defun main () (f 1))" 'callfoo-lang-fp-abi))))
+    (fiveam:is (member "LT" ops :test #'string=))
+    (fiveam:is (member "BRANCH-ZERO" ops :test #'string=))
+    (fiveam:is (null (%cl-branch-names ops)))))
+
+(fiveam:test a-comparison-without-its-branch-operation-falls-back
+  (let ((ops (%cl-op-names (%cl-compile "(defun f (x) (if (< x 5) 1 2)) (defun main () (f 1))" 'cl-no-ge-abi))))
+    (fiveam:is (member "LT-IMM" ops :test #'string=))
+    (fiveam:is (member "BRANCH-ZERO" ops :test #'string=))
+    (fiveam:is (null (%cl-branch-names ops)))))
+
+(fiveam:test a-malformed-condition-keeps-its-error
+  (fiveam:is (search "takes 2 operands" (%cl-fail "(defun main () (if (< 1) 1 0))")))
+  (fiveam:is (search "not is malformed" (%cl-fail "(defun main () (if (not) 1 0))")))
+  (fiveam:is (search "not is malformed" (%cl-fail "(defun main () (while (not 1 2) 1))"))))
+
+(defun %cl-signed (value)
+  (if (>= value 32768) (- value 65536) value))
+
+(defparameter +cl-condition-shapes+
+  (list (cons "(if (~A x y) 1 0)" (lambda (c x y) (funcall c x y)))
+        (cons "(if (~A x (+ y 0)) 1 0)" (lambda (c x y) (funcall c x y)))
+        (cons "(if (~A x 3) 1 0)" (lambda (c x y) (declare (ignore y)) (funcall c x 3)))
+        (cons "(if (~A 3 y) 1 0)" (lambda (c x y) (declare (ignore x)) (funcall c 3 y)))
+        (cons "(if (not (~A x y)) 1 0)" (lambda (c x y) (not (funcall c x y))))
+        (cons "(if (and (~A x y) (~A y 3)) 1 0)" (lambda (c x y) (and (funcall c x y) (funcall c y 3))))
+        (cons "(if (or (~A x y) (~A y 3)) 1 0)" (lambda (c x y) (or (funcall c x y) (funcall c y 3))))
+        (cons "(if (not (and (~A x y) (not (~A y 3)))) 1 0)"
+              (lambda (c x y) (not (and (funcall c x y) (not (funcall c y 3)))))))
+  "Condition source, with the value it must give for comparison C on signed X and Y.")
+
+(fiveam:test conditions-give-the-same-values-with-and-without-branch-operations
+  (dolist (backend '((callfoo-lang-abi callfoo) (cl-no-ge-abi callfoo) (callfoo-lang-fp-abi callfoo-fp)))
+    (loop for (name function) in '(("=" =) ("/=" /=) ("<" <) (">" >) ("<=" <=) (">=" >=))
+          do (loop for (control . expected) in +cl-condition-shapes+
+                   do (loop for (x y) in '((1 2) (2 1) (3 3) (65535 1) (1 65535) (65535 65535))
+                            for source = (format nil "(defun f (x y) ~A) (defun main () (f ~D ~D))"
+                                                 (format nil control name name name) x y)
+                            for want = (if (funcall expected (lambda (a b) (funcall function a b))
+                                                    (%cl-signed x) (%cl-signed y))
+                                           1 0)
+                            do (fiveam:is (= want (%cv-a (%cl-run source (first backend) (second backend))))
+                                          "~A on ~A" source (first backend)))))))
+
+(fiveam:test loops-and-nested-conditions-run-on-every-backend
+  (%cl-each-backend (backend machine)
+    (loop for (source . expected)
+            in '(("(defun main () (let ((i 0)) (while (< i 5) (set i (+ i 1))) i))" . 5)
+                 ("(defun main () (let ((i 0)) (while (and (< i 5) (/= i 3)) (set i (+ i 1))) i))" . 3)
+                 ("(defun main () (let ((i 0)) (while (or (> i 8) (< i 4)) (set i (+ i 1))) i))" . 4)
+                 ("(defun main () (if (and) 1 2))" . 1)
+                 ("(defun main () (if (or) 1 2))" . 2)
+                 ("(defun main () (if (not (and)) 1 2))" . 2)
+                 ("(defun f (a) (if (< a 0) 7 8)) (defun main () (f 65535))" . 7)
+                 ("(defun main () (if (< 1 2) (if (> 1 2) 3 4) 5))" . 4))
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend machine))) "~A on ~A" source backend))))
+
+(fiveam:test a-branch-operation-has-its-arity-checked
+  (dolist (name '(:branch-lt-imm :branch-ge-slot :branch-eq))
+    (fiveam:signals backend-definition-error
+      (eval `(defbackend cl-branch-arity-abi (:machine callfoo) (ops (,name (a b) (ldi a b))))))))
 
 ;;; #373: a register, not always the stack, holds a left operand
 

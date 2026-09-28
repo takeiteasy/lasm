@@ -175,6 +175,8 @@ definition, and a backend defines those its programs use; `:peek-byte`/
 Each arithmetic and comparison operation may also have an `-imm` and a `-slot`
 variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler
 uses [when the right operand allows](language.md#backend-requirements).
+Each comparison also has an optional `:branch-eq`...`:branch-ge (a b target)`
+operation, with the same variants, that a condition jumps on directly.
 
 ## Branches
 

@@ -202,6 +202,34 @@
 (defarith-ri sltri 106 (if (< sx sy) 1 0))
 (defarith-rs sltrs 107 (if (< sx sy) 1 0))
 
+;; #375: compare and jump, on the same source operands and signed values as
+;; the operations above, for the compiler's optional :BRANCH-cmp operations.
+(defmode call-rrt (expr :register r) "," (expr :register r) "," expr)
+(defmode call-rit (expr :register r) "," "#" expr "," expr)
+(defmode call-rst (expr :register r) "," "[" "sp" "+" expr "]" "," expr)
+
+(defmacro defbranch (mnemonic mode opcode operand-name source expression)
+  `(definstruction callfoo ,mnemonic (modes ,mode)
+     (encoding (opcode ,opcode) (operand dst :width 1) (operand ,operand-name :width 1)
+               (operand target :width 1))
+     (semantics
+       (let* ((x (r dst)) (y ,source)
+              (sx (if (>= x 32768) (- x 65536) x))
+              (sy (if (>= y 32768) (- y 65536) y)))
+         (declare (ignorable sx sy))
+         (when ,expression (set! pc target))))))
+
+(defmacro defbranches (comparisons)
+  `(progn
+     ,@(loop for (suffix expression) in comparisons
+             for offset from 0
+             collect `(defbranch ,(intern (format nil "B~Ar" suffix)) call-rrt ,(+ 108 offset) src (r src) ,expression)
+             collect `(defbranch ,(intern (format nil "B~Ari" suffix)) call-rit ,(+ 114 offset) value value ,expression)
+             collect `(defbranch ,(intern (format nil "B~Ars" suffix)) call-rst ,(+ 120 offset) offset
+                                 (mref machine 'ram (wrap-value (+ sp offset) 16)) ,expression))))
+
+(defbranches ((eq (= x y)) (ne (/= x y)) (lt (< sx sy)) (gt (> sx sy)) (le (<= sx sy)) (ge (>= sx sy))))
+
 ;; Arguments go on the stack right to left and the caller removes them; a
 ;; function finds its first argument above the return address.
 (defbackend callfoo-abi (:machine callfoo)
@@ -263,6 +291,24 @@
        (:poke-byte (a s) (stb (ind a) (reg s)))
        (:jump (target) (jmp target))
        (:branch-zero (r target) (jz r target))
+       (:branch-eq (a b target) (beqr a b target))
+       (:branch-eq-imm (a v target) (beqri a (imm v) target))
+       (:branch-eq-slot (a slot target) (beqrs a slot target))
+       (:branch-ne (a b target) (bner a b target))
+       (:branch-ne-imm (a v target) (bneri a (imm v) target))
+       (:branch-ne-slot (a slot target) (bners a slot target))
+       (:branch-lt (a b target) (bltr a b target))
+       (:branch-lt-imm (a v target) (bltri a (imm v) target))
+       (:branch-lt-slot (a slot target) (bltrs a slot target))
+       (:branch-gt (a b target) (bgtr a b target))
+       (:branch-gt-imm (a v target) (bgtri a (imm v) target))
+       (:branch-gt-slot (a slot target) (bgtrs a slot target))
+       (:branch-le (a b target) (bler a b target))
+       (:branch-le-imm (a v target) (bleri a (imm v) target))
+       (:branch-le-slot (a slot target) (blers a slot target))
+       (:branch-ge (a b target) (bger a b target))
+       (:branch-ge-imm (a v target) (bgeri a (imm v) target))
+       (:branch-ge-slot (a slot target) (bgers a slot target))
        (:halt () (hlt))
        (:sub (d s) (subr d s))
        (:mul (d s) (mulr d s))

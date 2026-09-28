@@ -291,8 +291,11 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
     ("ENTER" . 0) ("LEAVE" . 0))
   "Operations that convention lowering (items.lisp) emits, with their parameter counts.")
 
+(defparameter +backend-comparison-ops+ '("EQ" "NE" "LT" "GT" "LE" "GE")
+  "The comparisons; each also has a BRANCH- form (#375).")
+
 (defparameter +backend-binary-ops+
-  '("ADD" "SUB" "MUL" "DIV" "MOD" "AND" "OR" "XOR" "SHL" "SHR" "EQ" "NE" "LT" "GT" "LE" "GE")
+  (append '("ADD" "SUB" "MUL" "DIV" "MOD" "AND" "OR" "XOR" "SHL" "SHR") +backend-comparison-ops+)
   "The arithmetic and comparison operations; each may have -IMM and -SLOT variants (#374).")
 
 (defparameter +backend-language-op-arities+
@@ -302,7 +305,12 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
           (loop for name in +backend-binary-ops+
                 collect (cons name 2)
                 collect (cons (concatenate 'string name "-IMM") 2)
-                collect (cons (concatenate 'string name "-SLOT") 2)))
+                collect (cons (concatenate 'string name "-SLOT") 2))
+          (loop for name in +backend-comparison-ops+
+                for branch = (concatenate 'string "BRANCH-" name)
+                collect (cons branch 3)
+                collect (cons (concatenate 'string branch "-IMM") 3)
+                collect (cons (concatenate 'string branch "-SLOT") 3)))
   "Operations that the language compiler (compiler.lisp) emits, with their parameter counts.")
 
 (defun %parse-op-effects (key names forms)

@@ -268,6 +268,8 @@ for the forms a program uses. A missing one is a compile error naming the form.
 | `:add :sub :mul :div :mod :and :or :xor :shl :shr (d s)` | `d` = `d` op `s`. |
 | `:eq :ne :lt :gt :le :ge (d s)` | `d` = `1` or `0`. |
 | `:add-imm (d v)` `:add-slot (d slot)`, and the same for every operation above | Optional: `d` = `d` op an integer or label, or op a frame slot. |
+| `:branch-eq :branch-ne :branch-lt :branch-gt :branch-le :branch-ge (a b target)` | Optional: jump to `target` when `a` compares to `b` as the matching `:eq`...`:ge` does. |
+| `:branch-lt-imm (a v target)` `:branch-lt-slot (a slot target)`, and the same for every branch above | Optional: as above, with an integer or label, or a frame slot, for `b`. |
 
 An operator whose right operand is a constant, array or `(function F)` uses
 the `-imm` variant, and one whose right operand is a parameter or `let`
@@ -281,6 +283,23 @@ first.[^variants]
      (:add-slot (d slot) (addrs d slot)))
 ;; (+ x 1)  ->  :get a x, :add-imm a 1
 ;; (+ x y)  ->  :get a x, :add-slot a y
+```
+
+A constant or variable *left* operand swaps to the right when that lets a
+variant apply and the right operand has none: `(+ 1 (f y))` becomes
+`(+ (f y) 1)`, and `(> 5 (f y))` becomes `(< (f y) 5)`. Only `+ * logand logior
+logxor` and the comparisons swap. The swap happens only when evaluating the
+right operand first cannot change the left one.[^swap]
+
+A condition that is a comparison, or an `and`, `or` or `not` of conditions,
+jumps on the backend's `:branch-` operation, when it defines the one it needs,
+instead of computing `1` or `0` and testing that. A false condition jumps to
+the `else` or the end of the loop, so `<` uses `:branch-ge`.[^branches] A
+`:branch-cmp` must compare exactly as its `:cmp` does, signedness included.
+
+```lisp
+(ops (:branch-ge-imm (a v target) (bger a (imm v) target)))
+;; (if (< x 5) A B)  ->  :get a x, :branch-ge-imm a 5 else, A, :jump end, else: B
 ```
 
 It also defines the operations [call lowering](conventions.md#backend-operations)
@@ -337,8 +356,8 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | A register `%CC-TAKE` picks from the callee-saved pool for a single call site costs a save/restore even when the stack would have been as cheap. | [#376](https://todo.sr.ht/~takeiteasy/lasm/376) |
 | An `(asm ...)` in an operand always falls back to the stack: asm has no declared clobber list, so any register could be unsafe. | [#377](https://todo.sr.ht/~takeiteasy/lasm/377) |
-| A constant or variable *left* operand never uses an immediate or slot variant, even for a commutative operator. | [#388](https://todo.sr.ht/~takeiteasy/lasm/388) |
-| `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
+| A value-context `and`/`or` compares into the accumulator, then branches, per operand. | [#390](https://todo.sr.ht/~takeiteasy/lasm/390) |
+| A condition that must jump when true, without a comparison of its own, skips over a `:jump`. | [#389](https://todo.sr.ht/~takeiteasy/lasm/389) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
 | A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
@@ -362,12 +381,24 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
 
-[^variants]: `not` compares with `:eq-imm 0`. A global is not a slot, and reads
+[^variants]: `not` compares with `:eq-imm 0` when its value is used. A global is not a slot, and reads
   through `:peek`, so it loads first. The variants take the same operand a
   load would: `:add-slot`'s `slot` is the operand `:get` takes, and
   `:add-imm`'s `v` is the one `:const` takes. The example backend
   [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines them for `:add`,
   `:sub`, `:eq` and `:lt` only; `:mul` and the rest load first.
+
+[^swap]: Safe means the left operand is a constant, array, `(function F)` or
+  a parameter or `let` variable the right operand neither sets nor reaches
+  through an `(asm ...)` block. A global never swaps: a call or `poke` in the
+  right operand could change it.
+
+[^branches]: An `and`, `or` and `not` in a condition jump between their
+  operands and produce no value; used for their value they compute
+  comparisons as before. A comparison whose `:branch-cmp` the backend lacks,
+  and any other condition, computes a value and uses `:branch-zero`.
+  [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines all eighteen
+  branch operations.
 
 [^macros]: A fresh `let` name or `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`
