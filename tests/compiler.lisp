@@ -1753,11 +1753,32 @@ two |#
 
 (fiveam:test label-ops-leave-computed-addresses-to-peek-and-poke
   (destructuring-bind (peek-label poke-label peek poke)
-      (%cl-label-op-counts "(defarray a 2) (defun main () (aset a 1 5) (aref a 1))" 'cl-label-abi)
+      (%cl-label-op-counts "(defarray a 2) (defun main () (aset a (+ 0 1) 5) (aref a (+ 0 1)))" 'cl-label-abi)
     (fiveam:is (= 0 peek-label))
     (fiveam:is (= 0 poke-label))
     (fiveam:is (plusp peek))
     (fiveam:is (plusp poke))))
+
+;;; #431: a constant-index aref and aset by label
+
+(fiveam:test constant-index-aref-and-aset-use-label-ops
+  (dolist (source '("(defarray a 3) (defun main () (aset a 2 7) (aref a 2))"
+                    "(defconstant k 2) (defarray a 3) (defun main () (aset a k 7) (aref a k))"))
+    (destructuring-bind (peek-label poke-label peek poke) (%cl-label-op-counts source 'cl-label-abi)
+      (fiveam:is (plusp peek-label) "~A" source)
+      (fiveam:is (plusp poke-label) "~A" source)
+      (fiveam:is (= 0 peek))
+      (fiveam:is (= 0 poke)))
+    (fiveam:is (= 7 (%cv-a (%cl-run source 'cl-label-abi))) "~A" source)))
+
+(fiveam:test constant-index-aref-skips-the-address-add
+  (fiveam:is (= 0 (%cl-count-op "ADD-IMM" "(defarray a 3) (defun main () (aref a 2))" 'cl-static-abi)))
+  (fiveam:is (= 0 (%cl-count-op "ADD-IMM" "(defarray a 3) (defun main () (aref a 2))" 'cl-label-abi))))
+
+(fiveam:test constant-index-aref-reuses-the-pointer-register
+  (fiveam:is (= 1 (%cl-count-op "POINT-LABEL" "(defarray a 3) (defun main () (aset a 1 9) (aref a 1))" 'cl-pointer-label-abi)))
+  (fiveam:is (= 2 (%cl-count-op "POINT-LABEL" "(defarray a 3) (defun main () (aref a 0) (aref a 1))" 'cl-pointer-label-abi)))
+  (fiveam:is (= 10 (%cv-a (%cl-run "(defarray a (1 2 3)) (defun main () (aset a 1 9) (+ (aref a 0) (aref a 1)))" 'cl-pointer-label-abi)))))
 
 (fiveam:test label-ops-initialise-a-nonzero-global-in-the-stub
   (let ((m (%cl-run "(defvar g 7) (defun main () g)" 'cl-label-abi)))

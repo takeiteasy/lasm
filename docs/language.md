@@ -390,7 +390,7 @@ those registers is a pair.
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
 | `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
-| `:peek-label (d label)` `:poke-label (label s)` | Optional: a word at a label, for a global or a [static frame](static-frames.md) slot. Without them, `:const` then `:peek`/`:poke`. |
+| `:peek-label (d label)` `:poke-label (label s)` | Optional: a word at a label, for a global, a [static frame](static-frames.md) slot or a constant-index `aref`/`aset`. Without them, `:const` then `:peek`/`:poke`. |
 | `:point (r)` `:point-label (label)` `:peek-pointer (d)` `:poke-pointer (s)` | Optional: memory access through the backend's [pointer register](backends.md#pointer-register). |
 | `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` and, on most machines, `aref-byte`/`aset-byte` (#366, #379). |
 | `:byte-address (d)` | Optional: `d`, a cell address, becomes the byte address `:peek-byte` takes. Default: times the characters a cell holds. |
@@ -501,7 +501,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | `funcall` through a function's return value is checked only against every function value's arity. | [#403](https://todo.sr.ht/~takeiteasy/lasm/403) |
 | `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#404](https://todo.sr.ht/~takeiteasy/lasm/404) |
 | A global or static slot used as an operator's right operand loads into the temp register first. | [#430](https://todo.sr.ht/~takeiteasy/lasm/430) |
-| `(aref A 3)` computes its address before `:peek`, not through `:peek-label` or the pointer register. | [#431](https://todo.sr.ht/~takeiteasy/lasm/431) |
+| `(+ x (aref A 3))` computes the element before the operator, not as an operand leaf. | [#434](https://todo.sr.ht/~takeiteasy/lasm/434) |
 | Byte access does not use the pointer register. | [#432](https://todo.sr.ht/~takeiteasy/lasm/432) |
 | A repeated computed address reloads the pointer register. | [#433](https://todo.sr.ht/~takeiteasy/lasm/433) |
 

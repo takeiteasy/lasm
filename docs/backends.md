@@ -179,13 +179,15 @@ the byte address those take; without it, the address is multiplied by the
 8-bit characters a cell holds.
 
 Optional `:peek-label (d label)` and `:poke-label (label s)` read and write the
-word at a label in one operation. The compiler uses them for a global and a
-static frame slot, in place of `:const` then `:peek`/`:poke`.
+word at a label in one operation. The compiler uses them for a global, a
+static frame slot and an `aref`/`aset` of an array or string at a constant
+index, in place of `:const` then `:peek`/`:poke`.
 
 ```lisp
 (ops (:peek-label (d label) (ldwm (:hi d) (:lo d) label))
      (:poke-label (label s) (stwm (:hi s) (:lo s) label)))
-;; (+ g 1)  ->  :peek-label a gvg, :add-imm a 1
+;; (+ g 1)         ->  :peek-label a gvg, :add-imm a 1
+;; (aref table 3)  ->  :peek-label a (+ table 3)
 ```
 
 Each arithmetic and comparison operation may also have an `-imm`, a `-slot`
@@ -208,7 +210,7 @@ that load and use it. The compiler keeps `REG` out of its register pools.
 | `:point-label (label)` | Optional: `REG` = `label`. Without it, `:const` then `:point`. |
 | `:peek-pointer (d)` `:poke-pointer (s)` | `d` = the word at `REG`; the word at `REG` = `s`. Required, and they leave `REG` as it was. |
 
-A global or static slot loads and stores through it, and a computed address
+A global, a static slot and a constant-index `aref`/`aset` load and store through it, and a computed address
 does when the backend has no `:peek`/`:poke`. `:peek-label`/`:poke-label` win
 when both exist. The compiler skips `:point-label` while `REG` still holds the
 label: it forgets it at a label, a call, a `:point` and an `(asm ...)` that may

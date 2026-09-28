@@ -141,7 +141,7 @@
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
-(defvar *cc-pointer* nil "The name of the label the backend's :address register is known to hold, or NIL.")
+(defvar *cc-pointer* nil "The printed label or item expression the backend's :address register is known to hold, or NIL.")
 (defvar *cc-env* nil "(KEY . LOCATION) for each parameter and let variable in scope.")
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
@@ -267,7 +267,7 @@ cannot be a register alias or a generated label."
 
 (defun %cc-point-label (label scratch scratch-name)
   "Point the :address register at LABEL, unless it holds it already. Without :point-label the address goes through SCRATCH."
-  (let ((name (string label)))
+  (let ((name (princ-to-string label)))
     (unless (equal name *cc-pointer*)
       (if (%cc-op-p :point-label)
           (%cc-op :point-label label)
@@ -988,6 +988,16 @@ comparison, to a landing that loads the result."
           (if (cddr form) (%cc-sources (car (last form))) :unknown))
     (dotimes (i slots) (%cc-free))))
 
+(defun %cc-set-label (label value)
+  "VALUE into the word at LABEL, and left in the accumulator."
+  (if (%cc-label-store-p)
+      (progn (%cc-expr value)
+             (%cc-store-label label *cc-acc* *cc-acc-name*))
+      (progn (%cc-value-to-temp value)
+             (%cc-op :const *cc-acc* label)
+             (%cc-op :poke *cc-acc-name* *cc-temp-name*)
+             (%cc-op :move *cc-acc* *cc-temp*))))
+
 (defun %cc-set (form)
   (%cc-check-length form 3 3)
   (let ((location (%cc-lookup (second form))))
@@ -996,13 +1006,7 @@ comparison, to a landing that loads the result."
        (%cc-hold (%cc-local-cell (second form)) (third form))
        (%cc-store location))
       (:global (%cc-hold (second location) (third form))
-       (if (%cc-label-store-p)
-           (progn (%cc-expr (third form))
-                  (%cc-store-label (second location) *cc-acc* *cc-acc-name*))
-           (progn (%cc-value-to-temp (third form))
-                  (%cc-op :const *cc-acc* (second location))
-                  (%cc-op :poke *cc-acc-name* *cc-temp-name*)
-                  (%cc-op :move *cc-acc* *cc-temp*))))
+       (%cc-set-label (second location) (third form)))
       (:constant (%cc-fail form "~A is a constant" (%source-name (second form) nil)))
       (:address (%cc-fail form "~A is an array or string" (%source-name (second form) nil))))))
 
@@ -1056,13 +1060,30 @@ comparison, to a landing that loads the result."
     ((= (logcount factor) 1) (list 'shl index (integer-length (1- factor))))
     (t (list '* index factor))))
 
+(defun %cc-element-label (array index)
+  "The item expression (+ LABEL OFFSET) of element INDEX of the DEFARRAY or DEFSTRING ARRAY when INDEX is constant, else NIL."
+  (let ((position (%cc-constant-index index)))
+    (when (and position (%cc-name-p array))
+      (let ((location (%cc-lookup array)))
+        (when (eq (first location) :address)
+          (let ((offset (%cc-scaled-index position)))
+            (if (zerop offset)
+                (second location)
+                (list '+ (second location) offset))))))))
+
 (defun %cc-aref (form)
   (%cc-check-length form 3 3)
-  (%cc-peek (list 'peek (list '+ (second form) (%cc-scaled-index (third form))))))
+  (let ((label (%cc-element-label (second form) (third form))))
+    (if label
+        (%cc-load-label label *cc-acc* *cc-acc-name*)
+        (%cc-peek (list 'peek (list '+ (second form) (%cc-scaled-index (third form))))))))
 
 (defun %cc-aset (form)
   (%cc-check-length form 4 4)
-  (%cc-poke (list 'poke (list '+ (second form) (%cc-scaled-index (third form))) (fourth form)))
+  (let ((label (%cc-element-label (second form) (third form))))
+    (if label
+        (%cc-set-label label (fourth form))
+        (%cc-poke (list 'poke (list '+ (second form) (%cc-scaled-index (third form))) (fourth form)))))
   (%cc-hold-element (second form) (third form) (fourth form)))
 
 ;; (aref-byte S I)/(aset-byte S I V) reach character I of a :packed
