@@ -221,9 +221,10 @@
     (fiveam:is (equal '("####...." "#......." "#......." "#......." "####....")
                       (loop for y below 5 collect (row machine y))))))
 
-;;; The dispatch table calls through a computed target, which static frames
-;;; (docs/static-frames.md) support.
-(fiveam:test the-emulator-runs-under-static-frames
-  (let ((chip8::*image* (lasm:assemble-source-file (asdf:system-relative-pathname :chip8 "chip8.lsp")
-                                                    :backend 'chip8::host-lang :frames :static)))
-    (fiveam:is (equal '(5 8) (regs (run-rom '(#x6005 #x6107 #x7101 #x7101 #x71ff)) 0 1)))))
+;;; The host has 8-bit cells, so CHIP-8 memory is one byte a cell.
+
+(fiveam:test chip8-memory-is-one-byte-a-cell
+  (let* ((machine (run-rom '(#x6005)))
+         (base (chip8::label-address "armemory")))
+    (fiveam:is (equal '(#x60 #x05) (loop for i from #x200 repeat 2 collect (lasm:mref machine 'chip8::ram (+ base i)))))
+    (fiveam:is (equal '(#xf0 #x90) (loop for i below 2 collect (lasm:mref machine 'chip8::ram (+ base i)))))))

@@ -20,7 +20,9 @@ lasm run fact.lsp -m pairfoo.lisp --backend pairfoo-lang-abi   # ab is 120 when 
 ```
 
 See [`tests/fixtures/cli/pairfoo.lisp`](../tests/fixtures/cli/pairfoo.lisp), a
-complete 8-bit machine with a carry chain.
+complete 8-bit machine with a carry chain, and
+[`examples/chip8/host.lisp`](../examples/chip8/host.lisp), the [CHIP-8 example's](examples.md#chip-8)
+8-bit host.
 
 ## Declaring pairs
 

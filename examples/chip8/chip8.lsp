@@ -51,7 +51,7 @@ Choices
 
 (defconstant steps-per-tick 10)
 
-(defarray memory 2048)                  ; 4096 bytes, two to a host cell
+(defarray memory 2048)                  ; 2048 words, 4096 bytes, one a host cell
 (defarray display 128)                  ; 64x32 bits, 256 bytes
 (defarray v 16)
 (defarray stack 16)
@@ -109,7 +109,7 @@ Choices
 
 (defmacro skip-if (test) `(if ,test (set pc (logand (+ pc 2) #xFFF))))
 
-;;; Memory and the display are bytes packed into host cells. aref-byte and
+;;; Memory and the display are byte arrays, one byte a host cell. aref-byte and
 ;;; aset-byte index them a byte at a time.
 (defun fetch ()
   (let ((hi (aref-byte memory pc))

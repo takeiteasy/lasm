@@ -14,7 +14,9 @@ addresses, not in stack frames, so a machine with no SP-relative addressing (the
 lasm run static.lsp -m callfoo.lisp --backend callfoo-lang-abi --frames static
 ```
 
-See [`tests/fixtures/cli/static.lsp`](../tests/fixtures/cli/static.lsp).
+See [`tests/fixtures/cli/static.lsp`](../tests/fixtures/cli/static.lsp), and
+[`examples/chip8/host.lisp`](../examples/chip8/host.lisp), a backend that has no
+other frames.
 
 ## Choosing
 

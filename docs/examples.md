@@ -87,8 +87,8 @@ The spec is the block comment at the top of `examples/chip8/chip8.lsp`.
 | File | Holds |
 | --- | --- |
 | `package.lisp` | A package that only `use`s `#:lasm`. |
-| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 16-bit registers, a stack, byte access, and the [operations the language needs](language.md#backend-requirements). |
-| `chip8.lsp` | The interpreter: [`defarray`](language.md#arrays-strings-and-byte-access) memory and display, [macros](language.md#macros), and a table of [function values](language.md#function-values) indexed by opcode. |
+| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 8-bit registers and cells, [register pairs](register-pairs.md) for 16-bit words, [static frames](static-frames.md), byte access, and the [operations the language needs](language.md#backend-requirements). |
+| `chip8.lsp` | The interpreter: [`defarray`](language.md#arrays-strings-and-byte-access) memory and display, one byte a host cell, [macros](language.md#macros), and a table of [function values](language.md#function-values) indexed by opcode. |
 | `chip8.lisp` | Compiles `chip8.lsp` with `assemble-source-file`, loads a ROM and reads the state back. |
 | `test.lisp` | A FiveAM suite: a small ROM for each group of instructions, and one that asserts registers, memory and display together. |
 
@@ -111,5 +111,4 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 | `[5 + b]` assembles as the address `[6]`; write the register first. | [#411](https://todo.sr.ht/~takeiteasy/lasm/411) |
 | `0xffff` takes a next word; `-1` packs into the instruction. | [#412](https://todo.sr.ht/~takeiteasy/lasm/412) |
 | IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |
-| The CHIP-8 host has 16-bit registers, not 8-bit registers with [register pairs](register-pairs.md). | [#418](https://todo.sr.ht/~takeiteasy/lasm/418) |
-| A machine with no `[sp + n]` addressing or with a single pointer register cannot be a `.lsp` target. | [#415](https://todo.sr.ht/~takeiteasy/lasm/415), [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |
+| A machine that reaches memory through a single pointer register cannot be a `.lsp` target. | [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |
