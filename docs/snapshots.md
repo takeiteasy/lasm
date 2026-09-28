@@ -115,7 +115,7 @@ leaves the machine untouched.
 All four are `snapshot-error`s; `snapshot-error-detail` gives the message.
 
 `read-snapshot` treats the file as untrusted. It never evaluates, never
-interns a symbol, and accepts no `#` syntax beyond `#\`, `#(` and `#:`, so `#.`,
+interns a symbol, and accepts no `#` syntax beyond `#\`, `#(`, `#:` and the `#x`/`#b`/`#o` integers, so `#.`,
 `#S`, `#P` and `#n=` are rejected. A symbol that does not exist,
 lists nested deeper than 1000, or a float too large to represent (`1d999999999`)
 signals `snapshot-malformed`, as does anything unreadable. A float too small to

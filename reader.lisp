@@ -125,12 +125,32 @@ under READ-RESTRICTED-FORMS' :POSITIONS.")
 
 (defvar *restricted-readtable* nil)
 
+(defun %radix-integer-reader (radix)
+  "A dispatch function for #x, #b or #o: an optionally signed integer in RADIX, of
+at most +READER-MAX-NUMBER-CHARS+ characters. Eclector's own reads digits unbounded."
+  (lambda (stream char parameter)
+    (declare (ignore parameter))
+    (let ((token (with-output-to-string (out)
+                   (loop for next = (peek-char nil stream nil)
+                         while (and next (not (find next '(#\Space #\Tab #\Newline #\Return #\Page
+                                                           #\( #\) #\' #\" #\; #\` #\,))))
+                         for length from 1
+                         do (when (> length +reader-max-number-chars+)
+                              (%reader-fail "number longer than ~D characters" +reader-max-number-chars+))
+                            (write-char (read-char stream) out)))))
+      (handler-case (parse-integer token :radix radix)
+        (error () (%reader-fail "#~A is not followed by an integer in base ~D" char radix))))))
+
 (defun %restrict-sharpsign (table)
   "TABLE with every #X dispatch but the ones the restricted reader needs
-(numbers, characters, keywords) failing."
+(numbers, characters, keywords, #x #b #o integers) failing."
+  (loop for (radix . chars) in '((16 #\x #\X) (2 #\b #\B) (8 #\o #\O))
+        do (dolist (char chars)
+             (eclector.readtable:set-dispatch-macro-character
+              table #\# char (%radix-integer-reader radix))))
   (dotimes (code 128)
     (let ((char (code-char code)))
-      (unless (or (digit-char-p char) (member char '(#\\ #\( #\:)))
+      (unless (or (digit-char-p char) (member char '(#\\ #\( #\: #\x #\X #\b #\B #\o #\O)))
         (eclector.readtable:set-dispatch-macro-character
          table #\# char
          (lambda (stream char parameter)
@@ -140,7 +160,7 @@ under READ-RESTRICTED-FORMS' :POSITIONS.")
 
 (defun %restricted-readtable ()
   "The readtable for snapshots and item files: no #X dispatch beyond numbers/
-characters/keywords, and ' ` , are rejected outright (a source file's
+characters/keywords/#x #b #o integers, and ' ` , are rejected outright (a source file's
 readtable, %SOURCE-READTABLE, allows them instead)."
   (or *restricted-readtable*
       (let ((table (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*))))
@@ -154,13 +174,15 @@ readtable, %SOURCE-READTABLE, allows them instead)."
 (defvar *source-readtable* nil)
 
 (defun %source-readtable ()
-  "The readtable for source files: like %RESTRICTED-READTABLE, but
+  "The readtable for source files: like %RESTRICTED-READTABLE, but #| |# comments and
 ' ` , ,@ read as quote/quasiquote/unquote/unquote-splicing (WRAP-IN-QUOTE and
 friends, specialized on RESTRICTED-SOURCE-CLIENT, build their lists headed by
 an uninterned symbol instead of interning CL:QUOTE &c.)."
   (or *source-readtable*
-      (setf *source-readtable*
-            (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*)))))
+      (let ((table (%restrict-sharpsign (eclector.readtable:copy-readtable eclector.readtable:*readtable*))))
+        (eclector.readtable:set-dispatch-macro-character
+         table #\# #\| (eclector.readtable:get-dispatch-macro-character eclector.readtable:*readtable* #\# #\|))
+        (setf *source-readtable* table))))
 
 ;;; Quote/quasiquote for source files only: RESTRICTED-SOURCE-CLIENT
 ;;; overrides Eclector's WRAP-IN-* so a quoted form's head is an uninterned

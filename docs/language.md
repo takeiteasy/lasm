@@ -43,6 +43,8 @@ and [`:optimize`](#optimizing).
 | `(defmacro NAME (PARAM... [&rest R]) BODY...)` | A compile-time macro; see [below](#macros). |
 | `(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` | A compile-time helper function, callable from a macro's `BODY`. |
 
+Comments are `;` to the end of the line and `#| ... |#` blocks, which nest.
+
 The program needs `(defun main () ...)`. The compiled program starts with a stub
 that stores the globals' initial values, calls `main` and halts; the runner sets
 the stack pointer. `defarray` and `defstring` data is part of the image, not the
@@ -80,7 +82,7 @@ constant.
 
 | Form | Value |
 | --- | --- |
-| `5`, `-5` | The integer. |
+| `5`, `-5`, `#xFF`, `#b101`, `#o17` | The integer, in decimal, hexadecimal, binary or octal. |
 | `(set NAME E)` | `E`, stored in a variable or global. |
 | `(let ((V E)...) BODY...)` | The last body form. Each `E` sees the earlier `V`. |
 | `(if C A [B])` | `A` or `B`; `0` with no `B`. |
@@ -459,8 +461,9 @@ fact.lsp:2:7: unknown variable y (in (+ x y)) (function helper)
 ```
 
 `compile-program` on plain forms has no position to report. A source file is
-read without evaluation, as [items files](items.md#lasm-files) are, so `'`,
-`#` syntax and unknown packages are errors.
+read without evaluation, as [items files](items.md#lasm-files) are, so `#`
+syntax other than `#x`/`#b`/`#o` integers and `#| ... |#` comments, and unknown
+packages, are errors.
 
 ## Functions
 

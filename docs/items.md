@@ -165,8 +165,8 @@ A `.lasm` file holds one `(:program (OPTION...) ITEM...)` form.
 
 The file is untrusted. It is read with the same restricted reader as
 [snapshots](snapshots.md#reading): nothing is evaluated, symbols are never
-interned, `#` syntax and quoting are rejected, and nesting and numbers are
-bounded. Anything else signals `items-malformed`.
+interned, `#` syntax other than `#x`/`#b`/`#o` integers and quoting are
+rejected, and nesting and numbers are bounded. Anything else signals `items-malformed`.
 
 | Function | Does |
 | --- | --- |

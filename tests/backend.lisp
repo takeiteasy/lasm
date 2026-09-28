@@ -422,6 +422,13 @@ call .inner" :machine 'callfoo))
     (read-items-from-string (format nil "(:program (call ~A))"
                                     (make-string (1+ +reader-max-number-chars+) :initial-element #\9)))))
 
+(fiveam:test read-items-accepts-radix-integers-but-not-block-comments
+  (fiveam:is (equal '(255 5 -8) (cddr (first (items-program-items (read-items-from-string "(:program () (:op a #xFF #b101 #o-10))"))))))
+  (fiveam:signals items-malformed (read-items-from-string "(:program () #| c |# (:op a 1))"))
+  (fiveam:signals items-malformed (read-items-from-string "(:program () (:op a #xZZ))"))
+  (fiveam:is (equal '(:a 255) (with-input-from-string (in "(:a #xFF)")
+                                (read-restricted-form in (lambda (control &rest args) (error "~?" control args)) "snapshot")))))
+
 (defun %call-with-items-file (text function)
   (uiop:with-temporary-file (:pathname path :type "lasm" :stream out)
     (write-string text out)

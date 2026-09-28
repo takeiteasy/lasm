@@ -594,10 +594,13 @@ twice
 (fiveam:test text-snapshot-rejects-reader-macros
   (dolist (text '("#1=(:lasm-snapshot . #1#)" "(:lasm-snapshot #1=(1) #1#)"
                   "(:lasm-snapshot #.(error \"x\"))" "(:lasm-snapshot #S(foo))"
-                  "(:lasm-snapshot #P\"x\")" "(:lasm-snapshot #C(1 2))" "(:lasm-snapshot #b101)"
+                  "(:lasm-snapshot #P\"x\")" "(:lasm-snapshot #C(1 2))" "(:lasm-snapshot #b12)"
                   "(:lasm-snapshot #+sbcl 1)" "(:lasm-snapshot #|x|# 1)" "(:lasm-snapshot 'x)"
                   "(:lasm-snapshot #*101)" "(:lasm-snapshot #2A((1)))"))
     (fiveam:is (%text-malformed-p text) "~A" text)))
+
+(fiveam:test text-snapshot-reads-radix-integers
+  (fiveam:is (not (%text-malformed-p "(:lasm-snapshot #b101 #xFF #o17)"))))
 
 (fiveam:test text-snapshot-rejects-trailing-data-and-empty-files
   (fiveam:is (%text-malformed-p "(:lasm-snapshot) (:lasm-snapshot)"))

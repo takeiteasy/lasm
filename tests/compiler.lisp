@@ -1302,6 +1302,27 @@
       (read-restricted-forms (make-string-input-stream text)
                               (lambda (control &rest args) (error "~?" control args)) "items" :bare :uninterned))))
 
+(fiveam:test source-reads-radix-integers-and-block-comments
+  (flet ((body (text) (fourth (first (items-program-items (read-source-from-string text))))))
+    (fiveam:is (equal '(16 255 3 7 -8) (rest (body "(defun main () (+ #x10 #XfF #b11 #o7 #x-8))"))))
+    (fiveam:is (eql 1 (body "#| a #| nested |# b |# (defun main () #| in |# 1)"))))
+  (dolist (text '("(defun main () #x)" "(defun main () #xZZ)" "(defun main () #b12)" "(defun main () #r10)"
+                  "(defun main () #'main)" "(defun main () #+sbcl 1)" "(defun main () #| open)"))
+    (fiveam:signals program-compile-error (read-source-from-string text)))
+  (fiveam:signals program-compile-error
+    (read-source-from-string (format nil "(defun main () #x~A)"
+                                     (make-string (1+ +reader-max-number-chars+) :initial-element #\F)))))
+
+(fiveam:test source-radix-integers-compile-and-run
+  (fiveam:is (= 26 (%cv-a (%cl-run "(defun main () (+ #x10 #b11 #o7))" 'callfoo-lang-abi)))))
+
+(fiveam:test source-error-after-a-block-comment-reports-its-position
+  (handler-case (compile-source (read-source-from-string "(:program (:backend callfoo-lang-abi))
+#| one
+two |#
+(defun main () (+ 1 y))"))
+    (program-compile-error (c) (fiveam:is (eql 4 (lasm-syntax-error-line c))))))
+
 (fiveam:test read-restricted-forms-reads-every-form
   (with-input-from-string (in "(a 1) b 2")
     (let ((forms (read-restricted-forms in (lambda (control &rest args) (error "~?" control args)) "text"
