@@ -45,6 +45,7 @@ Every name is a register or register alias of the machine.
 | `:return` `:arguments` `:scratch` `:caller-saved` `:callee-saved` | A list of registers. A [call](conventions.md#register-cycles) breaks an argument cycle through a `:scratch` one, and copies a register its target reads into one. |
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
 | `:operand` | The [operand kind](#operand-kinds) that writes a register. |
+| `:pairs` | `((NAME HIGH LOW)...)`: [register pairs](register-pairs.md), which every role list then names. |
 
 A register cannot be both `:caller-saved` and `:callee-saved`. When the
 machine declares a [`stack-pointer`](machine-model.md#stacks), `:stack-pointer`

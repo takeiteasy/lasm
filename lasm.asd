@@ -94,6 +94,7 @@
                (:file "backend")
                (:file "convention")
                (:file "compiler")
+               (:file "pairs")
                (:file "cli")
                (:file "debugger")
                (:file "banks")

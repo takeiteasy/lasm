@@ -127,19 +127,34 @@ within a cell."
     (values (max 1 (floor (%descriptor-cell-width descriptor) 8))
             (%descriptor-endian descriptor))))
 
+(defun backend-pairs (backend)
+  "BACKEND's register pairs, each (NAME HIGH LOW WIDTH) with upcased names and WIDTH the bit
+width of a half."
+  (getf (backend-descriptor-registers (find-backend backend)) :pairs))
+
+(defun %pair-cell-width (descriptor)
+  "The cell width, in bits, of the memory a pair backend's words live in."
+  (let ((pointer (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                       return pointer)))
+    (if pointer
+        (storage-element-cell-width (descriptor-element descriptor (stack-pointer-descriptor-memory pointer)))
+        (%descriptor-cell-width descriptor))))
+
 (defun backend-word-cells (backend)
-  "Cells a word spans on BACKEND's machine: its declared stack pointer's slot
-width, which defaults to the memory's own cell width, divided by that
-cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
+  "Cells a word spans on BACKEND's machine: twice the width of a register pair's half when the
+backend declares pairs, else its declared stack pointer's slot width, which defaults to the
+memory's own cell width, divided by that cell width and rounded up. 1 without a matching
+(stack-pointer ...) clause."
   (let* ((backend (find-backend backend))
          (machine-descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
          (sp (%role-register backend :stack-pointer nil))
-         (pointer (%backend-matched-stack-pointer sp machine-descriptor)))
-    (if pointer
-        (ceiling (stack-pointer-descriptor-width pointer)
-                 (storage-element-cell-width
-                  (descriptor-element machine-descriptor (stack-pointer-descriptor-memory pointer))))
-        1)))
+         (pointer (%backend-matched-stack-pointer sp machine-descriptor))
+         (pairs (backend-pairs backend)))
+    (cond (pairs (ceiling (* 2 (fourth (first pairs))) (%pair-cell-width machine-descriptor)))
+          (pointer (ceiling (stack-pointer-descriptor-width pointer)
+                            (storage-element-cell-width
+                             (descriptor-element machine-descriptor (stack-pointer-descriptor-memory pointer)))))
+          (t 1))))
 
 ;;; Resolution by name
 
@@ -161,12 +176,16 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
   (let ((mode (%find-mode-by-name designator machine)))
     (and mode (mode-descriptor-name mode))))
 
+(defvar *backend-pairs* nil
+  "The (NAME HIGH LOW WIDTH) register pairs of the backend being built, upcased names.")
+
 (defun %backend-register-name (descriptor designator)
-  "DESIGNATOR's upcased name, if it is a register or register alias of DESCRIPTOR's machine."
+  "DESIGNATOR's upcased name, if it is a register or register alias of DESCRIPTOR's machine, or a register pair."
   (let ((key (%designator-name designator)))
     (unless key
       (%backend-error "~S is not a register name" designator))
-    (unless (or (nth-value 1 (gethash key (machine-descriptor-register-aliases descriptor)))
+    (unless (or (assoc key *backend-pairs* :test #'string=)
+                (nth-value 1 (gethash key (machine-descriptor-register-aliases descriptor)))
                 (find-if (lambda (element)
                            (and (eq (storage-element-kind element) :register)
                                 (string= key (%designator-name (storage-element-name element)))))
@@ -174,6 +193,44 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
       (%backend-error "~A is not a register or register alias of machine ~S"
                       key (machine-descriptor-name descriptor)))
     key))
+
+(defun %register-width (descriptor name)
+  "The bit width of the machine register or alias NAME, an upcased name."
+  (let ((element (or (gethash name (machine-descriptor-register-alias-elements descriptor))
+                     (find-if (lambda (element)
+                                (and (eq (storage-element-kind element) :register)
+                                     (string= name (%designator-name (storage-element-name element)))))
+                              (machine-descriptor-elements descriptor)))))
+    (storage-element-width element)))
+
+(defun %parse-pairs (descriptor entries)
+  "The (NAME HIGH LOW WIDTH) pairs the (registers :pairs ((NAME HIGH LOW)...)) ENTRIES declare."
+  (unless (and (listp entries) (null (cdr (last entries))))
+    (%backend-error "registers :pairs: expected a list of (NAME HIGH LOW), got ~S" entries))
+  (let ((*backend-pairs* nil) (result '()))
+    (dolist (entry entries (nreverse result))
+      (unless (and (consp entry) (= (length entry) 3))
+        (%backend-error "registers :pairs: expected (NAME HIGH LOW), got ~S" entry))
+      (destructuring-bind (name high low) entry
+        (let ((key (%designator-name name)))
+          (unless key
+            (%backend-error "registers :pairs: ~S is not a pair name" name))
+          (when (or (assoc key result :test #'string=)
+                    (ignore-errors (%backend-register-name descriptor name)))
+            (%backend-error "registers :pairs: ~A is already a register, alias or pair" key))
+          (let ((high (%backend-register-name descriptor high))
+                (low (%backend-register-name descriptor low)))
+            (when (string= high low)
+              (%backend-error "registers :pairs: ~A uses ~A for both halves" key high))
+            (dolist (half (list high low))
+              (let ((other (find-if (lambda (pair) (member half (list (second pair) (third pair)) :test #'string=))
+                                    result)))
+                (when other
+                  (%backend-error "registers :pairs: ~A is a half of both ~A and ~A" half (first other) key))))
+            (let ((width (%register-width descriptor high)))
+              (unless (eql width (%register-width descriptor low))
+                (%backend-error "registers :pairs: ~A and ~A, the halves of ~A, are not the same width" high low key))
+              (cl:push (list key high low width) result))))))))
 
 ;;; Expression operators, shared with items.lisp
 
@@ -194,7 +251,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
   "Register roles holding one register.")
 
 (defparameter +backend-clause-keys+
-  `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand)
+  `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand :pairs)
     ("CALL" :args :order :cleanup :return-address-slots)
     ("FRAME" :grows :alignment :slot :stack-slot :pointer :offsets :counts :static))
   "The keys each plist clause takes, by clause head.")
@@ -222,6 +279,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
                      ((eq role :operand)
                       (or (%designator-name value)
                           (%backend-error "registers :operand: ~S is not a kind name" value)))
+                     ((eq role :pairs) *backend-pairs*)
                      ((member role +backend-register-roles+)
                       (unless (listp value)
                         (%backend-error "registers ~S: expected a list of registers, got ~S" role value))
@@ -456,7 +514,19 @@ operand differently by kind, such as a register versus a label."
         when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
           do (%backend-error "~A: ~A is not a declared operand kind" what kind)))
 
+(defun %half-form-p (form)
+  "True when FORM is (:hi X) or (:lo X): the high or low half of a register pair's word."
+  (and (consp form) (keywordp (first form)) (member (symbol-name (first form)) '("HI" "LO") :test #'string=)
+       (consp (cdr form)) (null (cddr form))))
+
+(defun %check-half-form (op form)
+  (unless *backend-pairs*
+    (%backend-error "ops: ~A: ~S needs (registers :pairs ...)" op form)))
+
 (defun %check-hole-value (op value params)
+  (when (%half-form-p value)
+    (%check-half-form op value)
+    (return-from %check-hole-value (%check-hole-value op (second value) params)))
   (typecase value
     ((or integer string) t)
     (symbol (when (keywordp value)
@@ -488,6 +558,10 @@ local to one expansion of the operation."
 
 (defun %check-op-operand (op operand params kinds machine &optional labels)
   (flet ((param-p (name) (member (%designator-name name) params :test #'equal)))
+    (when (%half-form-p operand)
+      (%check-half-form op operand)
+      (return-from %check-op-operand
+        (%check-op-operand op (second operand) params kinds machine labels)))
     (typecase operand
       ((or integer string) t)
       (symbol (unless (and (not (keywordp operand))
@@ -562,6 +636,44 @@ declared (stack-pointer ...), and default the frame direction from it."
                       grows sp (stack-pointer-descriptor-grows match)))
     (setf (getf (backend-descriptor-frame descriptor) :grows)
           (or grows (and match (stack-pointer-descriptor-grows match)) :down))))
+
+;;; Register pairs
+
+(defun %finish-backend-pairs (descriptor machine-descriptor)
+  "Check that a backend with register pairs holds every operand in a pair, and that the words
+the pairs make fit the machine's memory and stack."
+  (let ((pairs (getf (backend-descriptor-registers descriptor) :pairs)))
+    (when pairs
+      (let* ((names (mapcar #'first pairs))
+             (width (fourth (first pairs)))
+             (cell (%pair-cell-width machine-descriptor))
+             (registers (backend-descriptor-registers descriptor))
+             (call-args (getf (backend-descriptor-call descriptor) :args)))
+        (loop for (role list) in `((":return" ,(getf registers :return))
+                                   (":arguments" ,(getf registers :arguments))
+                                   (":scratch" ,(getf registers :scratch))
+                                   (":caller-saved" ,(getf registers :caller-saved))
+                                   (":callee-saved" ,(getf registers :callee-saved))
+                                   ("call :args" ,(and (listp call-args) call-args)))
+              do (dolist (name list)
+                   (unless (member name names :test #'string=)
+                     (%backend-error "registers ~A: ~A is not a register pair; a backend with pairs holds values only in pairs"
+                                     role name))))
+        (unless (getf registers :return)
+          (%backend-error "registers :pairs: :return must name a pair, the accumulator"))
+        (dolist (pair (rest pairs))
+          (unless (= width (fourth pair))
+            (%backend-error "registers :pairs: ~A has ~D-bit halves, not ~D like ~A"
+                            (first pair) (fourth pair) width (first (first pairs)))))
+        (unless (member (%descriptor-endian machine-descriptor) '(:little :big))
+          (%backend-error "registers :pairs: the machine's :endian must be :little or :big"))
+        (when (getf (backend-descriptor-frame descriptor) :slot)
+          (unless (= width cell)
+            (%backend-error "registers :pairs: a pair's half is ~D bits but memory cells are ~D; a frame slot needs one cell a half"
+                            width cell))
+          (unless (and (eq (getf (backend-descriptor-frame descriptor) :offsets) :cells)
+                       (eq (getf (backend-descriptor-frame descriptor) :counts) :cells))
+            (%backend-error "registers :pairs: (frame :slot ...) needs :offsets :cells and :counts :cells, since a word spans several cells")))))))
 
 ;;; The frame pointer
 
@@ -723,6 +835,9 @@ its first position."
            (clauses (if parent
                         (%merge-backend-clauses name (backend-descriptor-clauses parent) clauses)
                         clauses))
+           (*backend-pairs* (let ((pairs (getf (rest (find "REGISTERS" clauses :test #'equal :key #'%clause-head-name))
+                                               :pairs)))
+                              (and pairs (%parse-pairs machine-descriptor pairs))))
            (descriptor (make-backend-descriptor :name name :machine machine :frame (list :grows nil :alignment 1)
                                                 :call (list :args :stack :order :right-to-left :cleanup :caller
                                                             :return-address-slots 1)
@@ -750,6 +865,7 @@ its first position."
                 ((equal head "STACK-WRITERS")
                  (%parse-stack-writers-clause descriptor machine (rest clause))))))
       (%finish-backend-stack descriptor machine-descriptor)
+      (%finish-backend-pairs descriptor machine-descriptor)
       (%finish-backend-pointer descriptor)
       (%check-backend-kinds descriptor)
       (%check-backend-ops descriptor)
@@ -784,7 +900,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (registers [:return (reg...)] [:arguments (reg...)] [:scratch (reg...)]
                 [:caller-saved (reg...)] [:callee-saved (reg...)]
                 [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg]
-                [:operand kind])
+                [:operand kind] [:pairs ((NAME HIGH LOW)...)])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg]
@@ -809,6 +925,8 @@ instruction variants whose semantics write the stack pointer but not the program
 are stack writers, which call lowering rejects in a function whose stack depth it
 tracks, judged by the variant an instruction's operands select; stack-writers adds
 entries to them and :except removes some.
+:pairs names register pairs that hold a word; every role list then names pairs, and
+an operation reaches a pair's halves with (:hi X) and (:lo X), see docs/register-pairs.md.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

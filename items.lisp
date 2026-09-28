@@ -343,6 +343,70 @@ alternative of the assembled instruction (see %CLAIM-RIVAL)."
                             (%substitute-params (cdr tree) bindings)))
         (t tree)))
 
+;; Register pairs (docs/register-pairs.md). A pair is a pseudo-register
+;; naming two machine registers; a template reaches its halves with (:hi X)
+;; and (:lo X), which expansion turns into the half register, the half of an
+;; integer, or an expression. A frame slot's half waits until the slot's
+;; offset is known (%FRAME-OPERAND).
+(defun %pair-named (name)
+  "The (NAME HIGH LOW WIDTH) pair of *ITEMS-BACKEND* that the symbol or string NAME names, or NIL."
+  (and *items-backend* (or (symbolp name) (stringp name)) name (not (keywordp name))
+       (assoc (%designator-name name) (backend-pairs *items-backend*) :test #'equal)))
+
+(defun %pair-value-p (value)
+  "True when VALUE is a pair name, or a register operand (KIND PAIR) naming one."
+  (or (%pair-named value)
+      (and (consp value) (= (length value) 2) (not (keywordp (first value))) (%pair-named (second value)) t)))
+
+(defun %slot-operand-p (value)
+  "True when VALUE is a resolved frame slot operand, (KIND OFFSET) of the backend's frame :slot or :stack-slot kind."
+  (and (consp value) (= (length value) 2) (integerp (second value)) (not (keywordp (first value)))
+       (let ((frame (backend-descriptor-frame *items-backend*)))
+         (some (lambda (key) (and (getf frame key) (%same-name-p (first value) (getf frame key))))
+               '(:slot :stack-slot)))))
+
+(defun %half-name (which pair)
+  (string-downcase (if (%keyword-named-p which "HI") (second pair) (third pair))))
+
+(defun %half-of (which value item)
+  "The half WHICH, :HI or :LO, of VALUE: a pair register or name, an integer, a label or an expression."
+  (let ((pair (if (consp value) (and (= (length value) 2) (%pair-named (second value))) (%pair-named value))))
+    (cond (pair (if (consp value)
+                    (list (first value) (%half-name which pair))
+                    (%half-name which pair)))
+          ((integerp value)
+           (let ((width (fourth (first (backend-pairs *items-backend*)))))
+             (ldb (byte width (if (%keyword-named-p which "HI") width 0)) value)))
+          ((%frame-operand-p value) (list which value))
+          ((%slot-operand-p value) (%frame-half which value item))
+          ((or (symbolp value) (stringp value)
+               (and (consp value) (%expression-head-p (first value))))
+           (let* ((width (fourth (first (backend-pairs *items-backend*))))
+                  (mask (1- (ash 1 width))))
+             (list (intern "&" :lasm)
+                   (if (%keyword-named-p which "HI")
+                       (list (intern ">>" :lasm) value width)
+                       value)
+                   mask)))
+          (t (%items-fail 'items-malformed item "cannot take the ~(~A~) half of ~S" (symbol-name which) value)))))
+
+(defun %substitute-pair-params (tree bindings item)
+  "TREE with each parameter replaced by its binding and each (:hi X)/(:lo X) by that half; a
+pair used whole, outside a half form, is an error."
+  (cond ((%half-form-p tree)
+         (%half-of (first tree) (%substitute-params (second tree) bindings) item))
+        ((and (symbolp tree) tree (not (keywordp tree)))
+         (let ((binding (assoc (symbol-name tree) bindings :test #'string=)))
+           (cond ((null binding) tree)
+                 ((%pair-value-p (cdr binding))
+                  (%items-fail 'items-malformed item
+                               "~A uses the register pair ~A whole; write (:hi ~A) and (:lo ~A)"
+                               (first item) (cdr binding) tree tree))
+                 (t (cdr binding)))))
+        ((consp tree) (cons (%substitute-pair-params (car tree) bindings item)
+                            (%substitute-pair-params (cdr tree) bindings item)))
+        (t tree)))
+
 (defun %rename-labels (tree renames)
   "TREE with each symbol RENAMES (an alist keyed by upcased name) maps replaced by
 its string, except an instruction's mnemonic."
@@ -393,6 +457,7 @@ plain argument-count mismatch is reported instead."
           (%items-fail 'items-malformed item "operation ~A takes ~D argument~:P, got ~D"
                        name (length params) (length args)))
         (let ((bindings (mapcar #'cons params args))
+              (pairs (and (backend-pairs backend) t))
               (renames (and rename
                             (loop for label in (%template-labels (first entry) params forms)
                                   collect (cons label (funcall rename label))))))
@@ -401,7 +466,12 @@ plain argument-count mismatch is reported instead."
                       (if (%label-form-p form)
                           form
                           (cons (first form)
-                                (mapcar (lambda (operand) (%substitute-params operand bindings)) (rest form))))))
+                                (mapcar (lambda (operand)
+                                          (if pairs
+                                              (let ((*items-backend* backend))
+                                                (%substitute-pair-params operand bindings item))
+                                              (%substitute-params operand bindings)))
+                                        (rest form))))))
                   forms))))))
 
 (defun backend-expand-op (backend name args)
@@ -513,10 +583,31 @@ to the enclosing label when one has been defined and the lexer has local labels.
   (+ (length (items-frame-saves frame)) (if (items-frame-pointer frame) 1 0)))
 
 (defun %frame-operand-p (operand)
-  (and (consp operand) (or (%keyword-named-p (first operand) "ARG") (%keyword-named-p (first operand) "LOCAL"))))
+  "True for (:arg i) and (:local i), and for a half of one, (:hi ...) or (:lo ...)."
+  (and (consp operand)
+       (or (%keyword-named-p (first operand) "ARG") (%keyword-named-p (first operand) "LOCAL")
+           (and (%half-form-p operand) (%frame-operand-p (second operand))))))
+
+(defun %frame-half (which operand item)
+  "The half WHICH of OPERAND, a resolved frame operand: a pair's half register, or the slot's
+cell holding that half, the word's cells lying in the memory's endian order."
+  (let ((place (second operand)))
+    (if (integerp place)
+        (let* ((highp (%keyword-named-p which "HI"))
+               (little (eq (%descriptor-endian (find-machine-descriptor (backend-descriptor-machine *items-backend*)))
+                     :little)))
+          (list (first operand) (+ place (if (eq highp little) 1 0))))
+        (let ((pair (%pair-named place)))
+          (unless pair
+            (%items-fail 'items-malformed item "cannot take the ~(~A~) half of ~S" (symbol-name which) operand))
+          (list (first operand) (%half-name which pair))))))
 
 (defun %frame-operand (operand item)
-  "The operand (:arg i) or (:local i) addresses in the current function."
+  "The operand (:arg i) or (:local i) addresses in the current function; for (:hi ...) or
+(:lo ...) of one, its half."
+  (when (%half-form-p operand)
+    (return-from %frame-operand
+      (%frame-half (first operand) (%frame-operand (second operand) item) item)))
   (let ((frame *items-frame*) (index (second operand)))
     (unless frame
       (%items-fail 'items-malformed item "~S is only valid inside (:function ...)" operand))
@@ -939,8 +1030,21 @@ survive a call, and any other register cannot be kept."
              (lines '()))
         (labels ((emit (new) (setf lines (append lines new)))
                  (push-cell (operand)
-                   (emit (%hook-lines :push (list operand) item))
-                   (%bump-depth 1)))
+                   (emit (push-lines operand))
+                   (%bump-depth 1))
+                 ;; A pair's :push template pushes two cells, so a slot read
+                 ;; after the first would be off by one: go through a register.
+                 (push-lines (operand)
+                   (let* ((slotp (and (backend-pairs *items-backend*) (%frame-operand-p operand)
+                                      (integerp (second (%resolve-operand operand item)))))
+                          (scratch (and slotp (%free-scratch '() '() target))))
+                     (when (and slotp (null scratch))
+                       (%items-fail 'items-malformed item
+                                    "pushing a frame slot on a backend with register pairs needs a :scratch pair the call target does not read"))
+                     (if scratch
+                         (append (%hook-lines :move (list (%register-operand scratch item) (%resolve-operand operand item)) item)
+                                 (%hook-lines :push (list (%register-operand scratch item)) item))
+                         (%hook-lines :push (list operand) item)))))
           (dolist (name keeps)
             (push-cell (%register-operand name item)))
           (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))

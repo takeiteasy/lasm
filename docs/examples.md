@@ -111,5 +111,5 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 | `[5 + b]` assembles as the address `[6]`; write the register first. | [#411](https://todo.sr.ht/~takeiteasy/lasm/411) |
 | `0xffff` takes a next word; `-1` packs into the instruction. | [#412](https://todo.sr.ht/~takeiteasy/lasm/412) |
 | IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |
-| The CHIP-8 host has 16-bit registers: a `.lsp` value is one register wide, and a 16-bit value cannot be split across two registers. | [#416](https://todo.sr.ht/~takeiteasy/lasm/416), [#418](https://todo.sr.ht/~takeiteasy/lasm/418) |
+| The CHIP-8 host has 16-bit registers, not 8-bit registers with [register pairs](register-pairs.md). | [#418](https://todo.sr.ht/~takeiteasy/lasm/418) |
 | A machine with no `[sp + n]` addressing or with a single pointer register cannot be a `.lsp` target. | [#415](https://todo.sr.ht/~takeiteasy/lasm/415), [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |

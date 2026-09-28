@@ -186,6 +186,8 @@ with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
 3. A `:move` of each register the call target reads into a free `:scratch`
    register, when an argument move would overwrite it. The call goes through
    the copy. With no free one, the call is `items-malformed`.
+   On a backend with [register pairs](register-pairs.md#calls), a stack argument
+   that is a frame slot is first moved into a free `:scratch` pair.
 4. A `:move` into each argument register, ordered so no move overwrites a
    register a later one reads. A [cycle](#register-cycles) uses `:exchange`
    or a `:scratch` register.

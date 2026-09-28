@@ -57,7 +57,8 @@ which is its value (peeked/poked through); it cannot be `set`. `(aref A I)`/
 
 ## Words wider than a cell
 
-A word is one cell unless the backend's machine gives its stack pointer a
+A word is two [register-pair](register-pairs.md) halves wide when the backend
+declares pairs. Otherwise it is one cell unless the backend's machine gives its stack pointer a
 [`:width`](machine-model.md#stacks) wider than a cell (#167), in which case a
 word spans that many cells, in the machine's own `:endian` order -- the same
 split a stack slot already gets. `(defvar ...)`, `(defarray ...)` and
@@ -381,7 +382,8 @@ holds a value across other code. It also needs `(registers :operand KIND)`
 and `(frame :slot KIND)`, and defines these [operations](backends.md#language-operations)
 for the forms a program uses. A missing one is a compile error naming the form.
 With [static frames](static-frames.md) it needs no `:get`, `:set`, `:alloc`,
-`:free`, `:push` or `:pop`.
+`:free`, `:push` or `:pop`. With [register pairs](register-pairs.md) every one of
+those registers is a pair.
 
 | Operation | Does |
 | --- | --- |

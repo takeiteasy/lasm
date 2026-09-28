@@ -31,6 +31,9 @@
 ;;;; A DEFVAR is *CC-WORD-CELLS* cells (.res); DEFARRAY indexes and sizes by
 ;;;; it, and (aref A I)/(aset A I V) step a word, not a cell.
 ;;;;
+;;;; A backend with register pairs (docs/register-pairs.md) holds every value
+;;;; in a pair, and a word is two of its halves' widths.
+;;;;
 ;;;; A binary operator's right operand that is a leaf goes straight into
 ;;;; the backend's optional :OP-imm (a constant) or :OP-slot (a frame slot)
 ;;;; operation when it defines one, instead of loading into the temp register.
@@ -460,13 +463,18 @@ escaped, and each function whose label it spells as taken."
 (:clobbers REG...), or :ALL without one."
   (let ((item (second form)))
     (if (%cc-clobber-declaration-p item)
-        (let ((descriptor (find-machine-descriptor (backend-descriptor-machine *cc-backend*))))
+        (let ((descriptor (find-machine-descriptor (backend-descriptor-machine *cc-backend*)))
+              (*backend-pairs* (backend-pairs *cc-backend*)))
           (mapcar (lambda (name)
                     (unless (%cc-name-p name)
                       (%cc-fail form "expected a register name in :clobbers, got ~S" name))
-                    (handler-case (%backend-register-name descriptor name)
-                      (backend-definition-error ()
-                        (%cc-fail form "~A in :clobbers is not a register" (%source-name name nil)))))
+                    (let ((register (handler-case (%backend-register-name descriptor name)
+                                      (backend-definition-error ()
+                                        (%cc-fail form "~A in :clobbers is not a register" (%source-name name nil))))))
+                      ;; A half clobbers the pair it belongs to.
+                      (or (first (find-if (lambda (pair) (member register (list (second pair) (third pair)) :test #'string=))
+                                          *backend-pairs*))
+                          register)))
                   (rest item)))
         :all)))
 
