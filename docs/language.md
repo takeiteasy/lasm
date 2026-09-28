@@ -246,7 +246,8 @@ label.
 
 `(asm (:clobbers REG...) ITEM...)` declares the registers the block writes; the
 declaration is not emitted. The [register allocator](#backend-requirements)
-holds a value across an `asm` in any other register. Without a declaration,
+holds a value across an `asm` in any other register, and the function saves
+and restores a declared `:callee-saved` register for its caller. Without a declaration,
 `asm` may write any register. The list is a promise: an `asm` that calls a
 routine lists every register the routine changes.
 
@@ -372,7 +373,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | Limitation | Ticket |
 | --- | --- |
 | A first callee-saved register is claimed only inside a loop, so one-off call sites outside a loop never share one. | [#394](https://todo.sr.ht/~takeiteasy/lasm/394) |
-| An `asm` that declares a callee-saved register in `:clobbers` must still save and restore it itself. | [#393](https://todo.sr.ht/~takeiteasy/lasm/393) |
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |

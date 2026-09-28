@@ -51,7 +51,8 @@
 ;;;; loop, or when the function already saves that register; otherwise the
 ;;;; stack costs less than the prologue/epilogue pair.
 ;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
-;;;; writes, so an operand holding another register may reach it.
+;;;; writes, so an operand holding another register may reach it. #393: a
+;;;; declared :callee-saved one is added to the function's :save.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
@@ -737,11 +738,13 @@ comparison, to a landing that loads the result."
          (mapcar (lambda (element) (%cc-substitute-variables element form)) tree))
         (t tree)))
 
-;; TODO: a declared :callee-saved clobber is not added to *CC-SAVES*, so the
-;; asm must save it itself (#393).
 (defun %cc-asm (form)
   (%cc-check-length form 1 nil)
-  (%cc-asm-clobbers form)
+  (let ((clobbers (%cc-asm-clobbers form)))
+    (unless (eq clobbers :all)
+      (dolist (name (getf (backend-descriptor-registers *cc-backend*) :callee-saved))
+        (when (member name clobbers :test #'string=)
+          (pushnew name *cc-saves* :test #'string=)))))
   (dolist (item (if (%cc-clobber-declaration-p (second form)) (cddr form) (rest form)))
     (%cc-emit (%cc-substitute-variables item form))))
 

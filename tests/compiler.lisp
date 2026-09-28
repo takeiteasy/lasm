@@ -532,6 +532,12 @@
   (fiveam:is (= 1 (%cl-push-count (%cl-compile (%cl-asm-source "(:clobbers C)") 'cl-reg-abi))))
   (fiveam:is (= 8 (%cv-a (%cl-run (%cl-asm-source "(:clobbers c)") 'cl-reg-abi)))))
 
+(fiveam:test a-declared-callee-saved-clobber-is-saved-by-the-function
+  (let ((items (%cl-compile "(defun main () (asm (:clobbers d) (:op :const (reg d) 3)) 0)" 'cl-reg-abi)))
+    (fiveam:is (equal '("D") (mapcar #'%designator-name (getf (%cl-function-options items "main") :save)))))
+  (fiveam:is (null (getf (%cl-function-options (%cl-compile "(defun main () (asm (:clobbers b)) 0)" 'cl-reg-abi) "main") :save)))
+  (fiveam:is (null (getf (%cl-function-options (%cl-compile "(defun main () (asm (:op :halt)) 0)" 'cl-reg-abi) "main") :save))))
+
 (fiveam:test a-clobber-declaration-is-not-emitted
   (let ((items (%cl-compile (%cl-asm-source "(:clobbers b)") 'cl-reg-abi)))
     (fiveam:is (null (find-if (lambda (item) (and (consp item) (eq :clobbers (first item)))) (fourth (find :function items :key #'first)))))))
