@@ -449,10 +449,10 @@ to the enclosing label when one has been defined and the lexer has local labels.
 (defstruct items-frame
   nargs     ; declared arguments
   nlocals   ; declared locals
-  locals    ; cells allocated for locals, padded to the frame alignment
+  locals    ; slots allocated for locals, padded to the frame alignment
   saves     ; registers saved on entry
   pointer   ; the frame pointer register, or NIL
-  (depth 0) ; cells pushed since the prologue
+  (depth 0) ; slots pushed since the prologue
   labels    ; (NAME . DEPTH) for each label defined in the body
   references) ; (NAME DEPTH ITEM) for each name an instruction of the body mentions
 
@@ -480,6 +480,16 @@ to the enclosing label when one has been defined and the lexer has local labels.
       (%items-fail 'items-malformed item "~A needs (registers :operand KIND) in the backend" (first item)))
     (list kind (string-downcase (string register)))))
 
+(defun %frame-unit-scale (key)
+  "Cells per slot for the backend's (frame KEY :cells) option, else 1."
+  (if (eq (getf (backend-descriptor-frame *items-backend*) key) :cells)
+      (backend-word-cells *items-backend*)
+      1))
+
+(defun %frame-count (n)
+  "N slots, in the unit the backend's :alloc, :free and :return-pop count."
+  (* n (%frame-unit-scale :counts)))
+
 (defun %slot-operand (distance item)
   (let* ((frame (backend-descriptor-frame *items-backend*))
          (stackp (and (getf frame :pointer) (null (items-frame-pointer *items-frame*))))
@@ -487,16 +497,17 @@ to the enclosing label when one has been defined and the lexer has local labels.
          (kind (getf frame key)))
     (unless kind
       (%items-fail 'items-malformed item "~A needs (frame ~(~S~) KIND) in the backend" (first item) key))
-    (list kind (if (eq (getf frame :grows) :up)
-                   (- -1 distance)
-                   distance))))
+    (list kind (* (%frame-unit-scale :offsets)
+                  (if (eq (getf frame :grows) :up)
+                      (- -1 distance)
+                      distance)))))
 
 (defun %bump-depth (n)
   (when *items-frame*
     (incf (items-frame-depth *items-frame*) n)))
 
 (defun %frame-overhead (frame)
-  "Cells between a frame's locals and its return address: the saved registers and the saved frame pointer."
+  "Slots between a frame's locals and its return address: the saved registers and the saved frame pointer."
   (+ (length (items-frame-saves frame)) (if (items-frame-pointer frame) 1 0)))
 
 (defun %frame-operand-p (operand)
@@ -669,7 +680,7 @@ the stack pointer. A line whose operands leave variants that differ is left to %
                  (setf (item-line-stack-check line) (nth-value 1 (%layout-line line 0))))))))))
 
 (defun %op-stack-effect (name args item)
-  "The net cells the backend's operation NAME puts on the stack, and true, when it declares an effect."
+  "The net slots the backend's operation NAME puts on the stack, and true, when it declares an effect."
   (let ((declared (assoc (%designator-name name) (backend-descriptor-op-effects *items-backend*) :test #'equal)))
     (when declared
       (let ((params (second (assoc (%designator-name name) (backend-descriptor-ops *items-backend*) :test #'equal))))
@@ -726,7 +737,7 @@ the stack pointer. A line whose operands leave variants that differ is left to %
                               (loop for register in saves
                                     append (%hook-lines :push (list (%register-operand register item)) item))
                               (and pointer (%hook-lines :enter '() item))
-                              (and (plusp locals) (%hook-lines :alloc (list locals) item)))))
+                              (and (plusp locals) (%hook-lines :alloc (list (%frame-count locals)) item)))))
           (let ((*items-frame* frame))
             (prog1 (append lines (loop for element in body append (%item-lines element)))
               (%check-label-depths frame))))))))
@@ -736,16 +747,16 @@ the stack pointer. A line whose operands leave variants that differ is left to %
     (unless (and frame (null (rest item)))
       (%items-fail 'items-malformed item "expected (:return) inside (:function ...)"))
     (unless (or (items-frame-pointer frame) (zerop (items-frame-depth frame)))
-      (%items-fail 'items-malformed item "the stack is ~D cell~:P deeper than at the function's entry"
+      (%items-fail 'items-malformed item "the stack is ~D slot~:P deeper than at the function's entry"
                    (items-frame-depth frame)))
     (let ((nstack (max 0 (- (items-frame-nargs frame) (length (%arg-registers))))))
       (append (if (items-frame-pointer frame)
                   (%hook-lines :leave '() item)
-                  (and (plusp (items-frame-locals frame)) (%hook-lines :free (list (items-frame-locals frame)) item)))
+                  (and (plusp (items-frame-locals frame)) (%hook-lines :free (list (%frame-count (items-frame-locals frame))) item)))
               (loop for register in (reverse (items-frame-saves frame))
                     append (%hook-lines :pop (list (%register-operand register item)) item))
               (if (and (eq (%backend-call-option :cleanup) :callee) (plusp nstack))
-                  (%hook-lines :return-pop (list nstack) item)
+                  (%hook-lines :return-pop (list (%frame-count nstack)) item)
                   (%hook-lines :return '() item))))))
 
 (defun %depth-lines (item)
@@ -941,7 +952,7 @@ survive a call, and any other register cannot be kept."
                 (emit (%hook-lines (first move) (rest move) item)))
               (emit (%hook-lines :call (list target) item))))
           (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
-            (emit (%hook-lines :free (list (length on-stack)) item)))
+            (emit (%hook-lines :free (list (%frame-count (length on-stack))) item)))
           (%bump-depth (- (length on-stack)))
           (dolist (name (reverse keeps))
             (emit (%hook-lines :pop (list (%register-operand name item)) item))

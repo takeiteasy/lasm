@@ -32,9 +32,10 @@
 
 (defstruct directive-descriptor
   name        ; string, upcased, prefix included (e.g. ".ORG")
-  arity       ; (:fixed n) | :variadic
+  arity       ; (:fixed n) | (:leading 1) | :variadic
   action      ; :set-origin | :select-bank | :emit | :reserve | :assign | :reassign
   width       ; element width, in cells (#53) -- 1 for .byte, 2 for .word;
+              ; :OPERAND when the directive's first operand gives it (.emit);
               ; NIL for :set-origin / :select-bank / :reserve / :assign / :reassign
   endian      ; :emit only: overrides the machine's endian order, or NIL
   terminator) ; :emit only: integer appended after each string operand, or NIL
@@ -56,12 +57,15 @@ instruction one, so a miss is an ordinary outcome, not a caller error."
 
 (defun %parse-directive-params (params)
   "PARAMS is DEFDIRECTIVE's parameter list: (name) for a fixed single
-argument, (name value) for a fixed two-argument directive (#35's .EQU), or
-(&rest name) for a variadic directive. Returns (VALUES arity param-names)
-where ARITY is (:FIXED 1), (:FIXED 2), or :VARIADIC and PARAM-NAMES is a
-list of the parameter symbols in order -- checked for &REST first since
-(&rest name) and (name value) are both length 2."
+argument, (name value) for a fixed two-argument directive (#35's .EQU),
+(&rest name) for a variadic directive, or (width &rest name) for a variadic
+one led by a width operand (#386). Returns (VALUES arity param-names)
+where ARITY is (:FIXED 1), (:FIXED 2), :VARIADIC or (:LEADING 1) and
+PARAM-NAMES is a list of the parameter symbols in order -- checked for &REST
+first since (&rest name) and (name value) are both length 2."
   (cond
+    ((and (= (length params) 3) (eq (second params) '&rest))
+     (values '(:leading 1) (list (first params) (third params))))
     ((and (= (length params) 2) (eq (first params) '&rest))
      (values :variadic (list (second params))))
     ((= (length params) 1)
@@ -69,7 +73,7 @@ list of the parameter symbols in order -- checked for &REST first since
     ((= (length params) 2)
      (values '(:fixed 2) params))
     (t (%defdirective-error "Malformed DEFDIRECTIVE parameter list ~S -- expected (name), ~
-(name value), or (&rest name)" params))))
+(name value), (&rest name) or (width &rest name)" params))))
 
 (defun %parse-directive-action (action-form param-names)
   "ACTION-FORM is DEFDIRECTIVE's single body form. PARAM-NAMES are the
@@ -94,14 +98,19 @@ by %PARSE-EMIT-ACTION / %PARSE-ASSIGN-ACTION instead."
 SELECT-BANK!, EMIT, RESERVE, or ASSIGN" head)))))
 
 (defun %parse-emit-action (action-form param-names)
-  "EMIT is one of the two actions taking two arguments (a literal width,
-then the variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's
-one-argument shape -- handled separately. Optional trailing :ENDIAN and
+  "EMIT is one of the two actions taking two arguments (a width, then the
+variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's one-argument
+shape -- handled separately. The width is a literal, or the directive's own
+leading width parameter (#386), in which case it returns :OPERAND. Optional trailing :ENDIAN and
 :TERMINATOR specs (each at most once) override the machine's endian order and
 name the cell appended after each string operand. Returns
 (VALUES :emit width endian terminator)."
   (%definition-bind (head width-form values-sym &rest options) action-form
-    (unless (and (eq head 'emit) (integerp width-form) (equal (list values-sym) param-names)
+    (unless (and (eq head 'emit)
+                 (if (= (length param-names) 2)
+                     (and (eq width-form (first param-names)) (eq values-sym (second param-names)))
+                     (and (integerp width-form)
+                          (equal (list values-sym) param-names)))
                  (evenp (length options))
                  (loop for (key) on options by #'cddr
                        always (member key '(:endian :terminator)))
@@ -111,9 +120,9 @@ name the cell appended after each string operand. Returns
                  (let ((terminator (getf options :terminator 0)))
                    (and (integerp terminator) (>= terminator 0))))
       (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S ~
-[:endian ORDER] [:terminator CELL])"
-             action-form (first param-names)))
-    (values :emit width-form
+[:endian ORDER] [:terminator CELL]), width an integer or the directive's leading parameter"
+             action-form (car (last param-names))))
+    (values :emit (if (integerp width-form) width-form :operand)
             (and (getf options :endian)
                  (%check-endian (getf options :endian) (first param-names)))
             (getf options :terminator))))
@@ -164,7 +173,9 @@ referencing PARAMS' own parameter name(s), in order:
                               endian order (#66), or in ORDER (:little, :big
                               or (outer inner group)) when :endian is given;
                               layout size is WIDTH *
-                              (length VALUES); each value may reference a
+                              (length VALUES), or, given (width &rest values)
+                              params, the first operand's own constant
+                              positive cell count (.emit, #386); each value may reference a
                               label (resolved in pass 2, like an ordinary
                               instruction operand). A quoted string value
                               expands to one field per character, followed
@@ -212,6 +223,9 @@ anything -- see this file's header comment."
 (defdirective ".byte" (&rest values) (emit 1 values))
 (defdirective ".word" (&rest values) (emit 2 values))
 (defdirective ".long" (&rest values) (emit 4 values))
+;; .EMIT (#386): a field width in cells given as the first operand, for a
+;; width no fixed directive has -- ".emit 3, 1, 2" lays down two 3-cell fields.
+(defdirective ".emit" (width &rest values) (emit width values))
 ;; .RES's count is also in cells (#53) -- on a word-addressed machine
 ;; ".res 4" reserves 4 cells, not 4 bytes. .ORG's operand was always an
 ;; address, and addresses were always cell-indexed, so .ORG itself needs no

@@ -18,7 +18,8 @@ references.
 ```
 
 `name` is matched without case. Parameters take one value, a name and
-value, or `(&rest values)` for a variable count. Each directive declares
+value, `(&rest values)` for a variable count, or `(width &rest values)` for a
+variable count led by a width operand. Each directive declares
 one of these actions:
 
 | Action | Effect |
@@ -26,7 +27,7 @@ one of these actions:
 | `(set-origin! address)` | Move the address counter. |
 | `(select-bank! n)` | Select a bank for later banked output. |
 | `(reserve count)` | Advance by zero-filled cells. |
-| `(emit width values [:endian order] [:terminator cell])` | Write values, each `width` cells wide; `:terminator` follows each string operand.[^emit] |
+| `(emit width values [:endian order] [:terminator cell])` | Write values, each `width` cells wide (an integer, or the leading parameter); `:terminator` follows each string operand.[^emit] |
 | `(assign name value)` | Bind a constant without using an address. |
 | `(reassign name value)` | Create or update an assignment. |
 
@@ -59,6 +60,19 @@ Values are resolved during encoding, so forward labels work. Fields follow the m
 custom `emit` action sets `:endian`; out-of-range values wrap.
 On a machine with 16-bit cells, `.byte` means one 16-bit cell and `.word`
 means two. See [Machine model](machine-model.md#cell-width-and-the-assembler).
+
+## `.emit`
+
+`.emit WIDTH, VALUE...` writes each value `WIDTH` cells wide, for a width the
+fixed directives lack. `WIDTH` is a positive constant expression:
+
+```asm
+.emit 3, 1, 2        ; 01 00 00  02 00 00  (little-endian)
+.emit 3, "a", 0      ; 61 00 00  00 00 00
+```
+
+Values and strings follow the same rules as `.word`. Its own definition is
+`(defdirective ".emit" (width &rest values) (emit width values))`.
 
 ## `.cell` / `.dat`
 

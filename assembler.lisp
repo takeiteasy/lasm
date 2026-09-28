@@ -877,16 +877,16 @@ operand is always one bare expression, never an addressing-mode pattern."
   "Parse STATEMENT's operands (parser.lisp) into a list of EXPR-* ASTs, one
 per operand, after checking their count against DIRECTIVE's arity: exactly
 one for a (:FIXED 1) directive (e.g. .ORG, .RES), any number (zero
-included) for a :VARIADIC one (e.g. .BYTE, .WORD)."
+included) for a :VARIADIC one (e.g. .BYTE, .WORD), at least one for a
+(:LEADING 1) one (.EMIT, #386)."
   (let ((operands (statement-operands statement)))
     (let ((arity (directive-descriptor-arity directive)))
       (unless (eq arity :variadic)
         (destructuring-bind (kind n) arity
-          (declare (ignore kind))
-          (unless (= (length operands) n)
+          (unless (if (eq kind :leading) (>= (length operands) n) (= (length operands) n))
             (%assembly-error (statement-line statement)
-                              "~A: expected ~D operand~:P, got ~D"
-                              (statement-mnemonic statement) n (length operands))))))
+                              "~A: expected ~:[~;at least ~]~D operand~:P, got ~D"
+                              (statement-mnemonic statement) (eq kind :leading) n (length operands))))))
     (%cached-operands statement :args
                       (lambda () (mapcar #'%directive-operand-ast operands)))))
 
@@ -904,6 +904,26 @@ character, followed by TERMINATOR when non-NIL. Other ASTs pass through."
                         collect (make-expr-number :value code))
                   (and terminator (list (make-expr-number :value terminator))))
         else collect ast))
+
+(defun %emit-value-args (statement directive)
+  "The operand ASTs an :EMIT directive lays down: all of them, less a leading
+width operand (.EMIT, #386)."
+  (let ((args (%directive-args statement directive)))
+    (if (eq (directive-descriptor-width directive) :operand) (rest args) args)))
+
+(defun %emit-width (statement directive address scope directive-symbols labels previous)
+  "The field width in cells of an :EMIT statement: DIRECTIVE's own, or for
+.EMIT its first operand, folded like .RES's count and required to be positive."
+  (let ((width (directive-descriptor-width directive)))
+    (if (eq width :operand)
+        (let ((value (or (%directive-constant-arg statement directive address scope
+                                                  directive-symbols labels previous)
+                         1)))
+          (unless (plusp value)
+            (%assembly-error (statement-line statement)
+                             "~A: width must be positive" (statement-mnemonic statement)))
+          value)
+        width)))
 
 (defun %directive-constant-arg (statement directive address scope directive-symbols labels previous)
   "Fold .ORG/.RES's operand against current symbols and previous-pass forward
@@ -1411,12 +1431,13 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                               (incf address count)
                               (unless region (setf emitted-p t main-end address)))))
                          (:emit
-                          (let* ((width (directive-descriptor-width directive))
+                          (let* ((width (%emit-width statement directive address scope
+                                                     directive-symbols labels prev-symbols))
                                  (asts (mapcar (lambda (ast)
                                                  (%capture-set-values ast symbols set-names line))
                                                (%qualify-locals-in-asts!
                                                 (%expand-string-operands
-                                                 (%directive-args statement directive)
+                                                 (%emit-value-args statement directive)
                                                  (directive-descriptor-terminator directive)
                                                  (* width cell-width) line mnemonic)
                                                 scope line))))

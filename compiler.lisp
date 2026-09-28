@@ -1106,15 +1106,12 @@ DEFSTRING's own name."
                      (%source-name value nil)))))
     (t (%cc-fail form "~S is not a constant, a function or an array/string" value))))
 
-(defun %cc-word-directive (form)
-  "\"cell\", \"word\" or \"long\", the initialised-data directive for a
-*CC-WORD-CELLS*-cell word (#368); a compile error naming FORM when it is not
-1, 2 or 4, since no built-in directive emits any other width (use (defarray
-NAME SIZE), uninitialised, instead)."
-  (case *cc-word-cells*
-    (1 "cell") (2 "word") (4 "long")
-    (t (%cc-fail form "a ~D-cell word has no initialised data directive; use (defarray NAME SIZE) instead"
-                 *cc-word-cells*))))
+(defun %cc-word-data (values)
+  "The directive item laying VALUES out as *CC-WORD-CELLS*-cell words: .cell
+for a one-cell word, else .emit with the width first (#386)."
+  (if (= *cc-word-cells* 1)
+      (list* :directive (%cc-symbol "cell") values)
+      (list* :directive (%cc-symbol "emit") *cc-word-cells* values)))
 
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
@@ -1202,16 +1199,14 @@ defined later in FORMS."
                   append (list (list :label label)
                                (ecase kind
                                  (:size (list :directive (%cc-symbol "res") (* payload *cc-word-cells*)))
-                                 (:values (list* :directive (%cc-symbol (%cc-word-directive form))
-                                                 (mapcar (lambda (value) (%cc-array-value value form)) payload)))
+                                 (:values (%cc-word-data (mapcar (lambda (value) (%cc-array-value value form)) payload)))
                                  ;; #368: W=1 keeps .asciz's own terminator; a
                                  ;; wider word has no terminated-string
                                  ;; directive, so the trailing 0 is emitted as
-                                 ;; a value alongside the string's characters,
-                                 ;; same as .asciz "a", "b" emits two strings.
+                                 ;; a value alongside the string's characters.
                                  (:string (if (= *cc-word-cells* 1)
                                               (list :directive (%cc-symbol "asciz") payload)
-                                              (list :directive (%cc-symbol (%cc-word-directive form)) payload 0)))))))))
+                                              (%cc-word-data (list payload 0))))))))))
 
 (defun compile-program (forms &key backend positions source file)
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and

@@ -338,10 +338,13 @@
          (items (%cl-compile source 'widefoo-lang-abi))
          (res (find-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "res"))) items)))
     (fiveam:is (= 2 (third res)) "a global reserves a whole word (.res 2)")
-    (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "word"))) items))
-               "the initialised defarray and defstring each use .word")))
+    (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "emit"))) items))
+               "the initialised defarray and defstring each use .emit")
+    (fiveam:is (every (lambda (i) (eql 2 (third i)))
+                      (remove-if-not (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "emit"))) items))
+               ".emit's width is the word size")))
 
-(fiveam:test a-word-with-no-initialised-data-directive-is-a-compile-error
+(fiveam:test a-three-cell-word-initialises-data-with-emit
   (eval '(defmachine cl-w3-machine
            (register sp :width 24) (register pc :width 16) (register r :width 24 :names (a b))
            (memory ram :width 8 :addr-width 16)
@@ -351,11 +354,11 @@
           (registers :return (a) :scratch (a b) :stack-pointer sp :operand reg)
           (operands (reg cl-w3-reg))))
   (fiveam:is (= 3 (backend-word-cells 'cl-w3-abi)))
-  (fiveam:is (search "has no initialised data directive" (%cl-fail "(defarray arr (1 2)) (defun main () 1)" 'cl-w3-abi)))
-  ;; An uninitialised DEFARRAY needs no directive by width -- .res takes any
-  ;; count of cells -- so this backend's next problem is the one it was built
-  ;; to have, a missing op, not %CC-WORD-DIRECTIVE.
-  (fiveam:is (search "needs the operation" (%cl-fail "(defarray arr 2) (defun main () 1)" 'cl-w3-abi))))
+  (fiveam:is (search "needs the operation" (%cl-fail "(defarray arr (1 2)) (defstring s \"a\") (defun main () 1)" 'cl-w3-abi)))
+  (fiveam:is (search "needs the operation" (%cl-fail "(defarray arr 2) (defun main () 1)" 'cl-w3-abi)))
+  (fiveam:is (equalp #(1 0 0 2 0 0 97 0 0 0 0 0)
+                     (assembly-cells (assemble ".emit 3, 1, 2
+.emit 3, \"a\", 0" :machine 'cl-w3-machine)))))
 
 (fiveam:test a-source-file-can-name-its-backend
   (let ((program (read-source-from-string "(:program (:backend callfoo-lang-abi :origin 4)) (defun main () 1)")))

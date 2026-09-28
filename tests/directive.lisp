@@ -126,3 +126,42 @@
                   (defdirective ".bad" (&rest v) (emit 1 v :nope 1))
                   (defdirective ".bad" (&rest v) (emit 1 v :terminator))))
     (fiveam:signals directive-definition-error (eval form))))
+
+;; #386 -- .EMIT takes its field width, in cells, as its first operand.
+(fiveam:test emit-directive-leads-with-its-width-operand
+  (let ((d (find-directive-descriptor ".emit")))
+    (fiveam:is (eq :emit (directive-descriptor-action d)))
+    (fiveam:is (equal '(:leading 1) (directive-descriptor-arity d)))
+    (fiveam:is (eq :operand (directive-descriptor-width d)))))
+
+(fiveam:test emit-lays-out-fields-of-any-width
+  (fiveam:is (equalp #(1 0 0 2 0 0)
+                     (assembly-cells (assemble ".emit 3, 1, 2" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(0 0 1 0 0 2)
+                     (assembly-cells (assemble ".emit 3, 1, 2" :machine 'bigendian-test-machine))))
+  (fiveam:is (equalp #(1 0 0 0 0)
+                     (assembly-cells (assemble ".emit 3, 1
+.emit 2, 0" :machine 'instr-test-machine)))))
+
+(fiveam:test emit-takes-labels-and-strings
+  (fiveam:is (equalp #(6 0 0 0 0 0 0)
+                     (assembly-cells (assemble "start: .emit 3, end
+.emit 3, 0
+end: .emit 1, 0" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(65 0 0 0 0 0)
+                     (assembly-cells (assemble ".emit 3, \"A\", 0" :machine 'instr-test-machine)))))
+
+(fiveam:test emit-rejects-a-missing-or-non-positive-width
+  (dolist (source '(".emit" ".emit 0, 1" ".emit -1, 1"))
+    (fiveam:signals assembly-error (assemble source :machine 'instr-test-machine))))
+
+(fiveam:test defdirective-takes-a-width-parameter
+  (defdirective ".test-wide" (width &rest v) (emit width v :terminator 0))
+  (let ((d (find-directive-descriptor ".test-wide")))
+    (fiveam:is (equal '(:leading 1) (directive-descriptor-arity d)))
+    (fiveam:is (eq :operand (directive-descriptor-width d)))
+    (fiveam:is (= 0 (directive-descriptor-terminator d))))
+  (dolist (form '((defdirective ".bad" (width &rest v) (emit 2 v))
+                  (defdirective ".bad" (width &rest v) (emit v width))
+                  (defdirective ".bad" (&rest v) (emit width v))))
+    (fiveam:signals directive-definition-error (eval form))))

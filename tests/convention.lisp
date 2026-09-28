@@ -1137,3 +1137,75 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
     (fiveam:is-false (writes '(vnot "PC")))
     (fiveam:is-true (writes '(vlocal)))
     (fiveam:is-false (writes '(vshadow)))))
+
+;;; #385: (frame :offsets :cells) and (frame :counts :cells) hand the backend
+;;; cell units, not slots, for a machine whose slot spans several cells.
+
+(defbackend cv-cell-offsets-abi (:extends widefoo-lang-abi)
+  (frame :grows :down :slot sp-idx :counts :slots :offsets :cells))
+
+(defbackend cv-slot-counts-abi (:extends widefoo-lang-abi)
+  (frame :grows :down :slot sp-idx :counts :slots))
+
+(defparameter +cv-cell-items+
+  '((:function f (:args 2 :locals 1) (lds (reg a) (:arg 1)) (lds (reg b) (:local 0)) (:return))
+    (:call f (imm 1) (imm 2))))
+
+(fiveam:test frame-units-default-to-slots
+  (let ((text (render-items +cv-cell-items+ :backend 'cv-slot-counts-abi)))
+    (fiveam:is (search "subs sp, # 1" text))
+    (fiveam:is (search "lds a, [ sp + 3 ]" text))
+    (fiveam:is (search "lds b, [ sp + 0 ]" text))
+    (fiveam:is (search "adds sp, # 2" text))))
+
+(fiveam:test frame-counts-cells-scale-alloc-and-free-by-the-word
+  (let ((text (render-items +cv-cell-items+ :backend 'widefoo-lang-abi)))
+    (fiveam:is (search "subs sp, # 2" text))
+    (fiveam:is (search "adds sp, # 4" text))))
+
+(fiveam:test frame-offsets-cells-scale-slot-distances-by-the-word
+  (let ((text (render-items +cv-cell-items+ :backend 'cv-cell-offsets-abi)))
+    (fiveam:is (search "lds a, [ sp + 6 ]" text))
+    (fiveam:is (search "lds b, [ sp + 0 ]" text))
+    (fiveam:is (search "subs sp, # 1" text))))
+
+(defmachine cv-wide-up
+  (register pc :width 16)
+  (register sp :width 16)
+  (register r :width 16 :names (a b c d))
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :grows :up :width 16))
+(definstruction cv-wide-up lds (modes call-rs)
+  (encoding (opcode 3) (operand dst :width 1) (operand offset :width 1))
+  (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ sp offset) 16)))))
+(definstruction cv-wide-up adds (modes call-spi)
+  (encoding (opcode 6) (operand :mode))
+  (semantics (set! sp (wrap-value (+ sp operand) 16))))
+(definstruction cv-wide-up subs (modes call-spi)
+  (encoding (opcode 15) (operand :mode))
+  (semantics (set! sp (wrap-value (- sp operand) 16))))
+(definstruction cv-wide-up ret
+  (encoding (opcode 8))
+  (semantics (set! pc (pop sp))))
+
+(defbackend cv-wide-up-abi (:machine cv-wide-up)
+  (registers :return (a) :stack-pointer sp :program-counter pc :operand reg)
+  (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
+  (frame :grows :up :slot sp-idx :offsets :cells :counts :cells)
+  (operands (reg call-reg) (imm call-imm) (sp-idx call-sp-idx) (sp call-sp))
+  (ops (:alloc (n) (adds (sp) (imm n)))
+       (:free (n) (subs (sp) (imm n)))
+       (:return () (ret))))
+
+(fiveam:test frame-cell-units-count-down-from-the-top-when-the-stack-grows-up
+  (let ((text (render-items '((:function f (:args 1 :locals 1) (lds (reg a) (:local 0)) (lds (reg b) (:arg 0)) (:return)))
+                            :backend 'cv-wide-up-abi)))
+    (fiveam:is (search "adds sp, # 2" text))
+    (fiveam:is (search "lds a, [ sp + - 2 ]" text))
+    (fiveam:is (search "lds b, [ sp + - 6 ]" text))))
+
+(fiveam:test defbackend-rejects-a-bad-frame-unit
+  (fiveam:signals backend-definition-error
+    (eval '(defbackend cv-bad-unit-abi (:machine callfoo) (frame :counts :bytes))))
+  (fiveam:signals backend-definition-error
+    (eval '(defbackend cv-bad-unit-abi (:machine callfoo) (frame :offsets nil)))))

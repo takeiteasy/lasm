@@ -73,6 +73,10 @@ calls from them; see [Calling conventions](conventions.md).
 | `:slot` | The [operand kind](#operand-kinds) that addresses a stack slot by its offset from the stack pointer, or from the frame pointer when there is one | None |
 | `:stack-slot` | With a `:pointer`, the operand kind that addresses a slot from the stack pointer, for a function with [`:frame nil`](conventions.md#opting-out) | None |
 | `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
+| `:offsets` | `:slots`, `:cells`: the unit of the distance handed to `:slot`/`:stack-slot` | `:slots` |
+| `:counts` | `:slots`, `:cells`: the unit of the count handed to `:alloc`, `:free` and `:return-pop` | `:slots` |
+
+[`:cells`](conventions.md#slots-and-cells) multiplies by the backend's word size in cells.
 
 `:grows` must agree with the machine's `(stack-pointer ... :grows ...)` for the
 backend's `:stack-pointer`. `:pointer` fills `(registers :frame-pointer)`, and

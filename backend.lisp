@@ -187,7 +187,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
 (defparameter +backend-clause-keys+
   `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand)
     ("CALL" :args :order :cleanup :return-address-slots)
-    ("FRAME" :grows :alignment :slot :stack-slot :pointer))
+    ("FRAME" :grows :alignment :slot :stack-slot :pointer :offsets :counts))
   "The keys each plist clause takes, by clause head.")
 
 (defun %clause-keys (head)
@@ -249,7 +249,11 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
 (defun %parse-frame-clause (descriptor args)
   (%check-plist "frame" args (%clause-keys "FRAME"))
   (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot))
-        (stack-slot (getf args :stack-slot)) (pointer (getf args :pointer)))
+        (stack-slot (getf args :stack-slot)) (pointer (getf args :pointer))
+        (offsets (getf args :offsets :slots)) (counts (getf args :counts :slots)))
+    (loop for (what unit) in `((":offsets" ,offsets) (":counts" ,counts))
+          unless (member unit '(:slots :cells))
+            do (%backend-error "frame ~A must be :slots or :cells, got ~S" what unit))
     (unless (member grows '(nil :down :up))
       (%backend-error "frame :grows must be :down or :up, got ~S" grows))
     (unless (typep alignment '(integer 1))
@@ -260,7 +264,9 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
     (append (list :grows grows :alignment alignment)
             (and slot (list :slot (%designator-name slot)))
             (and stack-slot (list :stack-slot (%designator-name stack-slot)))
-            (and pointer (list :pointer (%backend-register-name descriptor pointer))))))
+            (and pointer (list :pointer (%backend-register-name descriptor pointer)))
+            (and (eq offsets :cells) (list :offsets :cells))
+            (and (eq counts :cells) (list :counts :cells)))))
 
 (defun %parse-operands-clause (machine entries)
   (let (result)
@@ -755,7 +761,8 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
                 [:operand kind])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
-     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg])
+     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg]
+            [:offsets :slots/:cells] [:counts :slots/:cells])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
        ; a param is a name, or (NAME KIND) restricting it to an operand of that

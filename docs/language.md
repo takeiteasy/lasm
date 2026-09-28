@@ -60,11 +60,11 @@ split a stack slot already gets. `(defvar ...)`, `(defarray ...)` and
 `(aref A I)`/`(aset A I V)` scale `I` by it, so an array or string strides
 the same way regardless of word size.
 
-An initialised `(defarray NAME (VALUE...))` or `(defstring NAME "TEXT")`
-needs a built-in directive at that width -- `.cell`, `.word` or `.long` --
-which only exist for a 1, 2 or 4-cell word; any other word size is a compile
-error, though `(defarray NAME SIZE)`, uninitialised, still works (`.res`
-takes any count of cells).
+An initialised `(defarray NAME (VALUE...))` or `(defstring NAME "TEXT")` is
+laid out with `.cell` for a one-cell word and
+[`.emit`](directives.md#emit) at the word's width otherwise, for any word size.
+A backend whose stack instructions count cells rather than slots sets
+[`(frame :offsets :cells :counts :cells)`](conventions.md#slots-and-cells).
 
 Raw `peek`/`poke` and a manual address computed with `+` always count
 cells, not words -- only `aref`/`aset` scale by the word size. The
@@ -326,8 +326,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | `if`/`while`/`and`/`or` compare into the accumulator, then branch on it, rather than branching on the comparison directly. | [#375](https://todo.sr.ht/~takeiteasy/lasm/375) |
 | `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
-| A frame slot's offset from the stack/frame pointer is always in slots; a backend whose `:slot`/`:stack-slot` addressing mode takes a raw cell offset, rather than routing through the machine's own stack-slot sizing, addresses the wrong cell when the word is wider than one cell. | [#385](https://todo.sr.ht/~takeiteasy/lasm/385) |
-| An initialised `defarray`/`defstring` needs a built-in directive at the backend's word size; only 1, 2 and 4-cell words have one. | [#386](https://todo.sr.ht/~takeiteasy/lasm/386) |
 | A macro's own `let` names are hygienic, but a name it refers to free can still be captured by a caller's `let`. | [#382](https://todo.sr.ht/~takeiteasy/lasm/382) |
 | A quasiquote template can't nest another quasiquote inside it. | [#383](https://todo.sr.ht/~takeiteasy/lasm/383) |
 | The compile-time evaluator's operators are a minimal set: no strings, `apply`, `mapcar`, `and`/`or`/`cond`. | [#384](https://todo.sr.ht/~takeiteasy/lasm/384) |

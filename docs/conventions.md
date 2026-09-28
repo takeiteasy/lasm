@@ -54,10 +54,30 @@ multiple of the frame's `:alignment` slots. `(:return)` undoes both, then
 returns; it needs the stack at its entry depth.
 
 A slot is one push/pop's worth of stack space -- the stack pointer's own
-`:width`, which may span more than one memory cell (#167). `:alloc`, `:free`
-and every count below is in slots, not cells; the source language's own
-notion of a word ([Words wider than a cell](language.md#words-wider-than-a-cell))
-is layered on top, and stays out of this counting entirely.
+`:width`, which may span more than one memory cell (#167). Every count below
+is in slots. The source language's own notion of a word
+([Words wider than a cell](language.md#words-wider-than-a-cell)) is layered on
+top of it.
+
+### Slots and cells
+
+A backend whose operations take cells says so in its [`frame`](backends.md#frame).
+Lowering then multiplies by the cells in a slot (the stack pointer's `:width`
+over the memory's cell width):
+
+| Option | Scales | Default |
+| --- | --- | --- |
+| `:offsets :cells` | The distance in a `:slot`/`:stack-slot` operand | `:slots` |
+| `:counts :cells` | The count in `:alloc`, `:free` and `:return-pop` | `:slots` |
+
+```lisp
+;; 16-bit slots over 8-bit cells; SUBS/ADDS move the stack pointer by cells
+(frame :grows :down :slot sp-idx :counts :cells)
+(ops (:alloc (n) (subs (sp) (imm n)))   ; 3 locals -> subs sp, # 6
+     (:free (n) (adds (sp) (imm n))))
+```
+
+Depth tracking, `:pushes`/`:pops` and `:alignment` stay in slots.
 
 From the top of the stack, a frame holds the locals, the saved registers, the
 return address, then the stack arguments. A slot is addressed by its distance from the top of the stack, through the

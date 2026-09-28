@@ -132,7 +132,7 @@
   (registers :return (a) :scratch (a b) :callee-saved (c d)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
-  (frame :grows :down :slot sp-idx)
+  (frame :grows :down :slot sp-idx :counts :cells)
   (operands (reg wf-reg) (imm wf-imm) (sp-idx wf-sp-idx) (ind wf-ind) (sp wf-sp))
   (ops (:const (r v) (ldi r (imm v)))
        (:get (r slot) (lds r slot))
@@ -151,11 +151,10 @@
        (:push (x) (pushv x))
        (:pop (x) (popr x))
        (:move (d s) (movv d s))
-       ;; #368: SUBS/ADDS move SP by cells, but N counts slots -- PUSH/POP/
-       ;; LDS/STS all size themselves from the stack pointer's own :width
-       ;; (#167), so only this raw adjustment needs the *2.
-       (:alloc (n) (subs (sp) (imm (* n 2))))
-       (:free (n) (adds (sp) (imm (* n 2))))
+       ;; #385: SUBS/ADDS move SP by cells, so (frame :counts :cells) hands
+       ;; them a cell count; LDS/STS/PUSH/POP size a slot themselves (#167).
+       (:alloc (n) (subs (sp) (imm n)))
+       (:free (n) (adds (sp) (imm n)))
        (:call ((f reg)) (callr f))
        (:call (f) (call f))
        (:return () (ret))))
