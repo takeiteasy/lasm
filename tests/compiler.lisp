@@ -214,6 +214,12 @@
     ("(defmacro def-bump (name var) `(defmacro ,name () `(set ,(unmark ',var) (+ ,(unmark ',var) 1))))
       (def-bump bump-x x)
       (defun main () (let ((x 5)) (bump-x) x))" . 6)
+    ;; #396: an inner template's names get its own mark in place of the outer's,
+    ;; so the outer template's binding is reached through unmark.
+    ("(defmacro outer () `(progn (defmacro inner () `,(unmark 'x))
+                                (defun f () (let ((x 7)) (inner)))))
+      (outer)
+      (defun main () (f))" . 7)
     ;; #384: function values.
     ("(defmacro sum-scaled (k &rest xs) `(+ ,@(mapcar (lambda (x) `(* ,k ,x)) xs)))
       (defun main () (sum-scaled 10 1 2 3))" . 60)
@@ -1064,6 +1070,10 @@
                   ("(defmacro bad (v) `(+ ,v ,@1)) (defun main () (bad 1))" ",@ must splice a list")
                   ;; #382: a free name a template writes must be a global.
                   ("(defmacro peek-n () `(+ n 1)) (defun main () (let ((n 5)) (peek-n)))" "unknown variable n")
+                  ;; #396: the same holds through a macro that defines a macro.
+                  ("(defmacro outer () `(progn (defmacro inner () `x) (defun f () (let ((x 7)) (inner)))))
+                    (outer) (defun main () (f))"
+                   "unknown variable x")
                   ("(defun-for-syntax loopy (n) (loopy n)) (defmacro bad () (loopy 1)) (defun main () (bad))"
                    "recursed too deeply")
                   ("(defun-for-syntax f (a) a) (defmacro f (a) a) (defun main () 1)" "f is defined twice")

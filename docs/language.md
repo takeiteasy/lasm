@@ -556,6 +556,10 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   gives each name the mark of the macro's own call: none when written in
   source, or the enclosing macro's when written in its template, so a macro
   called from another macro's template reaches that template's variables.
+  A template inside a template gets its own mark in place of the outer one
+  (marks do not stack), so a macro an outer macro defines reaches a variable
+  the outer template binds only through `unmark`; a plain name there is an
+  `unknown variable` error.
 
 [^macros]: A `gensym` is an uninterned symbol whose
   printed name has a space, which no source symbol can spell. `nil` and `t`
