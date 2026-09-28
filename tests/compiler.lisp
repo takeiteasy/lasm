@@ -674,6 +674,17 @@
   (fiveam:is (= 1 (backend-word-cells 'callfoo-lang-fp-abi)))
   (fiveam:is (= 2 (backend-word-cells 'widefoo-lang-abi))))
 
+(fiveam:test funcall-through-a-variable-checks-its-arity-against-the-function-values
+  (fiveam:is (null (%cl-fail "(defun add (a b) (+ a b)) (defun one (x) x) (defvar g 0)
+                              (defun main () (set g (function add)) (+ (funcall g 1 2) (funcall (function one) 3)))")))
+  (fiveam:is (null (%cl-fail "(defun f (x) x) (defun main () (funcall (function f) 1))")))
+  (fiveam:is (null (%cl-fail "(defconstant rom 5) (defun main () (funcall rom 1) (funcall 7 1 2))"))
+             "an integer or constant target is a raw address, not checked")
+  (let ((detail (%cl-fail "(defun later () (funcall g 1 2)) (defvar g 0) (defun f (x) x)
+                           (defun main () (set g (function f)) (later))")))
+    (fiveam:is (and detail (search "no function value takes 2 arguments" detail))
+               "a function value taken after the call is still counted")))
+
 (fiveam:test a-word-wider-than-a-cell-runs-globals-arrays-and-strings
   (dolist (case '(("(defvar x 1000) (defvar y 2000) (defun main () (+ x y))" . 3000)
                   ("(defarray arr (10 20 30)) (defun main () (+ (aref arr 0) (+ (aref arr 1) (aref arr 2))))" . 60)
@@ -749,6 +760,12 @@
                   ;; #365: function values and indirect calls.
                   ("(defun main () (funcall (function nope) 1))" "unknown function nope")
                   ("(defun f (a b) a) (defun main () (funcall (function f) 1))" "f takes 2 arguments, got 1")
+                  ;; #378: a computed target's argument count must be one some function value takes.
+                  ("(defvar g 0) (defun f (x) x) (defun main () (set g (function f)) (funcall g 1 2))"
+                   "no function value takes 2 arguments (function values take 1)")
+                  ("(defun f (x) x) (defarray fns ((function f))) (defun main () (funcall (aref fns 0)))"
+                   "no function value takes 0 arguments (function values take 1)")
+                  ("(defvar g 0) (defun main () (funcall g 1))" "no function value takes 1 argument")
                   ("(defun funcall (x) x) (defun main () 1)" "funcall is a built-in form")
                   ("(defun function (x) x) (defun main () 1)" "function is a built-in form")
                   ;; #366: arrays, strings and byte access.

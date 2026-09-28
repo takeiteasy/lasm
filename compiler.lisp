@@ -101,6 +101,8 @@
 (defvar *cc-constants* nil "Upcased name -> integer.")
 (defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING (#366).")
 (defvar *cc-word-cells* 1 "Cells a word spans on the target backend (BACKEND-WORD-CELLS, #368).")
+(defvar *cc-value-arities* nil "Argument counts of every function a (function F) has made a value (#378).")
+(defvar *cc-indirect-calls* nil "(ARITY FORM FUNCTION), reversed, for each funcall through a computed target, checked once every function is compiled (#378).")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -234,6 +236,7 @@ cannot be a register alias or a generated label."
          (entry (gethash key *cc-functions*)))
     (unless entry
       (%cc-fail form "unknown function ~A" (%source-name (second form) nil)))
+    (pushnew (cdr entry) *cc-value-arities*)
     (car entry)))
 
 (defun %cc-function-expr (form)
@@ -834,7 +837,22 @@ items-malformed, as any call target is (#335, docs/conventions.md)."
     (or (find-if (lambda (name) (not (member name args :test #'string=))) candidates)
         (symbol-name *cc-acc-name*))))
 
+(defun %cc-raw-address-p (callee)
+  "T when CALLEE is an integer or a constant, an address the program did not take with (function F) (#378)."
+  (or (integerp callee)
+      (and (%cc-name-p callee) (eq (first (%cc-lookup callee)) :constant))))
+
+(defun %cc-check-indirect-calls ()
+  "Fail on the first funcall through a computed target whose argument count no function value takes (#378)."
+  (loop for (arity form function) in (reverse *cc-indirect-calls*)
+        unless (member arity *cc-value-arities*)
+          do (let ((*cc-function* function))
+               (%cc-fail form "no function value takes ~D argument~:P~@[ (function values take ~{~D~^, ~})~]"
+                         arity (sort (copy-list *cc-value-arities*) #'<)))))
+
 (defun %cc-indirect-funcall (callee args)
+  (unless (%cc-raw-address-p callee)
+    (cl:push (list (length args) *cc-form* *cc-function*) *cc-indirect-calls*))
   (let ((callee-slot (unless (%cc-leaf-p callee)
                         (%cc-expr callee)
                         (let ((slot (%cc-alloc)))
@@ -1642,7 +1660,8 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (*cc-macros* (make-hash-table :test 'equal)) (*cc-expansions* 0)
         (*cc-meta-functions* (make-hash-table :test 'equal)) (*cc-meta-steps* 0)
         (*cc-rename-serial* 0) (*cc-expand-position* nil)
-        (*cc-word-cells* (backend-word-cells backend)))
+        (*cc-word-cells* (backend-word-cells backend))
+        (*cc-value-arities* '()) (*cc-indirect-calls* '()))
     (%cc-registers)
     (multiple-value-bind (definitions globals data) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
@@ -1656,7 +1675,8 @@ them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN (#362)."
         (%cc-emit (list :call (car main)))
         (%cc-op :halt)
         (append (nreverse *cc-out*)
-                (mapcar #'%cc-function definitions)
+                (prog1 (mapcar #'%cc-function definitions)
+                  (%cc-check-indirect-calls))
                 (loop for (label) in globals
                       append (list (list :label label)
                                    (list :directive (%cc-symbol "res") *cc-word-cells*)))

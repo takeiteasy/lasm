@@ -121,8 +121,10 @@ Symbols are compared by name, ignoring case.
 `(function F)` is `F`'s address, a value like any other -- stored in a
 variable, put in a `defarray`, or called through. `(funcall E ARG...)` calls
 through `E`'s value: a literal `(function F)` compiles the same direct call
-`(F ARG...)` does, arity-checked at compile time; any other `E` computes a
-target checked only at the call.
+`(F ARG...)` does, arity-checked at compile time. Any other `E` computes its
+target at run time, and its argument count must be one some `(function F)` in
+the program takes, or it is a compile error. An integer or `defconstant` target
+is a raw address and is not checked.[^funcall-arity]
 
 ```lisp
 (defun add-one (x) (+ x 1))
@@ -418,7 +420,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | A first callee-saved register is claimed only inside a loop, so one-off call sites outside a loop never share one. | [#394](https://todo.sr.ht/~takeiteasy/lasm/394) |
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
-| `funcall`'s arity is checked only when the target is a literal `(function F)`; through a variable, a wrong argument count is not caught. | [#378](https://todo.sr.ht/~takeiteasy/lasm/378) |
+| `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
 | `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
@@ -440,6 +442,10 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   A call evaluates each argument into its own frame slot, then
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
+
+[^funcall-arity]: The check runs once every function is compiled, so a function
+  value taken after the call still counts. `(function F)` in a function body or
+  a `defarray` adds `F`'s argument count to the set.
 
 [^variants]: `not` compares with `:eq-imm 0` when its value is used. A global is not a slot, and reads
   through `:peek`, so it loads first. The variants take the same operand a
