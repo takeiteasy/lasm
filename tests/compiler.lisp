@@ -652,7 +652,12 @@
     ("(defvar g 1) (defun f (n) n)
       (defun main () (+ (f 1) (f 2)) (if g (+ (f 3) (f 4)) 0))" 0 ("C") 7)
     ("(defvar g 1) (defun f (n) n)
-      (defun main () (and g (+ (f 1) (f 2)) (+ (f 3) (f 4))))" 2 nil 7))
+      (defun main () (and g (+ (f 1) (f 2)) (+ (f 3) (f 4))))" 2 nil 7)
+    ("(defvar g 1) (defun f (n) n)
+      (defun main ()
+        (if g (+ (f 3) (f 4)) 0)
+        (if g (if g (if g (let ((i 0)) (while (< i 1) (+ (f 1) (f 2)) (set i 1)) 0) 0) 0) 0)
+        7)" 1 ("C") 7))
   "Source, the pushes :speed leaves, the registers it saves, and main's value.")
 
 (fiveam:test speed-weights-sites-by-how-often-they-run

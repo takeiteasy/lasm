@@ -475,7 +475,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| `:optimize :speed` counts a site in a `while` as 2, however deep the loops nest or rarely its `if` arm runs. | [#401](https://todo.sr.ht/~takeiteasy/lasm/401) |
 | `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
 | A `:packed` string is emitted as packed `.cell` integers, not text, in a compiled `.lasm` file. | [#398](https://todo.sr.ht/~takeiteasy/lasm/398) |
 
@@ -540,9 +539,9 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 [^speed]: Each function compiles twice. The first pass counts the call sites
   that would claim each `:callee-saved` register. A site counts 1, halved by
-  each enclosing `if` arm and by each `and`/`or` operand after the first, or 2
-  inside a `while`. The second pass lets a site outside a loop claim a register
-  counted more than 1: each run saves a push and a pop, and saving the register
+  each enclosing `if` arm and by each `and`/`or` operand after the first, and
+  multiplied by 4 inside each `while`. The second pass lets a site outside a
+  loop claim a register counted more than 1: each run saves a push and a pop, and saving the register
   costs one pair per call.
 
 [^hygiene]: A mark is a number kept on a fresh uninterned copy of each name

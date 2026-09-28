@@ -57,7 +57,7 @@
 ;;;; stack costs less than the prologue/epilogue pair. #394: with :optimize
 ;;;; :speed, a first compile counts the call sites per register and a register
 ;;;; claimed by more than one run is held outside loops too. #400: an if arm
-;;;; and each and/or operand after the first halve a site; a loop site counts 2.
+;;;; and each and/or operand after the first halve a site; a while multiplies it by 4 (#401).
 ;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
 ;;;; writes, so an operand holding another register may reach it. #393: a
 ;;;; declared :callee-saved one is added to the function's :save.
@@ -105,9 +105,9 @@
 (defvar *cc-preserved* nil "Upcased names the allocator may hold a value in across a call, saving it in the function's prologue.")
 (defvar *cc-saves* nil "Upcased names from *CC-PRESERVED* the function being compiled has used, for its :save option.")
 (defvar *cc-optimize* :size "The compile-program :optimize option: :SIZE, or :SPEED to share a preserved register between call sites (#394).")
-(defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that two or more call sites of the function being compiled claim, so a site outside a loop may claim them too (#394).")
+(defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that the function being compiled's call sites claim more than once a call (#400), so a site outside a loop may claim them too (#394).")
 (defvar *cc-counting* nil "NIL, or during the counting pass an EQUAL hash table, upcased register name -> the call sites that would claim it (#394).")
-(defvar *cc-site-weight* 1 "How often, relative to the function's entry, the code being compiled runs: halved by each if arm and each and/or operand after the first (#400).")
+(defvar *cc-site-weight* 1 "How often, relative to the function's entry, the code being compiled runs: halved by each if arm and each and/or operand after the first (#400), and multiplied by 4 inside each while (#401).")
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
@@ -329,7 +329,7 @@ calls a function the pick is a *CC-PRESERVED* register, recorded in
 *CC-SAVES* for the function's prologue and epilogue to save and restore: one
 already saved, else a new one only inside a loop (#376) or when it is in
 *CC-SHARED* (#394). The counting pass (*CC-COUNTING*) takes the first free one
-and counts the site at *CC-SITE-WEIGHT*, or 2 inside a loop (#400). Otherwise the pick is a
+and counts the site at *CC-SITE-WEIGHT* (#400). Otherwise the pick is a
 *CC-VOLATILE* register, since a call is the only thing a compiled operand
 can do that a :caller-saved register does not survive."
   (multiple-value-bind (clobbers call) (%cc-hazards form)
@@ -348,8 +348,7 @@ can do that a :caller-saved register does not survive."
             (when register
               (pushnew register *cc-saves* :test #'string=)
               (when *cc-counting*
-                ;; TODO: a loop site counts a flat 2; multiply by a loop factor (#401).
-                (incf (gethash register *cc-counting* 0) (if (plusp *cc-loop-depth*) 2 *cc-site-weight*))))
+                (incf (gethash register *cc-counting* 0) *cc-site-weight*)))
             register)
           (first (usable *cc-volatile*))))))
 
@@ -608,7 +607,8 @@ and, or and not of conditions jump between their operands and produce no value."
   (%cc-check-length form 3 nil)
   (let ((top (%cc-new-label)) (end (%cc-new-label)))
     (%cc-emit (list :label top))
-    (let ((*cc-loop-depth* (1+ *cc-loop-depth*)))
+    (let ((*cc-loop-depth* (1+ *cc-loop-depth*))
+          (*cc-site-weight* (* *cc-site-weight* 4)))
       (%cc-branch (second form) nil end)
       (dolist (body (cddr form)) (%cc-expr body)))
     (%cc-op :jump top)
