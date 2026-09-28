@@ -25,7 +25,7 @@
   machine     ; name of the machine described
   registers   ; plist of role -> upcased name, or list of names (see +BACKEND-REGISTER-ROLES+); :OPERAND -> kind name
   call        ; plist :ARGS :ORDER :CLEANUP :RETURN-ADDRESS-SLOTS
-  frame       ; plist :GROWS :ALIGNMENT, and :SLOT, :STACK-SLOT (kind names) and :POINTER (a register name) when given
+  frame       ; plist :GROWS :ALIGNMENT, and :SLOT, :STACK-SLOT (kind names), :POINTER (a register name) and :STATIC when given
   operands    ; alist of (KIND-NAME . MODE-NAME)
   ops         ; alist of (OP-NAME PARAMS FORM...), names upcased
   op-effects  ; alist of (OP-NAME :PUSHES X :POPS Y) for the ops that declare a stack effect
@@ -196,7 +196,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
 (defparameter +backend-clause-keys+
   `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand)
     ("CALL" :args :order :cleanup :return-address-slots)
-    ("FRAME" :grows :alignment :slot :stack-slot :pointer :offsets :counts))
+    ("FRAME" :grows :alignment :slot :stack-slot :pointer :offsets :counts :static))
   "The keys each plist clause takes, by clause head.")
 
 (defun %clause-keys (head)
@@ -259,7 +259,10 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
   (%check-plist "frame" args (%clause-keys "FRAME"))
   (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot))
         (stack-slot (getf args :stack-slot)) (pointer (getf args :pointer))
-        (offsets (getf args :offsets :slots)) (counts (getf args :counts :slots)))
+        (offsets (getf args :offsets :slots)) (counts (getf args :counts :slots))
+        (static (getf args :static)))
+    (unless (member static '(nil t))
+      (%backend-error "frame :static must be t or nil, got ~S" static))
     (loop for (what unit) in `((":offsets" ,offsets) (":counts" ,counts))
           unless (member unit '(:slots :cells))
             do (%backend-error "frame ~A must be :slots or :cells, got ~S" what unit))
@@ -275,7 +278,8 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
             (and stack-slot (list :stack-slot (%designator-name stack-slot)))
             (and pointer (list :pointer (%backend-register-name descriptor pointer)))
             (and (eq offsets :cells) (list :offsets :cells))
-            (and (eq counts :cells) (list :counts :cells)))))
+            (and (eq counts :cells) (list :counts :cells))
+            (and static (list :static t)))))
 
 (defun %parse-operands-clause (machine entries)
   (let (result)
@@ -784,7 +788,7 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg]
-            [:offsets :slots/:cells] [:counts :slots/:cells])
+            [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
        ; a param is a name, or (NAME KIND) restricting it to an operand of that

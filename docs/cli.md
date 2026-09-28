@@ -49,7 +49,8 @@ machines needs `--machine-name`.
 A `.lsp` file is a program in the [source language](language.md). Every command
 that takes a program accepts one; it compiles in memory through its backend,
 named by `(:program (:backend NAME))` or `--backend NAME`. `--optimize`
-overrides its `(:program (:optimize NAME))`.
+overrides its `(:program (:optimize NAME))`, and `--frames static|stack` its
+`(:program (:frames NAME))` and the backend's [static frames](static-frames.md).
 [`fact.lsp`](../tests/fixtures/cli/fact.lsp) runs on [`callfoo.lisp`](../tests/fixtures/cli/callfoo.lisp).
 
 ```sh
@@ -61,7 +62,7 @@ lasm compile fact.lsp -m callfoo.lisp -o fact.lasm
 
 | Command | Does | Options |
 | --- | --- | --- |
-| `compile FILE` | writes a `.lsp` program as a `.lasm` items program | `-o OUT`, `--backend NAME`, `--optimize size\|speed` |
+| `compile FILE` | writes a `.lsp` program as a `.lasm` items program | `-o OUT`, `--backend NAME`, `--optimize size\|speed`, `--frames static\|stack` |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
 | `run [FILE]` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
 | `debug [FILE]` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |

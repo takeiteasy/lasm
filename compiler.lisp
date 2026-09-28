@@ -122,6 +122,11 @@
 (defvar *cc-taken* nil "Upcased names of the functions a call cannot account for every caller of: made a value, or spelled in an (asm).")
 (defvar *cc-arrays* nil "An EQ table from a DEFARRAY's label to the vector of its elements' bindings.")
 (defvar *cc-escaped* nil "Upcased names of the DEFARRAYs used other than as the base of an AREF or ASET, so any element may change.")
+(defvar *cc-frames* :stack "Where locals live: :STACK, in frame slots, or :STATIC, at fixed addresses laid out from the call graph.")
+(defvar *cc-calls* nil "(CALLER CALLEE FORM FUNCTION), reversed, for each call a static frame layout must account for.")
+(defvar *cc-caller* nil "The upcased name of the function being compiled.")
+(defvar *cc-frame-label* nil "The label of the function being compiled, which its static slots' labels are made from.")
+(defvar *cc-sizes* nil "Upcased function name -> the static slots its frame needs.")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -215,8 +220,17 @@ cannot be a register alias or a generated label."
               (backend-descriptor-name *cc-backend*) name))
   (%cc-emit (list* :op name args)))
 
+(defun %cc-static-p ()
+  (eq *cc-frames* :static))
+
+(defun %cc-slot-label (function-label index)
+  "The label of slot INDEX in the static frame of the function labelled FUNCTION-LABEL."
+  (%cc-symbol (string-downcase (format nil "sf~Ax~D" (subseq (symbol-name function-label) 2) index))))
+
 (defun %cc-alloc ()
-  (prog1 (list :local *cc-next*)
+  (prog1 (if (%cc-static-p)
+             (list :static (%cc-slot-label *cc-frame-label* *cc-next*))
+             (list :local *cc-next*))
     (incf *cc-next*)
     (setf *cc-max* (max *cc-max* *cc-next*))))
 
@@ -225,6 +239,13 @@ cannot be a register alias or a generated label."
 
 (defun %cc-const (value)
   (%cc-op :const *cc-acc* value))
+
+(defun %cc-store (slot)
+  "The accumulator into the frame SLOT. A static slot goes through the temp register."
+  (if (eq (first slot) :static)
+      (progn (%cc-op :const *cc-temp* (second slot))
+             (%cc-op :poke *cc-temp-name* *cc-acc-name*))
+      (%cc-op :set slot *cc-acc*)))
 
 (defun %cc-register-operand (name)
   (list (%cc-symbol (string-downcase (getf (backend-descriptor-registers *cc-backend*) :operand)))
@@ -340,6 +361,13 @@ cannot be a register alias or a generated label."
             (%cc-hold (cl:aref elements position) value))
           (loop for element across elements do (%cc-hold element value))))))
 
+(defvar *cc-escape-form* nil "The innermost list %CC-NOTE-ESCAPES is walking, where a label it finds is written.")
+
+(defun %cc-note-call (callee form)
+  "Record that the function being compiled calls CALLEE, an upcased name, at FORM."
+  (when (%cc-static-p)
+    (cl:push (list *cc-caller* callee form *cc-function*) *cc-calls*)))
+
 (defun %cc-note-escapes (tree)
   "Mark each DEFARRAY TREE names other than as the base of an AREF or ASET as
 escaped, and each function whose label it spells as taken."
@@ -350,9 +378,11 @@ escaped, and each function whose label it spells as taken."
          (setf (gethash key *cc-escaped*) t))
        (let ((function (gethash key *cc-label-keys*)))
          (when function
-           (pushnew function *cc-taken* :test #'string=)))))
+           (pushnew function *cc-taken* :test #'string=)
+           (%cc-note-call function *cc-escape-form*)))))
     ((consp tree)
-     (loop for rest = (if (and (member (%cc-head tree) '("AREF" "ASET") :test #'equal)
+     (loop with *cc-escape-form* = tree
+           for rest = (if (and (member (%cc-head tree) '("AREF" "ASET") :test #'equal)
                                (%cc-name-p (second tree)))
                           (cddr tree)
                           tree)
@@ -409,7 +439,7 @@ escaped, and each function whose label it spells as taken."
     (t (let ((location (%cc-lookup form)))
          (ecase (first location)
            ((:local :arg) (%cc-op :get register location))
-           (:global (%cc-op :const register (second location))
+           ((:global :static) (%cc-op :const register (second location))
             (%cc-op :peek register-name register-name))
            (:constant (%cc-op :const register (second location)))
            (:address (%cc-op :const register (second location))))))))
@@ -490,6 +520,11 @@ can do that a :caller-saved register does not survive."
             register)
           (first (usable *cc-volatile*))))))
 
+(defun %cc-load-leaf-slot (slot)
+  "The static SLOT's value into the accumulator."
+  (%cc-op :const *cc-acc* (second slot))
+  (%cc-op :peek *cc-acc-name* *cc-acc-name*))
+
 (defun %cc-to-temp (form)
   "FORM's value into the temp register, leaving the accumulator as it is.
 A non-leaf FORM holds the accumulator's current value in a register from
@@ -498,20 +533,28 @@ free and safe; otherwise the accumulator is pushed and popped as before."
   (if (%cc-leaf-p form)
       (%cc-load-leaf form *cc-temp* *cc-temp-name*)
       (let ((register (%cc-take form)))
-        (if register
+        (cond
+          ((and (null register) (%cc-static-p))
+           (let ((slot (%cc-alloc)))
+             (%cc-store slot)
+             (%cc-expr form)
+             (%cc-op :move *cc-temp* *cc-acc*)
+             (%cc-load-leaf-slot slot)
+             (%cc-free)))
+          (register
             (let ((operand (%cc-register-operand register))
                   (*cc-volatile* (remove register *cc-volatile* :test #'string=))
                   (*cc-preserved* (remove register *cc-preserved* :test #'string=)))
               (%cc-op :move operand *cc-acc*)
               (%cc-expr form)
               (%cc-op :move *cc-temp* *cc-acc*)
-              (%cc-op :move *cc-acc* operand))
-            (progn (%cc-emit (list :push *cc-acc*))
-                   (incf *cc-depth*)
-                   (%cc-expr form)
-                   (%cc-op :move *cc-temp* *cc-acc*)
-                   (%cc-emit (list :pop *cc-acc*))
-                   (decf *cc-depth*))))))
+              (%cc-op :move *cc-acc* operand)))
+          (t (%cc-emit (list :push *cc-acc*))
+             (incf *cc-depth*)
+             (%cc-expr form)
+             (%cc-op :move *cc-temp* *cc-acc*)
+             (%cc-emit (list :pop *cc-acc*))
+             (decf *cc-depth*))))))
 
 (defun %cc-value-to-temp (form)
   "FORM's value into the temp register, when the accumulator holds nothing to keep."
@@ -543,7 +586,7 @@ could change it."
            (let ((location (%cc-lookup left)))
              (case (first location)
                ((:constant :address) t)
-               ((:local :arg) (not (%cc-affects-p (%designator-name left) right)))
+               ((:local :arg :static) (not (%cc-affects-p (%designator-name left) right)))
                (t nil))))))
 
 (defun %cc-operands (left right)
@@ -595,7 +638,7 @@ straight into the backend's OP-IMM or OP-SLOT variant, else NIL."
              (ecase (first location)
                ((:local :arg) (let ((name (variant "SLOT"))) (and name (list name location))))
                ((:constant :address) (let ((name (variant "IMM"))) (and name (list name (second location)))))
-               (:global nil)))))))
+               ((:global :static) nil)))))))
 
 (defun %cc-pair-plan (op swapped left right)
   "(KIND . OPERATION) for the operation OP on LEFT and RIGHT: :DIRECT with RIGHT's
@@ -622,7 +665,7 @@ its source."
   "Instructions to load FORM into a register: 0 for a non-leaf, whose cost
 every way of computing the pair shares."
   (cond ((not (%cc-leaf-p form)) 0)
-        ((and (%cc-name-p form) (eq (first (%cc-lookup form)) :global)) 2)
+        ((and (%cc-name-p form) (member (first (%cc-lookup form)) '(:global :static))) 2)
         (t 1)))
 
 (defun %cc-pair-cost (op swapped left right)
@@ -866,7 +909,7 @@ comparison, to a landing that loads the result."
       (%cc-expr (second binding))
       (let* ((slot (%cc-alloc))
              (cell (cons (%cc-local-key (first binding) form) slot)))
-        (%cc-op :set slot *cc-acc*)
+        (%cc-store slot)
         (incf slots)
         (%cc-hold cell (second binding))
         (cl:push cell *cc-env*)))
@@ -879,9 +922,9 @@ comparison, to a landing that loads the result."
   (%cc-check-length form 3 3)
   (let ((location (%cc-lookup (second form))))
     (ecase (first location)
-      ((:local :arg) (%cc-expr (third form))
+      ((:local :arg :static) (%cc-expr (third form))
        (%cc-hold (%cc-local-cell (second form)) (third form))
-       (%cc-op :set location *cc-acc*))
+       (%cc-store location))
       (:global (%cc-value-to-temp (third form))
        (%cc-hold (second location) (third form))
        (%cc-op :const *cc-acc* (second location))
@@ -991,7 +1034,7 @@ comparison, to a landing that loads the result."
            (when binding (setf (gethash binding *cc-holdings*) :unknown))
            (ecase (first location)
              ((:local :arg) location)
-             ((:global :address) (second location))
+             ((:global :address :static) (second location))
              (:constant (second location)))))
         ((and (consp tree) (null (cdr (last tree))))
          (mapcar (lambda (element) (%cc-substitute-variables element form)) tree))
@@ -1000,7 +1043,7 @@ comparison, to a landing that loads the result."
 (defun %cc-asm (form)
   (%cc-check-length form 1 nil)
   (let ((clobbers (%cc-asm-clobbers form)))
-    (unless (eq clobbers :all)
+    (unless (or (eq clobbers :all) (%cc-static-p))
       (dolist (name (getf (backend-descriptor-registers *cc-backend*) :callee-saved))
         (when (member name clobbers :test #'string=)
           (pushnew name *cc-saves* :test #'string=)))))
@@ -1023,6 +1066,45 @@ accumulator or a register (docs/language.md#backend-requirements)."
 (defun %cc-free-slots (slots)
   (dotimes (i (length slots)) (%cc-free)))
 
+(defun %cc-may-call-p (tree)
+  "T when TREE, an expression, may call a function: a call, a funcall or an (asm ...)."
+  (and (consp tree)
+       (let ((head (and (%cc-name-p (first tree)) (%designator-name (first tree)))))
+         (or (member head '("FUNCALL" "ASM") :test #'equal)
+             (and head (gethash head *cc-functions*) t)
+             (some #'%cc-may-call-p tree)))))
+
+;; A static call stores each argument straight into the callee's parameter
+;; slot. Frames of functions that do not call each other share addresses, so
+;; an argument evaluated before a later one that may call is held in a slot of
+;; the caller's own frame, and copied over once every argument is computed.
+(defun %cc-static-call (key label args form)
+  (%cc-note-call key form)
+  (let ((staged '()))
+    (loop for (arg . later) on args
+          for index from 0
+          for parameter = (list :static (%cc-slot-label label index))
+          do (%cc-expr arg)
+             (if (some #'%cc-may-call-p later)
+                 (let ((slot (%cc-alloc)))
+                   (%cc-store slot)
+                   (cl:push (cons slot parameter) staged))
+                 (%cc-store parameter)))
+    (loop for (slot . parameter) in staged
+          do (%cc-load-leaf-slot slot)
+             (%cc-store parameter))
+    (%cc-emit (list :call label))
+    (dotimes (i (length staged)) (%cc-free))))
+
+(defun %cc-call-callee (key label args form)
+  "Call the function named KEY, labelled LABEL, with ARGS."
+  (%cc-hold-arguments key args)
+  (if (%cc-static-p)
+      (%cc-static-call key label args form)
+      (let ((slots (%cc-args-to-slots args)))
+        (%cc-emit (list* :call label slots))
+        (%cc-free-slots slots))))
+
 (defun %cc-call (form)
   (let* ((entry (gethash (%cc-key (first form) form) *cc-functions*))
          (args (rest form)))
@@ -1032,10 +1114,7 @@ accumulator or a register (docs/language.md#backend-requirements)."
     (unless (= (length args) (cdr entry))
       (%cc-fail form "~A takes ~D argument~:P, got ~D"
                 (%source-name (first form) nil) (cdr entry) (length args)))
-    (let ((slots (%cc-args-to-slots args)))
-      (%cc-hold-arguments (%cc-key (first form) form) args)
-      (%cc-emit (list* :call (car entry) slots))
-      (%cc-free-slots slots))))
+    (%cc-call-callee (%cc-key (first form) form) (car entry) args form)))
 
 ;; (function F) is a value, F's label; (funcall E ARG...) calls through
 ;; any expression. A literal (function F) target compiles the same direct
@@ -1058,10 +1137,7 @@ accumulator or a register (docs/language.md#backend-requirements)."
     (unless (= (length args) (cdr entry))
       (%cc-fail form "~A takes ~D argument~:P, got ~D"
                 (%source-name (second callee) nil) (cdr entry) (length args)))
-    (let ((slots (%cc-args-to-slots args)))
-      (%cc-hold-arguments key args)
-      (%cc-emit (list* :call (car entry) slots))
-      (%cc-free-slots slots))))
+    (%cc-call-callee key (car entry) args form)))
 
 (defun %cc-call-arg-registers ()
   (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
@@ -1107,6 +1183,8 @@ function value takes, or that the function values reaching its target do not."
              *cc-indirect-calls*)))
 
 (defun %cc-indirect-funcall (callee args)
+  (when (%cc-static-p)
+    (%cc-fail *cc-form* "static frames call only (funcall (function F) ...), not a computed target"))
   (let ((form *cc-form*) (function *cc-function*)
         (callee-slot (unless (%cc-leaf-p callee)
                        (%cc-expr callee)
@@ -1726,6 +1804,7 @@ names must stay literal for the rest of the compiler to resolve."
 (defun %cc-function-items (name params body label)
   "The (:function LABEL ...) item for BODY, already macro-expanded."
   (let* ((*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-site-weight* 1) (*cc-saves* '())
+         (*cc-frame-label* label) (*cc-caller* (%designator-name name))
          (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                           (if (eq args :stack) 0 (length args)))))
     (loop for param in params
@@ -1733,21 +1812,26 @@ names must stay literal for the rest of the compiler to resolve."
           do (let ((key (%cc-local-key param name)))
                (when (assoc key *cc-env* :test #'string=)
                  (%cc-fail name "~A is a parameter twice" (%source-name param nil)))
-               (if (< index arg-registers)
-                   (let ((slot (%cc-alloc)))
-                     (let ((*cc-form* name))
-                       (%cc-op :set slot (list :arg index)))
-                     (cl:push (cons key slot) *cc-env*))
-                   (cl:push (cons key (list :arg index)) *cc-env*))
+               (cond ((%cc-static-p)
+                      (cl:push (cons key (%cc-alloc)) *cc-env*))
+                     ((< index arg-registers)
+                      (let ((slot (%cc-alloc)))
+                        (let ((*cc-form* name))
+                          (%cc-op :set slot (list :arg index)))
+                        (cl:push (cons key slot) *cc-env*)))
+                     (t (cl:push (cons key (list :arg index)) *cc-env*)))
                (setf (gethash (first *cc-env*) *cc-holdings*)
                      (list (nth index (gethash (%designator-name name) *cc-parameters*))))))
     (%cc-progn body)
+    (setf (gethash *cc-caller* *cc-sizes*) *cc-max*)
     (list* :function label
-           (append (list :args (length params) :locals *cc-max*)
+           (append (if (%cc-static-p)
+                       (list :args 0 :locals 0 :frame nil)
+                       (list :args (length params) :locals *cc-max*))
                    ;; A preserved register %CC-TAKE used; the backend's
                    ;; own :callee-saved convention pushes and pops it, which
                    ;; also restores it correctly across an early (return).
-                   (and *cc-saves* (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
+                   (and *cc-saves* (not (%cc-static-p)) (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
                                                         (reverse *cc-saves*)))))
            (nreverse (cl:push (list :return) *cc-out*)))))
 
@@ -1766,10 +1850,11 @@ the function once and discarding the items."
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
     (let* ((*cc-function* (%source-name name nil))
+           (*cc-caller* (%designator-name name))
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
            ;; first), regardless of where NAME's DEFUN sits relative to them.
            (body (mapcar #'%cc-expand-all body))
-           (*cc-shared* (and (eq *cc-optimize* :speed)
+           (*cc-shared* (and (eq *cc-optimize* :speed) (not (%cc-static-p))
                              (%cc-shared-registers name params body label))))
       (mapc #'%cc-note-escapes body)
       (%cc-function-items name params body label))))
@@ -1798,8 +1883,58 @@ register, so any of these are free once nothing above still needs them."
           *cc-temp-name* (%cc-symbol (string-downcase temp))
           *cc-volatile* (remove-if (lambda (name) (member name reserved :test #'string=))
                                     (append (getf registers :scratch) (getf registers :caller-saved)))
-          *cc-preserved* (remove-if (lambda (name) (member name reserved :test #'string=))
-                                     (getf registers :callee-saved)))))
+          *cc-preserved* (and (not (%cc-static-p))
+                              (remove-if (lambda (name) (member name reserved :test #'string=))
+                                         (getf registers :callee-saved))))))
+
+;; Static frames. A function's frame sits after every frame of its callers, so
+;; a function and the ones it calls never share an address, and functions that
+;; are never live together do. That holds only while no function is live
+;; twice: recursion is an error.
+(defun %cc-check-recursion ()
+  "Fail at the first call that closes a cycle in the call graph."
+  (let ((edges (make-hash-table :test 'equal)) (state (make-hash-table :test 'equal)))
+    (dolist (edge (reverse *cc-calls*))
+      (cl:push edge (gethash (first edge) edges)))
+    (labels ((visit (key path)
+               (setf (gethash key state) :active)
+               (dolist (edge (reverse (gethash key edges)))
+                 (destructuring-bind (caller callee form function) edge
+                   (declare (ignore caller))
+                   (case (gethash callee state)
+                     (:active
+                      (let ((*cc-function* function))
+                        (if (string= key callee)
+                            (%cc-fail form "~(~A~) calls itself; static frames do not support recursion" key)
+                            (%cc-fail form "~(~{~A~^ calls ~}~) is recursive; static frames do not support recursion"
+                                      (append (member callee (reverse (cons key path)) :test #'string=)
+                                              (list callee))))))
+                     ((nil) (visit callee (cons key path))))))
+               (setf (gethash key state) :done)))
+      (loop for (caller) in (reverse *cc-calls*)
+            unless (gethash caller state) do (visit caller '())))))
+
+(defun %cc-static-area (definitions)
+  "The items reserving every static frame. A function's frame starts after the
+frames of its callers, so two functions share the slots at an address."
+  (let ((callers (make-hash-table :test 'equal)) (offsets (make-hash-table :test 'equal)))
+    (loop for (caller callee) in *cc-calls*
+          do (pushnew caller (gethash callee callers) :test #'string=))
+    (labels ((offset (key)
+               (or (gethash key offsets)
+                   (setf (gethash key offsets)
+                         (reduce #'max (mapcar (lambda (caller) (+ (offset caller) (gethash caller *cc-sizes* 0)))
+                                               (gethash key callers))
+                                 :initial-value 0)))))
+      (let* ((slots (loop for (name nil nil label) in definitions
+                          for key = (%designator-name name)
+                          append (loop for index below (gethash key *cc-sizes* 0)
+                                       collect (cons (+ (offset key) index) (%cc-slot-label label index)))))
+             (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
+        (loop for address below size
+              append (append (loop for (at . label) in slots
+                                   when (= at address) collect (list :label label))
+                             (list (list :directive (%cc-symbol "res") *cc-word-cells*))))))))
 
 (defun %cc-array-value (value form)
   "The integer VALUE, an element of a DEFARRAY's (VALUE...), resolves to: an
@@ -1949,19 +2084,25 @@ defined later in FORMS."
                                               (list :directive (%cc-symbol "asciz") payload)
                                               (%cc-word-data (list payload 0))))))))))
 
-(defun compile-program (forms &key backend positions source file (optimize :size))
+(defun compile-program (forms &key backend positions source file (optimize :size) frames)
   "The items that compile FORMS, a list of (defun ...), (defvar ...) and
 (defconstant ...) forms, for BACKEND. A stub at the start stores the
 globals' initial values, calls main and halts. Signals PROGRAM-COMPILE-ERROR.
 POSITIONS, SOURCE and FILE, as READ-SOURCE and READ-SOURCE-FROM-STRING set
 them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN. OPTIMIZE
 is :SIZE, the fewest instructions, or :SPEED, which also holds an operand
-across calls in a preserved register shared by two or more sites."
+across calls in a preserved register shared by two or more sites. FRAMES is
+:STATIC, which gives locals fixed addresses and rejects recursion, :STACK,
+or NIL for what the backend's (frame :static t) says."
   (unless backend
     (%cc-fail nil "compiling needs a backend"))
   (unless (member optimize '(:size :speed))
     (%cc-fail nil ":optimize must be :size or :speed, got ~S" optimize))
+  (unless (member frames '(nil :static :stack))
+    (%cc-fail nil ":frames must be :static or :stack, got ~S" frames))
   (let ((*cc-backend* (find-backend backend))
+        (*cc-frames* (or frames (if (getf (backend-descriptor-frame (find-backend backend)) :static) :static :stack)))
+        (*cc-calls* '()) (*cc-caller* nil) (*cc-frame-label* nil) (*cc-sizes* (make-hash-table :test 'equal))
         (*cc-optimize* optimize) (*cc-shared* nil) (*cc-counting* nil)
         (*cc-functions* (make-hash-table :test 'equal))
         (*cc-globals* (make-hash-table :test 'equal))
@@ -1995,13 +2136,18 @@ across calls in a preserved register shared by two or more sites."
                    (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
         (%cc-emit (list :call (car main)))
         (%cc-op :halt)
-        (append (nreverse *cc-out*)
-                (prog1 (mapcar #'%cc-function definitions)
-                  (%cc-check-indirect-calls))
-                (loop for (label) in globals
-                      append (list (list :label label)
-                                   (list :directive (%cc-symbol "res") *cc-word-cells*)))
-                data)))))
+        (let ((stub (nreverse *cc-out*))
+              (functions (mapcar #'%cc-function definitions)))
+          (%cc-check-indirect-calls)
+          (when (%cc-static-p)
+            (%cc-check-recursion))
+          (append stub
+                  functions
+                  (loop for (label) in globals
+                        append (list (list :label label)
+                                     (list :directive (%cc-symbol "res") *cc-word-cells*)))
+                  (and (%cc-static-p) (%cc-static-area definitions))
+                  data))))))
 
 ;;; Source files
 
@@ -2048,12 +2194,14 @@ optional leading (:program (option...)) as in a .lasm file."
                 (items-program-positions program) positions)
           program)))))
 
-(defun compile-source (program &key backend optimize)
+(defun compile-source (program &key backend optimize frames)
   "An ITEMS-PROGRAM of the items that compile the source PROGRAM, with its
-options. BACKEND and OPTIMIZE (:SIZE or :SPEED, as for COMPILE-PROGRAM)
-override the program's; OPTIMIZE is :SIZE when neither names one."
+options. BACKEND, OPTIMIZE (:SIZE or :SPEED) and FRAMES (:STATIC or :STACK), as
+for COMPILE-PROGRAM, override the program's; OPTIMIZE is :SIZE when neither
+names one, and FRAMES is the backend's when neither does."
   (let ((backend (or backend (items-program-backend program)))
-        (optimize (or optimize (items-program-optimize program) :size)))
+        (optimize (or optimize (items-program-optimize program) :size))
+        (frames (or frames (items-program-frames program))))
     (unless backend
       (%source-fail "no backend: name one in (:program (:backend NAME)) or pass one"))
     (let ((compiled (copy-items-program program)))
@@ -2062,17 +2210,17 @@ override the program's; OPTIMIZE is :SIZE when neither names one."
                               :positions (items-program-positions program)
                               :source (items-program-source program)
                               :file (items-program-file program)
-                              :optimize optimize)
+                              :optimize optimize :frames frames)
             (items-program-backend compiled) backend)
       compiled)))
 
-(defun compile-source-file (path &key backend optimize)
+(defun compile-source-file (path &key backend optimize frames)
   "Compile the source file PATH to an ITEMS-PROGRAM."
-  (compile-source (read-source path) :backend backend :optimize optimize))
+  (compile-source (read-source path) :backend backend :optimize optimize :frames frames))
 
-(defun assemble-source-file (path &key backend machine lexer origin memory optimize)
+(defun assemble-source-file (path &key backend machine lexer origin memory optimize frames)
   "Compile the source file PATH and assemble it as ASSEMBLE-ITEMS-FILE does."
-  (%assemble-items-program (compile-source-file path :backend backend :optimize optimize) path
+  (%assemble-items-program (compile-source-file path :backend backend :optimize optimize :frames frames) path
                            :backend backend :machine machine :lexer lexer :origin origin :memory memory))
 
 ;;; Writing

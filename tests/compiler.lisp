@@ -1567,3 +1567,122 @@ two |#
   (let ((body "(and (not x) (not y) w)"))
     (fiveam:is (not (%cl-fuses-p body 'callfoo-lang-abi)))
     (fiveam:is (%cl-fuses-p body 'cl-no-eq-variants-abi))))
+
+;;; #415: static frames
+
+(eval `(defbackend cl-static-abi (:extends callfoo-lang-abi)
+         (frame :static t)
+         (without-ops :get :set :alloc :free :push :pop
+                      ,@(loop for (name nil kinds) in (backend-descriptor-ops (find-backend 'callfoo-lang-abi))
+                              when (and (search "-SLOT" name) (not (some #'identity kinds)))
+                                collect (intern name :keyword)))))
+
+(defun %cl-static-items (source &optional (backend 'cl-static-abi))
+  (%cl-compile source backend))
+
+(defun %cl-static-fail (source)
+  (%cl-fail source 'cl-static-abi))
+
+(defparameter +cl-static-programs+
+  '(("(defun g (x) (+ x 1)) (defun main () (let ((a 5)) (g 1) a))" . 5)
+    ("(defun g (x) (+ x 1)) (defun f (n) (let ((k n)) (g 1) (+ k n))) (defun main () (f 4))" . 8)
+    ("(defun g (x) (* x 10)) (defun f (a b) (- a b)) (defun main () (f (g 1) (g 2)))" . 65526)
+    ("(defun f (a b) (- a b)) (defun g (x) (+ x 10)) (defun main () (f 100 (g 2)))" . 88)
+    ("(defun f (a b c) (- a (- b c))) (defun g (x) x) (defun main () (f (g 9) 4 (g 1)))" . 6)
+    ("(defun f (x) (+ x 1)) (defun main () (funcall (function f) 5))" . 6)
+    ("(defun f (x) (+ x 1)) (defun g (x) (f (f x))) (defun main () (+ (g 1) (g 10)))" . 15)
+    ("(defvar g 1) (defun f (x) (set g (+ g x))) (defun main () (f 2) (f 3) g)" . 6)
+    ("(defun main () (let ((x 9)) (asm (:clobbers a b) (:op :const (reg a) 3) (:op :const (reg b) (:var x)) (:op :poke b a)) x))" . 3))
+  "Programs that run the same on a static-frame backend, and the value main leaves in the accumulator.")
+
+(fiveam:test static-frames-run-programs
+  (loop for (source . expected) in +cl-static-programs+
+        do (let ((m (%cl-run source 'cl-static-abi)))
+             (fiveam:is (= expected (%cv-a m)) "~A" source)
+             (fiveam:is (= +cv-sp+ (sref m 'sp)) "~A" source))))
+
+(fiveam:test static-frames-run-every-stack-program-that-does-not-recurse
+  (loop for (source . expected) in +cl-programs+
+        unless (search ":op :set" source)
+          do (let ((detail (%cl-static-fail source)))
+               (if detail
+                   (fiveam:is (or (search "recurs" detail) (search "calls itself" detail) (search "computed target" detail))
+                              "~A: ~A" source detail)
+                   (fiveam:is (= expected (%cv-a (%cl-run source 'cl-static-abi))) "~A" source)))))
+
+(fiveam:test static-frames-need-no-stack-instructions
+  (let ((names (loop for item in (%cl-static-items "(defun f (a b) (let ((c (+ a b))) (* c (f2 c)))) (defun f2 (x) (+ x 1)) (defun main () (f 1 2))")
+                     when (and (consp item) (eq (first item) :op)) collect (string (second item)))))
+    (fiveam:is (notany (lambda (name) (member name '("GET" "SET" "PUSH" "POP" "ALLOC" "FREE") :test #'string-equal)) names))))
+
+(fiveam:test static-frames-share-the-addresses-of-functions-that-never-run-together
+  (flet ((reserved (source)
+           (count-if (lambda (item) (and (consp item) (eq (first item) :directive) (string-equal (second item) "res")))
+                     (%cl-static-items source))))
+    (fiveam:is (= 2 (reserved "(defun f (x) x) (defun g (y) y) (defun main () (+ (f 1) (g 2)))"))
+               "main's temporary, then one slot f and g share")
+    (fiveam:is (= 2 (reserved "(defun f (x) x) (defun g (y) (f y)) (defun main () (g 1))"))
+               "g calls f, so their slots are apart")))
+
+(fiveam:test static-frames-report-recursion-at-the-call
+  (dolist (case '(("(defun f (n) (if n (f (- n 1)) 0)) (defun main () (f 3))" "f calls itself")
+                  ("(defun a (n) (b n)) (defun b (n) (a n)) (defun main () (a 1))" "a calls b calls a is recursive")
+                  ("(defun g () (asm (call fnf))) (defun f () (g)) (defun main () (f))" "g calls f calls g is recursive")))
+    (let ((detail (%cl-static-fail (first case))))
+      (fiveam:is (and detail (search (second case) detail)) "~A: ~A" (first case) detail))))
+
+(fiveam:test static-frames-report-the-line-of-a-recursive-call
+  (let ((c (handler-case (compile-source (read-source-from-string (format nil "(defun f (n)~%  (f n))~%(defun main () (f 1))"))
+                                         :backend 'cl-static-abi)
+             (program-compile-error (c) c))))
+    (fiveam:is (typep c 'program-compile-error))
+    (fiveam:is (eql 2 (lasm-syntax-error-line c)))))
+
+(fiveam:test static-frames-reject-a-computed-funcall
+  (let ((detail (%cl-static-fail "(defarray tbl ((function f))) (defun f (x) x) (defun main () (funcall (aref tbl 0) 1))")))
+    (fiveam:is (search "computed target" detail))))
+
+(fiveam:test the-program-header-and-the-key-choose-the-frames
+  (flet ((items (header backend &optional frames)
+           (items-program-items
+            (compile-source (read-source-from-string (format nil "~A (defun f (x) (let ((y x)) y)) (defun main () (f 1))" header))
+                            :backend backend :frames frames))))
+    (fiveam:is (find-if (lambda (item) (and (consp item) (eq (first item) :function) (member :frame (third item))))
+                        (items "(:program (:frames static))" 'callfoo-lang-abi)))
+    (fiveam:is (null (find-if (lambda (item) (and (consp item) (eq (first item) :function) (member :frame (third item))))
+                              (items "(:program (:frames stack))" 'callfoo-lang-abi))))
+    (fiveam:is (null (find-if (lambda (item) (and (consp item) (eq (first item) :function) (member :frame (third item))))
+                              (items "(:program (:frames static))" 'callfoo-lang-abi :stack))))
+    (fiveam:signals program-compile-error (items "(:program (:frames stack))" 'cl-static-abi))
+    (fiveam:signals program-compile-error (items "" 'callfoo-lang-abi :heap))))
+
+(fiveam:test a-static-program-header-runs-on-a-stack-backend
+  (let* ((program (compile-source (read-source-from-string "(:program (:frames static)) (defun sq (n) (* n n)) (defun main () (+ (sq 3) (sq 4)))")
+                                  :backend 'callfoo-lang-abi))
+         (m (make-machine 'callfoo)))
+    (load-program m (assemble-items (items-program-items program) :backend 'callfoo-lang-abi))
+    (setf (sref m 'sp) +cv-sp+)
+    (run m :max-steps 100000)
+    (fiveam:is (= 25 (%cv-a m)))))
+
+(fiveam:test defbackend-checks-the-static-frame-option
+  (fiveam:is (typep (%backend-error-of '(defbackend bk-static-bad (:machine callfoo) (frame :static 1)))
+                    'backend-definition-error))
+  (fiveam:is (getf (backend-descriptor-frame (find-backend 'cl-static-abi)) :static))
+  (fiveam:is (not (getf (backend-descriptor-frame (find-backend 'callfoo-lang-abi)) :static))))
+
+(fiveam:test cli-frames-chooses-static-or-stack
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/static.lsp"))
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped" out)))
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "stack")
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped" out)))
+  (multiple-value-bind (status out err) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "static")
+    (declare (ignore out))
+    (fiveam:is (/= 0 status))
+    (fiveam:is (search "calls itself" err)))
+  (multiple-value-bind (status out err) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "heap")
+    (declare (ignore out))
+    (fiveam:is (/= 0 status))
+    (fiveam:is (search "--frames must be static or stack" err))))

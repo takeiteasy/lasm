@@ -52,6 +52,7 @@
 (defstruct items-program
   items backend machine origin memory lexer
   optimize ; :SIZE or :SPEED, from a .lsp header only
+  frames   ; :STATIC or :STACK, from a .lsp header only
   source   ; source text, for a program a reader with positions made
   file     ; its path, or NIL for a *-FROM-STRING reader
   positions) ; EQ hash table, form -> character offset in SOURCE
@@ -1273,6 +1274,13 @@ ASSEMBLE-ITEMS's."
                         (unless (member choice '("SIZE" "SPEED") :test #'equal)
                           (%program-fail ":optimize must be size or speed, got ~S" value))
                         (setf (items-program-optimize program) (intern choice :keyword))))
+                     ((equal name "FRAMES")
+                      (unless optimize
+                        (%program-fail ":frames is a .lsp program option"))
+                      (let ((choice (and (symbolp value) value (symbol-name value))))
+                        (unless (member choice '("STATIC" "STACK") :test #'equal)
+                          (%program-fail ":frames must be static or stack, got ~S" value))
+                        (setf (items-program-frames program) (intern choice :keyword))))
                      (t (%program-fail "unknown :program option ~S" key)))))
     program))
 

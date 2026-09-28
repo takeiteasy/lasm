@@ -18,6 +18,7 @@
 commands:
   compile FILE      compile a .lsp program to a .lasm items program
                     [-o OUT] [--backend NAME] [--optimize size|speed]
+                    [--frames static|stack]
   assemble FILE     assemble to a file        [-o OUT] [--format bin|hex] [--origin N]
                     [--bank N] [--region NAME] [--packing pad|bits]
   run [FILE]        assemble and run          [--max-steps N] [--cycles N]
@@ -42,6 +43,8 @@ options:
   --backend NAME         backend for a .lasm or .lsp program that names none
   --optimize size|speed  .lsp code generation: fewest instructions (default), or
                          fewest run-time memory accesses; overrides the header
+  --frames static|stack  .lsp locals: at fixed addresses (no recursion), or on the
+                         stack; overrides the header and the backend
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
@@ -62,7 +65,7 @@ options:
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
     ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
-    ("--backend" . :backend) ("--optimize" . :optimize)
+    ("--backend" . :backend) ("--optimize" . :optimize) ("--frames" . :frames)
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)
     ("--save-snapshot" . :save-snapshot) ("--load-snapshot" . :load-snapshot)
@@ -187,12 +190,19 @@ the calling image."
           ((member name '("size" "speed") :test #'string-equal) (intern (string-upcase name) :keyword))
           (t (%usage-error "--optimize must be size or speed, got ~A" name)))))
 
+(defun %cli-frames (options)
+  (let ((name (getf options :frames)))
+    (cond ((null name) nil)
+          ((member name '("static" "stack") :test #'string-equal) (intern (string-upcase name) :keyword))
+          (t (%usage-error "--frames must be static or stack, got ~A" name)))))
+
 (defun %cli-assemble (file machine lexer options)
   (let ((origin (%cli-option-integer options :origin "--origin")))
     (cond ((string-equal "lsp" (pathname-type file))
            (assemble-source-file file :machine machine :lexer lexer :memory (%cli-memory options)
                                       :origin origin :backend (getf options :backend)
-                                      :optimize (%cli-optimize options)))
+                                      :optimize (%cli-optimize options)
+                                      :frames (%cli-frames options)))
           ((string-equal "lasm" (pathname-type file))
            (assemble-items-file file :machine machine :lexer lexer :memory (%cli-memory options)
                                      :origin origin :backend (getf options :backend)))
@@ -202,7 +212,8 @@ the calling image."
 (defun %cli-command-compile (file machine lexer options out)
   (declare (ignore machine lexer))
   (let ((program (compile-source-file file :backend (getf options :backend)
-                                            :optimize (%cli-optimize options)))
+                                            :optimize (%cli-optimize options)
+                                            :frames (%cli-frames options)))
         (path (or (getf options :output)
                   (namestring (make-pathname :type "lasm" :defaults file)))))
     (with-open-file (stream path :direction :output :if-exists :supersede)

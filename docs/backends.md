@@ -75,6 +75,7 @@ calls from them; see [Calling conventions](conventions.md).
 | `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
 | `:offsets` | `:slots`, `:cells`: the unit of the distance handed to `:slot`/`:stack-slot` | `:slots` |
 | `:counts` | `:slots`, `:cells`: the unit of the count handed to `:alloc`, `:free` and `:return-pop` | `:slots` |
+| `:static` | `t`: a [`.lsp`](static-frames.md) program keeps locals at fixed addresses, and needs no stack slot operations | `nil` |
 
 [`:cells`](conventions.md#slots-and-cells) multiplies by the backend's word size in cells.
 

@@ -29,8 +29,8 @@ See [`tests/fixtures/cli/fact.lsp`](../tests/fixtures/cli/fact.lsp), and the
 ## Program
 
 A `.lsp` file holds top-level forms, in any order. A leading
-`(:program (OPTION...))` takes the options of a [`.lasm` file](items.md#lasm-files)
-and [`:optimize`](#optimizing).
+`(:program (OPTION...))` takes the options of a [`.lasm` file](items.md#lasm-files),
+[`:optimize`](#optimizing) and [`:frames`](static-frames.md#choosing).
 
 | Form | Is |
 | --- | --- |
@@ -380,6 +380,8 @@ only its destination register: nothing else may change while one of these
 holds a value across other code. It also needs `(registers :operand KIND)`
 and `(frame :slot KIND)`, and defines these [operations](backends.md#language-operations)
 for the forms a program uses. A missing one is a compile error naming the form.
+With [static frames](static-frames.md) it needs no `:get`, `:set`, `:alloc`,
+`:free`, `:push` or `:pop`.
 
 | Operation | Does |
 | --- | --- |
@@ -448,7 +450,8 @@ its cells (#368).
 ## Names
 
 A function `add-one` is the label `fnaddz2dzone`; a global is `gv...`, an array
-`ar...`, a string `st...`, and control flow uses `lbl1`, `lbl2`. Every name is
+`ar...`, a string `st...`, a [static frame](static-frames.md) word `sf...x0`,
+`sf...x1`, and control flow uses `lbl1`, `lbl2`. Every name is
 alphanumeric, so it cannot be a register alias or mnemonic. Two names that make
 the same label are a compile error.
 
@@ -473,11 +476,11 @@ packages, are errors.
 
 | Function | Does |
 | --- | --- |
-| `(compile-program forms &key backend optimize)` | Returns the items. `optimize` is [`:size` or `:speed`](#optimizing). |
+| `(compile-program forms &key backend optimize frames)` | Returns the items. `optimize` is [`:size` or `:speed`](#optimizing); `frames` is [`:static` or `:stack`](static-frames.md#choosing). |
 | `(read-source path)` `(read-source-from-string text)` | Returns an `items-program` whose items are the source forms. |
-| `(compile-source program &key backend optimize)` | Returns an `items-program` of the compiled items; `backend` and `optimize` override the program's. |
-| `(compile-source-file path &key backend optimize)` | Reads and compiles. |
-| `(assemble-source-file path &key backend machine lexer origin memory optimize)` | Compiles and assembles as `assemble-items-file` does. |
+| `(compile-source program &key backend optimize frames)` | Returns an `items-program` of the compiled items; `backend`, `optimize` and `frames` override the program's. |
+| `(compile-source-file path &key backend optimize frames)` | Reads and compiles. |
+| `(assemble-source-file path &key backend machine lexer origin memory optimize frames)` | Compiles and assembles as `assemble-items-file` does. |
 | `(write-items-program program stream)` | Writes a `.lasm` file `read-items` reads back. |
 
 The [command line](cli.md#source-programs) takes `.lsp` files.
