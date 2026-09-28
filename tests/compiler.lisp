@@ -644,6 +644,30 @@
       (fiveam:is (= 37 (%cv-a (%cl-run +cl-two-sites+ name machine :speed))) "~A" name)
       (fiveam:is (= 37 (%cv-a (%cl-run +cl-two-sites+ name machine :size))) "~A" name))))
 
+;;; #400: a site's weight halves in an if arm and in a later and/or operand
+
+(defparameter +cl-arm-sites+
+  '(("(defvar g 1) (defun f (n) n)
+      (defun main () (if g (+ (f 1) (f 2)) (+ (f 3) (f 4))))" 2 nil 3)
+    ("(defvar g 1) (defun f (n) n)
+      (defun main () (+ (f 1) (f 2)) (if g (+ (f 3) (f 4)) 0))" 0 ("C") 7)
+    ("(defvar g 1) (defun f (n) n)
+      (defun main () (and g (+ (f 1) (f 2)) (+ (f 3) (f 4))))" 2 nil 7))
+  "Source, the pushes :speed leaves, the registers it saves, and main's value.")
+
+(fiveam:test speed-weights-sites-by-how-often-they-run
+  (loop for (source pushes saved) in +cl-arm-sites+
+        do (let ((items (%cl-compile source 'callfoo-lang-abi :speed)))
+             (fiveam:is (= pushes (%cl-push-count items)) "~A" source)
+             (fiveam:is (equal saved (%cl-saved items)) "~A" source))))
+
+(fiveam:test weighted-sites-run-to-the-same-values
+  (dolist (backend +cl-backends+)
+    (destructuring-bind (name machine) backend
+      (loop for (source nil nil value) in +cl-arm-sites+
+            do (dolist (optimize '(:size :speed))
+                 (fiveam:is (= value (%cv-a (%cl-run source name machine optimize))) "~A ~A" name optimize))))))
+
 (fiveam:test optimize-is-size-or-speed
   (fiveam:is (search ":optimize" (or (handler-case (%cl-compile "(defun main () 1)" 'callfoo-lang-abi :fast)
                                        (program-compile-error (c) (program-compile-error-detail c)))
@@ -879,6 +903,39 @@
       (fiveam:is (eq :call (first (first (items-program-items compiled))))))
     (fiveam:signals program-compile-error
       (compile-source (read-source-from-string "(defun main () 1)")))))
+
+(defparameter +cl-header-speed+
+  "(:program (:backend callfoo-lang-abi :optimize speed))
+   (defun f (n) n)
+   (defun main () (let ((a (+ (f 1) (f 2))) (b (+ (f 3) (f 4)))) (+ (* a 10) b)))")
+
+(fiveam:test a-source-header-can-name-its-optimize
+  (let ((program (read-source-from-string +cl-header-speed+)))
+    (fiveam:is (eq :speed (items-program-optimize program)))
+    (fiveam:is (zerop (%cl-push-count (items-program-items (compile-source program)))))
+    (fiveam:is (= 2 (%cl-push-count (items-program-items (compile-source program :optimize :size)))))
+    (fiveam:is (zerop (%cl-push-count (items-program-items (compile-source program :optimize :speed))))))
+  (fiveam:is (eq :speed (items-program-optimize
+                         (read-source-from-string "(:program (:optimize :speed)) (defun main () 1)"))))
+  (fiveam:is (null (items-program-optimize (read-source-from-string "(defun main () 1)")))))
+
+(fiveam:test a-header-optimize-must-be-size-or-speed-in-a-source-file
+  (fiveam:signals items-malformed
+    (read-source-from-string "(:program (:optimize fast)) (defun main () 1)"))
+  (fiveam:signals items-malformed
+    (read-source-from-string "(:program (:optimize 3)) (defun main () 1)"))
+  (fiveam:signals items-malformed
+    (read-items-from-string "(:program (:optimize speed))")))
+
+(fiveam:test cli-optimize-overrides-the-header
+  (let ((path (%cl-source-file +cl-header-speed+)))
+    (unwind-protect
+         (uiop:with-temporary-file (:pathname out :type "lasm")
+           (fiveam:is (= 0 (%cl-cli "compile" path "-o" (namestring out))))
+           (fiveam:is (zerop (%cl-push-count (items-program-items (read-items out)))))
+           (fiveam:is (= 0 (%cl-cli "compile" path "--optimize" "size" "-o" (namestring out))))
+           (fiveam:is (= 2 (%cl-push-count (items-program-items (read-items out))))))
+      (%cl-delete path))))
 
 ;;; Errors
 

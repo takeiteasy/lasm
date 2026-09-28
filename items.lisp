@@ -51,6 +51,7 @@
 
 (defstruct items-program
   items backend machine origin memory lexer
+  optimize ; :SIZE or :SPEED, from a .lsp header only (#399)
   source   ; source text, for a program a reader with positions made
   file     ; its path, or NIL for a *-FROM-STRING reader
   positions) ; EQ hash table, form -> character offset in SOURCE, for #362, #372
@@ -1248,7 +1249,7 @@ ASSEMBLE-ITEMS's."
 (defun %program-fail (control &rest args)
   (%items-fail 'items-malformed nil "~?" control args))
 
-(defun %parse-program (form)
+(defun %parse-program (form &key optimize)
   (unless (and (consp form) (listp (cdr form)) (keywordp (first form)) (string= (symbol-name (first form)) "PROGRAM")
                (listp (second form)))
     (%program-fail "expected (:program (option...) item...)"))
@@ -1265,6 +1266,13 @@ ASSEMBLE-ITEMS's."
                       (unless (typep value '(integer 0))
                         (%program-fail ":origin must be a non-negative integer, got ~S" value))
                       (setf (items-program-origin program) value))
+                     ((equal name "OPTIMIZE")
+                      (unless optimize
+                        (%program-fail ":optimize is a .lsp program option"))
+                      (let ((choice (and (symbolp value) value (symbol-name value))))
+                        (unless (member choice '("SIZE" "SPEED") :test #'equal)
+                          (%program-fail ":optimize must be size or speed, got ~S" value))
+                        (setf (items-program-optimize program) (intern choice :keyword))))
                      (t (%program-fail "unknown :program option ~S" key)))))
     program))
 

@@ -56,7 +56,8 @@
 ;;;; loop, or when the function already saves that register; otherwise the
 ;;;; stack costs less than the prologue/epilogue pair. #394: with :optimize
 ;;;; :speed, a first compile counts the call sites per register and a register
-;;;; two or more claim (a loop site counts twice) is held outside loops too.
+;;;; claimed by more than one run is held outside loops too. #400: an if arm
+;;;; and each and/or operand after the first halve a site; a loop site counts 2.
 ;;;; #377: (asm (:clobbers REG...) ITEM...) declares the registers the asm
 ;;;; writes, so an operand holding another register may reach it. #393: a
 ;;;; declared :callee-saved one is added to the function's :save.
@@ -106,6 +107,7 @@
 (defvar *cc-optimize* :size "The compile-program :optimize option: :SIZE, or :SPEED to share a preserved register between call sites (#394).")
 (defvar *cc-shared* nil "Upcased names from *CC-PRESERVED* that two or more call sites of the function being compiled claim, so a site outside a loop may claim them too (#394).")
 (defvar *cc-counting* nil "NIL, or during the counting pass an EQUAL hash table, upcased register name -> the call sites that would claim it (#394).")
+(defvar *cc-site-weight* 1 "How often, relative to the function's entry, the code being compiled runs: halved by each if arm and each and/or operand after the first (#400).")
 (defvar *cc-functions* nil "Upcased name -> (LABEL . ARITY).")
 (defvar *cc-globals* nil "Upcased name -> label symbol.")
 (defvar *cc-constants* nil "Upcased name -> integer.")
@@ -327,7 +329,7 @@ calls a function the pick is a *CC-PRESERVED* register, recorded in
 *CC-SAVES* for the function's prologue and epilogue to save and restore: one
 already saved, else a new one only inside a loop (#376) or when it is in
 *CC-SHARED* (#394). The counting pass (*CC-COUNTING*) takes the first free one
-and counts the site, twice inside a loop. Otherwise the pick is a
+and counts the site at *CC-SITE-WEIGHT*, or 2 inside a loop (#400). Otherwise the pick is a
 *CC-VOLATILE* register, since a call is the only thing a compiled operand
 can do that a :caller-saved register does not survive."
   (multiple-value-bind (clobbers call) (%cc-hazards form)
@@ -346,7 +348,8 @@ can do that a :caller-saved register does not survive."
             (when register
               (pushnew register *cc-saves* :test #'string=)
               (when *cc-counting*
-                (incf (gethash register *cc-counting* 0) (if (plusp *cc-loop-depth*) 2 1))))
+                ;; TODO: a loop site counts a flat 2; multiply by a loop factor (#401).
+                (incf (gethash register *cc-counting* 0) (if (plusp *cc-loop-depth*) 2 *cc-site-weight*))))
             register)
           (first (usable *cc-volatile*))))))
 
@@ -573,11 +576,13 @@ and, or and not of conditions jump between their operands and produce no value."
            (%cc-branch (first args) (not sense) target))
           ((and (member head '("AND" "OR") :test #'equal) args)
            (let* ((stop (if (equal head "AND") nil t))
-                  (skip (unless (eq sense stop) (%cc-new-label))))
+                  (skip (unless (eq sense stop) (%cc-new-label)))
+                  (*cc-site-weight* *cc-site-weight*))
              (loop for (arg . more) on args
                    do (if more
                           (%cc-branch arg stop (if (eq sense stop) target skip))
-                          (%cc-branch arg sense target)))
+                          (%cc-branch arg sense target))
+                      (setf *cc-site-weight* (/ *cc-site-weight* 2)))
              (when skip (%cc-emit (list :label skip)))))
           (branch
            (let* ((*cc-form* form)
@@ -592,10 +597,11 @@ and, or and not of conditions jump between their operands and produce no value."
   (%cc-check-length form 3 4)
   (let ((else (%cc-new-label)) (end (%cc-new-label)))
     (%cc-branch (second form) nil else)
-    (%cc-expr (third form))
-    (%cc-op :jump end)
-    (%cc-emit (list :label else))
-    (if (fourth form) (%cc-expr (fourth form)) (%cc-const 0))
+    (let ((*cc-site-weight* (/ *cc-site-weight* 2)))
+      (%cc-expr (third form))
+      (%cc-op :jump end)
+      (%cc-emit (list :label else))
+      (if (fourth form) (%cc-expr (fourth form)) (%cc-const 0)))
     (%cc-emit (list :label end))))
 
 (defun %cc-while (form)
@@ -688,7 +694,8 @@ comparison, to a landing that loads the result."
       (%cc-const (if sense 0 1))
       (let* ((end (%cc-new-label))
              (fuse (%cc-fuses-p (rest form) sense))
-             (landing (and fuse (%cc-new-label))))
+             (landing (and fuse (%cc-new-label)))
+             (*cc-site-weight* *cc-site-weight*))
         (loop for (arg . more) on (rest form)
               do (cond ((not more) (%cc-expr arg))
                        ((and fuse (plusp (%cc-fused-saving arg sense)))
@@ -696,7 +703,8 @@ comparison, to a landing that loads the result."
                        (t (%cc-expr arg)
                           (if sense
                               (%cc-branch-nonzero end)
-                              (%cc-op :branch-zero *cc-acc* end)))))
+                              (%cc-op :branch-zero *cc-acc* end))))
+                 (setf *cc-site-weight* (/ *cc-site-weight* 2)))
         (when fuse
           (%cc-op :jump end)
           (%cc-emit (list :label landing))
@@ -1553,7 +1561,7 @@ names must stay literal for the rest of the compiler to resolve."
 
 (defun %cc-function-items (name params body label)
   "The (:function LABEL ...) item for BODY, already macro-expanded."
-  (let* ((*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-saves* '())
+  (let* ((*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-site-weight* 1) (*cc-saves* '())
          (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                           (if (eq args :stack) 0 (length args)))))
     (loop for param in params
@@ -1577,17 +1585,17 @@ names must stay literal for the rest of the compiler to resolve."
                                                         (reverse *cc-saves*)))))
            (nreverse (cl:push (list :return) *cc-out*)))))
 
-;; TODO: every site counts once, a loop site twice; weight by branch and loop
-;; nesting instead (#400).
 (defun %cc-shared-registers (name params body label)
-  "The upcased names of the preserved registers two or more call sites of the
-function would claim (#394), counted by compiling it once and discarding the items."
+  "The upcased names of the preserved registers whose call sites, weighted by
+how often they run (#400), total more than one run: the save and restore cost
+a push and a pop a call, and each site saves one (#394). Counted by compiling
+the function once and discarding the items."
   (let ((*cc-counting* (make-hash-table :test 'equal))
         (*cc-labels* *cc-labels*)
         (*cc-indirect-calls* *cc-indirect-calls*))
     (%cc-function-items name params body label)
     (loop for register being the hash-keys of *cc-counting* using (hash-value sites)
-          when (>= sites 2) collect register)))
+          when (> sites 1) collect register)))
 
 (defun %cc-function (definition)
   (destructuring-bind (name params body label) definition
@@ -1816,7 +1824,7 @@ across calls in a preserved register shared by two or more sites (#394)."
   "The ITEMS-PROGRAM whose items are FORMS, less a leading (:program (option...))."
   (let ((head (first forms)))
     (if (and (consp head) (%keyword-named-p (first head) "PROGRAM"))
-        (let ((program (%parse-program head)))
+        (let ((program (%parse-program head :optimize t)))
           (setf (items-program-items program) (rest forms))
           program)
         (make-items-program :items forms))))
@@ -1851,10 +1859,12 @@ optional leading (:program (option...)) as in a .lasm file."
                 (items-program-positions program) positions)
           program)))))
 
-(defun compile-source (program &key backend (optimize :size))
+(defun compile-source (program &key backend optimize)
   "An ITEMS-PROGRAM of the items that compile the source PROGRAM, with its
-options. BACKEND overrides the program's; OPTIMIZE is as for COMPILE-PROGRAM."
-  (let ((backend (or backend (items-program-backend program))))
+options. BACKEND and OPTIMIZE (:SIZE or :SPEED, as for COMPILE-PROGRAM)
+override the program's; OPTIMIZE is :SIZE when neither names one."
+  (let ((backend (or backend (items-program-backend program)))
+        (optimize (or optimize (items-program-optimize program) :size)))
     (unless backend
       (%source-fail "no backend: name one in (:program (:backend NAME)) or pass one"))
     (let ((compiled (copy-items-program program)))
@@ -1867,11 +1877,11 @@ options. BACKEND overrides the program's; OPTIMIZE is as for COMPILE-PROGRAM."
             (items-program-backend compiled) backend)
       compiled)))
 
-(defun compile-source-file (path &key backend (optimize :size))
+(defun compile-source-file (path &key backend optimize)
   "Compile the source file PATH to an ITEMS-PROGRAM."
   (compile-source (read-source path) :backend backend :optimize optimize))
 
-(defun assemble-source-file (path &key backend machine lexer origin memory (optimize :size))
+(defun assemble-source-file (path &key backend machine lexer origin memory optimize)
   "Compile the source file PATH and assemble it as ASSEMBLE-ITEMS-FILE does."
   (%assemble-items-program (compile-source-file path :backend backend :optimize optimize) path
                            :backend backend :machine machine :lexer lexer :origin origin :memory memory))

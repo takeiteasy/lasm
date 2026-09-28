@@ -41,7 +41,7 @@ options:
   --lexer NAME           lexer to use when FILE defines several
   --backend NAME         backend for a .lasm or .lsp program that names none
   --optimize size|speed  .lsp code generation: fewest instructions (default), or
-                         fewest run-time memory accesses
+                         fewest run-time memory accesses; overrides the header
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
@@ -183,7 +183,7 @@ the calling image."
 
 (defun %cli-optimize (options)
   (let ((name (getf options :optimize)))
-    (cond ((null name) :size)
+    (cond ((null name) nil)
           ((member name '("size" "speed") :test #'string-equal) (intern (string-upcase name) :keyword))
           (t (%usage-error "--optimize must be size or speed, got ~A" name)))))
 

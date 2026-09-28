@@ -161,6 +161,7 @@ A `.lasm` file holds one `(:program (OPTION...) ITEM...)` form.
 | `:origin` | Start address. |
 | `:memory` | Memory element. |
 | `:lexer` | Lexer name. |
+| `:optimize` | `size` or `speed`; a [`.lsp` header](language.md#optimizing) only. |
 
 The file is untrusted. It is read with the same restricted reader as
 [snapshots](snapshots.md#reading): nothing is evaluated, symbols are never

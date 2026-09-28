@@ -28,7 +28,8 @@ See [`examples/cli/fact.lsp`](../examples/cli/fact.lsp).
 ## Program
 
 A `.lsp` file holds top-level forms, in any order. A leading
-`(:program (OPTION...))` takes the options of a [`.lasm` file](items.md#lasm-files).
+`(:program (OPTION...))` takes the options of a [`.lasm` file](items.md#lasm-files)
+and [`:optimize`](#optimizing).
 
 | Form | Is |
 | --- | --- |
@@ -330,18 +331,27 @@ routine lists every register the routine changes.
 
 `:optimize :size` (the default) emits the fewest instructions. `:optimize
 :speed` also holds an operand across calls in a `:callee-saved` register that
-two or more call sites share, which costs two instructions in the function's
-prologue and epilogue and saves memory accesses at run time.[^speed]
+call sites share when they run more than once a call, which costs two
+instructions in the function's prologue and epilogue and saves memory accesses
+at run time.[^speed] A program names it in its header; the `optimize` key or
+`--optimize` overrides it.
+
+```lisp
+(:program (:backend callfoo-lang-abi :optimize speed))
+```
 
 | `:optimize` | Holds an operand across calls in |
 | --- | --- |
 | `:size` | a saved register inside a `while`, else the stack |
-| `:speed` | a saved register inside a `while` or shared by two or more sites, else the stack |
+| `:speed` | a saved register inside a `while`, or shared by sites that together run more than once a call, else the stack |
 
 ```lisp
 (defun main ()
   (+ (f 1) (f 2))                    ; :speed holds (f 1) in c
   (+ (f 3) (f 4)))                   ; and so does this one
+
+(defun pick (x)
+  (if x (+ (f 1) (f 2)) (+ (f 3) (f 4))))   ; one site runs per call: stack
 ```
 
 ```sh
@@ -454,7 +464,7 @@ read without evaluation, as [items files](items.md#lasm-files) are, so `'`,
 | --- | --- |
 | `(compile-program forms &key backend optimize)` | Returns the items. `optimize` is [`:size` or `:speed`](#optimizing). |
 | `(read-source path)` `(read-source-from-string text)` | Returns an `items-program` whose items are the source forms. |
-| `(compile-source program &key backend optimize)` | Returns an `items-program` of the compiled items; `backend` overrides the program's. |
+| `(compile-source program &key backend optimize)` | Returns an `items-program` of the compiled items; `backend` and `optimize` override the program's. |
 | `(compile-source-file path &key backend optimize)` | Reads and compiles. |
 | `(assemble-source-file path &key backend machine lexer origin memory optimize)` | Compiles and assembles as `assemble-items-file` does. |
 | `(write-items-program program stream)` | Writes a `.lasm` file `read-items` reads back. |
@@ -465,8 +475,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| `:optimize :speed` counts every call site once, a loop site twice, however rarely it runs. | [#400](https://todo.sr.ht/~takeiteasy/lasm/400) |
-| A program cannot name its `:optimize` in a `(:program ...)` header. | [#399](https://todo.sr.ht/~takeiteasy/lasm/399) |
+| `:optimize :speed` counts a site in a `while` as 2, however deep the loops nest or rarely its `if` arm runs. | [#401](https://todo.sr.ht/~takeiteasy/lasm/401) |
 | `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
 | A `:packed` string is emitted as packed `.cell` integers, not text, in a compiled `.lasm` file. | [#398](https://todo.sr.ht/~takeiteasy/lasm/398) |
 
@@ -483,7 +492,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   `:callee-saved` one, added to the function's `:save`, when it calls a
   function inside a `while` or the function already saves that register,
   since a first save costs a push and a pop that the stack would not (#376),
-  or, with [`:optimize :speed`](#optimizing), when two or more sites share it;
+  or, with [`:optimize :speed`](#optimizing), when sites that together run more than once a call share it;
   the stack when the pool has none free. An `(asm ...)` in the right operand
   rules out the registers it declares in `:clobbers`, or every register when
   it declares none (#377).
@@ -530,10 +539,11 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
   `b`'s value.
 
 [^speed]: Each function compiles twice. The first pass counts the call sites
-  that would claim each `:callee-saved` register, a site inside a `while`
-  counting twice; the second lets a site outside a loop claim a register
-  counted two or more times. A site in a rarely taken `if` branch counts as
-  much as one on the main path ([limitation](#limitations)).
+  that would claim each `:callee-saved` register. A site counts 1, halved by
+  each enclosing `if` arm and by each `and`/`or` operand after the first, or 2
+  inside a `while`. The second pass lets a site outside a loop claim a register
+  counted more than 1: each run saves a push and a pop, and saving the register
+  costs one pair per call.
 
 [^hygiene]: A mark is a number kept on a fresh uninterned copy of each name
   a quasiquote template writes; a local variable is looked up by name plus
