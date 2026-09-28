@@ -23,7 +23,8 @@ lasm run fact.lsp -m callfoo.lisp     # a is 120 when it halts
 lasm compile fact.lsp -m callfoo.lisp # writes fact.lasm
 ```
 
-See [`tests/fixtures/cli/fact.lsp`](../tests/fixtures/cli/fact.lsp).
+See [`tests/fixtures/cli/fact.lsp`](../tests/fixtures/cli/fact.lsp), and the
+[CHIP-8 example](examples.md#chip-8) for a larger program.
 
 ## Program
 
@@ -192,6 +193,9 @@ with 16-bit cells, `"abc"` is two cells and `(aref-byte S 1)` is `98`.
 `S` times the characters a cell holds (`S` itself for 8-bit cells). A machine
 whose cell holds one character and whose word is one cell needs neither: there
 `aref-byte` is `aref`. A packed string's `aref` returns its raw cells.
+
+`(aref-byte A I)`/`(aset-byte A I V)` also take a `defarray`, numbering the bytes of its
+cells the same way.
 
 ## Macros
 

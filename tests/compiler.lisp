@@ -986,6 +986,12 @@
         (fiveam:is (= expected (regref m 'r 0)) "widefoo: ~A" source)
         (fiveam:is (= +cv-sp+ (sref m 'sp)))))))
 
+(fiveam:test byte-access-reaches-the-bytes-of-a-defarray
+  (let ((source "(defarray a 2)
+                 (defun main () (aset-byte a 3 200) (aset-byte a 0 5) (+ (aref-byte a 3) (aref a 0)))"))
+    (%cl-each-backend (backend machine)
+      (fiveam:is (= 205 (%cv-a (%cl-run source backend machine))) "~A" backend))))
+
 (fiveam:test a-packed-string-stores-several-characters-a-cell
   (fiveam:is (= 25185 (%cv-a (%cl-run "(defstring s \"ab\" :packed) (defun main () (aref s 0))" 'callfoo-lang-abi))))
   (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "packz")))

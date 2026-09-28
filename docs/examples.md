@@ -5,13 +5,14 @@ Each example is an ASDF system depending on `:lasm`, with its own test system.
 | System | Front end | Shows |
 | --- | --- | --- |
 | [`:dcpu16`](#dcpu-16) | Lisp DSL | A complete DCPU-16 v1.7 machine: operand modes, word-encoded instructions, interrupts and devices. |
+| [`:chip8`](#chip-8) | `.lsp` language | A CHIP-8 interpreter written in the [source language](language.md), compiled for a small host machine. |
 
 ## Loading
 
 ASDF must find the system. Any one of these works, from the repository root:
 
 ```lisp
-(asdf:load-asd #p"examples/dcpu16/dcpu16.asd")
+(asdf:load-asd #p"examples/dcpu16/dcpu16.asd")   ; likewise chip8/chip8.asd
 
 (cl:push #p"examples/dcpu16/" asdf:*central-registry*)
 
@@ -68,6 +69,40 @@ case-insensitive; a program halts by jumping to itself.
 `run-dcpu16` steps a machine until an instruction leaves PC unchanged.
 `key-down` and `key-up` feed the keyboard.
 
+## CHIP-8
+
+The spec is the block comment at the top of `examples/chip8/chip8.lsp`.
+
+```lisp
+(asdf:load-system :chip8)
+
+(let ((machine (chip8:load-chip8 #(#x60 #x05    ; V0 = 5
+                                   #x61 #x07    ; V1 = 7
+                                   #x80 #x14    ; V0 += V1
+                                   #x12 #x06))))  ; jump to itself: halt
+  (chip8:run-chip8 machine)
+  (chip8:v-reg machine 0))                       ; 12
+```
+
+| File | Holds |
+| --- | --- |
+| `package.lisp` | A package that only `use`s `#:lasm`. |
+| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 16-bit registers, a stack, byte access, and the [operations the language needs](language.md#backend-requirements). |
+| `chip8.lsp` | The interpreter: [`defarray`](language.md#arrays-strings-and-byte-access) memory and display, [macros](language.md#macros), and a table of [function values](language.md#function-values) indexed by opcode. |
+| `chip8.lisp` | Compiles `chip8.lsp` with `assemble-source-file`, loads a ROM and reads the state back. |
+| `test.lisp` | A FiveAM suite: a small ROM for each group of instructions, and one that asserts registers, memory and display together. |
+
+`run-chip8` stops when the ROM jumps to itself or after `:max-steps` host
+instructions, and returns `:halted` or `:running`; any other stop is an error. A ROM waiting on `FX0A`
+stays `:running`; press a key with `key-down` and call it again to resume.
+
+| Reader | Returns |
+| --- | --- |
+| `(v-reg m n)`, `(i-reg m)`, `(chip8-pc m)` | Registers. |
+| `(delay-timer m)`, `(sound-timer m)` | Timers. |
+| `(memory-byte m address)` | A byte of CHIP-8 memory. |
+| `(pixel m x y)`, `(display-rows m)` | The 64x32 display. |
+
 ## Limitations
 
 | Limitation | Ticket |
@@ -76,3 +111,5 @@ case-insensitive; a program halts by jumping to itself.
 | `[5 + b]` assembles as the address `[6]`; write the register first. | [#411](https://todo.sr.ht/~takeiteasy/lasm/411) |
 | `0xffff` takes a next word; `-1` packs into the instruction. | [#412](https://todo.sr.ht/~takeiteasy/lasm/412) |
 | IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |
+| The CHIP-8 host has 16-bit registers: a `.lsp` value is one register wide, and a 16-bit value cannot be split across two registers. | [#416](https://todo.sr.ht/~takeiteasy/lasm/416), [#418](https://todo.sr.ht/~takeiteasy/lasm/418) |
+| A machine with no `[sp + n]` addressing or with a single pointer register cannot be a `.lsp` target. | [#415](https://todo.sr.ht/~takeiteasy/lasm/415), [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |
