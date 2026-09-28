@@ -724,6 +724,84 @@
                      (assembly-cells (assemble ".emit 3, 1, 2
 .emit 3, \"a\", 0" :machine 'cl-w3-machine)))))
 
+;;; #379: packed strings and (aref-byte S I)/(aset-byte S I V). callfoo's cells are
+;;; 16 bits (two characters), widefoo's 8 (one, over a two-cell word).
+
+(defparameter +cl-packed-programs+
+  '(("(defstring s \"abc\" :packed) (defun main () (+ (aref-byte s 0) (+ (aref-byte s 1) (aref-byte s 2))))" . 294)
+    ("(defstring s \"abc\" :packed) (defun main () (aref-byte s 3))" . 0)
+    ("(defstring s \"ab\" :packed) (defun main () (+ (aref-byte s 2) (aref-byte s 3)))" . 0)
+    ("(defstring s \"hello\" :packed)
+      (defun main () (let ((i 0)) (while (aref-byte s i) (set i (+ i 1))) i))" . 5)
+    ("(defstring s \"ab\" :packed)
+      (defun main () (aset-byte s 1 65) (+ (aref-byte s 0) (* 256 (aref-byte s 1))))" . 16737)
+    ("(defstring s \"ab\" :packed) (defstring t2 \"cd\" :packed)
+      (defun main () (+ (aref-byte s 1) (aref-byte t2 0)))" . 197)))
+
+(fiveam:test a-packed-string-reads-and-writes-a-character-a-byte
+  (dolist (case +cl-packed-programs+)
+    (destructuring-bind (source . expected) case
+      (%cl-each-backend (backend machine)
+        (fiveam:is (= expected (%cv-a (%cl-run source backend machine))) "~A: ~A" backend source))
+      (let ((m (%cl-run source 'widefoo-lang-abi 'widefoo)))
+        (fiveam:is (= expected (regref m 'r 0)) "widefoo: ~A" source)
+        (fiveam:is (= +cv-sp+ (sref m 'sp)))))))
+
+(fiveam:test a-packed-string-stores-several-characters-a-cell
+  (fiveam:is (= 25185 (%cv-a (%cl-run "(defstring s \"ab\" :packed) (defun main () (aref s 0))" 'callfoo-lang-abi))))
+  (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "cell")))
+                            (%cl-compile "(defstring s \"a\" :packed) (defstring t2 \"bc\" :packed) (defun main () 1)"
+                                         'callfoo-lang-abi)))
+             "each packed string is one .cell directive"))
+
+(fiveam:test a-packed-string-lays-out-by-the-memorys-endianness
+  (eval '(defmachine cl-be-machine (register pc :width 16) (register r :width 16 :names (a b))
+           (memory ram :width 16 :addr-width 16 :endian :big)))
+  (eval '(defmachine cl-b8-machine (register pc :width 16) (register r :width 8 :names (a b))
+           (memory ram :width 8 :addr-width 16)))
+  (eval '(defmode cl-lay-reg (expr :register r)))
+  (dolist (name '(cl-be cl-b8))
+    (eval `(defbackend ,(intern (format nil "~A-ABI" name)) (:machine ,(intern (format nil "~A-MACHINE" name)))
+             (registers :return (a) :scratch (a b) :operand reg)
+             (operands (reg cl-lay-reg)))))
+  (flet ((pack (backend string)
+           (let ((*cc-backend* (find-backend backend))) (%cc-pack-string string nil))))
+    (fiveam:is (equal '(#x6162 #x6300) (pack 'cl-be-abi "abc")) "big-endian: the first character in the high bits")
+    (fiveam:is (equal '(#x6261 #x0063) (pack 'callfoo-lang-abi "abc")) "little-endian: the first in the low bits")
+    (fiveam:is (equal '(#x6261 0) (pack 'callfoo-lang-abi "ab")) "an even length gets a whole terminator cell")
+    (fiveam:is (equal '(97 98 99 0) (pack 'cl-b8-abi "abc")) "an 8-bit cell holds one character"))
+  (fiveam:is (= 1 (backend-cell-bytes 'cl-b8-abi)))
+  (fiveam:is (= 2 (backend-cell-bytes 'callfoo-lang-abi)))
+  (fiveam:is (eq :big (nth-value 1 (backend-cell-bytes 'cl-be-abi))))
+  (let ((*cc-backend* (find-backend 'cl-b8-abi)) (*cc-word-cells* 1))
+    (fiveam:is (%cc-direct-character-p) "one character a cell and one cell a word: a character is a word"))
+  (let ((*cc-backend* (find-backend 'widefoo-lang-abi)) (*cc-word-cells* 2))
+    (fiveam:is (not (%cc-direct-character-p)))))
+
+(defbackend cl-byte-address-abi (:extends callfoo-lang-abi)
+  (ops (:byte-address (d) (add d d))))
+
+(fiveam:test a-backends-byte-address-operation-replaces-the-default-scaling
+  (let ((source "(defstring s \"ab\" :packed) (defun main () (aref-byte s 1))"))
+    (fiveam:is (member "BYTE-ADDRESS" (%cl-op-names (%cl-compile source 'cl-byte-address-abi)) :test #'string=))
+    (fiveam:is (not (member "BYTE-ADDRESS" (%cl-op-names (%cl-compile source 'callfoo-lang-abi)) :test #'string=)))
+    (fiveam:is (= 98 (%cv-a (%cl-run source 'cl-byte-address-abi))))))
+
+(defbackend cl-no-peek-byte-abi (:extends callfoo-lang-abi)
+  (without-ops :peek-byte))
+
+(fiveam:test a-packed-string-needs-the-byte-operations-and-8-bit-characters
+  (fiveam:is (search "needs the operation :peek-byte"
+                     (%cl-fail "(defstring s \"a\" :packed) (defun main () (aref-byte s 0))" 'cl-no-peek-byte-abi)))
+  (fiveam:is (search "8-bit characters"
+                     (%cl-fail (format nil "(defstring s \"~C\" :packed) (defun main () 1)" (code-char 300)))))
+  (fiveam:is (search "expected (defstring"
+                     (%cl-fail "(defstring s \"a\" :bogus) (defun main () 1)")))
+  (fiveam:is (search "expected (defstring"
+                     (%cl-fail "(defstring s \"a\" :packed :packed) (defun main () 1)")))
+  (fiveam:is (search "aref-byte is malformed"
+                     (%cl-fail "(defstring s \"a\" :packed) (defun main () (aref-byte s))"))))
+
 (fiveam:test a-source-file-can-name-its-backend
   (let ((program (read-source-from-string "(:program (:backend callfoo-lang-abi :origin 4)) (defun main () 1)")))
     (fiveam:is (%same-name-p 'callfoo-lang-abi (items-program-backend program)))
@@ -772,7 +850,7 @@
                   ("(defarray buf 4) (defun main () (set buf 1))" "buf is an array or string")
                   ("(defarray buf foo) (defun main () 1)" "expected (defarray NAME size)")
                   ("(defvar buf 0) (defarray buf 4) (defun main () 1)" "buf is defined twice")
-                  ("(defstring s 5) (defun main () 1)" "expected (defstring NAME \"text\")")
+                  ("(defstring s 5) (defun main () 1)" "expected (defstring NAME \"text\" [:packed])")
                   ("(defarray a (1 nope)) (defun main () 1)" "not a constant, a function or an array/string")
                   ;; #367, #380: macros.
                   ("(defmacro inc (v) `(set ,v (+ ,v 1))) (defun main () (inc 1 2))" "inc takes exactly 1 argument, got 2")

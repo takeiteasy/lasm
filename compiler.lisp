@@ -6,12 +6,12 @@
 ;;;; through the backend's operations (+BACKEND-LANGUAGE-OP-ARITIES+).
 ;;;;
 ;;;; Forms:  (defun NAME (PARAM...) BODY...)  (defvar NAME [INT])  (defconstant NAME INT)
-;;;;   (defarray NAME SIZE)  (defarray NAME (VALUE...))  (defstring NAME "TEXT")
+;;;;   (defarray NAME SIZE)  (defarray NAME (VALUE...))  (defstring NAME "TEXT" [:packed])
 ;;;;   (defmacro NAME (PARAM... [&rest R]) BODY...)  (defun-for-syntax NAME (PARAM... [&rest R]) BODY...)
 ;;;; Expressions: an integer or name, (set N E), (let ((V E)...) BODY...),
 ;;;;   (if C A [B]), (while C BODY...), (progn E...), (and E...), (or E...),
 ;;;;   (not E), an operator, (peek A), (poke A V), (peek-byte A), (poke-byte A V),
-;;;;   (aref A I), (aset A I V), (return [E]), (asm ITEM...), (function F),
+;;;;   (aref A I), (aset A I V), (aref-byte S I), (aset-byte S I V), (return [E]), (asm ITEM...), (function F),
 ;;;;   (funcall E ARG...), (F ARG...)
 ;;;;
 ;;;; #365: (function F) is F's address, a value; (funcall E ARG...) calls
@@ -21,6 +21,10 @@
 ;;;; global. (peek-byte A)/(poke-byte A V) are the backend's optional
 ;;;; :peek-byte/:poke-byte, byte-addressing within a word, for a machine whose
 ;;;; registers are wider than its cells.
+;;;;
+;;;; #379: (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
+;;;; as fit, byte order from the memory's endianness; (aref-byte S I)/(aset-byte
+;;;; S I V) reach one through :peek-byte/:poke-byte.
 ;;;;
 ;;;; #368: a word is *CC-WORD-CELLS* cells (BACKEND-WORD-CELLS, backend.lisp),
 ;;;; the split #167's (stack-pointer ... :width n) already gives a stack slot.
@@ -716,12 +720,12 @@ comparison, to a landing that loads the result."
 ;; operand-ordering treatment as any other (#364). A literal I folds to a
 ;; literal offset at compile time; a computed I scales by a shift when W is a
 ;; power of two, so scaling a variable index never newly requires :mul.
-(defun %cc-scaled-index (index)
+(defun %cc-scaled-index (index &optional (factor *cc-word-cells*))
   (cond
-    ((= *cc-word-cells* 1) index)
-    ((integerp index) (* index *cc-word-cells*))
-    ((= (logcount *cc-word-cells*) 1) (list 'shl index (integer-length (1- *cc-word-cells*))))
-    (t (list '* index *cc-word-cells*))))
+    ((= factor 1) index)
+    ((integerp index) (* index factor))
+    ((= (logcount factor) 1) (list 'shl index (integer-length (1- factor))))
+    (t (list '* index factor))))
 
 (defun %cc-aref (form)
   (%cc-check-length form 3 3)
@@ -730,6 +734,37 @@ comparison, to a landing that loads the result."
 (defun %cc-aset (form)
   (%cc-check-length form 4 4)
   (%cc-poke (list 'poke (list '+ (second form) (%cc-scaled-index (third form))) (fourth form))))
+
+;; #379: (aref-byte S I)/(aset-byte S I V) reach character I of a :packed
+;; string, S's byte address plus I, through :peek-byte/:poke-byte. A cell that
+;; holds one character (and a one-cell word) needs no byte access: the
+;; character is a word, so these are AREF/ASET. Otherwise S's byte address is
+;; the backend's :byte-address (d) operation on S, or S times the characters
+;; a cell holds, as callfoo/ANIMA-16 LDB/STB byte-address it. The internal
+;; form's name has a space, which no source symbol can spell.
+(defparameter +cc-byte-address+ (make-symbol "BYTE ADDRESS"))
+
+(defun %cc-byte-address (form)
+  (%cc-check-length form 2 2)
+  (if (%cc-op-p :byte-address)
+      (progn (%cc-expr (second form))
+             (%cc-op :byte-address *cc-acc-name*))
+      (%cc-expr (%cc-scaled-index (second form) (backend-cell-bytes *cc-backend*)))))
+
+(defun %cc-direct-character-p ()
+  (and (= *cc-word-cells* 1) (= (backend-cell-bytes *cc-backend*) 1)))
+
+(defun %cc-aref-byte (form)
+  (%cc-check-length form 3 3)
+  (if (%cc-direct-character-p)
+      (%cc-aref (list* 'aref (rest form)))
+      (%cc-peek-byte (list 'peek-byte (list '+ (list +cc-byte-address+ (second form)) (third form))))))
+
+(defun %cc-aset-byte (form)
+  (%cc-check-length form 4 4)
+  (if (%cc-direct-character-p)
+      (%cc-aset (list* 'aset (rest form)))
+      (%cc-poke-byte (list 'poke-byte (list '+ (list +cc-byte-address+ (second form)) (third form)) (fourth form)))))
 
 ;; #363: an early return. Pending temporaries (each binary operator's left
 ;; operand, or a POKE's address) sit on the stack above the frame's own
@@ -873,6 +908,7 @@ items-malformed, as any call target is (#335, docs/conventions.md)."
   '(("PROGN" . %cc-progn-form) ("IF" . %cc-if) ("WHILE" . %cc-while) ("AND" . %cc-and) ("OR" . %cc-or)
     ("NOT" . %cc-not) ("LET" . %cc-let) ("SET" . %cc-set) ("PEEK" . %cc-peek) ("POKE" . %cc-poke)
     ("PEEK-BYTE" . %cc-peek-byte) ("POKE-BYTE" . %cc-poke-byte) ("AREF" . %cc-aref) ("ASET" . %cc-aset)
+    ("AREF-BYTE" . %cc-aref-byte) ("ASET-BYTE" . %cc-aset-byte) ("BYTE ADDRESS" . %cc-byte-address)
     ("ASM" . %cc-asm) ("RETURN" . %cc-return) ("FUNCTION" . %cc-function-expr) ("FUNCALL" . %cc-funcall)))
 
 ;;; Macros (#367, #380)
@@ -1545,6 +1581,20 @@ for a one-cell word, else .emit with the width first (#386)."
       (list* :directive (%cc-symbol "cell") values)
       (list* :directive (%cc-symbol "emit") *cc-word-cells* values)))
 
+(defun %cc-pack-string (string form)
+  "STRING's characters, then a 0, packed into cells of as many 8-bit characters
+as a cell holds, the first in the low bits of a little-endian memory's cell
+and the high bits of a big-endian one's (#379)."
+  (multiple-value-bind (bytes endian) (backend-cell-bytes *cc-backend*)
+    (let ((characters (append (map 'list #'char-code string) '(0))))
+      (when (find-if (lambda (code) (> code 255)) characters)
+        (%cc-fail form "a :packed string holds 8-bit characters only"))
+      (loop while characters
+            collect (let ((cell 0))
+                      (dotimes (k bytes cell)
+                        (setf cell (logior cell (ash (or (cl:pop characters) 0)
+                                                     (* 8 (if (eq endian :big) (- bytes 1 k) k)))))))))))
+
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
 constants, DEFARRAY/DEFSTRING data (#366), macros and DEFUN-FOR-SYNTAX
@@ -1616,14 +1666,15 @@ defined later in FORMS."
                     ((and (listp spec) (null (cdr (last spec)))) (cl:push (list label :values spec form) arrays))
                     (t (%cc-fail form "expected (defarray NAME size) or (defarray NAME (value...))")))))
                ((string= head "DEFSTRING")
-                (unless (and (= (length form) 3) (stringp (third form)))
-                  (%cc-fail form "expected (defstring NAME \"text\")"))
+                (unless (and (<= 3 (length form) 4) (stringp (third form))
+                             (or (null (cdddr form)) (%keyword-named-p (fourth form) "PACKED")))
+                  (%cc-fail form "expected (defstring NAME \"text\" [:packed])"))
                 (let* ((name (second form)) (key (%cc-key name form)) (label (%cc-mangle "st" name)))
                   (when (defined-p key)
                     (%cc-fail form "~A is defined twice" (%source-name name nil)))
                   (claim name form label)
                   (setf (gethash key *cc-data*) label)
-                  (cl:push (list label :string (third form) form) arrays)))
+                  (cl:push (list label (if (cdddr form) :packed :string) (third form) form) arrays)))
                (t (%cc-fail form "expected (defun ...), (defvar ...), (defconstant ...), (defarray ...), (defstring ...), (defmacro ...) or (defun-for-syntax ...)"))))))
       (dolist (form forms) (process form)))
     (values (nreverse definitions) (nreverse globals)
@@ -1636,6 +1687,7 @@ defined later in FORMS."
                                  ;; wider word has no terminated-string
                                  ;; directive, so the trailing 0 is emitted as
                                  ;; a value alongside the string's characters.
+                                 (:packed (list* :directive (%cc-symbol "cell") (%cc-pack-string payload form)))
                                  (:string (if (= *cc-word-cells* 1)
                                               (list :directive (%cc-symbol "asciz") payload)
                                               (%cc-word-data (list payload 0))))))))))

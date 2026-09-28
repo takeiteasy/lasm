@@ -237,6 +237,9 @@ The grouped form orders groups with its first keyword and cells within a
 group with its second. Word-addressed memory and word-encoded instructions
 can be combined; see [`dcpu16.lisp`](../examples/dcpu16.lisp).
 
+`:endian` also orders the 8-bit characters within a cell of a
+[packed string](language.md#arrays-strings-and-byte-access).
+
 ## Limitations
 
 | Limitation | Ticket |

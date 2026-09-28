@@ -108,6 +108,15 @@
       (set! (mref machine 'ram (r addr)) (logand value #xFF))
       (set! (mref machine 'ram (wrap-value (1+ (r addr)) 16)) (logand (ash value -8) #xFF)))))
 
+;; #379: a byte is one 8-bit cell here, so its byte address is its cell address.
+(definstruction widefoo ldb (modes wf-rind)
+  (encoding (opcode 23) (operand dst :width 1) (operand addr :width 1))
+  (semantics (set! (r dst) (mref machine 'ram (r addr)))))
+
+(definstruction widefoo stb (modes wf-indr)
+  (encoding (opcode 24) (operand addr :width 1) (operand src :width 1))
+  (semantics (set! (mref machine 'ram (r addr)) (logand (r src) #xFF))))
+
 (defmacro defarith (mnemonic opcode expression)
   "MNEMONIC dst, src sets dst to EXPRESSION of the signed values x and y."
   `(definstruction widefoo ,mnemonic (modes wf-rr)
@@ -139,6 +148,8 @@
        (:set (slot r) (sts slot r))
        (:peek (d a) (ldw (reg d) (ind a)))
        (:poke (a s) (stw (ind a) (reg s)))
+       (:peek-byte (d a) (ldb (reg d) (ind a)))
+       (:poke-byte (a s) (stb (ind a) (reg s)))
        (:jump (target) (jmp target))
        (:branch-zero (r target) (jz r target))
        (:halt () (hlt))

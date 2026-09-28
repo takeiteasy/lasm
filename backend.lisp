@@ -118,6 +118,15 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
 ;; (stack-pointer ... :width n) gives a stack slot -- the source language
 ;; (compiler.lisp) lays globals, DEFARRAY/DEFSTRING data and AREF/ASET
 ;; strides out by it.
+(defun backend-cell-bytes (backend)
+  "(VALUES BYTES ENDIAN): whole 8-bit characters a cell of BACKEND's machine
+holds (at least 1), and the machine's memory endianness, which orders them
+within a cell (#379)."
+  (let* ((backend (find-backend backend))
+         (descriptor (find-machine-descriptor (backend-descriptor-machine backend))))
+    (values (max 1 (floor (%descriptor-cell-width descriptor) 8))
+            (%descriptor-endian descriptor))))
+
 (defun backend-word-cells (backend)
   "Cells a word spans on BACKEND's machine: its declared stack pointer's slot
 width (#167), which defaults to the memory's own cell width, divided by that
@@ -300,7 +309,7 @@ cell width and rounded up. 1 without a matching (stack-pointer ...) clause."
 
 (defparameter +backend-language-op-arities+
   (append '(("CONST" . 2) ("GET" . 2) ("SET" . 2) ("PEEK" . 2) ("POKE" . 2)
-            ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2)
+            ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2) ("BYTE-ADDRESS" . 1)
             ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0))
           (loop for name in +backend-binary-ops+
                 collect (cons name 2)

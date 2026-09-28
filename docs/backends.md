@@ -170,7 +170,10 @@ The [source language](language.md) emits `:const :get :set :peek :poke
 `:add :sub :mul :div :mod :and :or :xor :shl :shr` and the comparisons
 `:eq :ne :lt :gt :le :ge`. Each has a fixed number of parameters, checked at
 definition, and a backend defines those its programs use; `:peek-byte`/
-`:poke-byte` are needed only by `peek-byte`/`poke-byte` (#366).
+`:poke-byte` are needed only by `peek-byte`/`poke-byte` and packed-string access
+(#366, #379). An optional `:byte-address (d)` turns a cell address in `d` into
+the byte address those take; without it, the address is multiplied by the
+8-bit characters a cell holds.
 
 Each arithmetic and comparison operation may also have an `-imm` and a `-slot`
 variant, such as `:add-imm (d v)` and `:add-slot (d slot)`, that the compiler

@@ -38,6 +38,7 @@ A `.lsp` file holds top-level forms, in any order. A leading
 | `(defarray NAME SIZE)` | `SIZE` words reserved, uninitialised. |
 | `(defarray NAME (VALUE...))` | Words initialised to `VALUE...`, each an integer, `(function F)`, or another `defconstant`/`defarray`/`defstring` name. |
 | `(defstring NAME "TEXT")` | `TEXT`, one character a word, `0`-terminated. |
+| `(defstring NAME "TEXT" :packed)` | `TEXT`, 8-bit characters packed into cells, `0`-terminated; see [below](#arrays-strings-and-byte-access). |
 | `(defmacro NAME (PARAM... [&rest R]) BODY...)` | A compile-time macro; see [below](#macros). |
 | `(defun-for-syntax NAME (PARAM... [&rest R]) BODY...)` | A compile-time helper function, callable from a macro's `BODY`. |
 
@@ -88,7 +89,8 @@ constant.
 | `(not E)` | `1` if `E` is `0`, else `0`. |
 | `(peek ADDR)` `(poke ADDR V)` | The word at `ADDR`; `V`, stored there. |
 | `(peek-byte ADDR)` `(poke-byte ADDR V)` | The byte at `ADDR`; `V`, stored there; see [below](#arrays-strings-and-byte-access). |
-| `(aref A I)` `(aset A I V)` | The cell at index `I` of array/string `A`; `V`, stored there. |
+| `(aref A I)` `(aset A I V)` | The word at index `I` of array/string `A`; `V`, stored there. |
+| `(aref-byte S I)` `(aset-byte S I V)` | Character `I` of packed string `S`; `V`, stored there; see [below](#arrays-strings-and-byte-access). |
 | `(return [E])` | Exits the function with `E`, or `0`; see [below](#return).[^return] |
 | `(function F)` | `F`'s address, a value; see [below](#function-values). |
 | `(funcall E ARG...)` | Calls through `E`'s value; see [below](#function-values). |
@@ -161,6 +163,28 @@ from `0`.
 `:peek-byte`/`:poke-byte`, byte-addressing `ADDR` as the machine defines it --
 for a machine whose registers are wider than its cells. Using one without the
 backend operation is a compile error naming the form.
+
+`(defstring NAME "TEXT" :packed)` stores as many 8-bit characters in a cell as
+fit, `0`-terminated, in the memory's [`:endian`](machine-model.md#cell-width-and-the-assembler)
+order: the first character in the low bits of a little-endian cell, the high
+bits of a big-endian one. A character above `255` is a compile error.
+`(aref-byte S I)`/`(aset-byte S I V)` read and write character `I`; on a machine
+with 16-bit cells, `"abc"` is two cells and `(aref-byte S 1)` is `98`.
+
+```lisp
+(defstring greeting "hello" :packed)
+
+(defun length (s)
+  (let ((i 0))
+    (while (aref-byte s i) (set i (+ i 1)))
+    i))
+```
+
+`aref-byte` byte-addresses `S + I` through `:peek-byte`/`:poke-byte`, where
+`S`'s byte address is the backend's optional `:byte-address` on `S`, or else
+`S` times the characters a cell holds (`S` itself for 8-bit cells). A machine
+whose cell holds one character and whose word is one cell needs neither: there
+`aref-byte` is `aref`. A packed string's `aref` returns its raw cells.
 
 ## Macros
 
@@ -320,7 +344,8 @@ for the forms a program uses. A missing one is a compile error naming the form.
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
 | `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
-| `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` (#366). |
+| `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` and, on most machines, `aref-byte`/`aset-byte` (#366, #379). |
+| `:byte-address (d)` | Optional: `d`, a cell address, becomes the byte address `:peek-byte` takes. Default: times the characters a cell holds. |
 | `:jump (target)` `:branch-zero (r target)` | Jump; jump when `r` is `0`. |
 | `:halt ()` | Stops the machine. |
 | `:add :sub :mul :div :mod :and :or :xor :shl :shr (d s)` | `d` = `d` op `s`. |
@@ -421,7 +446,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | A first callee-saved register is claimed only inside a loop, so one-off call sites outside a loop never share one. | [#394](https://todo.sr.ht/~takeiteasy/lasm/394) |
 | The estimate that decides whether a value-context `and`/`or` fuses counts a comparison as one instruction, ignoring `-imm`/`-slot` variants. | [#392](https://todo.sr.ht/~takeiteasy/lasm/392) |
 | `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
-| `defstring` is one character a word; no packed (several-per-word) strings. | [#379](https://todo.sr.ht/~takeiteasy/lasm/379) |
+| A `:packed` string is emitted as packed `.cell` integers, not text, in a compiled `.lasm` file. | [#398](https://todo.sr.ht/~takeiteasy/lasm/398) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an

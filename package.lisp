@@ -263,6 +263,7 @@
    #:backend-stack-writers
    #:backend-register
    #:backend-word-cells
+   #:backend-cell-bytes
    #:backend-expand-op
    #:assemble-items
    #:assemble-items-file
