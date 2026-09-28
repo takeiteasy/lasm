@@ -377,14 +377,17 @@ MODE-DESCRIPTOR.")
       (setf (gethash (symbol-name head) table) head))))
 
 (defun %dsl-head (form)
-  "FORM, a list, with its head replaced by lasm's symbol when it names a DSL word."
-  (let ((canonical (and (symbolp (first form)) (gethash (symbol-name (first form)) *dsl-clause-heads*))))
+  "FORM with its head replaced by lasm's symbol when it names a DSL word. A form
+that is not a list is left for the definer to reject."
+  (let ((canonical (and (consp form) (symbolp (first form))
+                        (gethash (symbol-name (first form)) *dsl-clause-heads*))))
     (if canonical (cons canonical (rest form)) form)))
 
 (defun %dsl-heads-in (forms)
   (mapcar (lambda (form) (if (consp form) (%dsl-head form) form)) forms))
 
 (defun %dsl-machine-clause (clause)
+  (unless (consp clause) (return-from %dsl-machine-clause clause))
   (let ((clause (%dsl-head clause)))
     (if (member (first clause) '(memory instruction-word layout))
         (cons (first clause)
@@ -392,6 +395,7 @@ MODE-DESCRIPTOR.")
         clause)))
 
 (defun %dsl-encoding-subclause (subclause)
+  (unless (consp subclause) (return-from %dsl-encoding-subclause subclause))
   (let ((subclause (%dsl-head subclause)))
     (case (first subclause)
       (operand (list* (first subclause) (second subclause)
@@ -405,6 +409,7 @@ MODE-DESCRIPTOR.")
 
 (defun %dsl-variant (form)
   "An OPERAND's variant, or the atoms and plist values around one, unchanged."
+  (unless (consp form) (return-from %dsl-variant form))
   (let ((form (%dsl-head form)))
     (if (eq (first form) 'variant)
         (list* (first form)
@@ -413,6 +418,7 @@ MODE-DESCRIPTOR.")
         form)))
 
 (defun %dsl-instruction-clause (clause)
+  (unless (consp clause) (return-from %dsl-instruction-clause clause))
   (let ((clause (%dsl-head clause)))
     (case (first clause)
       (modes (cons (first clause)
@@ -425,6 +431,7 @@ MODE-DESCRIPTOR.")
       (t clause))))
 
 (defun %dsl-modes-subclause (subclause)
+  (unless (consp subclause) (return-from %dsl-modes-subclause subclause))
   (let ((subclause (%dsl-head subclause)))
     (if (member (first subclause) '(semantics cycles))
         subclause
