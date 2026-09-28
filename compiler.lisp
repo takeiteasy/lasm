@@ -114,7 +114,8 @@
 (defvar *cc-data* nil "Upcased name -> label symbol, for a DEFARRAY or DEFSTRING (#366).")
 (defvar *cc-word-cells* 1 "Cells a word spans on the target backend (BACKEND-WORD-CELLS, #368).")
 (defvar *cc-value-arities* nil "Argument counts of every function a (function F) has made a value (#378).")
-(defvar *cc-indirect-calls* nil "(ARITY FORM FUNCTION), reversed, for each funcall through a computed target, checked once every function is compiled (#378).")
+(defvar *cc-indirect-calls* nil "(ARITY FORM FUNCTION BINDING NAME), reversed, for each funcall through a computed target, checked once every function is compiled (#378, #397).")
+(defvar *cc-holdings* nil "An EQ table from a local's environment cell or a global's label to the argument counts of the function values put in it, or :UNKNOWN (#397).")
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
@@ -225,11 +226,15 @@ cannot be a register alias or a generated label."
 
 ;;; Expressions
 
+(defun %cc-local-cell (symbol)
+  "SYMBOL's (KEY . LOCATION) cell in *CC-ENV*, or NIL when it is no local or parameter."
+  (assoc (%cc-local-key symbol *cc-form*) *cc-env* :test #'string=))
+
 (defun %cc-lookup (symbol)
   "The location of the variable SYMBOL: (:LOCAL i), (:ARG i), (:GLOBAL LABEL),
 (:CONSTANT n) or (:ADDRESS LABEL), a DEFARRAY or DEFSTRING (#366)."
   (let ((key (%cc-key symbol *cc-form*)))
-    (or (cdr (assoc (%cc-local-key symbol *cc-form*) *cc-env* :test #'string=))
+    (or (cdr (%cc-local-cell symbol))
         (let ((label (gethash key *cc-globals*)))
           (and label (list :global label)))
         (let ((value (gethash key *cc-constants*)))
@@ -250,6 +255,25 @@ cannot be a register alias or a generated label."
       (%cc-fail form "unknown function ~A" (%source-name (second form) nil)))
     (pushnew (cdr entry) *cc-value-arities*)
     (car entry)))
+
+;; #397: what a variable can hold, by its binding: a local's environment cell,
+;; or a global's label. A let binding or a set records the argument count of a
+;; literal (function F), or :UNKNOWN for any other value; a parameter and a
+;; global that starts non-zero are :UNKNOWN from the start.
+(defun %cc-binding (symbol)
+  "The key SYMBOL's holdings are recorded under, or NIL for a constant, array or string."
+  (or (%cc-local-cell symbol)
+      (let ((location (%cc-lookup symbol)))
+        (and (eq (first location) :global) (second location)))))
+
+(defun %cc-hold (binding value)
+  "Record that VALUE, an expression, may be put in BINDING."
+  (let ((held (gethash binding *cc-holdings*))
+        (entry (and (%cc-function-form-p value) (= (length value) 2) (%cc-name-p (second value))
+                    (gethash (%cc-key (second value) value) *cc-functions*))))
+    (unless (eq held :unknown)
+      (setf (gethash binding *cc-holdings*)
+            (if entry (adjoin (cdr entry) held) :unknown)))))
 
 (defun %cc-function-expr (form)
   (%cc-check-length form 2 2)
@@ -726,10 +750,12 @@ comparison, to a landing that loads the result."
       (unless (and (consp binding) (= (length binding) 2))
         (%cc-fail form "let binding ~S is not (NAME VALUE)" binding))
       (%cc-expr (second binding))
-      (let ((slot (%cc-alloc)))
+      (let* ((slot (%cc-alloc))
+             (cell (cons (%cc-local-key (first binding) form) slot)))
         (%cc-op :set slot *cc-acc*)
         (incf slots)
-        (cl:push (cons (%cc-local-key (first binding) form) slot) *cc-env*)))
+        (cl:push cell *cc-env*)
+        (%cc-hold cell (second binding))))
     (%cc-progn (cddr form))
     (dotimes (i slots) (%cc-free))))
 
@@ -738,8 +764,10 @@ comparison, to a landing that loads the result."
   (let ((location (%cc-lookup (second form))))
     (ecase (first location)
       ((:local :arg) (%cc-expr (third form))
+       (%cc-hold (%cc-local-cell (second form)) (third form))
        (%cc-op :set location *cc-acc*))
-      (:global (%cc-value-to-temp (third form))
+      (:global (%cc-hold (second location) (third form))
+       (%cc-value-to-temp (third form))
        (%cc-op :const *cc-acc* (second location))
        (%cc-op :poke *cc-acc-name* *cc-temp-name*)
        (%cc-op :move *cc-acc* *cc-temp*))
@@ -840,7 +868,10 @@ comparison, to a landing that loads the result."
   (cond ((and (consp tree) (%keyword-named-p (first tree) "VAR"))
          (unless (and (= (length tree) 2) (%cc-name-p (second tree)))
            (%cc-fail form "expected (:var NAME), got ~S" tree))
-         (let ((location (let ((*cc-form* form)) (%cc-lookup (second tree)))))
+         (let* ((*cc-form* form)
+                (location (%cc-lookup (second tree)))
+                (binding (%cc-binding (second tree))))
+           (when binding (setf (gethash binding *cc-holdings*) :unknown))
            (ecase (first location)
              ((:local :arg) location)
              ((:global :address) (second location))
@@ -935,16 +966,25 @@ items-malformed, as any call target is (#335, docs/conventions.md)."
       (and (%cc-name-p callee) (eq (first (%cc-lookup callee)) :constant))))
 
 (defun %cc-check-indirect-calls ()
-  "Fail on the first funcall through a computed target whose argument count no function value takes (#378)."
-  (loop for (arity form function) in (reverse *cc-indirect-calls*)
-        unless (member arity *cc-value-arities*)
-          do (let ((*cc-function* function))
-               (%cc-fail form "no function value takes ~D argument~:P~@[ (function values take ~{~D~^, ~})~]"
-                         arity (sort (copy-list *cc-value-arities*) #'<)))))
+  "Fail on the first funcall through a computed target whose argument count no
+function value takes (#378), or that a variable's own function values do not (#397)."
+  (loop for (arity form function binding name) in (reverse *cc-indirect-calls*)
+        for held = (and binding (gethash binding *cc-holdings*))
+        do (let ((*cc-function* function))
+             (cond ((consp held)
+                    (unless (member arity held)
+                      (%cc-fail form "funcall through ~A passes ~D argument~:P, but it holds only function values taking ~{~D~^, ~}"
+                                name arity (sort (copy-list held) #'<))))
+                   ((not (member arity *cc-value-arities*))
+                    (%cc-fail form "no function value takes ~D argument~:P~@[ (function values take ~{~D~^, ~})~]"
+                              arity (sort (copy-list *cc-value-arities*) #'<)))))))
 
 (defun %cc-indirect-funcall (callee args)
   (unless (%cc-raw-address-p callee)
-    (cl:push (list (length args) *cc-form* *cc-function*) *cc-indirect-calls*))
+    (cl:push (list (length args) *cc-form* *cc-function*
+                   (and (%cc-name-p callee) (%cc-binding callee))
+                   (and (%cc-name-p callee) (%source-name callee nil)))
+             *cc-indirect-calls*))
   (let ((callee-slot (unless (%cc-leaf-p callee)
                         (%cc-expr callee)
                         (let ((slot (%cc-alloc)))
@@ -1574,7 +1614,8 @@ names must stay literal for the rest of the compiler to resolve."
                      (let ((*cc-form* name))
                        (%cc-op :set slot (list :arg index)))
                      (cl:push (cons key slot) *cc-env*))
-                   (cl:push (cons key (list :arg index)) *cc-env*))))
+                   (cl:push (cons key (list :arg index)) *cc-env*))
+               (setf (gethash (first *cc-env*) *cc-holdings*) :unknown)))
     (%cc-progn body)
     (list* :function label
            (append (list :args (length params) :locals *cc-max*)
@@ -1785,7 +1826,8 @@ across calls in a preserved register shared by two or more sites (#394)."
         (*cc-meta-functions* (make-hash-table :test 'equal)) (*cc-meta-steps* 0)
         (*cc-rename-serial* 0) (*cc-expand-position* nil)
         (*cc-word-cells* (backend-word-cells backend))
-        (*cc-value-arities* '()) (*cc-indirect-calls* '()))
+        (*cc-value-arities* '()) (*cc-indirect-calls* '())
+        (*cc-holdings* (make-hash-table :test 'eq)))
     (%cc-registers)
     (multiple-value-bind (definitions globals data) (%cc-collect forms)
       (let ((main (gethash "MAIN" *cc-functions*)))
@@ -1793,6 +1835,7 @@ across calls in a preserved register shared by two or more sites (#394)."
           (%cc-fail nil "the program needs (defun main () ...)"))
         (loop for (label value) in globals
               do (unless (zerop value)
+                   (setf (gethash label *cc-holdings*) :unknown)
                    (%cc-op :const *cc-acc* label)
                    (%cc-op :const *cc-temp* value)
                    (%cc-op :poke *cc-acc-name* *cc-temp-name*)))

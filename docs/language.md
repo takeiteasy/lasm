@@ -125,9 +125,10 @@ Symbols are compared by name, ignoring case.
 variable, put in a `defarray`, or called through. `(funcall E ARG...)` calls
 through `E`'s value: a literal `(function F)` compiles the same direct call
 `(F ARG...)` does, arity-checked at compile time. Any other `E` computes its
-target at run time, and its argument count must be one some `(function F)` in
-the program takes, or it is a compile error. An integer or `defconstant` target
-is a raw address and is not checked.[^funcall-arity]
+target at run time. Through a `let` variable or global, its argument count must
+be one of the function values put in that variable; through anything else, one
+some `(function F)` in the program takes. Otherwise it is a compile error. An
+integer or `defconstant` target is a raw address and is not checked.[^funcall-arity]
 
 ```lisp
 (defun add-one (x) (+ x 1))
@@ -476,7 +477,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
+| `funcall` through a parameter, an array element or a computed target is checked only against every function value's arity; with several arities taken, a wrong one that another function has is not caught. | [#402](https://todo.sr.ht/~takeiteasy/lasm/402) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an
@@ -501,7 +502,11 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 [^funcall-arity]: The check runs once every function is compiled, so a function
   value taken after the call still counts. `(function F)` in a function body or
-  a `defarray` adds `F`'s argument count to the set.
+  a `defarray` adds `F`'s argument count to the program-wide set. A `let`
+  binding or `set` of a variable to a literal `(function F)` adds it to that
+  variable's own set; any other value, a parameter, a global that starts
+  non-zero, or an `(asm ...)` naming the variable with `(:var NAME)` makes the
+  variable unknown, and a call through it uses the program-wide set.
 
 [^variants]: `not` compares with `:eq-imm 0` when its value is used. A global is not a slot, and reads
   through `:peek`, so it loads first. The variants take the same operand a
