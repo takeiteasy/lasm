@@ -6,7 +6,7 @@
 (fiveam:def-suite compiler :in lasm)
 (fiveam:in-suite compiler)
 
-;;; Fixtures: callfoo-lang-abi (examples/cli/callfoo.lisp, loaded by
+;;; Fixtures: callfoo-lang-abi (tests/fixtures/cli/callfoo.lisp, loaded by
 ;;; tests/backend.lisp) with stack arguments, and the same operations over
 ;;; register arguments. callfoo-lang-fp-abi addresses slots through a frame
 ;;; pointer. cl-up is a machine whose stack grows up.
@@ -698,7 +698,7 @@
              (fiveam:is (/= 0 status))
              (fiveam:is (search "--optimize must be size or speed" err))))
       (%cl-delete path))
-    (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/fact.lsp") "--optimize" "speed")
+    (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--optimize" "speed")
       (fiveam:is (= 0 status))
       (fiveam:is (search "stopped" out)))))
 
@@ -779,7 +779,7 @@
                          (assembly-cells (assemble-items (items-program-items again) :backend backend)))
                  "~A" backend))))
 
-;;; #368: words wider than one cell. widefoo-lang-abi (examples/cli/widefoo.lisp,
+;;; #368: words wider than one cell. widefoo-lang-abi (tests/fixtures/cli/widefoo.lisp,
 ;;; loaded by tests/backend.lisp) has 16-bit registers over 8-bit cells, so
 ;;; BACKEND-WORD-CELLS is 2; callfoo-lang-abi's is 1.
 
@@ -1341,34 +1341,34 @@
 ;;; Command line
 
 (defun %cl-cli (command path &rest more)
-  (%run-cli (list* command (namestring path) "-m" (%cli-path "examples/cli/callfoo.lisp") more)))
+  (%run-cli (list* command (namestring path) "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") more)))
 
 (fiveam:test cli-run-executes-a-source-program
-  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/fact.lsp"))
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped" out))))
 
 ;; #365, #366: function values, arrays and strings, run through the CLI.
 (fiveam:test cli-run-executes-table-lsp
-  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "examples/cli/table.lsp"))
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/table.lsp"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped" out))))
 
 (fiveam:test cli-run-executes-the-macros-example
-  (let ((m (%cl-run (%slurp-file (%cli-path "examples/cli/macros.lsp")) 'callfoo-lang-abi)))
+  (let ((m (%cl-run (%slurp-file (%cli-path "tests/fixtures/cli/macros.lsp")) 'callfoo-lang-abi)))
     (fiveam:is (= 287 (%cv-a m)))))
 
 (fiveam:test cli-compile-writes-an-items-program-that-run-accepts
   (uiop:with-temporary-file (:pathname path :type "lasm")
     (multiple-value-bind (status out)
-        (%cl-cli "compile" (%cli-path "examples/cli/fact.lsp") "-o" (namestring path))
+        (%cl-cli "compile" (%cli-path "tests/fixtures/cli/fact.lsp") "-o" (namestring path))
       (fiveam:is (= 0 status))
       (fiveam:is (search "wrote" out)))
     (let ((program (read-items path)))
       (fiveam:is (%same-name-p 'callfoo-lang-abi (items-program-backend program))))
     (multiple-value-bind (status out) (%cl-cli "run" path)
       (fiveam:is (= 0 status))
-      (fiveam:is (string= out (nth-value 1 (%cl-cli "run" (%cli-path "examples/cli/fact.lsp"))))))))
+      (fiveam:is (string= out (nth-value 1 (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp"))))))))
 
 (fiveam:test cli-compile-reports-a-compile-error
   (let ((path (%cl-source-file "(defun main () x)")))

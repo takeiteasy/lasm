@@ -3377,7 +3377,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
     (fiveam:is (equal (list 0) (encode-instruction nop nil)))))
 
 ;;; Non-uniform register widths + banked registers (#54, M4) -- CHIP8FOO
-;;; mirrors examples/chip8.lisp: an 8-bit banked V register (#13's REGREF)
+;;; is CHIP-8-shaped: an 8-bit banked V register (#13's REGREF)
 ;;; and a 12-bit I register on the same machine, ordinary opcode-plus-
 ;;; operand-cells encoding (not #20's INSTRUCTION-WORD).
 
@@ -3448,7 +3448,6 @@ wsi #-100" :machine 'mixed-field-test-machine)
     (fiveam:is (= 3 (sref m 'i)))))         ; 4099 mod 4096
 
 (fiveam:test chip8-machine-end-to-end
-  ;; Mirrors examples/chip8.lisp's *SOURCE* verbatim.
   (let ((a (assemble "ldv v0, #$fa
 ldv v1, #5
 addv v0, #10
@@ -3469,7 +3468,7 @@ skip: hlt" :machine 'chip8-test-machine)))
         (fiveam:is (= 3 (sref m 'i)))))))
 
 ;;; Per-instruction, non-uniform instruction-word layouts (#64) --
-;;; CHIP8WORDFOO mirrors examples/chip8word.lisp: CHIP8's own layout-only
+;;; CHIP8WORDFOO models CHIP8's own layout-only
 ;;; opcode families -- JP/CALL/LD-I on a 4/12 NNN layout, LD/ADD/SE Vx,byte
 ;;; on a 4/4/8 XNN layout, DRW on the default 4/4/4/4 -- sharing one 16-bit
 ;;; instruction word and OPCODE field.
@@ -3557,7 +3556,6 @@ skip: hlt" :machine 'chip8-test-machine)))
     (fiveam:is (equalp #(#x00 #x11) (coerce (encode-instruction jp '(256)) 'vector)))))
 
 (fiveam:test chip8word-machine-end-to-end
-  ;; Mirrors examples/chip8word.lisp's *SOURCE* verbatim.
   (let ((a (assemble "  ld    V 0, #21
   ldi   $100
   call  double
@@ -3582,7 +3580,7 @@ done:
         (fiveam:is (zerop (stack-depth m 'cs)))))))
 
 ;;; Word-addressed memory + bitfield/variant encoding combined (#55, M4) --
-;;; DCPU16FOO mirrors examples/dcpu16.lisp: DCPU-16's real instruction-word
+;;; DCPU16FOO models DCPU-16's real instruction-word
 ;;; layout (6-bit AV, 5-bit BV, 5-bit OPCODE fields) over :CELL-WIDTH 16
 ;;; memory, and a banked (#13) 16-bit REG register carrying DCPU-16's own
 ;;; register names (#72's :names) rather than bare indices.
@@ -3654,7 +3652,6 @@ done:
     (fiveam:is (= 1 (length (assembly-cells a))))))
 
 (fiveam:test dcpu16-machine-end-to-end
-  ;; Mirrors examples/dcpu16.lisp's *SOURCE* verbatim.
   (let ((a (assemble "set a, 5
 set b, 1000
 addr a, b
@@ -4504,7 +4501,7 @@ reld #*" :machine 'instr-test-machine)
              (semantics nil)))))
 
 ;; :RELATIVE and :WIDTH disagreeing at the SAME hole (not two different
-;; holes, the way BRW above puts them -- examples/subtable.lisp) -- one
+;; holes, the way BRW above puts them) -- one
 ;; sub-opcode selector satisfying both %CHECK-BYTE-ONE-OF-WIDTH and
 ;; %CHECK-BYTE-ONE-OF-RELATIVE at once, since each reads SUB-CHOICES
 ;; independently. Left open by #130's own design comment as unverified

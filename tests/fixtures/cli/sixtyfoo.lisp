@@ -1,15 +1,8 @@
-;;;; examples/include/include.lisp
+;;;; tests/fixtures/cli/sixtyfoo.lisp
+;;;; Machine definition for the lasm command line, read in the LASM package
+;;;; (see docs/cli.md). Pair it with counter.asm:
 ;;;;
-;;;; A program split across files: main.asm pulls a shared .equ and .macro in
-;;;; from defs.asm with .include, and ASSEMBLE-FILE reads main.asm from disk.
-;;;; defs.asm has an .ifndef include guard, and main.asm checks its size with
-;;;; .assert. See docs/includes.md, docs/conditionals.md and docs/assertions.md.
-;;;;
-;;;; Run with:  sbcl --script examples/include/include.lisp
-
-(load (merge-pathnames "../boot.lisp" *load-pathname*))
-
-(in-package #:lasm)
+;;;;   lasm run counter.asm -m sixtyfoo.lisp
 
 (deflexer sixtyfoo-syntax
   (comment-styles (";" :line))
@@ -48,11 +41,3 @@
 (definstruction sixtyfoo hlt
   (encoding (opcode #x00))
   (semantics (trap :halt)))
-
-(let ((assembly (assemble-file (merge-pathnames "main.asm" *load-pathname*)
-                               :lexer 'sixtyfoo-syntax :machine 'sixtyfoo)))
-  (format t "bytes: ~S~%" (coerce (assembly-cells assembly) 'list))
-  (let ((m (make-machine 'sixtyfoo)))
-    (load-program m assembly)
-    (multiple-value-bind (reason steps) (run m)
-      (format t "stopped: ~A after ~D step~:P, X = ~D~%" reason steps (sref m 'x)))))

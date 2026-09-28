@@ -18,9 +18,6 @@ including file uses below the `.include`. An `.include` inside a `.macro` body
 is expanded at each invocation and resolves against the file that defines the
 macro.
 
-See [`examples/include/`](../examples/include/include.lisp) for a runnable
-version.
-
 ## Syntax
 
 The operand is a single quoted path, so the active lexer must declare a

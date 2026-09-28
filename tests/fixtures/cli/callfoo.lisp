@@ -1,4 +1,4 @@
-;;;; examples/cli/callfoo.lisp
+;;;; tests/fixtures/cli/callfoo.lisp
 ;;;; A machine with register names, a memory stack and a call instruction, and
 ;;;; the backend a front end targets it through (#113):
 ;;;;

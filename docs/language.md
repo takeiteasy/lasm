@@ -23,7 +23,7 @@ lasm run fact.lsp -m callfoo.lisp     # a is 120 when it halts
 lasm compile fact.lsp -m callfoo.lisp # writes fact.lasm
 ```
 
-See [`examples/cli/fact.lsp`](../examples/cli/fact.lsp).
+See [`tests/fixtures/cli/fact.lsp`](../tests/fixtures/cli/fact.lsp).
 
 ## Program
 
@@ -303,7 +303,7 @@ it can recurse over a value a macro has already computed.
 (defun main () (total 1 2 3))          ; 6, added up at compile time
 ```
 
-See [`examples/cli/macros.lsp`](../examples/cli/macros.lsp).[^macros]
+See [`tests/fixtures/cli/macros.lsp`](../tests/fixtures/cli/macros.lsp).[^macros]
 
 ## Inline items
 
@@ -434,9 +434,9 @@ an [operand-kind clause](backends.md#operand-kind-clauses) for a register
 target to compile `funcall` on a computed value (#365); one clause for the
 usual label call and another for a register are typical.
 
-[`callfoo-lang-abi`](../examples/cli/callfoo.lisp) is a complete example;
-[`callfoo-lang-fp-abi`](../examples/cli/callfoo-fp.lisp) uses a frame pointer;
-[`widefoo-lang-abi`](../examples/cli/widefoo.lisp) has registers wider than
+[`callfoo-lang-abi`](../tests/fixtures/cli/callfoo.lisp) is a complete example;
+[`callfoo-lang-fp-abi`](../tests/fixtures/cli/callfoo-fp.lisp) uses a frame pointer;
+[`widefoo-lang-abi`](../tests/fixtures/cli/widefoo.lisp) has registers wider than
 its cells (#368).
 
 ## Names
@@ -527,7 +527,7 @@ With several arities taken, a wrong one that another function has is not caught 
   through `:peek`, so it loads first. The variants take the same operand a
   load would: `:add-slot`'s `slot` is the operand `:get` takes, and
   `:add-imm`'s `v` is the one `:const` takes. The example backend
-  [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines them for `:add`,
+  [`callfoo-lang-abi`](../tests/fixtures/cli/callfoo.lisp) defines them for `:add`,
   `:sub`, `:eq` and `:lt` only; `:mul` and the rest load first.
 
 [^swap]: Safe means the left operand is a constant, array, `(function F)` or
@@ -538,7 +538,7 @@ With several arities taken, a wrong one that another function has is not caught 
 [^branches]: An `and`, `or` and `not` in a condition jump between their
   operands and produce no value. A comparison whose `:branch-cmp` the backend
   lacks, and any other condition, computes a value and uses `:branch-zero`.
-  [`callfoo-lang-abi`](../examples/cli/callfoo.lisp) defines all eighteen
+  [`callfoo-lang-abi`](../tests/fixtures/cli/callfoo.lisp) defines all eighteen
   branch operations.
 
 [^fusing]: The landing costs a `:jump` and a `:const`. Each operand before the

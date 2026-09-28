@@ -12,8 +12,6 @@ far:    hlt
         .org $0100          ; outside any banked region: main image
 ```
 
-See [`examples/banks.lisp`](../examples/banks.lisp) for a runnable version.
-
 ## `.bank`
 
 `.bank N` selects bank `N` for later output. Output whose address lies in a

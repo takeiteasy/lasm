@@ -1,6 +1,6 @@
 ;;;; sbcl --script bench/debugger-history.lisp [STEPS]
 
-(load (merge-pathnames "../examples/boot.lisp" *load-pathname*))
+(load (merge-pathnames "../bench/boot.lisp" *load-pathname*))
 
 (in-package #:lasm)
 

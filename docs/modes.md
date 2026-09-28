@@ -103,8 +103,6 @@ below it.
   (semantics (set! a (stack-ref operand))))
 ```
 
-See [`hybrid.lisp`](../examples/hybrid.lisp).
-
 ## Forcing a mode with a mnemonic suffix
 
 A mode's `:suffix` lets source select it explicitly:
@@ -119,7 +117,7 @@ unsupported mode for the instruction, or mismatched syntax signals
 `assembly-error`. A forced mode signals `assembly-error` for an operand that
 does not fit its field, as a `:strict` mode does; a relative mode checks its
 offset. The suffix separator is a
-[lexer](lexer.md) setting. See [`complete.lisp`](../examples/complete.lisp).
+[lexer](lexer.md) setting.
 
 ## Forcing one hole with a prefix
 

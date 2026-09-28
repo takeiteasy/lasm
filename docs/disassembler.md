@@ -9,8 +9,6 @@ It can render source for reassembly or a listing for inspection.
   (print-disassembly lines))
 ```
 
-See [`disasm.lisp`](../examples/disasm.lisp).
-
 ## `decode-instruction-at`
 
 ```lisp

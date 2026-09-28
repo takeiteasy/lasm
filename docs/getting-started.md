@@ -29,47 +29,18 @@ ros lasm.ros --help
 
 ## Try an example
 
-```sh
-sbcl --script examples/counter.lisp
+The [DCPU-16 example](examples.md) is an ASDF system that assembles and
+runs a program:
+
+```lisp
+(asdf:load-asd #p"examples/dcpu16/dcpu16.asd")
+(asdf:load-system :dcpu16)
 ```
 
-This example parses, assembles, and runs a counter loop. Each example script
-runs on its own.[^scripts]
-
-## More examples
-
-Run a Lisp example with `sbcl --script <path>`.
-
-| Path | Shows | Reference |
-| --- | --- | --- |
-| `examples/sixtyfoo.lisp` | Registers, stack, memory, and flags | [Semantics](semantics.md) |
-| `examples/modes.lisp` | Choosing an addressing mode | [Modes](modes.md) |
-| `examples/mov.lisp` | An instruction with two operands | [Instructions](instructions.md) |
-| `examples/hole-attributes.lisp` | Signed and relative operands | [Modes](modes.md) |
-| `examples/directives.lisp` | Data, constants, and reserved space | [Directives](directives.md) |
-| `examples/pc-and-scopes.lisp` | Location counter and local labels | [Assembler](assembler.md) |
-| `examples/scoped-counter-alias.lisp` | Scoped labels and `$` location alias | [Assembler](assembler.md) |
-| `examples/macros.lisp` | Macro parameters and local constants | [Macros](macros.md) |
-| `examples/include/include.lisp` | Assembling included files | [Includes](includes.md) |
-| `examples/complete.lisp` | Constants, macros, and forced modes | [Assembler](assembler.md) |
-| `examples/stack.lisp` | A stack-based machine | [Machine model](machine-model.md) |
-| `examples/hybrid.lisp` | Registers and a shared data/call stack | [Machine model](machine-model.md) |
-| `examples/word.lisp` | Bit fields and extra instruction words | [Instructions](instructions.md) |
-| `examples/wordaddr.lisp` | 16-bit addressable cells | [Machine model](machine-model.md) |
-| `examples/chip8.lisp` | Registers with different widths | [Machine model](machine-model.md) |
-| `examples/dcpu16.lisp` | Word-addressed memory and instruction fields | [Instructions](instructions.md) |
-| `examples/chip8word.lisp` | Instruction layouts and fixed field values | [Instructions](instructions.md) |
-| `examples/cycles.lisp` | Cycle and duration budgets | [Emulator](emulator.md) |
-| `examples/debugger.lisp` | Breakpoints, stepping, and inspection | [Debugger](debugger.md) |
-| `examples/regions.lisp` | ROM, RAM, and device memory regions | [Machine model](machine-model.md) |
-| `examples/devices.lisp` | Attached and declared devices | [Devices](devices.md) |
-| `examples/interrupts.lisp` | Interrupt delivery and masking | [Interrupts](interrupts.md) |
-| `examples/backend.lisp` | A backend and a program as items | [Backends](backends.md) |
-
-Run the command line example with:
+From the command line:
 
 ```sh
-ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lisp
+ros lasm.ros run tests/fixtures/cli/counter.asm -m tests/fixtures/cli/sixtyfoo.lisp
 ```
 
 ## Run the tests
@@ -79,8 +50,8 @@ sbcl --non-interactive --eval '(asdf:test-system :lasm)'
 ecl --eval '(asdf:test-system :lasm)' --eval '(ext:quit)'
 ```
 
-The suite runs the Lisp examples and reports failures with a nonzero exit
-status.[^tests]
+The suite tests each [example](examples.md) in its own Lisp process and
+reports failures with a nonzero exit status.[^tests]
 
 ## Next
 
@@ -91,10 +62,7 @@ or the [documentation index](README.md).
   Eclector, which reads [snapshot](snapshots.md) and [items](items.md) files, is. Without Quicklisp,
   make their system files, Eclector's and CFFI's available to ASDF, then run
   `(asdf:load-system :lasm)`.
-[^scripts]: Each script loads `examples/boot.lisp` to find its dependencies
-  without relying on `~/.sbclrc`.
-[^tests]: The suite runs each `examples/**/*.lisp` script in its own Lisp
-  process. On SBCL it caches a bootstrapped core as `examples.core` beside
-  compiled LASM files; delete that core after changing Quicklisp dependencies.
-  ECL starts each script with `ecl --shell`. Set
+[^tests]: On SBCL the suite caches a bootstrapped core as `examples.core`
+  beside compiled LASM files; delete that core after changing Quicklisp
+  dependencies. ECL starts each script with `ecl --shell`. Set
   `LASM_BENCH=1` to run the external benchmarks with STAR at `../star`.

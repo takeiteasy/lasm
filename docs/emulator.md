@@ -9,8 +9,6 @@ The emulator loads encoded cells into a machine and executes instructions.
   (run m))
 ```
 
-See [`counter.lisp`](../examples/counter.lisp) for a runnable program.
-
 ## PC and program memory
 
 The emulator uses register `pc` and the machine's sole memory element by
@@ -177,8 +175,7 @@ budgets.
 
 Both budgets are checked **after** each step, so one instruction can cross
 the limit. `:throttle t` paces `run-for-duration` against real time;
-without it, the duration is a simulated-time budget. See
-[`cycles.lisp`](../examples/cycles.lisp).[^timing]
+without it, the duration is a simulated-time budget.[^timing]
 
 ### Per-mode cycle cost
 

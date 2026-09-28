@@ -8,11 +8,6 @@ returns encoded memory cells.
         bne start" :lexer 'sixtyfoo-syntax :machine 'sixtyfoo)
 ```
 
-For runnable programs, see
-[`counter.lisp`](../examples/counter.lisp),
-[`modes.lisp`](../examples/modes.lisp), and
-[`directives.lisp`](../examples/directives.lisp).
-
 ## `assemble` / `assemble-statements`
 
 ```lisp
@@ -135,8 +130,7 @@ inline values are tried before variants needing extra cells. Each field uses
 its declared range or width; relative fields use the same next-instruction
 base as other encodings.[^word]
 
-See [Word-encoded instructions](word-instructions.md) and
-[`word.lisp`](../examples/word.lisp).
+See [Word-encoded instructions](word-instructions.md).
 
 ## PC-relative offsets
 

@@ -624,7 +624,7 @@ loop:   dex
 ;;; M3 milestone target: a pure stack-based fantasy CPU, assembled and run
 ;;; end to end (#51). STACK-TEST-MACHINE declares no general-purpose
 ;;; registers at all -- only PC (still a plain register, by the %RESOLVE-PC
-;;; convention), a data stack, and RAM -- mirroring examples/stack.lisp.
+;;; convention), a data stack, and RAM.
 
 (defmachine stack-test-machine
   (register pc :width 16)
@@ -727,8 +727,7 @@ hlt" :machine 'stack-test-machine)))
 (fiveam:test stack-machine-end-to-end
   ;; The M3 milestone's actual validation case: a counted loop (5+4+3+2+1)
   ;; built entirely on PC + one stack + RAM, no general-purpose registers,
-  ;; no flags. See examples/stack.lisp for the annotated version and the
-  ;; write-up of what this does (and doesn't) require of the storage model.
+  ;; no flags.
   (let* ((m (make-machine 'stack-test-machine))
          (a (assemble "        psh #5
         sto $0000
@@ -822,7 +821,7 @@ hlt" :machine 'shallow-stack-test-machine)))
                                     :machine 'emu-test-machine :name 'ram :address #x10000))))))
 
 ;;; M3 milestone target: a hybrid machine -- accumulator + index registers +
-;;; an implicit call stack (#52), mirroring examples/hybrid.lisp. JSR/RTS are
+;;; an implicit call stack (#52). JSR/RTS are
 ;;; built entirely from PUSH/POP of PC onto S, no dedicated call-stack
 ;;; primitive, and DOUBLE reaches its argument with STACK-RELATIVE addressing
 ;;; (#50) since JSR's own return address sits on top of it on the same S.
@@ -947,8 +946,8 @@ double: lda 1,S
 
 (fiveam:test hybrid-machine-end-to-end
   ;; The M3 milestone's second validation case: DOUBLE called three times
-  ;; through the same JSR/RTS + STACK-RELATIVE machinery as
-  ;; examples/hybrid.lisp, doubling ram[$1000] each time (1 -> 2 -> 4 -> 8)
+  ;; through the same JSR/RTS + STACK-RELATIVE machinery,
+  ;; doubling ram[$1000] each time (1 -> 2 -> 4 -> 8)
   ;; and counting the calls into ram[$1001] via Y.
   (let* ((m (make-machine 'hybrid-test-machine))
          (a (assemble "        ldx #3
@@ -972,7 +971,7 @@ double: iny
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
-      ;; Pinned down by running examples/hybrid.lisp, not hand-counted.
+      ;; Pinned down by running the program, not hand-counted.
       (fiveam:is (= 41 steps))
       (fiveam:is (= 8 (mref m 'ram #x1000)))
       (fiveam:is (= 3 (mref m 'ram #x1001)))

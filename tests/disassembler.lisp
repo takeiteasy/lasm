@@ -136,7 +136,7 @@
             (for-choice disasm-vh-idx (operand off :width 1)))
   (semantics (set! x src)))
 
-;;; Word-encoded fixture -- DCPU-16-shaped (examples/dcpu16.lisp): a 6-bit
+;;; Word-encoded fixture -- DCPU-16-shaped: a 6-bit
 ;;; field A, a 5-bit field B, a 5-bit OPCODE field, MSB-first. SET's operand
 ;;; order (dst = field B, shift 5; src = field A, shift 10) is declared
 ;;; opposite its shift order -- the shape that catches a hole-order/

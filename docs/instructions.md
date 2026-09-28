@@ -10,9 +10,6 @@
   (semantics (set! x operand)))
 ```
 
-See [`counter.lisp`](../examples/counter.lisp) for a runnable instruction
-set and [`modes.lisp`](../examples/modes.lisp) for multiple modes.
-
 ## `definstruction`
 
 ```lisp
@@ -101,8 +98,6 @@ fields for discrimination and rejects `:sub`.
       (semantics (set! a (mref machine 'ram operand))))))
 ```
 
-See [`subopcode.lisp`](../examples/subopcode.lisp).
-
 ### `(variant (choice m) (sub s))` — hole-selected sub-opcode
 
 A `one-of` hole can select the sub-opcode from the alternative its syntax
@@ -128,7 +123,7 @@ matches:
 `lda 5` and `lda [5]` share an opcode but use different sub-opcodes. Every
 alternative must have one unique `sub` value. Only one hole can select the
 cell this way; use a [sub-opcode table](#sub-opcode-table)
-when several holes participate. See [`subchoice.lisp`](../examples/subchoice.lisp).
+when several holes participate.
 
 ### Sub-opcode table
 
@@ -145,7 +140,7 @@ A table selects one sub-opcode for a combination of `one-of` holes:
 Each `choice` lists participating holes in pattern order. Cover every
 combination exactly once, with distinct sub-opcodes that fit the cell.
 A table cannot share its encoding with an explicit `:sub` or a per-hole
-sub-opcode selector. See [`subtable.lisp`](../examples/subtable.lisp).
+sub-opcode selector.
 
 #### Table holes
 
@@ -173,9 +168,7 @@ carry a selector. Name its slot in `(holes ...)` instead:
 Without `(holes ...)`, every `one-of` hole and every such slot
 participates. A slot and a hole index can share one table:
 `(holes kind 0)`. A `one-of` with no slot and no hole is rejected; name it.
-Nested alternatives use tree keys: `(choice (stk pop))`. See
-[`slotvarying.lisp`](../examples/slotvarying.lisp) and
-[`nesttree.lisp`](../examples/nesttree.lisp).
+Nested alternatives use tree keys: `(choice (stk pop))`.
 
 ### `operand-signedness`
 

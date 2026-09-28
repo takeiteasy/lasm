@@ -7,7 +7,7 @@
 (fiveam:def-suite convention :in lasm)
 (fiveam:in-suite convention)
 
-;;; Fixtures: callfoo (examples/cli/callfoo.lisp, loaded by tests/backend.lisp)
+;;; Fixtures: callfoo (tests/fixtures/cli/callfoo.lisp, loaded by tests/backend.lisp)
 ;;; under several conventions, and a machine whose stack grows up.
 
 (defmacro %cv-abi (name &key (args :stack) (order :right-to-left) (cleanup :caller) (alignment 1)

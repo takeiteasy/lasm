@@ -1,4 +1,4 @@
-;;;; examples/cli/callfoo-fp.lisp
+;;;; tests/fixtures/cli/callfoo-fp.lisp
 ;;;; callfoo with a frame pointer, and the backend extending callfoo-abi for it
 ;;;; (#321, #323). The CLI file defines callfoo too, so name the machine:
 ;;;;

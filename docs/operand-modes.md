@@ -85,8 +85,7 @@ Alternatives can have different expression-hole counts, such as `reg` and
 The base hole selects the alternative. A cell-encoded instruction needs a
 sub-opcode selector; a word-encoded instruction needs a `choice` field.
 Several varying elements select independently. See
-[Word-encoded instructions](word-instructions.md#extra-holes-with-for-choice)
-and [`subvarying.lisp`](../examples/subvarying.lisp).
+[Word-encoded instructions](word-instructions.md#extra-holes-with-for-choice).
 
 ### Nested varying alternatives
 
@@ -95,8 +94,7 @@ subkey per keyed `one-of` it contains: `(choice (ind ind-idx))`. A `one-of` is
 keyed when its options differ in hole count (varying) or in a
 [per-hole attribute](#keyed-nested-alternatives).
 `for-choice` uses the same key to name extra holes, and `choice-case` can
-inspect the outer or inner selection. See
-[`nestvarying.lisp`](../examples/nestvarying.lisp).[^nested]
+inspect the outer or inner selection.[^nested]
 
 An inner option with no hole, such as `POP`, needs a named outer `one-of`;
 the slot records the pick as a tree:
@@ -105,8 +103,6 @@ the slot records the pick as a tree:
 (defmode stk (one-of pop idx))
 (defmode src (one-of (src-slot reg stk)))
 ```
-
-See [`slotvarying.lisp`](../examples/slotvarying.lisp).
 
 #### Several varying `one-of`s in one alternative
 
@@ -124,8 +120,7 @@ for each, and `for-choice` and `choice-case` address one `one-of` by its slot:
 ```
 
 Extra operands land at the position of their own `one-of`, so an operand
-declared after the nested alternative keeps its binding. See
-[`nesttree.lisp`](../examples/nesttree.lisp).
+declared after the nested alternative keeps its binding.
 
 When the alternative's minimum shape has more holes than the operand's base,
 `(for-choice (src pair) ...)` declares the excess. Those operands land at
@@ -135,8 +130,6 @@ their pattern position, between the extras of the `one-of`s:
 (defmode any (one-of pair lit))     ; lit is "#" expr, one hole
 (for-choice (src pair) (operand rv :width 1))   ; pair's second hole
 ```
-
-See [`nestexcess.lisp`](../examples/nestexcess.lisp).
 
 ## Per-hole attributes
 
@@ -184,8 +177,7 @@ these attributes is keyed: its pick is a subkey of the option tree,
 `(choice (ind near))`. `ind` above has the same hole count either way, and
 its picks still decide width and signedness. `:signed`, `:relative` and
 `:width` need a selector for the hole, as at the top level, so decode
-recovers them; `:strict` does not. See
-[`nestkeyed.lisp`](../examples/nestkeyed.lisp).
+recovers them; `:strict` does not.
 
 ## Forcing one hole
 

@@ -1,6 +1,7 @@
 # LASM documentation
 
 - [Getting started](getting-started.md) — install, load, run the example and tests
+- [Examples](examples.md) — packaged emulators loaded through ASDF
 - [Memory audit](memory-audit.md) — measured build, runtime and per-CPU costs
 - [Machine model](machine-model.md) — storage elements and `defmachine`
 - [Machine families](machine-families.md) — `(:extends ...)`, inherited instructions, removal, undefined-opcode policy

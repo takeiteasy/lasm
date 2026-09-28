@@ -1,4 +1,4 @@
-;;;; examples/cli/double.lasm
+;;;; tests/fixtures/cli/double.lasm
 ;;;; double(21) with the argument on the stack (#113):
 ;;;;
 ;;;;   lasm run double.lasm -m callfoo.lisp

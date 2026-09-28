@@ -35,8 +35,7 @@ time.[^word]
 ```
 
 The assembler chooses the inline form when it fits, otherwise the extra
-word. See [`word.lisp`](../examples/word.lisp) and
-[Assembler](assembler.md#choosing-a-mode).
+word. See [Assembler](assembler.md#choosing-a-mode).
 
 ## Per-instruction layouts
 
@@ -45,8 +44,7 @@ instruction. Each `:field` and `field-value` name resolves within that
 layout. Without `(layout ...)`, the default layout applies. Distinct
 instructions sharing an opcode can use different layouts when their encoded
 bit patterns remain distinguishable. See
-[Machine model](machine-model.md#defmachine) and
-[`chip8word.lisp`](../examples/chip8word.lisp).
+[Machine model](machine-model.md#defmachine).
 
 ## Cell order
 
@@ -66,8 +64,7 @@ memory's `:endian` order by default. Two overrides take any `:endian` order
 ```
 
 The extra value's setting wins over the instruction word's, which wins over
-the memory's. `.word` and other data directives keep the memory's order. See
-[`word-endian.lisp`](../examples/word-endian.lisp).[^endian]
+the memory's. `.word` and other data directives keep the memory's order.[^endian]
 
 ## Fixed field values
 
@@ -80,8 +77,7 @@ the memory's. `.word` and other data directives keep the memory's order. See
 ```
 
 It can distinguish instructions sharing an opcode. A field cannot be both
-fixed and assigned to an operand, and its value must fit. See
-[`chip8word.lisp`](../examples/chip8word.lisp).
+fixed and assigned to an operand, and its value must fit.
 
 ## Fallback instructions
 

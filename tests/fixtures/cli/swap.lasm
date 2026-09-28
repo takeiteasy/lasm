@@ -1,4 +1,4 @@
-;;;; examples/cli/swap.lasm
+;;;; tests/fixtures/cli/swap.lasm
 ;;;; Calling with the registers the callee's arguments swap: callfoo-reg-abi
 ;;;; breaks the cycle through its scratch register (docs/conventions.md#calls).
 ;;;;

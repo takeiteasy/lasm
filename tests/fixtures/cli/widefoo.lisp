@@ -1,4 +1,4 @@
-;;;; examples/cli/widefoo.lisp
+;;;; tests/fixtures/cli/widefoo.lisp
 ;;;; #368: a machine whose registers (16 bits) are wider than its memory cells
 ;;;; (8 bits), so a language word spans two cells (BACKEND-WORD-CELLS). Modeled
 ;;;; on callfoo.lisp, with (stack-pointer sp ... :width 16) (#167) giving the

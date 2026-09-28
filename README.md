@@ -30,7 +30,9 @@ emulation and tools.
   (push a s))
 ```
 
-See [`examples/sixtyfoo.lisp`](examples/sixtyfoo.lisp) for a runnable version.
+## Examples
+
+Full emulators packaged as ASDF systems are listed in [Examples](docs/examples.md).
 
 ## License
 

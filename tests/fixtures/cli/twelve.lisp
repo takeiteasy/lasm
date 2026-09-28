@@ -1,4 +1,4 @@
-;;;; examples/cli/twelve.lisp
+;;;; tests/fixtures/cli/twelve.lisp
 ;;;; A 12-bit-cell machine for trying non-byte cell packing (see
 ;;;; docs/binary-output.md):
 ;;;;

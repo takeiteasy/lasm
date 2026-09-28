@@ -1,6 +1,6 @@
 ;;;; tests/cli.lisp
 ;;;; fiveam tests for cli.lisp (#80): RUN-CLI driven with argument lists
-;;;; against examples/cli/ and tests/fixtures/cli/.
+;;;; against tests/fixtures/cli/ and tests/fixtures/cli/.
 
 (in-package #:lasm)
 
@@ -11,7 +11,7 @@
   (namestring (asdf:system-relative-pathname :lasm relative)))
 
 (defun %cli-args (command file &rest more)
-  (list* command (%cli-path file) "-m" (%cli-path "examples/cli/sixtyfoo.lisp") more))
+  (list* command (%cli-path file) "-m" (%cli-path "tests/fixtures/cli/sixtyfoo.lisp") more))
 
 (defun %run-cli (args &optional (input ""))
   "Returns (VALUES EXIT-STATUS STDOUT STDERR). INPUT feeds the debugger."
@@ -23,32 +23,32 @@
 (fiveam:test cli-assemble-writes-binary-by-default
   (uiop:with-temporary-file (:pathname path :type "bin")
     (multiple-value-bind (status out)
-        (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+        (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") (list "-o" (namestring path))))
       (fiveam:is (= 0 status))
       (fiveam:is (search "9 bytes" out))
       (fiveam:is (equalp #(#xA2 10 #xCA #xD0 #xFD #x8D 0 #x10 0) (%cli-read-bytes path))))))
 
 (fiveam:test cli-assemble-hex-format
   (uiop:with-temporary-file (:pathname path :type "hex")
-    (fiveam:is (= 0 (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm")
+    (fiveam:is (= 0 (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm")
                                       (list "-o" (namestring path) "--format" "hex")))))
     (fiveam:is (string= (format nil ":09000000A20ACAD0FD8D00100017~%:00000001FF~%")
                         (uiop:read-file-string path)))))
 
 (fiveam:test cli-assemble-origin-flag
   (uiop:with-temporary-file (:pathname path :type "hex")
-    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm")
+    (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm")
                       (list "-o" (namestring path) "--format" "hex" "--origin" "$100")))
     (fiveam:is (string= ":09010000" (subseq (uiop:read-file-string path) 0 9)))))
 
 (fiveam:test cli-run-reports-stop-reason
-  (multiple-value-bind (status out) (%run-cli (%cli-args "run" "examples/cli/counter.asm"))
+  (multiple-value-bind (status out) (%run-cli (%cli-args "run" "tests/fixtures/cli/counter.asm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 23 steps, pc = $0009" out))))
 
 (fiveam:test cli-run-honours-max-steps
   (multiple-value-bind (status out)
-      (%run-cli (append (%cli-args "run" "examples/cli/counter.asm") (list "--max-steps" "5")))
+      (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm") (list "--max-steps" "5")))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: max-steps after 5 steps" out))))
 
@@ -73,7 +73,7 @@
 
 (fiveam:test cli-listing-and-symbols
   (multiple-value-bind (status out)
-      (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--symbols")))
+      (%run-cli (append (%cli-args "listing" "tests/fixtures/cli/counter.asm") (list "--symbols")))
     (fiveam:is (= 0 status))
     (fiveam:is (search "A2 0A" out))
     (fiveam:is (search "count" out))
@@ -81,27 +81,27 @@
 
 (fiveam:test cli-disassemble-round-trips-assembled-binary
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+    (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") (list "-o" (namestring path))))
     (multiple-value-bind (status out)
-        (%run-cli (list "disassemble" (namestring path) "-m" (%cli-path "examples/cli/sixtyfoo.lisp")))
+        (%run-cli (list "disassemble" (namestring path) "-m" (%cli-path "tests/fixtures/cli/sixtyfoo.lisp")))
       (fiveam:is (= 0 status))
       (dolist (text '("ldx #$A" "dex" "sta $1000" "hlt"))
         (fiveam:is (search text out) "~S missing from:~%~A" text out)))))
 
 (fiveam:test cli-disassemble-annotate-prints-cells
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+    (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") (list "-o" (namestring path))))
     (fiveam:is (search "A2 0A" (nth-value 1 (%run-cli (list "disassemble" (namestring path) "-m"
-                                                            (%cli-path "examples/cli/sixtyfoo.lisp")
+                                                            (%cli-path "tests/fixtures/cli/sixtyfoo.lisp")
                                                             "--annotate")))))))
 
 (fiveam:test cli-definitions-do-not-leak-into-the-image
-  (%run-cli (%cli-args "listing" "examples/cli/counter.asm"))
+  (%run-cli (%cli-args "listing" "tests/fixtures/cli/counter.asm"))
   (fiveam:is (null (gethash 'sixtyfoo *machines*)))
   (fiveam:is (null (gethash 'sixtyfoo-syntax *lexers*))))
 
 (fiveam:test cli-load-keeps-compiler-output-off-the-streams
-  (multiple-value-bind (status out err) (%run-cli (%cli-args "listing" "examples/cli/counter.asm"))
+  (multiple-value-bind (status out err) (%run-cli (%cli-args "listing" "tests/fixtures/cli/counter.asm"))
     (fiveam:is (= 0 status))
     (fiveam:is (string= "" err))
     (fiveam:is (not (search "STYLE-WARNING" out)))))
@@ -115,8 +115,8 @@
 (fiveam:test cli-usage-errors-exit-two
   (dolist (args (list '() '("frobnicate" "x.asm" "-m" "m.lisp") '("run") '("run" "x.asm")
                       '("run" "x.asm" "-m") '("run" "x.asm" "--nope")
-                      (append (%cli-args "assemble" "examples/cli/counter.asm") '("--format" "elf"))
-                      (append (%cli-args "run" "examples/cli/counter.asm") '("--max-steps" "many"))))
+                      (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") '("--format" "elf"))
+                      (append (%cli-args "run" "tests/fixtures/cli/counter.asm") '("--max-steps" "many"))))
     (multiple-value-bind (status out err) (%run-cli args)
       (fiveam:is (= 2 status) "~S exited ~D" args status)
       (fiveam:is (string= "" out))
@@ -153,15 +153,15 @@
     (fiveam:is (search "no machine named" (nth-value 2 (%run-cli (append args '("--machine-name" "nope"))))))))
 
 (fiveam:test cli-machine-flag-is-required
-  (multiple-value-bind (status out err) (%run-cli (list "listing" (%cli-path "examples/cli/counter.asm")))
+  (multiple-value-bind (status out err) (%run-cli (list "listing" (%cli-path "tests/fixtures/cli/counter.asm")))
     (fiveam:is (= 2 status))
     (fiveam:is (string= "" out))
     (fiveam:is (search "-m MACHINE.lisp is required" err))))
 
 (fiveam:test cli-disassemble-data-region-renders-bytes
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
-    (let ((machine (%cli-path "examples/cli/sixtyfoo.lisp")))
+    (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") (list "-o" (namestring path))))
+    (let ((machine (%cli-path "tests/fixtures/cli/sixtyfoo.lisp")))
       (multiple-value-bind (status out)
           (%run-cli (list "disassemble" (namestring path) "-m" machine "--data-region" "0:2"))
         (fiveam:is (= 0 status))
@@ -176,10 +176,10 @@
 
 (fiveam:test cli-disassemble-rejects-malformed-data-region
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (%run-cli (append (%cli-args "assemble" "examples/cli/counter.asm") (list "-o" (namestring path))))
+    (%run-cli (append (%cli-args "assemble" "tests/fixtures/cli/counter.asm") (list "-o" (namestring path))))
     (dolist (bad '("5" "3:1" "2:2" "a:b" ":4"))
       (multiple-value-bind (status out err)
-          (%run-cli (list "disassemble" (namestring path) "-m" (%cli-path "examples/cli/sixtyfoo.lisp")
+          (%run-cli (list "disassemble" (namestring path) "-m" (%cli-path "tests/fixtures/cli/sixtyfoo.lisp")
                           "--data-region" bad))
         (fiveam:is (= 2 status) "~S" bad)
         (fiveam:is (string= "" out))
@@ -211,10 +211,10 @@
 
 (fiveam:test cli-listing-cycle-costs
   (multiple-value-bind (status out)
-      (%run-cli (append (%cli-args "listing" "examples/cli/counter.asm") (list "--cycle-costs")))
+      (%run-cli (append (%cli-args "listing" "tests/fixtures/cli/counter.asm") (list "--cycle-costs")))
     (fiveam:is (= 0 status))
     (fiveam:is (search "1    A2 0A" out)))
-  (multiple-value-bind (status out) (%run-cli (%cli-args "listing" "examples/cli/counter.asm"))
+  (multiple-value-bind (status out) (%run-cli (%cli-args "listing" "tests/fixtures/cli/counter.asm"))
     (fiveam:is (= 0 status))
     (fiveam:is (not (search "1    A2 0A" out)))))
 
@@ -231,30 +231,30 @@
     (fiveam:is (null (gethash 'cli-local-mode *machine-modes*)))))
 
 (defun %twelve-args (command file &rest more)
-  (list* command (%cli-path file) "-m" (%cli-path "examples/cli/twelve.lisp") more))
+  (list* command (%cli-path file) "-m" (%cli-path "tests/fixtures/cli/twelve.lisp") more))
 
 (fiveam:test cli-assemble-pads-twelve-bit-cells-by-default
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (fiveam:is (= 0 (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+    (fiveam:is (= 0 (%run-cli (append (%twelve-args "assemble" "tests/fixtures/cli/twelve.asm")
                                       (list "-o" (namestring path))))))
     (fiveam:is (equalp #(#x0A #x01 #x0A #xBC #x0B #x02 #x01 #x23 0 0) (%cli-read-bytes path)))))
 
 (fiveam:test cli-assemble-and-disassemble-bit-packed-cells
   (uiop:with-temporary-file (:pathname path :type "bin")
     (multiple-value-bind (status out)
-        (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+        (%run-cli (append (%twelve-args "assemble" "tests/fixtures/cli/twelve.asm")
                           (list "-o" (namestring path) "--packing" "bits")))
       (fiveam:is (= 0 status))
       (fiveam:is (search "8 bytes" out)))
     (fiveam:is (equalp #(#xA0 #x1A #xBC #xB0 #x21 #x23 0 0) (%cli-read-bytes path)))
     (let ((text (nth-value 1 (%run-cli (list "disassemble" (namestring path) "-m"
-                                             (%cli-path "examples/cli/twelve.lisp")
+                                             (%cli-path "tests/fixtures/cli/twelve.lisp")
                                              "--packing" "bits")))))
       (dolist (line '("lda #$ABC" "sta $123" "hlt"))
         (fiveam:is (search line text) "~S missing from:~%~A" line text)))))
 
 (fiveam:test cli-packing-rejects-an-unknown-value
-  (fiveam:is (= 2 (%run-cli (append (%twelve-args "assemble" "examples/cli/twelve.asm")
+  (fiveam:is (= 2 (%run-cli (append (%twelve-args "assemble" "tests/fixtures/cli/twelve.asm")
                                     (list "--packing" "nibbles"))))))
 
 (fiveam:test cli-disassemble-cells-drops-bit-padding
@@ -312,12 +312,12 @@
   (uiop:with-temporary-file (:pathname path :type "snap")
     (let ((snapshot (namestring path)))
       (multiple-value-bind (status out)
-          (%run-cli (append (%cli-args "run" "examples/cli/counter.asm")
+          (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm")
                             (list "--max-steps" "5" "--save-snapshot" snapshot)))
         (fiveam:is (= 0 status))
         (fiveam:is (search "stopped: max-steps after 5 steps" out)))
       (multiple-value-bind (status out)
-          (%run-cli (append (%cli-args "run" "examples/cli/counter.asm")
+          (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm")
                             (list "--load-snapshot" snapshot)))
         (fiveam:is (= 0 status))
         (fiveam:is (search "stopped: trap after 18 steps, pc = $0009" out))))))
@@ -327,7 +327,7 @@
     (with-open-file (out path :direction :output :if-exists :supersede)
       (write-string "not a snapshot (" out))
     (multiple-value-bind (status out err)
-        (%run-cli (append (%cli-args "run" "examples/cli/counter.asm")
+        (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm")
                           (list "--load-snapshot" (namestring path))))
       (fiveam:is (= 1 status))
       (fiveam:is (string= "" out))
@@ -335,7 +335,7 @@
 
 (fiveam:test cli-run-rejects-a-snapshot-of-another-machine
   (uiop:with-temporary-file (:pathname path :type "snap")
-    (%run-cli (append (%cli-args "run" "examples/cli/counter.asm") (list "--save-snapshot" (namestring path))))
+    (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm") (list "--save-snapshot" (namestring path))))
     (multiple-value-bind (status out err)
         (%run-cli (list "run" (%cli-path "tests/fixtures/cli/ambi.asm")
                         "-m" (%cli-path "tests/fixtures/cli/ambi.lisp")
@@ -349,7 +349,7 @@
 
 (fiveam:test cli-debug-runs-a-session-from-stdin
   (multiple-value-bind (status out err)
-      (%run-cli (%cli-args "debug" "examples/cli/counter.asm")
+      (%run-cli (%cli-args "debug" "tests/fixtures/cli/counter.asm")
                 (%debug-lines "break count.loop" "continue" "print x" "quit"))
     (fiveam:is (= 0 status))
     (fiveam:is (string= "" err))
@@ -359,20 +359,20 @@
 
 (fiveam:test cli-debug-conditions-use-the-assemblys-lexer
   (multiple-value-bind (status out)
-      (%run-cli (%cli-args "debug" "examples/cli/counter.asm")
+      (%run-cli (%cli-args "debug" "tests/fixtures/cli/counter.asm")
                 (%debug-lines "break count.loop if x == %1010" "quit"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "Breakpoint 1" out))
     (fiveam:is (not (search "Error" out)))))
 
 (fiveam:test cli-debug-ends-at-end-of-input
-  (multiple-value-bind (status out) (%run-cli (%cli-args "debug" "examples/cli/counter.asm") "step")
+  (multiple-value-bind (status out) (%run-cli (%cli-args "debug" "tests/fixtures/cli/counter.asm") "step")
     (fiveam:is (= 0 status))
     (fiveam:is (search "(lasm-dbg) " out))))
 
 (fiveam:test cli-debug-break-presets-stop-before-the-prompt
   (multiple-value-bind (status out)
-      (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--break" ".loop in count"))
+      (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--break" ".loop in count"))
                 (%debug-lines "continue"))
     (fiveam:is (= 0 status))
     (fiveam:is (< (search "Breakpoint 1" out) (search "(lasm-dbg)" out)))
@@ -383,31 +383,31 @@
     (with-open-file (out path :direction :output :if-exists :supersede)
       (format out "step 2~%print x~%"))
     (multiple-value-bind (status out)
-        (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--commands" (namestring path)))
+        (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--commands" (namestring path)))
                   (%debug-lines "quit"))
       (fiveam:is (= 0 status))
       (fiveam:is (search "(lasm-dbg) step 2" out))
       (fiveam:is (search "Bye." out)))
     (fiveam:is (not (search "(lasm-dbg) quit"
-                            (nth-value 1 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm")
+                            (nth-value 1 (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm")
                                                            (list "--commands" (namestring path)))
                                                    "quit\nprint x\n")))))))
 
 (fiveam:test cli-debug-history-enables-step-back
   (let ((script (%debug-lines "step 2" "back")))
-    (fiveam:is (search "Error" (nth-value 1 (%run-cli (%cli-args "debug" "examples/cli/counter.asm") script))))
-    (let ((out (nth-value 1 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--history" "10"))
+    (fiveam:is (search "Error" (nth-value 1 (%run-cli (%cli-args "debug" "tests/fixtures/cli/counter.asm") script))))
+    (let ((out (nth-value 1 (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--history" "10"))
                                       script))))
       (fiveam:is (not (search "Error" out))))
-    (fiveam:is (= 2 (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--history" "0")))))))
+    (fiveam:is (= 2 (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--history" "0")))))))
 
 (fiveam:test cli-debug-loads-and-saves-snapshots
   (uiop:with-temporary-file (:pathname path :type "snap")
     (let ((snapshot (namestring path)))
-      (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--save-snapshot" snapshot))
+      (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--save-snapshot" snapshot))
                 (%debug-lines "step 3"))
       (multiple-value-bind (status out)
-          (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--load-snapshot" snapshot))
+          (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--load-snapshot" snapshot))
                     (%debug-lines "continue"))
         (fiveam:is (= 0 status))
         (fiveam:is (search "PC=0009" (string-upcase out)))))))
@@ -415,10 +415,10 @@
 ;;; Resuming from a snapshot alone
 
 (defun %sixtyfoo-args (command &rest more)
-  (list* command "-m" (%cli-path "examples/cli/sixtyfoo.lisp") more))
+  (list* command "-m" (%cli-path "tests/fixtures/cli/sixtyfoo.lisp") more))
 
 (defun %save-counter-snapshot (path &rest more)
-  (%run-cli (append (%cli-args "run" "examples/cli/counter.asm")
+  (%run-cli (append (%cli-args "run" "tests/fixtures/cli/counter.asm")
                     (list "--max-steps" "5" "--save-snapshot" (namestring path)) more)))
 
 (fiveam:test cli-run-resumes-without-the-source-file
@@ -444,10 +444,10 @@
   (uiop:with-temporary-file (:pathname snap :type "snap")
     (%call-with-temp-sources
      `(("main.asm" . ".include \"inc/body.asm\"")
-       ("inc/body.asm" . ,(uiop:read-file-string (%cli-path "examples/cli/counter.asm"))))
+       ("inc/body.asm" . ,(uiop:read-file-string (%cli-path "tests/fixtures/cli/counter.asm"))))
      (lambda (main dir)
        (declare (ignore dir))
-       (fiveam:is (= 0 (%run-cli (list "run" (namestring main) "-m" (%cli-path "examples/cli/sixtyfoo.lisp")
+       (fiveam:is (= 0 (%run-cli (list "run" (namestring main) "-m" (%cli-path "tests/fixtures/cli/sixtyfoo.lisp")
                                        "--max-steps" "5" "--save-snapshot" (namestring snap)))))))
     (multiple-value-bind (status out)
         (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap)))
@@ -502,7 +502,7 @@
 
 (fiveam:test cli-debug-resumes-without-the-source-file
   (uiop:with-temporary-file (:pathname snap :type "snap")
-    (%run-cli (append (%cli-args "debug" "examples/cli/counter.asm") (list "--save-snapshot" (namestring snap)))
+    (%run-cli (append (%cli-args "debug" "tests/fixtures/cli/counter.asm") (list "--save-snapshot" (namestring snap)))
               (%debug-lines "step 3"))
     (multiple-value-bind (status out)
         (%run-cli (%sixtyfoo-args "debug" "--load-snapshot" (namestring snap))
@@ -514,7 +514,7 @@
 ;;; Items programs (#113)
 
 (defun %items-cli-args (command file &rest more)
-  (list* command (%cli-path file) "-m" (%cli-path "examples/cli/callfoo.lisp") more))
+  (list* command (%cli-path file) "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") more))
 
 (defun %with-items-program (text function)
   (uiop:with-temporary-file (:pathname path :type "lasm" :stream out)
@@ -523,18 +523,18 @@
     (funcall function (namestring path))))
 
 (fiveam:test cli-run-executes-an-items-program
-  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "examples/cli/double.lasm"))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "tests/fixtures/cli/double.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 7 steps" out))))
 
 (fiveam:test cli-run-executes-a-lowered-items-program
-  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "examples/cli/calls.lasm"))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "tests/fixtures/cli/calls.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 7 steps" out))))
 
 (fiveam:test cli-assemble-writes-an-items-program
   (uiop:with-temporary-file (:pathname path :type "bin")
-    (fiveam:is (= 0 (%run-cli (append (%items-cli-args "assemble" "examples/cli/double.lasm")
+    (fiveam:is (= 0 (%run-cli (append (%items-cli-args "assemble" "tests/fixtures/cli/double.lasm")
                                       (list "-o" (namestring path))))))
     (let ((bytes (%cli-read-bytes path)))
       (fiveam:is (= 28 (length bytes)))
@@ -542,13 +542,13 @@
 
 (fiveam:test cli-runs-an-items-program-with-a-frame-pointer-backend
   (multiple-value-bind (status out)
-      (%run-cli (list "run" (%cli-path "examples/cli/framed.lasm") "-m" (%cli-path "examples/cli/callfoo-fp.lisp")
+      (%run-cli (list "run" (%cli-path "tests/fixtures/cli/framed.lasm") "-m" (%cli-path "tests/fixtures/cli/callfoo-fp.lisp")
                       "--machine-name" "callfoo-fp"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 15 steps" out))))
 
 (fiveam:test cli-listing-shows-an-items-program
-  (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "examples/cli/double.lasm"))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "tests/fixtures/cli/double.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "call double" out))))
 
@@ -556,7 +556,7 @@
   (%with-items-program "(:program () (:op :return))"
     (lambda (path)
       (uiop:with-temporary-file (:pathname out :type "bin")
-        (fiveam:is (= 0 (%run-cli (list "assemble" path "-m" (%cli-path "examples/cli/callfoo.lisp")
+        (fiveam:is (= 0 (%run-cli (list "assemble" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp")
                                         "--backend" "callfoo-abi" "-o" (namestring out)))))
         (fiveam:is (equalp #(8 0) (%cli-read-bytes out)))))))
 
@@ -564,11 +564,11 @@
   (%with-items-program "(:program (:machine callfoo :origin 4) (hlt))"
     (lambda (path)
       (multiple-value-bind (status out)
-          (%run-cli (list "listing" path "-m" (%cli-path "examples/cli/callfoo.lisp")))
+          (%run-cli (list "listing" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp")))
         (fiveam:is (= 0 status))
         (fiveam:is (search "0004" out)))
       (multiple-value-bind (status out)
-          (%run-cli (list "listing" path "-m" (%cli-path "examples/cli/callfoo.lisp") "--origin" "9"))
+          (%run-cli (list "listing" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") "--origin" "9"))
         (fiveam:is (= 0 status))
         (fiveam:is (search "0009" out))))))
 
@@ -576,7 +576,7 @@
   (%with-items-program "(:program (:machine callfoo) (:frobnicate))"
     (lambda (path)
       (multiple-value-bind (status out err)
-          (%run-cli (list "assemble" path "-m" (%cli-path "examples/cli/callfoo.lisp") "-o" "/dev/null"))
+          (%run-cli (list "assemble" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") "-o" "/dev/null"))
         (declare (ignore out))
         (fiveam:is (= 1 status))
         (fiveam:is (search "unknown item" err))
@@ -584,17 +584,17 @@
 
 (fiveam:test cli-items-program-snapshots-and-resumes
   (uiop:with-temporary-file (:pathname snap :type "snap")
-    (fiveam:is (= 0 (%run-cli (append (%items-cli-args "run" "examples/cli/double.lasm")
+    (fiveam:is (= 0 (%run-cli (append (%items-cli-args "run" "tests/fixtures/cli/double.lasm")
                                       (list "--max-steps" "3" "--save-snapshot" (namestring snap))))))
     (multiple-value-bind (status out)
-        (%run-cli (list "run" "-m" (%cli-path "examples/cli/callfoo.lisp") "--load-snapshot" (namestring snap)))
+        (%run-cli (list "run" "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") "--load-snapshot" (namestring snap)))
       (fiveam:is (= 0 status))
       (fiveam:is (search "stopped: trap" out)))))
 
 (fiveam:test cli-runs-an-items-program-that-swaps-register-arguments
-  (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "examples/cli/swap.lasm"))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "listing" "tests/fixtures/cli/swap.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "call swap" out)))
-  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "examples/cli/swap.lasm"))
+  (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "tests/fixtures/cli/swap.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 8 steps" out))))

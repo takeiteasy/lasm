@@ -6,17 +6,17 @@
 (fiveam:def-suite backend :in lasm)
 (fiveam:in-suite backend)
 
-;;; Fixture: examples/cli/callfoo-fp.lisp, which loads callfoo.lisp (the machine
+;;; Fixture: tests/fixtures/cli/callfoo-fp.lisp, which loads callfoo.lisp (the machine
 ;;; and backend behind double.lasm) and adds the frame-pointer family member,
 ;;; plus a machine whose LD takes a ONE-OF operand.
 
 (let ((*package* (find-package '#:lasm)))
-  (load (asdf:system-relative-pathname :lasm "examples/cli/callfoo-fp.lisp")))
+  (load (asdf:system-relative-pathname :lasm "tests/fixtures/cli/callfoo-fp.lisp")))
 
-;;; #368: examples/cli/widefoo.lisp, whose registers are wider than its cells,
+;;; #368: tests/fixtures/cli/widefoo.lisp, whose registers are wider than its cells,
 ;;; so a language word is 2 cells (BACKEND-WORD-CELLS).
 (let ((*package* (find-package '#:lasm)))
-  (load (asdf:system-relative-pathname :lasm "examples/cli/widefoo.lisp")))
+  (load (asdf:system-relative-pathname :lasm "tests/fixtures/cli/widefoo.lisp")))
 
 (defmachine bk-ld-machine
   (register pc :width 16)

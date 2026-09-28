@@ -14,8 +14,6 @@ addconst cell       ; uses k=1
 addconst cell, 5    ; uses k=5
 ```
 
-See the runnable [`macros.lisp` example](../examples/macros.lisp).
-
 ## Syntax
 
 | Form | Meaning |

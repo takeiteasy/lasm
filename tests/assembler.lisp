@@ -1159,8 +1159,8 @@ target: whlt" :machine 'word-relative-test-machine)))
 (fiveam:test choice-selected-field-encodes-by-matched-syntax-indirect
   ;; WC-IND (bias #x08): raw field = 8 + 5 = 13 (#x0D) -> word #x400D --
   ;; different cells than the bare form above for the identical value 5,
-  ;; which is exactly what a plain (non-CHOICE) field could never do (see
-  ;; examples/orthogonal.lisp's byte-encoded counterexample).
+  ;; which is exactly what a plain (non-CHOICE) field could never do (a byte-encoded
+  ;; machine cannot).
   (let ((a (assemble "wcx [5]" :machine 'word-test-machine)))
     (fiveam:is (equalp #(#x0d #x40) (assembly-cells a)))))
 

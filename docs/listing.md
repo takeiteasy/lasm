@@ -8,8 +8,6 @@ An `assembly` keeps its address-to-source mapping and symbol details.
   (print-symbols a))
 ```
 
-See [`listing.lisp`](../examples/listing.lisp).
-
 ## The retained mapping: `assembly-listing` / `assembly-source`
 
 `assembly-listing` contains one entry per instruction, emitted data, or

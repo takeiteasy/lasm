@@ -10,14 +10,14 @@ lasm assemble counter.asm -m sixtyfoo.lisp -o counter.bin
 lasm run counter.asm -m sixtyfoo.lisp
 ```
 
-See [`examples/cli/`](../examples/cli/sixtyfoo.lisp) for a runnable pair, and
-[`callfoo.lisp`](../examples/cli/callfoo.lisp) with
-[`double.lasm`](../examples/cli/double.lasm) for an items program, and
-[`calls.lasm`](../examples/cli/calls.lasm) for one that lowers a
-[calling convention](conventions.md). [`swap.lasm`](../examples/cli/swap.lasm)
-swaps register arguments through a scratch register. [`framed.lasm`](../examples/cli/framed.lasm)
+See [`tests/fixtures/cli/`](../tests/fixtures/cli/sixtyfoo.lisp) for a runnable pair, and
+[`callfoo.lisp`](../tests/fixtures/cli/callfoo.lisp) with
+[`double.lasm`](../tests/fixtures/cli/double.lasm) for an items program, and
+[`calls.lasm`](../tests/fixtures/cli/calls.lasm) for one that lowers a
+[calling convention](conventions.md). [`swap.lasm`](../tests/fixtures/cli/swap.lasm)
+swaps register arguments through a scratch register. [`framed.lasm`](../tests/fixtures/cli/framed.lasm)
 uses a [frame pointer](conventions.md#frame-pointer) on
-[`callfoo-fp.lisp`](../examples/cli/callfoo-fp.lisp), which defines two machines
+[`callfoo-fp.lisp`](../tests/fixtures/cli/callfoo-fp.lisp), which defines two machines
 and is run with `--machine-name callfoo-fp`.
 
 ## Machine files
@@ -50,7 +50,7 @@ A `.lsp` file is a program in the [source language](language.md). Every command
 that takes a program accepts one; it compiles in memory through its backend,
 named by `(:program (:backend NAME))` or `--backend NAME`. `--optimize`
 overrides its `(:program (:optimize NAME))`.
-[`fact.lsp`](../examples/cli/fact.lsp) runs on [`callfoo.lisp`](../examples/cli/callfoo.lisp).
+[`fact.lsp`](../tests/fixtures/cli/fact.lsp) runs on [`callfoo.lisp`](../tests/fixtures/cli/callfoo.lisp).
 
 ```sh
 lasm run fact.lsp -m callfoo.lisp
@@ -178,7 +178,7 @@ library, `trivial-high-precision-timer` — see
 [Getting started](getting-started.md#install).
 
 ```sh
-ros lasm.ros run examples/cli/counter.asm -m examples/cli/sixtyfoo.lisp
+ros lasm.ros run tests/fixtures/cli/counter.asm -m tests/fixtures/cli/sixtyfoo.lisp
 ros build lasm.ros    # standalone ./lasm
 ```
 

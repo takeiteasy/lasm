@@ -147,8 +147,7 @@ bits unchanged is always allowed.
 `:fields` combines with `:read` and `:write`, and applies to banked registers
 and their aliases. It cannot gate a `(stack-pointer ...)` register, and masks
 must not overlap. Host access, delivery and `interrupt-return` bypass it as
-they bypass other [gates](#gating-registers-flags-and-stacks). See
-`examples/privilege.lisp`.
+they bypass other [gates](#gating-registers-flags-and-stacks).
 
 ## Interrupt delivery
 
@@ -213,7 +212,6 @@ machine)` returns `(:pc PC :kind KIND :name NAME :address ADDRESS :required
 LEVEL :current LEVEL :access ACCESS :mask MASK)` for the last such violation. `reset` clears it and
 snapshots do not save it. With `:deliver-level` and a saved level register,
 `interrupt-return` resumes the violating instruction at the original level.
-See `examples/privilege.lisp`.
 
 ## Limitations
 

@@ -14,8 +14,6 @@ locations.
     (debug-state-text session :stream t)))
 ```
 
-See [`debugger.lisp`](../examples/debugger.lisp).
-
 ## Sessions
 
 ```lisp

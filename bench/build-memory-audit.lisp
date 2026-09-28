@@ -1,4 +1,4 @@
-(load (merge-pathnames "../examples/boot.lisp" *load-pathname*))
+(load (merge-pathnames "../bench/boot.lisp" *load-pathname*))
 (require :sb-sprof)
 
 (defun audit-mib (bytes)

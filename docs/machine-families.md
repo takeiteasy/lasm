@@ -27,8 +27,7 @@ instructions and differ in memory size, clock rate and identity.
 ```
 
 `(defmachine (NAME (:extends PARENT)) clause...)` — `PARENT` must already be
-defined. Chains can be any depth. Runnable example:
-[`examples/family.lisp`](../examples/family.lisp).
+defined. Chains can be any depth.
 
 ## Clause merging
 

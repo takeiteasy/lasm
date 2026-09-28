@@ -1,6 +1,6 @@
 ;;;; SBCL audit: sbcl --script bench/memory-audit.lisp ../star/star.asd
 
-(load (merge-pathnames "../examples/boot.lisp" *load-pathname*))
+(load (merge-pathnames "../bench/boot.lisp" *load-pathname*))
 
 (defun memory-checkpoint (label)
   (sb-ext:gc :full t)

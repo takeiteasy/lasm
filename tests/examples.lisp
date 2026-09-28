@@ -1,6 +1,6 @@
 ;;;; tests/examples.lisp
-;;;; Runs every examples/**/*.lisp script, and bench/ scripts when LASM_BENCH=1,
-;;;; failing on any non-zero exit.
+;;;; Runs every packaged example's test system, and bench/ scripts when
+;;;; LASM_BENCH=1, each in its own Lisp, failing on any non-zero exit.
 
 (in-package #:lasm)
 
@@ -10,13 +10,8 @@
 (defun %lasm-path (relative)
   (merge-pathnames relative (asdf:system-source-directory :lasm)))
 
-(defun %example-scripts ()
-  "Standalone scripts; examples/cli/ holds machine files for the command line."
-  (remove-if (lambda (path)
-               (or (string= "boot" (pathname-name path))
-                   (member "cli" (pathname-directory path) :test #'string=)))
-             (directory (%lasm-path (make-pathname :directory '(:relative "examples" :wild-inferiors)
-                                                   :name :wild :type "lisp")))))
+(defun %example-systems ()
+  (directory (%lasm-path "examples/*/*.asd")))
 
 (defun %host-cores ()
   (or (ignore-errors
@@ -31,7 +26,7 @@
 (defun %save-example-core (core)
   (multiple-value-bind (out err status)
       (uiop:run-program (%sbcl "--non-interactive" "--no-sysinit" "--no-userinit"
-                               "--load" (namestring (%lasm-path "examples/boot.lisp"))
+                               "--load" (namestring (%lasm-path "bench/boot.lisp"))
                                "--eval" (format nil "(sb-ext:save-lisp-and-die ~S)" (namestring core)))
                         :output nil :error-output :string :ignore-error-status t)
     (declare (ignore out))
@@ -41,12 +36,12 @@
 (defun %newest-lasm-source-date ()
   (reduce #'max (mapcar #'file-write-date
                         (list* (asdf:system-source-file :lasm)
-                               (%lasm-path "examples/boot.lisp")
+                               (%lasm-path "bench/boot.lisp")
                                (mapcar #'asdf:component-pathname
                                        (asdf:component-children (asdf:find-system :lasm)))))))
 
 ;; Booting Quicklisp dominates each script's run time, so scripts start from a
-;; core that has already loaded boot.lisp. Quicklisp dependency updates don't
+;; core that has already loaded bench/boot.lisp. Quicklisp dependency updates don't
 ;; invalidate it; delete the core after one.
 (defun %example-core ()
   "The core the scripts start from, or NIL on a host that cannot save one."
@@ -69,14 +64,15 @@
 
 ;; Scripts are standalone and redefine globals, so each gets its own Lisp.
 (defun %run-scripts (runs)
-  "RUNS is a list of (SCRIPT . ARGS). Returns a (SCRIPT EXIT-STATUS STDERR) list per run."
+  "RUNS is a list of (SCRIPT . ARGS). Returns a (RUN EXIT-STATUS STDERR) list per run."
   (let ((core (let ((core (%example-core))) (and core (namestring core))))
         (queue runs)
         (results '())
         (lock (%make-lock)))
     (flet ((worker ()
-             (loop for (script . args) = (%with-lock (lock) (cl:pop queue))
-                   while script
+             (loop for run = (%with-lock (lock) (cl:pop queue))
+                   for (script . args) = run
+                   while run
                    do (multiple-value-bind (out err status)
                           (handler-case
                               (uiop:with-temporary-file (:pathname err-file)
@@ -87,21 +83,23 @@
                             (error (e) (values nil (princ-to-string e) -1)))
                         (declare (ignore out))
                         (%with-lock (lock)
-                          (cl:push (list script status err) results))))))
+                          (cl:push (list run status err) results))))))
       (mapc #'%join-thread
             (loop repeat (%host-cores) collect (%make-thread #'worker "script"))))
     results))
 
 (defun %check-scripts (runs)
-  (loop for (script status err) in (%run-scripts runs)
-        do (fiveam:is (zerop status) "~A exited ~D:~%~A"
+  (loop for ((script . args) status err) in (%run-scripts runs)
+        do (fiveam:is (zerop status) "~A ~{~A~^ ~} exited ~D:~%~A"
                       (enough-namestring script (asdf:system-source-directory :lasm))
-                      status err)))
+                      args status err)))
 
-(fiveam:test every-example-script-exits-cleanly
-  (let ((scripts (%example-scripts)))
-    (fiveam:is (plusp (length scripts)))
-    (%check-scripts (mapcar #'list scripts))))
+(fiveam:test every-example-system-passes
+  (let ((systems (%example-systems)))
+    (fiveam:is (plusp (length systems)))
+    (%check-scripts (loop for asd in systems
+                          collect (list (%lasm-path "tests/run-example.lisp")
+                                        (namestring asd) (pathname-name asd))))))
 
 (fiveam:test debugger-history-bench-exits-cleanly
   (%check-scripts `((,(%lasm-path "bench/debugger-history.lisp") "1000"))))
