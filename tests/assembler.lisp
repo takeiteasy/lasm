@@ -1538,6 +1538,37 @@ end: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "end" (assembly-symbols a))))
     (fiveam:is (= 3 (listing-line-size (first (assembly-listing a)))))))
 
+;;; .pack/.packz (#398)
+
+(fiveam:test packz-packs-characters-into-cells-by-the-memorys-endianness
+  (eval '(defmachine pack-be-machine (register pc :width 16) (register r :width 16 :names (a b))
+           (memory ram :width 16 :addr-width 16 :endian :big)))
+  (eval '(defmachine pack-grouped-machine (register pc :width 16) (register r :width 16 :names (a b))
+           (memory ram :width 16 :addr-width 16 :endian (:big :little 2))))
+  (fiveam:is (equal '(#x6261 #x0063) (%string-cells ".packz \"abc\"" 'callfoo)))
+  (fiveam:is (equal '(#x6162 #x6300) (%string-cells ".packz \"abc\"" 'pack-be-machine)))
+  (fiveam:is (equal '(#x6261 #x0063) (%string-cells ".packz \"abc\"" 'pack-grouped-machine))
+             "a grouped :endian orders characters by its inner order")
+  (fiveam:is (equal '(#x6261 0) (%string-cells ".packz \"ab\"" 'callfoo)) "an even length gets a whole terminator cell")
+  (fiveam:is (equal '(0) (%string-cells ".packz \"\"" 'callfoo))))
+
+(fiveam:test pack-has-no-terminator-and-zero-fills-the-last-cell
+  (fiveam:is (equal '(#x6261 #x0063) (%string-cells ".pack \"abc\"" 'callfoo)))
+  (fiveam:is (equal '(#x6261) (%string-cells ".pack \"ab\"" 'callfoo))))
+
+(fiveam:test pack-gives-an-8-bit-cell-one-character-and-a-number-one-cell
+  (fiveam:is (equal '(#x61 #x62 0) (%string-cells ".packz \"ab\"")))
+  (fiveam:is (equal '(#x6261 #x0063 7 #x0064) (%string-cells ".packz \"abc\", 7, \"d\"" 'callfoo))))
+
+(fiveam:test pack-rejects-a-character-wider-than-8-bits
+  (fiveam:signals assembly-error
+    (assemble (format nil ".packz \"~C\"" (code-char 300)) :machine 'callfoo)))
+
+(fiveam:test a-packed-string-sizes-its-label
+  (let ((a (assemble "s: .packz \"abc\"
+end: .cell 0" :machine 'callfoo)))
+    (fiveam:is (= 2 (gethash "end" (assembly-symbols a))))))
+
 (fiveam:test string-characters-are-one-cell-on-word-addressed-machine
   (fiveam:is (equal '(#x68 #x69 0) (%string-cells ".asciz \"hi\"" 'wordaddr-test-machine)))
   (fiveam:is (equal '(#x263A) (%string-cells (format nil ".ascii \"~C\"" (code-char #x263A))

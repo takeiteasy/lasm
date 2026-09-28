@@ -127,6 +127,21 @@
                   (defdirective ".bad" (&rest v) (emit 1 v :terminator))))
     (fiveam:signals directive-definition-error (eval form))))
 
+(fiveam:test pack-directives-are-packing-emits
+  (let ((pack (find-directive-descriptor ".pack")) (packz (find-directive-descriptor ".packz")))
+    (fiveam:is (directive-descriptor-pack pack))
+    (fiveam:is (directive-descriptor-pack packz))
+    (fiveam:is (null (directive-descriptor-terminator pack)))
+    (fiveam:is (= 0 (directive-descriptor-terminator packz)))
+    (fiveam:is (null (directive-descriptor-pack (find-directive-descriptor ".asciz"))))))
+
+(fiveam:test defdirective-pack-takes-t-and-width-one
+  (defdirective ".test-pack" (&rest v) (emit 1 v :pack t :terminator 10))
+  (fiveam:is (directive-descriptor-pack (find-directive-descriptor ".test-pack")))
+  (dolist (form '((defdirective ".bad" (&rest v) (emit 1 v :pack 3))
+                  (defdirective ".bad" (&rest v) (emit 2 v :pack t))))
+    (fiveam:signals directive-definition-error (eval form))))
+
 ;; #386 -- .EMIT takes its field width, in cells, as its first operand.
 (fiveam:test emit-directive-leads-with-its-width-operand
   (let ((d (find-directive-descriptor ".emit")))

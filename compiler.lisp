@@ -23,7 +23,7 @@
 ;;;; registers are wider than its cells.
 ;;;;
 ;;;; #379: (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
-;;;; as fit, byte order from the memory's endianness; (aref-byte S I)/(aset-byte
+;;;; as fit (a .packz directive, #398), byte order from the memory's endianness; (aref-byte S I)/(aset-byte
 ;;;; S I V) reach one through :peek-byte/:poke-byte.
 ;;;;
 ;;;; #368: a word is *CC-WORD-CELLS* cells (BACKEND-WORD-CELLS, backend.lisp),
@@ -1656,19 +1656,10 @@ for a one-cell word, else .emit with the width first (#386)."
       (list* :directive (%cc-symbol "cell") values)
       (list* :directive (%cc-symbol "emit") *cc-word-cells* values)))
 
-(defun %cc-pack-string (string form)
-  "STRING's characters, then a 0, packed into cells of as many 8-bit characters
-as a cell holds, the first in the low bits of a little-endian memory's cell
-and the high bits of a big-endian one's (#379)."
-  (multiple-value-bind (bytes endian) (backend-cell-bytes *cc-backend*)
-    (let ((characters (append (map 'list #'char-code string) '(0))))
-      (when (find-if (lambda (code) (> code 255)) characters)
-        (%cc-fail form "a :packed string holds 8-bit characters only"))
-      (loop while characters
-            collect (let ((cell 0))
-                      (dotimes (k bytes cell)
-                        (setf cell (logior cell (ash (or (cl:pop characters) 0)
-                                                     (* 8 (if (eq endian :big) (- bytes 1 k) k)))))))))))
+(defun %cc-check-packable (string form)
+  "Fail unless every character of STRING is 8 bits, as .PACKZ packs (#379, #398)."
+  (when (find-if (lambda (char) (> (char-code char) 255)) string)
+    (%cc-fail form "a :packed string holds 8-bit characters only")))
 
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
@@ -1762,7 +1753,8 @@ defined later in FORMS."
                                  ;; wider word has no terminated-string
                                  ;; directive, so the trailing 0 is emitted as
                                  ;; a value alongside the string's characters.
-                                 (:packed (list* :directive (%cc-symbol "cell") (%cc-pack-string payload form)))
+                                 (:packed (%cc-check-packable payload form)
+                                          (list :directive (%cc-symbol "packz") payload))
                                  (:string (if (= *cc-word-cells* 1)
                                               (list :directive (%cc-symbol "asciz") payload)
                                               (%cc-word-data (list payload 0))))))))))

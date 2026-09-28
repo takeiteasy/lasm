@@ -761,6 +761,18 @@
                          (assembly-cells (assemble-items (items-program-items again) :backend backend)))
                  "~A" backend))))
 
+(fiveam:test a-packed-string-writes-as-text-and-reads-back-to-the-same-cells
+  (%cl-each-backend (backend machine)
+    (let* ((program (compile-source (read-source-from-string
+                                     "(defstring s \"hello\" :packed) (defun main () (aref-byte s 1))")
+                                    :backend backend))
+           (text (with-output-to-string (out) (write-items-program program out)))
+           (again (read-items-from-string text)))
+      (fiveam:is (search "hello" text) "~A: the .lasm file holds the string" backend)
+      (fiveam:is (equalp (assembly-cells (assemble-items (items-program-items program) :backend backend))
+                         (assembly-cells (assemble-items (items-program-items again) :backend backend)))
+                 "~A" backend))))
+
 ;;; #368: words wider than one cell. widefoo-lang-abi (examples/cli/widefoo.lisp,
 ;;; loaded by tests/backend.lisp) has 16-bit registers over 8-bit cells, so
 ;;; BACKEND-WORD-CELLS is 2; callfoo-lang-abi's is 1.
@@ -845,10 +857,10 @@
 
 (fiveam:test a-packed-string-stores-several-characters-a-cell
   (fiveam:is (= 25185 (%cv-a (%cl-run "(defstring s \"ab\" :packed) (defun main () (aref s 0))" 'callfoo-lang-abi))))
-  (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "cell")))
+  (fiveam:is (= 2 (count-if (lambda (i) (and (consp i) (eq (first i) :directive) (%same-name-p (second i) "packz")))
                             (%cl-compile "(defstring s \"a\" :packed) (defstring t2 \"bc\" :packed) (defun main () 1)"
                                          'callfoo-lang-abi)))
-             "each packed string is one .cell directive"))
+             "each packed string is one .packz directive"))
 
 (fiveam:test a-packed-string-lays-out-by-the-memorys-endianness
   (eval '(defmachine cl-be-machine (register pc :width 16) (register r :width 16 :names (a b))
@@ -860,12 +872,11 @@
     (eval `(defbackend ,(intern (format nil "~A-ABI" name)) (:machine ,(intern (format nil "~A-MACHINE" name)))
              (registers :return (a) :scratch (a b) :operand reg)
              (operands (reg cl-lay-reg)))))
-  (flet ((pack (backend string)
-           (let ((*cc-backend* (find-backend backend))) (%cc-pack-string string nil))))
-    (fiveam:is (equal '(#x6162 #x6300) (pack 'cl-be-abi "abc")) "big-endian: the first character in the high bits")
-    (fiveam:is (equal '(#x6261 #x0063) (pack 'callfoo-lang-abi "abc")) "little-endian: the first in the low bits")
-    (fiveam:is (equal '(#x6261 0) (pack 'callfoo-lang-abi "ab")) "an even length gets a whole terminator cell")
-    (fiveam:is (equal '(97 98 99 0) (pack 'cl-b8-abi "abc")) "an 8-bit cell holds one character"))
+  (flet ((cells (machine text)
+           (coerce (assembly-cells (assemble (format nil ".packz ~S" text) :machine machine)) 'list)))
+    (fiveam:is (equal '(#x6162 #x6300) (cells 'cl-be-machine "abc")) "big-endian: the first character in the high bits")
+    (fiveam:is (equal '(#x6261 #x0063) (cells 'callfoo "abc")) "little-endian: the first in the low bits")
+    (fiveam:is (equal '(97 98 99 0) (cells 'cl-b8-machine "abc")) "an 8-bit cell holds one character"))
   (fiveam:is (= 1 (backend-cell-bytes 'cl-b8-abi)))
   (fiveam:is (= 2 (backend-cell-bytes 'callfoo-lang-abi)))
   (fiveam:is (eq :big (nth-value 1 (backend-cell-bytes 'cl-be-abi))))

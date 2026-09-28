@@ -168,7 +168,8 @@ backend operation is a compile error naming the form.
 `(defstring NAME "TEXT" :packed)` stores as many 8-bit characters in a cell as
 fit, `0`-terminated, in the memory's [`:endian`](machine-model.md#cell-width-and-the-assembler)
 order: the first character in the low bits of a little-endian cell, the high
-bits of a big-endian one. A character above `255` is a compile error.
+bits of a big-endian one. A character above `255` is a compile error. A compiled
+`.lasm` file holds it as text, a [`.packz`](directives.md#pack--packz) directive.
 `(aref-byte S I)`/`(aset-byte S I V)` read and write character `I`; on a machine
 with 16-bit cells, `"abc"` is two cells and `(aref-byte S 1)` is `98`.
 
@@ -476,7 +477,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | Limitation | Ticket |
 | --- | --- |
 | `funcall` through a variable is checked only against the set of function values' arities; with several arities taken, a wrong one that another function has is not caught. | [#397](https://todo.sr.ht/~takeiteasy/lasm/397) |
-| A `:packed` string is emitted as packed `.cell` integers, not text, in a compiled `.lasm` file. | [#398](https://todo.sr.ht/~takeiteasy/lasm/398) |
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an

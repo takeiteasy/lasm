@@ -890,19 +890,37 @@ included) for a :VARIADIC one (e.g. .BYTE, .WORD), at least one for a
     (%cached-operands statement :args
                       (lambda () (mapcar #'%directive-operand-ast operands)))))
 
-(defun %expand-string-operands (asts terminator element-bits line mnemonic)
+(defvar *byte-order* :little
+  "The order of the 8-bit characters within one cell of the memory being assembled (#398).")
+
+(defun %pack-characters (codes cell-width byte-order)
+  "CODES, 8-bit characters, packed into cells of CELL-WIDTH bits, as many whole
+characters a cell as fit, the first in the low bits when BYTE-ORDER is :LITTLE
+and the high bits when :BIG. A short last cell is zero-filled (#398)."
+  (let ((bytes (max 1 (floor cell-width 8))))
+    (loop while codes
+          collect (let ((cell 0))
+                    (dotimes (k bytes cell)
+                      (setf cell (logior cell (ash (or (cl:pop codes) 0)
+                                                   (* 8 (if (eq byte-order :big) (- bytes 1 k) k))))))))))
+
+(defun %expand-string-operands (asts terminator element-bits line mnemonic &optional pack)
   "Replace each top-level EXPR-STRING in ASTS with one EXPR-NUMBER per
-character, followed by TERMINATOR when non-NIL. Other ASTs pass through."
+character, followed by TERMINATOR when non-NIL. With PACK the characters and
+terminator pack several to a cell (%PACK-CHARACTERS) instead. Other ASTs pass
+through."
   (loop for ast in asts
         if (expr-string-p ast)
-          append (append
-                  (loop for char across (expr-string-value ast)
-                        for code = (char-code char)
-                        do (unless (< code (ash 1 element-bits))
-                             (%assembly-error line "~A: character ~S does not fit a ~D-bit element"
-                                              mnemonic char element-bits))
-                        collect (make-expr-number :value code))
-                  (and terminator (list (make-expr-number :value terminator))))
+          append (let* ((bits (if pack (min 8 element-bits) element-bits))
+                        (codes (loop for char across (expr-string-value ast)
+                                     for code = (char-code char)
+                                     do (unless (< code (ash 1 bits))
+                                          (%assembly-error line "~A: character ~S does not fit a ~D-bit element"
+                                                           mnemonic char bits))
+                                     collect code)))
+                   (when terminator (setf codes (append codes (list terminator))))
+                   (mapcar (lambda (value) (make-expr-number :value value))
+                           (if pack (%pack-characters codes element-bits *byte-order*) codes)))
         else collect ast))
 
 (defun %emit-value-args (statement directive)
@@ -1445,7 +1463,8 @@ this width, resolved once by %LAYOUT rather than per pass or per statement."
                                                 (%expand-string-operands
                                                  (%emit-value-args statement directive)
                                                  (directive-descriptor-terminator directive)
-                                                 (* width cell-width) line mnemonic)
+                                                 (* width cell-width) line mnemonic
+                                                 (directive-descriptor-pack directive))
                                                 scope line))))
                             (cl:push (list :emit address width (directive-descriptor-endian directive)
                                            asts line *current-definition-line*
@@ -1868,6 +1887,7 @@ by the cell width and endianness, inside the context ASSEMBLE-STATEMENTS sets up
             (*cell-width* cell-width)
             (*mode-scope* ,machine)
             (endian (%machine-endian ,machine ,memory))
+            (*byte-order* (%endian-byte-order endian))
             (*banked-regions*
               (let ((element (descriptor-element (find-machine-descriptor ,machine)
                                                  (%resolve-memory ,machine ,memory))))

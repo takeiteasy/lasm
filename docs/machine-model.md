@@ -238,7 +238,8 @@ group with its second. Word-addressed memory and word-encoded instructions
 can be combined; see [`dcpu16.lisp`](../examples/dcpu16.lisp).
 
 `:endian` also orders the 8-bit characters within a cell of a
-[packed string](language.md#arrays-strings-and-byte-access).
+[packed string](language.md#arrays-strings-and-byte-access) and of
+[`.pack`/`.packz`](directives.md#pack--packz); a grouped order uses its inner one.
 
 ## Limitations
 

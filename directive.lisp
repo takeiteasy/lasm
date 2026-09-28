@@ -38,7 +38,8 @@
               ; :OPERAND when the directive's first operand gives it (.emit);
               ; NIL for :set-origin / :select-bank / :reserve / :assign / :reassign
   endian      ; :emit only: overrides the machine's endian order, or NIL
-  terminator) ; :emit only: integer appended after each string operand, or NIL
+  terminator  ; :emit only: integer appended after each string operand, or NIL
+  pack)       ; :emit only: T packs a string's characters several to a cell
 
 ;; Registry of defined directives, keyed by upcased name string -- mirrors
 ;; *LEXERS* (lexer.lisp), a plain runtime hash table with no EVAL-WHEN (see
@@ -103,8 +104,9 @@ variadic values), so it doesn't fit %PARSE-DIRECTIVE-ACTION's one-argument
 shape -- handled separately. The width is a literal, or the directive's own
 leading width parameter (#386), in which case it returns :OPERAND. Optional trailing :ENDIAN and
 :TERMINATOR specs (each at most once) override the machine's endian order and
-name the cell appended after each string operand. Returns
-(VALUES :emit width endian terminator)."
+name the cell appended after each string operand; :PACK T packs a string's
+8-bit characters several to a cell (#398). Returns
+(VALUES :emit width endian terminator pack)."
   (%definition-bind (head width-form values-sym &rest options) action-form
     (unless (and (eq head 'emit)
                  (if (= (length param-names) 2)
@@ -113,19 +115,22 @@ name the cell appended after each string operand. Returns
                           (equal (list values-sym) param-names)))
                  (evenp (length options))
                  (loop for (key) on options by #'cddr
-                       always (member key '(:endian :terminator)))
+                       always (member key '(:endian :terminator :pack)))
                  (= (length options)
                     (* 2 (length (remove-duplicates (loop for (key) on options by #'cddr
                                                           collect key)))))
                  (let ((terminator (getf options :terminator 0)))
-                   (and (integerp terminator) (>= terminator 0))))
+                   (and (integerp terminator) (>= terminator 0)))
+                 (member (getf options :pack) '(nil t))
+                 (or (null (getf options :pack)) (eql width-form 1)))
       (%defdirective-error "Malformed DEFDIRECTIVE action ~S -- expected (emit width ~S ~
-[:endian ORDER] [:terminator CELL]), width an integer or the directive's leading parameter"
+[:endian ORDER] [:terminator CELL] [:pack T]), width an integer or the directive's leading parameter (1 with :pack)"
              action-form (car (last param-names))))
     (values :emit (if (integerp width-form) width-form :operand)
             (and (getf options :endian)
                  (%check-endian (getf options :endian) (first param-names)))
-            (getf options :terminator))))
+            (getf options :terminator)
+            (getf options :pack))))
 
 (defun %parse-assign-action (action-form param-names)
   "Validate ASSIGN or REASSIGN with the directive's two parameters, in order."
@@ -138,7 +143,7 @@ name the cell appended after each string operand. Returns
 (defun build-directive-descriptor (name params action-form)
   (%with-definition (name directive-definition-error)
     (multiple-value-bind (arity param-names) (%parse-directive-params params)
-      (multiple-value-bind (action width endian terminator)
+      (multiple-value-bind (action width endian terminator pack)
           (cond
             ((and (consp action-form) (eq (first action-form) 'emit))
              (%parse-emit-action action-form param-names))
@@ -147,7 +152,7 @@ name the cell appended after each string operand. Returns
             (t (%parse-directive-action action-form param-names)))
         (make-directive-descriptor :name (string-upcase name) :arity arity
                                     :action action :width width :endian endian
-                                    :terminator terminator)))))
+                                    :terminator terminator :pack pack)))))
 
 (defmacro defdirective (name params &body body)
   "Define a directive named NAME (a string, e.g. \".org\") taking PARAMS --
@@ -167,7 +172,7 @@ referencing PARAMS' own parameter name(s), in order:
                               (#53 -- a machine's own addressable unit, not
                               necessarily 8 bits), zero-filled; COUNT must
                               also fold label-free.
-  (emit width values [:endian order] [:terminator cell])
+  (emit width values [:endian order] [:terminator cell] [:pack t])
                            -- lay down (length VALUES) WIDTH-cell fields,
                               one per value in VALUES, in the machine's own
                               endian order (#66), or in ORDER (:little, :big
@@ -179,7 +184,12 @@ referencing PARAMS' own parameter name(s), in order:
                               label (resolved in pass 2, like an ordinary
                               instruction operand). A quoted string value
                               expands to one field per character, followed
-                              by CELL when :terminator is given.
+                              by CELL when :terminator is given. With :pack
+                              t (width 1) a string instead packs as many
+                              8-bit characters a cell as fit, the first in
+                              the low bits of a little-endian memory's cell
+                              and the high bits of a big-endian one's; a
+                              number operand is still one cell.
   (assign name value)      -- bind NAME (an identifier operand, not an
                               expression) to VALUE in the symbol table,
                               without occupying any address -- .EQU.
@@ -248,3 +258,6 @@ anything -- see this file's header comment."
 (defdirective ".ascii" (&rest values) (emit 1 values))
 (defdirective ".asciz" (&rest values) (emit 1 values :terminator 0))
 (defdirective ".dat"  (&rest values) (emit 1 values))
+;; .PACK/.PACKZ (#398): .ASCII/.ASCIZ with the characters packed several a cell.
+(defdirective ".pack" (&rest values) (emit 1 values :pack t))
+(defdirective ".packz" (&rest values) (emit 1 values :pack t :terminator 0))

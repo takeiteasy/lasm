@@ -27,7 +27,7 @@ one of these actions:
 | `(set-origin! address)` | Move the address counter. |
 | `(select-bank! n)` | Select a bank for later banked output. |
 | `(reserve count)` | Advance by zero-filled cells. |
-| `(emit width values [:endian order] [:terminator cell])` | Write values, each `width` cells wide (an integer, or the leading parameter); `:terminator` follows each string operand.[^emit] |
+| `(emit width values [:endian order] [:terminator cell] [:pack t])` | Write values, each `width` cells wide (an integer, or the leading parameter); `:terminator` follows each string operand; `:pack t` (width 1) packs a string's characters several to a cell.[^emit] |
 | `(assign name value)` | Bind a constant without using an address. |
 | `(reassign name value)` | Create or update an assignment. |
 
@@ -99,6 +99,25 @@ valid only as a top-level data operand; anywhere else (`.org "a"`,
 `lda #"a"`, `"a" + 1`) it signals `assembly-error`. Escapes are listed in
 [Lexer](lexer.md#string-escapes).
 
+## `.pack` / `.packz`
+
+A string operand packs as many 8-bit characters into each cell as fit.
+`.packz` adds a `0` after each string, `.pack` does not; a number takes one
+cell. The first character sits in the low bits of a little-endian memory's cell
+and the high bits of a big-endian one's (the inner order of a grouped
+[`:endian`](machine-model.md#cell-width-and-the-assembler)). The last cell is
+zero-filled:
+
+```asm
+.packz "abc"        ; 16-bit cells, little-endian: 6261 0063
+.pack "abc", 7      ; 6261 0063 0007
+.packz "abc"        ; 16-bit cells, big-endian:    6162 6300
+.packz "abc"        ; 8-bit cells:                 61 62 63 00
+```
+
+A character above `255` signals `assembly-error`. The compiler emits `.packz`
+for a [`:packed` string](language.md#arrays-strings-and-byte-access).
+
 ## `.res`
 
 `.res count` reserves `count` zero-filled cells. The count must be
@@ -160,5 +179,5 @@ a label absent from the completed program. See [Diagnostics](diagnostics.md).
 See the [issue tracker](https://todo.sr.ht/~takeiteasy/lasm) for planned
 work on these limits.
 
-[^emit]: `:terminator` takes a non-negative integer. `:endian` and
-    `:terminator` may each appear once, in either order.
+[^emit]: `:terminator` takes a non-negative integer. `:endian`,
+    `:terminator` and `:pack` may each appear once, in any order.
