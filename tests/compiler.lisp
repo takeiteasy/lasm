@@ -1907,3 +1907,65 @@ two |#
                     'backend-definition-error))
   (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:machine callfoo) (ops (:branch-lt-label (a b) (ldi a b)))))
                     'backend-definition-error)))
+
+;;; #434: a constant-index aref as an operand leaf
+
+(defun %cl-op-args (name source backend)
+  "The arguments after the destination of each (:op NAME ...) item in the compiled SOURCE."
+  (labels ((walk (items)
+             (cond ((and (consp items) (eq :op (first items)) (string-equal (%designator-name (second items)) name))
+                    (list (cdddr items)))
+                   ((consp items) (mapcan #'walk (copy-list items))))))
+    (walk (%cl-compile source backend))))
+
+(fiveam:test aref-leaf-right-operand-uses-the-label-variant
+  (let ((source "(defarray a (1 2 3)) (defun f (x) (+ x (aref a 2))) (defun main () (f 4))"))
+    (let ((names (%cl-label-variant-names source)))
+      (fiveam:is (member "ADD-LABEL" names :test #'string-equal))
+      (fiveam:is (= 1 (count "PEEK-LABEL" names :test #'string-equal)) "only x is loaded"))
+    (fiveam:is (= 7 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-index-zero-passes-the-bare-label
+  (let ((args (%cl-op-args "ADD-LABEL" "(defarray a (5 2)) (defun f (x) (+ x (aref a 0))) (defun main () (f 4))" 'cl-label-variant-abi)))
+    (fiveam:is (= 1 (length args)))
+    (fiveam:is (symbolp (first (first args))))))
+
+(fiveam:test aref-leaf-takes-a-defconstant-index
+  (let ((source "(defconstant k 1) (defarray a (5 2)) (defun f (x) (+ x (aref a k))) (defun main () (f 4))"))
+    (fiveam:is (member "ADD-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 6 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-branches-on-an-element
+  (let ((source "(defarray a (5 2)) (defun f (x) (if (< x (aref a 0)) 1 2)) (defun main () (+ (* 10 (f 3)) (f 7)))"))
+    (fiveam:is (member "BRANCH-GE-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 12 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-left-operand-swaps-past-a-leaf
+  (let ((source "(defarray a (5 2)) (defun f (x) (> (aref a 0) x)) (defun main () (+ (* 10 (f 3)) (f 7)))"))
+    (fiveam:is (member "LT-LABEL" (%cl-label-variant-names source) :test #'string-equal))
+    (fiveam:is (= 10 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-left-operand-does-not-swap-past-a-call
+  (let ((source "(defarray a (5 2)) (defun bump () (aset a 0 9) 1) (defun main () (- (aref a 0) (bump)))"))
+    (fiveam:is (not (member "SUB-LABEL" (%cl-label-variant-names source) :test #'string-equal)))
+    (fiveam:is (= 4 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-loads-straight-into-the-temp-register
+  (let ((source "(defarray a (1 2 3)) (defun f (x) (* x (aref a 2))) (defun main () (f 4))"))
+    (fiveam:is (= 12 (%cv-a (%cl-run source 'cl-label-abi))))
+    (fiveam:is (= 0 (%cl-count-op "MOVE" source 'cl-label-abi)))))
+
+(fiveam:test aref-callee-is-computed-before-the-arguments
+  (let ((source "(defarray ops (0 0))
+                 (defun one (n) 1) (defun two (n) 2)
+                 (defun pick (n) (aset ops 0 (function two)) n)
+                 (defun main () (aset ops 0 (function one)) (funcall (aref ops 0) (pick 0)))"))
+    (fiveam:is (= 1 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+(fiveam:test aref-leaf-runs-on-the-pointer-register-backends
+  (dolist (backend '(cl-pointer-abi cl-pointer-label-abi))
+    (fiveam:is (= 9 (%cv-a (%cl-run "(defarray a (1 2 3)) (defun f (x) (+ x (aref a 1))) (defun main () (f 7))" backend))))))
+
+(fiveam:test aref-leaf-operand-errors-are-the-arefs-own
+  (fiveam:is (search "unknown variable" (%cl-fail "(defun main () (+ 1 (aref nope 1)))" 'cl-label-variant-abi)))
+  (fiveam:is (%cl-fail "(defarray a 2) (defun main () (+ 1 (aref a 1 2)))" 'cl-label-variant-abi)))

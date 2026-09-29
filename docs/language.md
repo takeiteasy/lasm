@@ -500,8 +500,6 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | `funcall` through a function's return value is checked only against every function value's arity. | [#403](https://todo.sr.ht/~takeiteasy/lasm/403) |
 | `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#404](https://todo.sr.ht/~takeiteasy/lasm/404) |
-| A global or static slot used as an operator's right operand loads into the temp register first. | [#430](https://todo.sr.ht/~takeiteasy/lasm/430) |
-| `(+ x (aref A 3))` computes the element before the operator, not as an operand leaf. | [#434](https://todo.sr.ht/~takeiteasy/lasm/434) |
 | Byte access does not use the pointer register. | [#432](https://todo.sr.ht/~takeiteasy/lasm/432) |
 | A repeated computed address reloads the pointer register. | [#433](https://todo.sr.ht/~takeiteasy/lasm/433) |
 
@@ -509,7 +507,8 @@ With several arities taken, a wrong one that another function has is not caught 
 
 [^codegen]: A binary operator's operands go into the accumulator and the
   temporary register in whichever order avoids the stack (#364): a leaf (an
-  integer, or a parameter, `let` variable, global or constant) loads directly
+  integer, or a parameter, `let` variable, global, constant or constant-index
+  `aref`) loads directly
   with `:const`/`:get`/`:peek`, and when the right operand is not a leaf but
   the left is an integer, a constant, or a local the right cannot change, the
   right is compiled first and the left loads afterwards. Otherwise the left

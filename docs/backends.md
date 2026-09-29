@@ -188,11 +188,12 @@ index, in place of `:const` then `:peek`/`:poke`.
      (:poke-label (label s) (stwm (:hi s) (:lo s) label)))
 ;; (+ g 1)         ->  :peek-label a gvg, :add-imm a 1
 ;; (aref table 3)  ->  :peek-label a (+ table 3)
+;; (+ x (aref table 3)) -> :add-label a (+ table 3)
 ```
 
 Each arithmetic and comparison operation may also have an `-imm`, a `-slot`
 and a `-label` variant, such as `:add-imm (d v)`, `:add-slot (d slot)` and
-`:add-label (d label)` (the word at a global or static slot), that the compiler
+`:add-label (d label)` (the word at a global, a static slot or a constant-index `aref`), that the compiler
 uses [when the right operand allows](language.md#backend-requirements).
 Each comparison also has an optional `:branch-eq`...`:branch-ge (a b target)`
 operation, with the same variants, that a condition jumps on directly.

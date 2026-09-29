@@ -36,8 +36,8 @@
 ;;;;
 ;;;; A binary operator's right operand that is a leaf goes straight into
 ;;;; the backend's optional :OP-imm (a constant), :OP-slot (a frame slot) or
-;;;; :OP-label (a global or static slot) operation when it defines one, instead
-;;;; of loading into the temp register.
+;;;; :OP-label (a global, a static slot or a constant-index aref) operation when
+;;;; it defines one, instead of loading into the temp register.
 ;;;;
 ;;;; A global or static slot loads and stores through the backend's optional
 ;;;; :PEEK-LABEL (d label) and :POKE-LABEL (label s), one operation instead of
@@ -488,11 +488,18 @@ escaped, and each function whose label it spells as taken."
   (%cc-check-length form 2 2)
   (%cc-const (%cc-function-label form)))
 
-;; A leaf (an integer, a variable name, or (function NAME)) loads straight
-;; into any register with :const/:get/:peek, instead of always going
-;; through the accumulator and the stack.
+;; A leaf (an integer, a variable name, (function NAME) or a constant-index
+;; (aref A I)) loads straight into any register with :const/:get/:peek, instead
+;; of always going through the accumulator and the stack.
+(defun %cc-element-leaf-p (form)
+  "T when FORM is (aref A I) of a DEFARRAY or DEFSTRING A and a constant I."
+  (and (equal (%cc-head form) "AREF")
+       (= (length form) 3)
+       (let ((*cc-form* form))
+         (and (%cc-element-label (second form) (third form)) t))))
+
 (defun %cc-leaf-p (form)
-  (or (integerp form) (%cc-name-p form) (%cc-function-form-p form)))
+  (or (integerp form) (%cc-name-p form) (%cc-function-form-p form) (%cc-element-leaf-p form)))
 
 (defun %cc-load-leaf (form register register-name)
   "Load leaf FORM into REGISTER; REGISTER-NAME names it, for :peek."
@@ -501,6 +508,8 @@ escaped, and each function whose label it spells as taken."
     ((%cc-function-form-p form)
      (%cc-check-length form 2 2)
      (%cc-op :const register (%cc-function-label form)))
+    ((%cc-element-leaf-p form)
+     (%cc-load-label (%cc-element-label (second form) (third form)) register register-name))
     (t (let ((location (%cc-lookup form)))
          (ecase (first location)
            ((:local :arg) (%cc-op :get register location))
@@ -646,10 +655,11 @@ through (:var KEY)."
   "T when LEFT, an operator's left operand, can be loaded after RIGHT is
 evaluated: an integer, a constant, an array/string address, or (function F)
 always can; a local or argument can when RIGHT does not (set) it or reach it
-through an (asm ...) block. A global swaps only past a leaf RIGHT -- a call
-or poke in any other RIGHT could change it."
+through an (asm ...) block. A global or a constant-index (aref A I) swaps only
+past a leaf RIGHT -- a call, poke or aset in any other RIGHT could change it."
   (or (integerp left)
       (%cc-function-form-p left)
+      (and (%cc-element-leaf-p left) (%cc-leaf-p right))
       (and (%cc-name-p left)
            (let ((location (%cc-lookup left)))
              (case (first location)
@@ -702,6 +712,9 @@ straight into the backend's OP-IMM, OP-SLOT or OP-LABEL variant, else NIL."
           ((%cc-function-form-p form)
            (%cc-check-length form 2 2)
            (let ((name (variant "IMM"))) (and name (list name (%cc-function-label form)))))
+          ((%cc-element-leaf-p form)
+           (let ((name (variant "LABEL")))
+             (and name (list name (%cc-element-label (second form) (third form))))))
           ((%cc-name-p form)
            (let ((location (%cc-lookup form)))
              (ecase (first location)
@@ -734,7 +747,8 @@ its source."
   "Instructions to load FORM into a register: 0 for a non-leaf, whose cost
 every way of computing the pair shares."
   (cond ((not (%cc-leaf-p form)) 0)
-        ((and (%cc-name-p form) (member (first (%cc-lookup form)) '(:global :static)))
+        ((or (%cc-element-leaf-p form)
+             (and (%cc-name-p form) (member (first (%cc-lookup form)) '(:global :static))))
          (if (%cc-op-p :peek-label) 1 2))
         (t 1)))
 
@@ -1297,6 +1311,12 @@ function value takes, or that the function values reaching its target do not."
                     (%cc-fail form "no function value takes ~D argument~:P~@[ (function values take ~{~D~^, ~})~]"
                               arity (sort (copy-list *cc-value-arities*) #'<)))))))
 
+;; FIXME: a leaf callee, a global too, loads after the arguments; one that sets it changes the target (#435).
+(defun %cc-callee-leaf-p (callee)
+  "T when CALLEE loads straight into the call target register, after the arguments.
+An element is computed first, as an argument could aset it."
+  (and (%cc-leaf-p callee) (not (%cc-element-leaf-p callee))))
+
 (defun %cc-note-indirect-call (callee args form function)
   (unless (%cc-raw-address-p callee)
     (cl:push (list (length args) form function (%cc-sources callee)
@@ -1308,7 +1328,7 @@ function value takes, or that the function values reaching its target do not."
 ;; thunk copies them into the function's own parameter words.
 (defun %cc-static-indirect-funcall (callee args)
   (let ((form *cc-form*) (function *cc-function*)
-        (callee-slot (unless (%cc-leaf-p callee)
+        (callee-slot (unless (%cc-callee-leaf-p callee)
                        (%cc-expr callee)
                        (let ((slot (%cc-alloc)))
                          (%cc-store slot)
@@ -1334,7 +1354,7 @@ function value takes, or that the function values reaching its target do not."
   (when (%cc-static-p)
     (return-from %cc-indirect-funcall (%cc-static-indirect-funcall callee args)))
   (let ((form *cc-form*) (function *cc-function*)
-        (callee-slot (unless (%cc-leaf-p callee)
+        (callee-slot (unless (%cc-callee-leaf-p callee)
                        (%cc-expr callee)
                        (let ((slot (%cc-alloc)))
                          (%cc-op :set slot *cc-acc*)
