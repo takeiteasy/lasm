@@ -6,13 +6,14 @@ Each example is an ASDF system depending on `:lasm`, with its own test system.
 | --- | --- | --- |
 | [`:dcpu16`](#dcpu-16) | Lisp DSL | A complete DCPU-16 v1.7 machine: operand modes, word-encoded instructions, interrupts and devices. |
 | [`:chip8`](#chip-8) | `.lsp` language | A CHIP-8 interpreter written in the [source language](language.md), compiled for a small host machine. |
+| [`"6502"`](#6502) | `.lasm` items, assembly text | A MOS 6502 with every documented opcode and addressing mode, and a program that mixes raw instructions with a backend's operations and calls. |
 
 ## Loading
 
 ASDF must find the system. Any one of these works, from the repository root:
 
 ```lisp
-(asdf:load-asd #p"examples/dcpu16/dcpu16.asd")   ; likewise chip8/chip8.asd
+(asdf:load-asd #p"examples/dcpu16/dcpu16.asd")   ; likewise chip8/chip8.asd, 6502/6502.asd
 
 (cl:push #p"examples/dcpu16/" asdf:*central-registry*)
 
@@ -102,3 +103,64 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 | `(delay-timer m)`, `(sound-timer m)` | Timers. |
 | `(memory-byte m address)` | A byte of CHIP-8 memory. |
 | `(pixel m x y)`, `(display-rows m)` | The 64x32 display. |
+
+## 6502
+
+The spec is the block comment at the top of `examples/6502/6502.lisp`. The system
+is named `"6502"`, which is not a symbol, so its package is `mos6502`.
+
+```lisp
+(asdf:load-system "6502")
+
+(let* ((assembly (lasm:assemble-items-file mos6502:*demo*))
+       (machine (mos6502:load-6502 assembly)))
+  (mos6502:reset-6502 machine)                  ; PC from the vector at $FFFC
+  (mos6502:run-6502 machine)                    ; :halted, on JAM
+  (mos6502:word-at machine (mos6502:demo-symbol assembly "product")))   ; 2100
+```
+
+| File | Holds |
+| --- | --- |
+| `package.lisp` | A package that `use`s `#:lasm`, and imports the built-in [mode](modes.md) names. |
+| `6502.lisp` | The [machine](machine-model.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page pairs](register-pairs.md#memory-halves) and [static frames](static-frames.md). |
+| `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` and `(:call ...)`. |
+| `test.lisp` | A FiveAM suite: the opcode matrix, mode selection, flags, decimal mode, the stack, BRK and RTI, cycles, the demo, and `.lsp` programs on the backend. |
+
+Assembly text uses `assemble-6502`; `$` is hex and `;` starts a comment.
+
+| Operand | Written |
+| --- | --- |
+| Immediate | `#$10` |
+| Zero page, absolute | `$10`, `$1234`: a value that fits a byte is zero page, and `lda.w`, `lda.z` force one |
+| Indexed | `$10,x`, `$10,y`, `$1234,x`, `$1234,y` |
+| Indirect | `($1234)` for `jmp` |
+| Indexed indirect, indirect indexed | `($10,x)`, `($10),y` |
+| Accumulator | `asl a` |
+| Branch | a label, as a signed byte from the next instruction |
+
+In a `.lasm` file an operand is `(KIND value)`: `imm`, `zp`, `zpx`, `zpy`, `abs`,
+`absx`, `absy`, `indx`, `indy`, `ind` and `acc`. A branch or jump takes a bare label.
+
+`run-6502` stops on `JAM` (`$02`) or after `:max-steps` instructions, and returns
+`:halted` or `:running`; any other stop is an error. `BRK` is a real interrupt
+through the vector at `$FFFE`.
+
+| Reader | Returns |
+| --- | --- |
+| `(reg m 'a)` | A register: `a`, `x`, `y`, `s`, `pc`. |
+| `(status m)`, `(flag-set-p m 'c)` | The flags, packed as `PHP` pushes them without B, or one flag. |
+| `(ram m address)`, `(word-at m address)` | A cell, or a little-endian word. |
+| `(demo-symbol assembly "label")` | The address of a label. |
+
+## Limitations
+
+What the examples needed that LASM does not model yet.
+
+| Limitation | Ticket |
+| --- | --- |
+| The 6502 packs and unpacks its status byte by hand: a machine cannot declare one register over its flags. | [#453](https://todo.sr.ht/~takeiteasy/lasm/453) |
+| A machine `stack-pointer` has no page base or post-decrement, so the 6502's stack is hand-written. | [#454](https://todo.sr.ht/~takeiteasy/lasm/454) |
+| `reset-pc` is a fixed value, not a memory vector; the 6502's reset is a Lisp function. | [#455](https://todo.sr.ht/~takeiteasy/lasm/455) |
+| Interrupt vectors are registers, so `BRK` and `RTI` do not use `interrupts`. | [#313](https://todo.sr.ht/~takeiteasy/lasm/313) |
+| A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
+| The built-in mode names are internal, so a package imports them. | [#457](https://todo.sr.ht/~takeiteasy/lasm/457) |

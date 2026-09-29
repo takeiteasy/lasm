@@ -38,6 +38,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | `(:mode MODE value...)` | A mode named directly; works without a backend. |
 | An expression | A bare value, as in `call 6`. |
 | `(:arg i)` `(:local i)` | A [frame slot](conventions.md#functions) of the enclosing function. |
+| `(:hi X)` `(:lo X)` | A half of a [register pair](register-pairs.md#halves-in-templates) word: `(:lo (zp w0))` is `(zp 2)` on a [memory pair](register-pairs.md#memory-halves). |
 | `(:force OPERAND)` | `OPERAND`, a `:mode` or kind, with its mode [forced](#forcing-a-variant). |
 
 The values fill the mode's `expr` holes in order. A mode with a `one-of`

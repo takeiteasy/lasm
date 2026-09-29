@@ -1,0 +1,200 @@
+;;;; demo.lasm
+;;;; A 6502 program in the items format (docs/items.md#lasm-files): s-expressions
+;;;; instead of assembly text, so a compiler can emit it and a program can mix
+;;;; raw instructions with the operations of a backend. It names its backend,
+;;;; mos6502-lang, so
+;;;;
+;;;;   (:op :NAME ...)              is a backend operation on 16-bit words,
+;;;;   (:function ...) (:call ...)  use the backend's calling convention, and
+;;;;   (MNEMONIC OPERAND...)        is one 6502 instruction.
+;;;;
+;;;; An operand is (KIND VALUE), and KIND names an addressing mode:
+;;;;
+;;;;   (imm 5)     #5          (indx 62)   (62,X)
+;;;;   (zp 32)     32          (indy 48)   (48),Y
+;;;;   (abs sum)   sum         (ind vector) (vector)
+;;;;   (absx t)    t,X         (acc)       A
+;;;;
+;;;; A branch or jump takes a bare label. (zp w0) is the zero-page pair the
+;;;; backend calls w0, two cells, and (:lo (zp w0)) is its low cell
+;;;; (docs/register-pairs.md#memory-halves).
+;;;;
+;;;; The program runs from the reset vector and stops on JAM. The results are
+;;;; at `results`, read back by test.lisp.
+;;;;
+;;;; TODO: a `.lasm` function cannot have `:locals` on a static-frame backend, so
+;;;; this program keeps its own cells; see docs/examples.md#limitations.
+
+(:program (:backend mos6502-lang :origin 512)
+
+  ;; The zero-page cells the program uses besides the backend's pairs, which
+  ;; occupy 2-13.
+  (:directive equ src 48)      ; a pointer, two cells
+  (:directive equ dst 50)
+  (:directive equ vec 64)
+
+  (:label reset)
+  (sei)
+  (cld)
+  (ldx (imm 255))
+  (txs)                        ; S = $FF: the stack is page 1
+
+  ;; Absolute,X: add the eight bytes of `table`. An 8-bit register indexes a
+  ;; 16-bit address, and a branch that goes back is a negative offset.
+  (lda (imm 0))
+  (ldx (imm 0))
+  (clc)
+  (:label sum_loop)
+  (adc (absx table))
+  (inx)
+  (cpx (imm 8))
+  (bne sum_loop)
+  (sta (abs sum))
+
+  ;; (zp),Y: copy a string through two pointers held in zero page. A pointer is a
+  ;; little-endian word, so its high byte is the next cell.
+  (lda (imm (& msg 255)))
+  (sta (zp src))
+  (lda (imm (& (>> msg 8) 255)))
+  (sta (zp 49))
+  (lda (imm (& buffer 255)))
+  (sta (zp dst))
+  (lda (imm (& (>> buffer 8) 255)))
+  (sta (zp 51))
+  (ldy (imm 0))
+  (:label copy_loop)
+  (lda (indy src))
+  (sta (indy dst))
+  (iny)
+  (cpy (imm 6))
+  (bne copy_loop)
+
+  ;; (zp,X): the pointer is at zero page 62 + X.
+  (lda (imm (& table 255)))
+  (sta (zp vec))
+  (lda (imm (& (>> table 8) 255)))
+  (sta (zp 65))
+  (ldx (imm 2))
+  (lda (indx 62))
+  (sta (abs first))
+
+  ;; JMP (vector): an indirect jump through a word in memory.
+  (jmp (ind vector))
+  (lda (imm 255))              ; skipped
+  (:label landing)
+  (lda (imm 1))
+  (sta (abs landed))
+
+  ;; The backend's operations. w2 * w3 is a call to a function written below
+  ;; with raw instructions: its arguments arrive in w2 and w3 and its result
+  ;; leaves in w0. A word is stored little-endian at a label.
+  (:op :const (zp w2) 300)
+  (:op :const (zp w3) 7)
+  (:call multiply (zp w2) (zp w3))
+  (:op :poke-label product (zp w0))
+  (:op :const (zp w1) 5)
+  (:op :add (zp w0) (zp w1))
+  (:op :poke-label total (zp w0))
+
+  ;; Decimal mode: 58 + 46 = 104, the sum $04 with a carry out.
+  (sed)
+  (clc)
+  (lda (imm 88))               ; $58 as packed BCD
+  (adc (imm 70))               ; $46
+  (cld)
+  (sta (abs bcd))
+  (lda (imm 0))
+  (adc (imm 0))                ; the carry
+  (sta (abs bcd_carry))
+
+  ;; The stack: PHA and PLA, and PHP, which sets the B bit in the byte it pushes.
+  (lda (imm 66))
+  (pha)
+  (lda (imm 0))
+  (pla)
+  (sta (abs pulled))
+  (sec)
+  (php)
+  (pla)
+  (sta (abs status_byte))
+  (tsx)
+  (stx (abs stack_top))
+
+  ;; BRK pushes the return address and P, then jumps through the vector at
+  ;; $FFFE. The byte after a BRK is padding the handler returns over.
+  (brk)
+  (nop)
+  (brk)
+  (nop)
+
+  (jam)
+
+  ;; A function. Its arguments are in the backend's :args pairs, which
+  ;; (:arg 0) and (:arg 1) name: shift-and-add, one multiplier bit at a time.
+  (:function multiply (:args 2)
+    (lda (imm 0))
+    (sta (:lo (zp w0)))
+    (sta (:hi (zp w0)))
+    (ldx (imm 16))
+    (:label multiply_loop)
+    (lsr (:hi (:arg 1)))
+    (ror (:lo (:arg 1)))
+    (bcc multiply_skip)
+    (:op :add (zp w0) (:arg 0))
+    (:label multiply_skip)
+    (asl (:lo (:arg 0)))
+    (rol (:hi (:arg 0)))
+    (dex)
+    (bne multiply_loop)
+    (:return))
+
+  (:label nmi)
+  (rti)
+
+  (:label irq)
+  (inc (abs irq_count))
+  (tsx)
+  (lda (absx 257))             ; the P that BRK pushed
+  (sta (abs irq_status))
+  (rti)
+
+  ;; Data.
+  (:directive org 4096)
+  (:label table)
+  (:directive byte 1 2 3 4 5 6 7 8)
+  (:label msg)
+  (:directive asciz "HELLO")
+  (:label vector)
+  (:directive word landing)
+
+  (:label results)
+  (:label sum)
+  (:directive res 1)
+  (:label first)
+  (:directive res 1)
+  (:label landed)
+  (:directive res 1)
+  (:label bcd)
+  (:directive res 1)
+  (:label bcd_carry)
+  (:directive res 1)
+  (:label pulled)
+  (:directive res 1)
+  (:label status_byte)
+  (:directive res 1)
+  (:label stack_top)
+  (:directive res 1)
+  (:label irq_count)
+  (:directive res 1)
+  (:label irq_status)
+  (:directive res 1)
+  (:label product)
+  (:directive res 2)
+  (:label total)
+  (:directive res 2)
+  (:label buffer)
+  (:directive res 6)
+
+  ;; The vectors: NMI, reset, IRQ and BRK.
+  (:directive org 65530)
+  (:directive word nmi reset irq))

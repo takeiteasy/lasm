@@ -116,7 +116,7 @@
       (set! cf (if (minusp difference) 1 0)))))
 
 ;; CMP compares A with a cell; CMPC also takes the borrow and the zero flag of the low half.
-(defmacro defcompare (mnemonic opcode carry-in zero-in)
+(defmacro zf-defcompare (mnemonic opcode carry-in zero-in)
   `(definstruction zpfoo ,mnemonic (modes zf-zp)
      (encoding (opcode ,opcode) (operand cell :width 1))
      (semantics
@@ -132,27 +132,27 @@
          (set! nf (if (>= result 128) 1 0))
          (set! vf (if (or (< signed -128) (> signed 127)) 1 0))))))
 
-(defcompare cmp 19 0 t)
-(defcompare cmpc 20 cf (= zf 1))
+(zf-defcompare cmp 19 0 t)
+(zf-defcompare cmpc 20 cf (= zf 1))
 
-(defmacro defsetter (mnemonic opcode condition)
+(defmacro zf-defsetter (mnemonic opcode condition)
   `(definstruction zpfoo ,mnemonic
      (encoding (opcode ,opcode))
      (semantics (set! a (if ,condition 1 0)))))
 
-(defsetter seteq 21 (= zf 1))
-(defsetter setne 22 (= zf 0))
-(defsetter setlt 23 (/= nf vf))
-(defsetter setge 24 (= nf vf))
+(zf-defsetter seteq 21 (= zf 1))
+(zf-defsetter setne 22 (= zf 0))
+(zf-defsetter setlt 23 (/= nf vf))
+(zf-defsetter setge 24 (= nf vf))
 
-(defmacro defbitwise (mnemonic opcode function)
+(defmacro zf-defbitwise (mnemonic opcode function)
   `(definstruction zpfoo ,mnemonic (modes zf-zp)
      (encoding (opcode ,opcode) (operand cell :width 1))
      (semantics (set! a (,function a (mref machine 'ram cell))))))
 
-(defbitwise anda 25 logand)
-(defbitwise ora 26 logior)
-(defbitwise eor 27 logxor)
+(zf-defbitwise anda 25 logand)
+(zf-defbitwise ora 26 logior)
+(zf-defbitwise eor 27 logxor)
 
 ;; A word through the address in two cells, two cells little-endian: dh, dl, ah, al.
 (definstruction zpfoo ldw (modes zf-zzzz)
@@ -172,7 +172,7 @@
       (set! (mref machine 'ram (wrap-value (1+ address) 16)) (mref machine 'ram sh)))))
 
 ;; MNEMONIC dh, dl, sh, sl sets the word in dh:dl to EXPRESSION of the words x and y, signed as sx and sy.
-(defmacro defword (mnemonic opcode expression)
+(defmacro zf-defword (mnemonic opcode expression)
   `(definstruction zpfoo ,mnemonic (modes zf-zzzz)
      (encoding (opcode ,opcode) (operand dh :width 1) (operand dl :width 1)
                (operand sh :width 1) (operand sl :width 1))
@@ -185,11 +185,11 @@
          (set! (mref machine 'ram dh) (ash result -8))
          (set! (mref machine 'ram dl) (logand result 255))))))
 
-(defword mulw 30 (* sx sy))
-(defword divw 31 (if (zerop sy) 0 (truncate sx sy)))
-(defword modw 32 (if (zerop sy) 0 (rem sx sy)))
-(defword shlw 33 (ash x y))
-(defword shrw 34 (ash x (- y)))
+(zf-defword mulw 30 (* sx sy))
+(zf-defword divw 31 (if (zerop sy) 0 (truncate sx sy)))
+(zf-defword modw 32 (if (zerop sy) 0 (rem sx sy)))
+(zf-defword shlw 33 (ash x y))
+(zf-defword shrw 34 (ash x (- y)))
 
 ;; Every value is a pair of zero-page cells; w3's halves are far apart, so no
 ;; template may assume a pair's cells are adjacent. The accumulator A is in no
