@@ -339,7 +339,11 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   ;; Interrupt priority of this device's signals; higher delivers first.
   (priority 0 :type integer)
   ;; This device's signals ignore every mask.
-  (non-maskable nil :type boolean))
+  (non-maskable nil :type boolean)
+  ;; NIL for an inline (device ...); for a (devices ...) entry, (DEFINITION-NAME
+  ;; DEFINITION OVERRIDES) so MACHINE-DESCRIPTOR-DEVICES can re-derive it when
+  ;; DEFDEVICE redefines DEFINITION-NAME.
+  (source nil :type list))
 
 ;; Devices defined once with DEFDEVICE, keyed by name; a CPU's (devices ...)
 ;; entry and ATTACH-DEVICE :DEVICE copy one.
@@ -349,6 +353,16 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   "The DEVICE-DESCRIPTOR DEFDEVICE defined as NAME."
   (or (gethash name *device-definitions*)
       (%lookup-error 'unknown-device-definition name "No device named ~S has been defined with DEFDEVICE" name)))
+
+(defun machine-descriptor-devices (descriptor)
+  "DESCRIPTOR's declared devices in bus order, each one derived from a DEFDEVICE
+re-derived first when that device has been redefined."
+  (loop for cell on (machine-descriptor-device-list descriptor)
+        for source = (device-descriptor-source (car cell))
+        when (and source (not (eq (gethash (first source) *device-definitions*) (second source))))
+          do (setf (car cell) (%derive-entry-device (first source) (device-descriptor-name (car cell))
+                                                    (third source))))
+  (machine-descriptor-device-list descriptor))
 
 ;; A machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
@@ -557,8 +571,8 @@ machine's default layout -- callers hold no other kind."
   ;; DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
   ;; order -- that order is a runtime MACHINE's initial bus index order (see
   ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
-  ;; declaring none.
-  (devices nil :type list)
+  ;; declaring none. Read through MACHINE-DESCRIPTOR-DEVICES.
+  (device-list nil :type list)
   ;; NIL unless DEFMACHINE declares an (interrupts ...) clause -- the
   ;; machine's whole interrupt model (vector/message/save registers, queue
   ;; depth/overflow policy, masking, delivery cost). NIL is what keeps

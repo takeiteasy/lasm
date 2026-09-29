@@ -1031,6 +1031,13 @@ DESCRIPTOR's finished elements."
   "A copy of the device DEFINITION named NAME, with the keyword plist OVERRIDES applied."
   (parse-device-clause (cons name (%plist-merge (%device-plist definition) overrides))))
 
+(defun %derive-entry-device (definition-name name overrides)
+  "The device NAME derived from the DEFDEVICE DEFINITION-NAME, remembering its source."
+  (let* ((definition (find-device-definition definition-name))
+         (device (derive-device definition name overrides)))
+    (setf (device-descriptor-source device) (list definition-name definition overrides))
+    device))
+
 (defun %device-entry-name (entry)
   (if (consp entry) (first entry) entry))
 
@@ -1043,10 +1050,10 @@ DESCRIPTOR's finished elements."
     (unless (and (symbolp (first entry)) (first entry) (evenp (length (rest entry))))
       (%defmachine-error "devices: expected NAME or (NAME [:device DEF] key value...), got ~S" entry))
     (let ((overrides (rest entry)))
-      (derive-device (find-device-definition (or (getf overrides :device) (first entry)))
-                     (first entry)
-                     (loop for (key value) on overrides by #'cddr
-                           unless (eq key :device) append (list key value))))))
+      (%derive-entry-device (or (getf overrides :device) (first entry))
+                            (first entry)
+                            (loop for (key value) on overrides by #'cddr
+                                  unless (eq key :device) append (list key value))))))
 
 (defun parse-identity-clause (form)
   "Values the plist of the identity keys FORM gives (:model :id :version
@@ -1132,7 +1139,7 @@ DESCRIPTOR's finished elements."
       (parse-machine-clauses clauses)
     (let ((descriptor (funcall constructor :name name :instruction-word instruction-word
                                            :clock-speed clock-speed :reset-pc reset-pc
-                                           :devices devices
+                                           :device-list devices
                                            :interrupts interrupts :privilege privilege
                                            :idle-cycles idle-cycles
                                            :undefined-opcode undefined-opcode
@@ -1774,8 +1781,8 @@ ATTACH-DEVICE :DEVICE. KEYS are a (device ...) clause's:
      [:id n] [:version n] [:manufacturer n] [:priority n] [:non-maskable t/nil]
      [:init fn] [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
      [:read fn] [:write fn]
-Hooks are bare function names. A CPU copies the definition when it is defined,
-so redefining a device does not reach CPUs already built. See docs/devices.md."
+Hooks are bare function names. Redefining a device reaches every CPU that
+attaches it, from its next MAKE-MACHINE or RESET. See docs/devices.md."
   (%expanding-definition
     (%definition-toplevel-form
      `(%define-device ',name ',keys)

@@ -35,8 +35,9 @@ object is both enumerated and memory-mapped.
 
 An entry's name is its bus name and shares the [namespace](machine-model.md)
 of storage, regions and other devices. Each attachment has its own state, so
-one definition can attach twice. A CPU copies the definition when it is
-defined.[^copy]
+one definition can attach twice. Redefining a `defdevice` reaches every CPU
+that attaches it, from that CPU's next `make-machine` or `reset`; a machine
+already built keeps its devices until then.
 
 `devices` and `device` entries take bus indices in clause order. A child CPU
 merges an entry of the same name in place and appends new ones after the
@@ -184,8 +185,3 @@ or drops the signal when none is installed. Machines with an `(interrupts
 
 - Interrupt delivery and idle steps tick devices once for their whole cost;
   they have no body to subdivide.
-- Redefining a `defdevice` does not change CPUs already defined. ([#449](https://todo.sr.ht/~takeiteasy/lasm/449))
-
-[^copy]: A `defdevice` is copied into the CPU's descriptor when `defcpu` runs,
-    so re-evaluate the CPU after redefining a device. The hook names are
-    symbols, so redefining a hook function takes effect at once.

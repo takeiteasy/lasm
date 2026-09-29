@@ -149,3 +149,40 @@
 (fiveam:test defisa-rejects-devices
   (fiveam:signals machine-definition-error
     (eval '(defisa dd-bad-isa (register pc :width 8) (memory ram :width 8 :addr-width 8) (devices dd-clock)))))
+
+;;; Redefining a defdevice reaches the CPUs that attach it.
+
+(defdevice dd-redef :id 1 :version 1)
+
+(defcpu (dd-redef-cpu (:isa dd-isa))
+  (devices dd-redef (aux :device dd-redef :id 50))
+  (device inline :id 60))
+
+(defcpu (dd-redef-child (:extends dd-redef-cpu))
+  (device late :id 61))
+
+(defmacro with-dd-redef-redefined ((&rest keys) &body body)
+  `(let ((original (find-device-definition 'dd-redef)))
+     (unwind-protect
+          (progn (eval '(defdevice dd-redef ,@keys)) ,@body)
+       (setf (gethash 'dd-redef *device-definitions*) original))))
+
+(fiveam:test redefining-a-defdevice-reaches-cpus-defined-earlier
+  (with-dd-redef-redefined (:id 2 :version 3)
+    (dolist (cpu '(dd-redef-cpu dd-redef-child))
+      (let ((m (make-machine cpu)))
+        (fiveam:is (equal '(2 3 0) (multiple-value-list (device-info m 0))))
+        (fiveam:is (equal '(50 3 0) (multiple-value-list (device-info m 1))))
+        (fiveam:is (= 60 (device-info m 2)))))))
+
+(fiveam:test a-machine-keeps-its-device-until-reset
+  (let ((m (make-machine 'dd-redef-cpu)))
+    (with-dd-redef-redefined (:id 2)
+      (fiveam:is (= 1 (device-info m 0)))
+      (reset m)
+      (fiveam:is (= 2 (device-info m 0))))))
+
+(fiveam:test a-redefined-defdevice-leaves-the-bus-order-alone
+  (with-dd-redef-redefined (:id 2)
+    (fiveam:is (equal '(dd-redef aux inline) (%dd-names (make-machine 'dd-redef-cpu))))
+    (fiveam:is (equal '(dd-redef aux inline late) (%dd-names (make-machine 'dd-redef-child))))))
