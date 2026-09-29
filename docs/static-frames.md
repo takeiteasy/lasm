@@ -38,8 +38,9 @@ nor a `(frame :slot ...)` operand kind: a backend with no slot operand omits it.
 A static slot is read with `:peek-label` and written with `:poke-label`, or
 with `:const` then `:peek`/`:poke` when the backend has no such operations, so
 those are needed, as is `:call`, `:return` and the rest of the
-[backend requirements](language.md#backend-requirements). The registers and
-`:save` of the stack convention are unused: no register is held across a call.
+[backend requirements](language.md#backend-requirements). A `:callee-saved`
+register holds a value across a call as with stack frames, and is saved in the
+function's own frame, not with `:push` and `:pop`.
 
 ## How it works
 
@@ -48,6 +49,7 @@ those are needed, as is `:call`, `:return` and the rest of the
 | A parameter or `let` variable is a frame slot | It is a labelled word, `sf`*function*`x`*n* |
 | A call pushes its arguments | A call stores each into the callee's parameter word |
 | A function allocates its slots on entry | Its words are reserved once, after the code |
+| A `:callee-saved` register a function uses is pushed and popped | It is stored in an extra word of the function's frame, and loaded back before every `(:return)`[^saved] |
 | Slots are live for one call | Functions that never run together share addresses |[^layout]
 | A computed call passes its arguments on the stack | It stores them in a shared block, `sfx0`…, and the target's entry thunk copies them |
 
@@ -114,13 +116,16 @@ taken to be any entered function that takes as many arguments.
 | Limitation | Ticket |
 | --- | --- |
 | A recursive function is an error; it cannot keep a stack frame. | [#420](https://todo.sr.ht/~takeiteasy/lasm/420) |
-| No value is held across a call in a callee-saved register. | [#421](https://todo.sr.ht/~takeiteasy/lasm/421) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
   pushed share out. A function's offset is the largest offset plus size among
   the functions that call it, and one that nobody calls starts at `0`. Every
   word is `.res` of one language word, so a wider word reserves more cells.
+
+[^saved]: The word follows the function's other slots, so a callee's frame never
+  overlaps it. The register is stored at the function's start, and each restore
+  loads it back with the accumulator left alone, so the return value survives.
 
 [^staging]: Only the arguments before the last one that may call are held; the
   rest are stored directly. A call, a `funcall` and any `(asm ...)` may call.

@@ -1721,6 +1721,48 @@ two |#
     (fiveam:is (/= 0 status))
     (fiveam:is (search "--frames must be static or stack" err))))
 
+;;; #421: a callee-saved register saved in a static frame
+
+(defparameter +cl-static-saved-programs+
+  '(("(defun g (x) (+ x 1))
+     (defun f (n) (let ((i 0) (a 0)) (while (< i n) (set a (+ (* a 2) (g i))) (set i (+ i 1))) a))
+     (defun main () (let ((i 0) (r 0)) (while (< i 2) (set r (+ (* r 3) (f 2))) (set i (+ i 1))) r))" . 16)
+    ("(defun g (x) (+ x 1))
+     (defun f (n) (let ((i 0) (a 0)) (while (< i n) (set a (+ (* a 2) (g i))) (if (= i 1) (return a)) (set i (+ i 1))) 0))
+     (defun main () (let ((i 0) (r 0)) (while (< i 2) (set r (+ (* r 3) (f 3))) (set i (+ i 1))) r))" . 16)
+    ("(defun f () (asm (:clobbers c) (:op :const (reg c) 99)) 1)
+     (defun main () (let ((i 0) (r 0)) (while (< i 2) (set r (+ (* r 3) (f))) (set i (+ i 1))) r))" . 4))
+  "Programs whose callers and callees both hold a value in a callee-saved register, and the value main leaves in the accumulator.")
+
+(defun %cl-function-ops (items name)
+  "The (OP ARG...) of each operation in function NAME's items, as downcased strings."
+  (let ((label (%cc-mangle "fn" name)))
+    (loop for item in (cdddr (find-if (lambda (item) (and (eq :function (first item)) (%same-name-p label (second item))))
+                                      items))
+          when (and (consp item) (eq (first item) :op))
+            collect (mapcar (lambda (x) (string-downcase (princ-to-string x))) (rest item)))))
+
+(fiveam:test static-frames-save-a-callee-saved-register-in-the-frame
+  (dolist (optimize '(:size :speed))
+    (let ((ops (%cl-function-ops (%cl-compile (first (first +cl-static-saved-programs+)) 'cl-static-abi optimize) "f")))
+      (fiveam:is (= 1 (count-if (lambda (op) (and (equal "poke" (first op)) (equal "c" (car (last op))))) ops)) "~A" optimize)
+      (fiveam:is (= 1 (count-if (lambda (op) (and (equal "peek" (first op)) (equal "c" (second op)))) ops)) "~A" optimize))))
+
+(fiveam:test static-frames-restore-a-saved-register-before-each-return
+  (let ((ops (%cl-function-ops (%cl-compile (first (second +cl-static-saved-programs+)) 'cl-static-abi) "f")))
+    (fiveam:is (= 2 (count-if (lambda (op) (and (equal "peek" (first op)) (equal "c" (second op)))) ops)))))
+
+(fiveam:test static-frames-hold-values-across-calls-in-callee-saved-registers
+  (dolist (optimize '(:size :speed))
+    (loop for (source . expected) in +cl-static-saved-programs+
+          do (let ((m (%cl-run source 'cl-static-abi 'callfoo optimize)))
+               (fiveam:is (= expected (%cv-a m)) "~A ~A" optimize source)
+               (fiveam:is (= +cv-sp+ (sref m 'sp)) "~A ~A" optimize source)))))
+
+(fiveam:test static-frames-save-a-callee-saved-asm-clobber
+  (let ((ops (%cl-function-ops (%cl-compile (first (third +cl-static-saved-programs+)) 'cl-static-abi) "f")))
+    (fiveam:is (find-if (lambda (op) (and (equal "poke" (first op)) (equal "c" (car (last op))))) ops))))
+
 ;;; #429: a load and store by label
 
 (eval '(defbackend cl-label-abi (:extends cl-static-abi)

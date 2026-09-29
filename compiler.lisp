@@ -69,7 +69,8 @@
 ;;;; and each and/or operand after the first halve a site; a while multiplies it by 4.
 ;;;; (asm (:clobbers REG...) ITEM...) declares the registers the asm
 ;;;; writes, so an operand holding another register may reach it. A
-;;;; declared :callee-saved one is added to the function's :save.
+;;;; declared :callee-saved one is added to the function's :save. Under static
+;;;; frames the function saves it in a word of its own frame instead.
 ;;;;
 ;;;; Symbols are compared by name: source is read without interning.
 ;;;;
@@ -1236,7 +1237,7 @@ VALUE goes first when ADDRESS has a key and VALUE sets no variable, so a VALUE t
 (defun %cc-asm (form)
   (%cc-check-length form 1 nil)
   (let ((clobbers (%cc-asm-clobbers form)))
-    (unless (or (eq clobbers :all) (%cc-static-p))
+    (unless (eq clobbers :all)
       (dolist (name (getf (backend-descriptor-registers *cc-backend*) :callee-saved))
         (when (member name clobbers :test #'string=)
           (pushnew name *cc-saves* :test #'string=)))))
@@ -2065,17 +2066,38 @@ names must stay literal for the rest of the compiler to resolve."
                (setf (gethash (first *cc-env*) *cc-holdings*)
                      (list (nth index (gethash (%designator-name name) *cc-parameters*))))))
     (%cc-progn body)
-    (setf (gethash *cc-caller* *cc-sizes*) *cc-max*)
-    (list* :function label
-           (append (if (%cc-static-p)
-                       (list :args 0 :locals 0 :frame nil)
-                       (list :args (length params) :locals *cc-max*))
-                   ;; A preserved register %CC-TAKE used; the backend's
-                   ;; own :callee-saved convention pushes and pops it, which
-                   ;; also restores it correctly across an early (return).
-                   (and *cc-saves* (not (%cc-static-p)) (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
-                                                        (reverse *cc-saves*)))))
-           (nreverse (cl:push (list :return) *cc-out*)))))
+    (let* ((save-slots (and (%cc-static-p)
+                            (loop for name in (reverse *cc-saves*)
+                                  for index from *cc-max*
+                                  collect (cons name (%cc-slot-label label index)))))
+           (items (nreverse (cl:push (list :return) *cc-out*))))
+      (setf (gethash *cc-caller* *cc-sizes*) (+ *cc-max* (length save-slots)))
+      (list* :function label
+             (append (if (%cc-static-p)
+                         (list :args 0 :locals 0 :frame nil)
+                         (list :args (length params) :locals *cc-max*))
+                     ;; A preserved register %CC-TAKE used; the backend's
+                     ;; own :callee-saved convention pushes and pops it, which
+                     ;; also restores it correctly across an early (return).
+                     (and *cc-saves* (not (%cc-static-p))
+                          (list :save (mapcar (lambda (name) (%cc-symbol (string-downcase name)))
+                                              (reverse *cc-saves*)))))
+             (if save-slots
+                 (%cc-save-in-frame save-slots items)
+                 items)))))
+
+(defun %cc-save-in-frame (save-slots items)
+  "ITEMS with each of SAVE-SLOTS, (REGISTER . LABEL), stored at its start and
+loaded back before every (:return)."
+  (let ((*cc-out* '()) (*cc-pointer* nil))
+    (loop for (name . label) in save-slots
+          do (%cc-store-label label (%cc-register-operand name) (%cc-symbol (string-downcase name))))
+    (dolist (item items)
+      (when (equal item '(:return))
+        (loop for (name . label) in save-slots
+              do (%cc-load-label label (%cc-register-operand name) (%cc-symbol (string-downcase name)))))
+      (%cc-emit item))
+    (nreverse *cc-out*)))
 
 (defun %cc-shared-registers (name params body label)
   "The upcased names of the preserved registers whose call sites, weighted by
@@ -2084,7 +2106,9 @@ a push and a pop a call, and each site saves one. Counted by compiling
 the function once and discarding the items."
   (let ((*cc-counting* (make-hash-table :test 'equal))
         (*cc-labels* *cc-labels*)
-        (*cc-indirect-calls* *cc-indirect-calls*))
+        (*cc-indirect-calls* *cc-indirect-calls*)
+        (*cc-calls* *cc-calls*) (*cc-computed-calls* *cc-computed-calls*)
+        (*cc-entered* *cc-entered*) (*cc-block-size* *cc-block-size*))
     (%cc-function-items name params body label)
     (loop for register being the hash-keys of *cc-counting* using (hash-value sites)
           when (> sites 1) collect register)))
@@ -2097,7 +2121,7 @@ the function once and discarding the items."
            ;; Every macro in the file is registered by now (%CC-COLLECT ran
            ;; first), regardless of where NAME's DEFUN sits relative to them.
            (body (mapcar #'%cc-expand-all body))
-           (*cc-shared* (and (eq *cc-optimize* :speed) (not (%cc-static-p))
+           (*cc-shared* (and (eq *cc-optimize* :speed)
                              (%cc-shared-registers name params body label))))
       (mapc #'%cc-note-escapes body)
       (%cc-function-items name params body label))))
@@ -2127,9 +2151,8 @@ register, so any of these are free once nothing above still needs them."
           *cc-temp-name* (%cc-symbol (string-downcase temp))
           *cc-volatile* (remove-if (lambda (name) (member name reserved :test #'string=))
                                     (append (getf registers :scratch) (getf registers :caller-saved)))
-          *cc-preserved* (and (not (%cc-static-p))
-                              (remove-if (lambda (name) (member name reserved :test #'string=))
-                                         (getf registers :callee-saved))))))
+          *cc-preserved* (remove-if (lambda (name) (member name reserved :test #'string=))
+                                    (getf registers :callee-saved)))))
 
 ;; Static frames. A function's frame sits after every frame of its callers, so
 ;; a function and the ones it calls never share an address, and functions that
