@@ -335,15 +335,20 @@ function), got ~S" context name (car fn) (cdr fn))))
 ;; :WRITE; a device no region binds is bus-only. NAME is validated as a symbol here;
 ;; BUILD-MACHINE-DESCRIPTOR cross-checks it against every other name in the
 ;; machine's namespace, same as a region's or a register alias's name.
+(defun %check-non-negative-integers (owner entries)
+  "Signal unless every (KEY . VALUE) of ENTRIES is a non-negative integer."
+  (dolist (entry entries)
+    (unless (and (integerp (cdr entry)) (>= (cdr entry) 0))
+      (%defmachine-error "~A: ~A must be a non-negative integer, got ~S" owner (car entry) (cdr entry)))))
+
 (defun parse-device-clause (form)
   (%definition-bind (name &key (id 0) (version 0) (manufacturer 0)
                              init tick receive detach save load read write (priority 0) non-maskable)
       form
     (unless (symbolp name)
       (%defmachine-error "device ~S: name must be a symbol" name))
-    (dolist (v (list (cons :id id) (cons :version version) (cons :manufacturer manufacturer)))
-      (unless (and (integerp (cdr v)) (>= (cdr v) 0))
-        (%defmachine-error "device ~S: ~A must be a non-negative integer, got ~S" name (car v) (cdr v))))
+    (%check-non-negative-integers (format nil "device ~S" name)
+                                  (list (cons :id id) (cons :version version) (cons :manufacturer manufacturer)))
     (unless (integerp priority)
       (%defmachine-error "device ~S: :priority must be an integer, got ~S" name priority))
     (dolist (fn (list (cons :init init) (cons :tick tick)
@@ -1010,9 +1015,26 @@ DESCRIPTOR's finished elements."
             do (%defmachine-error "properties: duplicate key ~S" key)))
   (copy-list form))
 
+(defun parse-identity-clause (form)
+  "Values the plist of the identity keys FORM gives (:model :id :version
+:manufacturer) and whether it is :required."
+  (%definition-bind (&key model id version manufacturer (required nil required-p)) form
+    (when (and model (not (stringp model)))
+      (%defmachine-error "identity: :model must be a string, got ~S" model))
+    (when (and required-p (not (typep required 'boolean)))
+      (%defmachine-error "identity: :required must be T or NIL, got ~S" required))
+    (let ((numbers (loop for (key value) in (list (list :id id) (list :version version)
+                                                  (list :manufacturer manufacturer))
+                         when value collect (cons key value))))
+      (%check-non-negative-integers "identity" numbers)
+      (values (append (and model (list :model model))
+                      (loop for (key . value) in numbers append (list key value)))
+              required))))
+
 (defun parse-machine-clauses (clauses)
   (let (elements instruction-word clock-speed reset-pc devices interrupts stack-pointers privilege
-        (idle-cycles 1) idle-seen (undefined-opcode :fault) undefined-opcode-seen properties properties-seen)
+        (idle-cycles 1) idle-seen (undefined-opcode :fault) undefined-opcode-seen properties properties-seen
+        identity identity-required identity-seen)
     (dolist (clause clauses)
       (case (first clause)
         (register (cl:push (parse-register-clause (rest clause)) elements))
@@ -1056,16 +1078,23 @@ DESCRIPTOR's finished elements."
            (%defmachine-error "DEFMACHINE: more than one properties clause"))
          (setf properties-seen t
                properties (parse-properties-clause (rest clause))))
+        (identity
+         (when identity-seen
+           (%defmachine-error "DEFMACHINE: more than one identity clause"))
+         (setf identity-seen t)
+         (multiple-value-setq (identity identity-required) (parse-identity-clause (rest clause))))
         ((without-instructions instruction-cycles without-storage without-devices)
          (%defmachine-error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
                 (first clause)))
         (t (%defmachine-error "Unknown DEFMACHINE clause head ~S in ~S" (first clause) clause))))
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
-            (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles reset-pc)))
+            (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles reset-pc
+            identity identity-required)))
 
 (defun build-machine-descriptor (name clauses &key (constructor #'make-machine-descriptor))
   (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
-                        undefined-opcode properties privilege idle-cycles reset-pc)
+                        undefined-opcode properties privilege idle-cycles reset-pc
+                        identity identity-required)
       (parse-machine-clauses clauses)
     (let ((descriptor (funcall constructor :name name :instruction-word instruction-word
                                            :clock-speed clock-speed :reset-pc reset-pc
@@ -1074,6 +1103,7 @@ DESCRIPTOR's finished elements."
                                            :idle-cycles idle-cycles
                                            :undefined-opcode undefined-opcode
                                            :properties properties
+                                           :identity identity :identity-required identity-required
                                            :source-clauses clauses))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
@@ -1189,7 +1219,7 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
 existing register/stack/memory/device merges into the parent's in place, a new
 one is appended. Singletons replace (clock-speed, reset-pc, undefined-opcode) or merge
-key by key (interrupts, properties, privilege, idle); flags are additive."
+key by key (interrupts, properties, identity, privilege, idle); flags are additive."
   (let ((merged (copy-list parent-clauses))
         (added '()))
     (dolist (clause child-clauses)
@@ -1216,7 +1246,7 @@ instructions are compiled against the parent's" head))
              (if position
                  (setf (nth position merged) clause)
                  (cl:push clause added))))
-          ((interrupts properties privilege idle)
+          ((interrupts properties privilege idle identity)
            (let ((position (position head merged :key #'first)))
              (if position
                  (setf (nth position merged)
@@ -1359,6 +1389,18 @@ instructions are compiled against the parent's" head))
                        (setf isa (append isa (list key value)))))
           (values (and isa (cons 'interrupts isa)) (and cpu (cons 'interrupts cpu)))))))
 
+(defun %split-identity-clause (clause)
+  "Values the ISA's and the CPU's part of an (identity ...) CLAUSE: :required
+is the ISA's, the rest the CPU's; NIL for an empty part."
+  (let ((plist (rest clause)))
+    (if (oddp (length plist))
+        (values nil clause)
+        (let ((required (getf plist :required))
+              (rest (loop for (key value) on plist by #'cddr
+                          unless (eq key :required) append (list key value))))
+          (values (and (member :required plist) (list 'identity :required required))
+                  (and rest (cons 'identity rest)))))))
+
 (defun %declared-names (clauses)
   (loop for clause in clauses
         append (case (first clause)
@@ -1387,6 +1429,10 @@ it on the CPU, and any other declares new storage on the ISA."
          (multiple-value-bind (isa-part cpu-part) (%split-interrupts-clause clause)
            (when isa-part (cl:push isa-part isa))
            (when cpu-part (cl:push cpu-part cpu))))
+        ((eq (first clause) 'identity)
+         (multiple-value-bind (isa-part cpu-part) (%split-identity-clause clause)
+           (when isa-part (cl:push isa-part isa))
+           (when cpu-part (cl:push cpu-part cpu))))
         (t (cl:push clause isa))))
     (values (nreverse isa) (nreverse cpu))))
 
@@ -1408,6 +1454,22 @@ it on the CPU, and any other declares new storage on the ISA."
 
 (defun %clause-list (heads clauses)
   (loop for c in clauses when (eq (first c) heads) append (rest c)))
+
+(defparameter *identity-keys* '(:model :id :version :manufacturer))
+
+(defun %finish-identity (cpu)
+  "Signal when CPU's ISA requires an identity key CPU lacks, then default the rest."
+  (let* ((name (machine-descriptor-name cpu))
+         (identity (machine-descriptor-identity cpu))
+         (missing (and (machine-descriptor-identity-required cpu)
+                       (remove-if (lambda (key) (member key identity)) *identity-keys*))))
+    (when missing
+      (%defmachine-error "CPU ~S: ISA ~S requires an identity; missing ~{~S~^, ~}"
+                         name (machine-descriptor-isa cpu) missing))
+    (setf (machine-descriptor-identity cpu)
+          (loop for key in *identity-keys*
+                append (list key (getf identity key
+                                       (if (eq key :model) (string-downcase (symbol-name name)) 0)))))))
 
 (defun %build-cpu (name isa parent clauses)
   "The CPU descriptor NAME of the ISA descriptor ISA from CLAUSES, over CPU
@@ -1468,6 +1530,7 @@ PARENT's when given. Registers nothing."
                                   (remove-if (lambda (e) (assoc (car e) cycles :test #'string=))
                                              (machine-descriptor-instruction-cycles parent-md)))))
         (%check-inheritance-compatible isa cpu)
+        (%finish-identity cpu)
         cpu))))
 
 (defun %register-machine (isa cpu)
@@ -1535,7 +1598,7 @@ each key one of ALLOWED and given once."
 
 (defparameter *dsl-known-machine-heads*
   '(register stack memory flags instruction-word stack-pointer interrupts privilege
-    device clock-speed reset-pc idle undefined-opcode properties
+    device clock-speed reset-pc idle undefined-opcode properties identity
     without-instructions instruction-cycles without-storage without-devices))
 
 (defun %check-clause-heads (clauses definer allowed hint)
@@ -1548,7 +1611,7 @@ each key one of ALLOWED and given once."
   "Build and register the ISA NAME."
   (%with-definition (name machine-definition-error)
     (%check-clause-heads clauses "DEFISA"
-                         '(register stack memory flags instruction-word stack-pointer interrupts privilege)
+                         '(register stack memory flags instruction-word stack-pointer interrupts privilege identity)
                          "a CPU clause; declare it in DEFCPU")
     (dolist (clause clauses)
       (case (first clause)
@@ -1557,7 +1620,11 @@ each key one of ALLOWED and given once."
                                      (second clause))))
         (interrupts (when (loop for (key) on (rest clause) by #'cddr thereis (member key *cpu-interrupt-keys*))
                       (%defmachine-error "DEFISA: interrupts takes ~{~S~^, ~} in DEFCPU"
-                                         *cpu-interrupt-keys*)))))
+                                         *cpu-interrupt-keys*)))
+        (identity (when (or (oddp (length (rest clause)))
+                            (loop for (key) on (rest clause) by #'cddr thereis (not (eq key :required))))
+                    (%defmachine-error "DEFISA: identity takes only :required; the model, id, version and ~
+manufacturer belong to DEFCPU")))))
     (let ((isa (%build-isa name parent clauses)))
       (setf (gethash name *isas*) isa)
       (incf *instruction-generation*)
@@ -1578,7 +1645,7 @@ each key one of ALLOWED and given once."
         (%defmachine-error "DEFCPU ~S: ISA ~S is not ~S's ISA ~S or a descendant of it"
                            name isa-name parent (machine-descriptor-isa parent-md)))
       (%check-clause-heads clauses "DEFCPU"
-                           (append '(register stack memory interrupts) *cpu-clause-heads*)
+                           (append '(register stack memory interrupts identity) *cpu-clause-heads*)
                            "an ISA clause; declare it in DEFISA")
       (let ((known (%declared-names (machine-descriptor-source-clauses isa))))
         (dolist (clause clauses)
@@ -1590,7 +1657,9 @@ each key one of ALLOWED and given once."
                      (loop for (key) on (rest clause) by #'cddr
                            thereis (not (member key *cpu-interrupt-keys*))))
             (%defmachine-error "DEFCPU: interrupts takes only ~{~S~^, ~}; the delivery layout is the ISA's"
-                               *cpu-interrupt-keys*))))
+                               *cpu-interrupt-keys*))
+          (when (and (eq (first clause) 'identity) (member :required (rest clause)))
+            (%defmachine-error "DEFCPU: :required is the ISA's; declare it in DEFISA"))))
       (let ((cpu (%build-cpu name isa parent clauses)))
         (%register-machine nil cpu)))))
 

@@ -79,6 +79,7 @@
                (:file "word-choices")
                (:file "inheritance")
                (:file "isa")
+               (:file "identity")
                (:file "directive")
                (:file "include")
                (:file "macro")

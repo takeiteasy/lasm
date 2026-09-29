@@ -181,6 +181,9 @@
    #:machine-descriptor-properties
    #:machine-descriptor-property
    #:machine-property
+   #:cpu-info
+   #:cpu-model
+   #:cpu-isa
    #:interrupt-descriptor
    #:interrupt-descriptor-p
    #:interrupt-descriptor-vector

@@ -42,6 +42,7 @@ its cycle overrides applied.
 | `instruction-word`, `stack-pointer` | `device`, `clock-speed`, `reset-pc`, `idle` |
 | `interrupts` without `:queue`, `:on-overflow`, `:cycles`, `:max-depth` | `interrupts` with only those keys |
 | `privilege` | `undefined-opcode`, `properties` |
+| `identity :required t` | `identity :model :id :version :manufacturer` |
 | | `without-instructions`, `instruction-cycles`, `without-storage`, `without-devices` |
 
 A CPU declares no storage its ISA lacks, and cannot change what the ISA

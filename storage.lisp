@@ -623,7 +623,11 @@ machine's default layout -- callers hold no other kind."
   (disabled-table (make-hash-table :test 'eql))
   ;; What a step does on an opcode with no descriptor: :FAULT, :NOP or :TRAP.
   (undefined-opcode :fault :type (member :fault :nop :trap))
-  (properties nil :type list))
+  (properties nil :type list)
+  ;; A CPU's (model id version manufacturer) plist, filled in when it is built;
+  ;; an ISA's :REQUIRED marks every CPU of it as needing all four given.
+  (identity nil :type list)
+  (identity-required nil))
 
 (defun descriptor-element (descriptor name)
   (or (gethash name (machine-descriptor-table descriptor))
@@ -1119,15 +1123,31 @@ handler-address place a signal would use reads 0 under :DROP-ON-ZERO-VECTOR."
       (setf (device-state device) (funcall init machine device)))
     device))
 
+(defun %descriptor-of (thing)
+  "The machine descriptor of THING -- a runtime machine, a descriptor or a CPU name."
+  (etypecase thing
+    (machine (machine-descriptor thing))
+    (machine-descriptor thing)
+    (symbol (find-machine-descriptor thing))))
+
 (defun machine-property (thing key &optional default)
   "The value of KEY in the (properties ...) of THING -- a runtime machine, a
 machine descriptor or a machine name -- or DEFAULT."
-  (machine-descriptor-property
-   (etypecase thing
-     (machine (machine-descriptor thing))
-     (machine-descriptor thing)
-     (symbol (find-machine-descriptor thing)))
-   key default))
+  (machine-descriptor-property (%descriptor-of thing) key default))
+
+(defun cpu-info (thing)
+  "The (identity ...) id, version and manufacturer of THING -- a runtime
+machine, a machine descriptor or a CPU name -- as three values."
+  (let ((identity (machine-descriptor-identity (%descriptor-of thing))))
+    (values (getf identity :id) (getf identity :version) (getf identity :manufacturer))))
+
+(defun cpu-model (thing)
+  "The (identity ...) model name of THING, a string."
+  (getf (machine-descriptor-identity (%descriptor-of thing)) :model))
+
+(defun cpu-isa (thing)
+  "The name of the ISA THING runs."
+  (machine-descriptor-isa (%descriptor-of thing)))
 
 ;; Bank storage: one array per bank, sized to the region's window.
 (defun %banked-regions (descriptor)

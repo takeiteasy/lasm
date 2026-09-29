@@ -37,7 +37,8 @@ one namespace.
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
 | `(privilege :level NAME [:shift N] [:width N] :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
 | `(undefined-opcode POLICY)` | Fault, NOP, or trap on an unknown opcode. | [Machine families](machine-families.md#undefined-opcodes) |
-| `(properties :key value ...)` | Literal machine properties. | [Machine families](machine-families.md#properties) |
+| `(identity :model S :id n :version n :manufacturer n)` | What a CPU reports about itself. | [Machine families](machine-families.md#identity) |
+| `(properties :key value ...)` | Free-form machine data. | [Machine families](machine-families.md#properties) |
 
 A [backend](backends.md) describes a machine as a compiler target.
 

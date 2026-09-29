@@ -17,7 +17,7 @@ instructions and differ in memory size, clock rate and identity.
   (stack-pointer sp :memory ram :grows :down)
   (interrupts :vector ia :message (reg 0) :save (pc (reg 0)) :stack sp :queue 512)
   (clock-speed 100000)
-  (properties :architecture "anima16"))
+  (identity :model "praxis-100" :id #xC9000001 :version #x0107 :manufacturer #xBAAAAAAD))
 
 (defmachine (mote (:extends anima16))
   (without-instructions bra bsr swp neg)
@@ -25,7 +25,7 @@ instructions and differ in memory size, clock rate and identity.
   (interrupts :queue 16)
   (memory ram :addr-width 12)
   (clock-speed 1000000)
-  (properties :model "mote-40" :device-id #xC9000002))
+  (identity :model "mote-40" :id #xC9000002))
 ```
 
 `(defmachine (NAME (:extends PARENT)) clause...)` — `PARENT` must already be
@@ -40,7 +40,7 @@ A child clause is merged over the parent's clause of the same kind:
 | `register`, `stack`, `memory`, `device` | matched by name; the child's keywords override the parent's, the rest are kept |
 | `memory` `(region ...)` forms | if the child gives any, they replace the parent's regions |
 | `flags` | added to the parent's |
-| `interrupts`, `properties`, `idle` | merged key by key |
+| `interrupts`, `identity`, `properties`, `idle` | merged key by key |
 | `clock-speed`, `reset-pc`, `undefined-opcode` | replaced |
 
 A clause naming something the parent does not have adds it. Element order and
@@ -113,14 +113,34 @@ cell (or one instruction word) and costs one cycle. On a word-encoded machine
 a removed instruction is not decoded by a `(fallback)` instruction it shadows
 in the parent.
 
+## Identity
+
+`(identity :model "praxis-100" :id n :version n :manufacturer n)` is what a CPU
+reports about itself. Every key is optional: `:model` defaults to the CPU's
+name and the numbers to `0`. A child merges key by key.
+
+```lisp
+(cpu-info 'mote)     ; => #xC9000002, #x0107, #xBAAAAAAD
+(cpu-model 'mote)    ; => "mote-40"
+(cpu-isa 'mote)      ; => MOTE
+```
+
+Each takes a machine, a descriptor or a CPU name. `cpu-info` returns the id,
+version and manufacturer as three values, like `device-info`. The ISA name is
+the architecture.
+
+An ISA can require every key with `(identity :required t)`; a CPU that omits
+one is a definition error naming it. `:required` belongs to `defisa` and the
+other keys to `defcpu`; a `defmachine` takes both and splits them.
+
 ## Properties
 
-`(properties :key value ...)` attaches literal data to a machine, readable
+`(properties :key value ...)` attaches free-form data to a machine, readable
 from semantics or host code:
 
 ```lisp
-(machine-property machine :device-id)          ; a machine, descriptor or name
-(machine-property 'mote :model "unknown")      ; optional default
+(machine-property machine :rom-size)           ; a machine, descriptor or name
+(machine-property 'mote :rom-size 0)           ; optional default
 ```
 
 ## Later definitions

@@ -412,7 +412,7 @@ MODE-DESCRIPTOR.")
 (defparameter *dsl-clause-heads*
   (let ((table (make-hash-table :test #'equal)))
     (dolist (head '(register stack memory flags instruction-word clock-speed reset-pc device
-                    stack-pointer interrupts undefined-opcode properties privilege idle
+                    stack-pointer interrupts undefined-opcode properties identity privilege idle
                     without-instructions instruction-cycles without-storage without-devices
                     region field layout extra-word-order
                     modes encoding semantics cycles opcode operand field-value for-choice
