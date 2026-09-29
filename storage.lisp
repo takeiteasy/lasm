@@ -518,7 +518,7 @@ machine's default layout -- callers hold no other kind."
   ;; mnemonic string -> list of instruction-descriptor, one per addressing
   ;; mode the mnemonic accepts (mode.lisp/M2); a no-operand or single-mode
   ;; mnemonic's list has exactly one element.
-  (instructions (make-hash-table :test 'equal))
+  (instruction-table (make-hash-table :test 'equal))
   ;; opcode -> list of instruction-descriptor, one per co-tenant decode-
   ;; distinguishable descriptor sharing that opcode -- more than one
   ;; entry only on a word-encoded machine, where %CHECK-OPCODE-DECODABLE!
@@ -529,7 +529,7 @@ machine's default layout -- callers hold no other kind."
   ;; there is no per-field discriminator to decode by, so
   ;; REGISTER-INSTRUCTION-VARIANTS! rejects any second descriptor at an
   ;; opcode outright there, regardless of mnemonic or mode.
-  (opcodes (make-hash-table :test 'eql))
+  (opcode-table (make-hash-table :test 'eql))
   (word-decode-table nil :type (or null simple-vector))
   ;; NIL for an ordinary byte-encoded machine (every machine before) --
   ;; DEFINSTRUCTION/the assembler/the emulator all branch on this being NIL
@@ -600,6 +600,14 @@ machine's default layout -- callers hold no other kind."
   ;; list a child merges onto in turn.
   (parent nil :type (or null symbol))
   (source-clauses nil :type list)
+  ;; A CPU's ISA name; NIL on an ISA, whose tables are authoritative. A CPU's
+  ;; instruction, opcode and disabled-opcode tables are a view of its ISA's,
+  ;; rebuilt when *INSTRUCTION-GENERATION* moves past VIEW-GENERATION.
+  (isa nil :type (or null symbol))
+  (view-generation -1 :type fixnum)
+  ;; The merged CPU-side clauses, and the device names removed so far.
+  (cpu-clauses nil :type list)
+  (removed-devices nil :type list)
   ;; Upcased mnemonics defined directly on this machine, which parent
   ;; propagation never overwrites.
   (own-instructions (make-hash-table :test 'equal))
@@ -612,7 +620,7 @@ machine's default layout -- callers hold no other kind."
   (instruction-cycles nil :type list)
   ;; opcode -> descriptors of removed mnemonics, kept only so an undefined-
   ;; opcode :NOP can size them and word decode can rank them.
-  (disabled-opcodes (make-hash-table :test 'eql))
+  (disabled-table (make-hash-table :test 'eql))
   ;; What a step does on an opcode with no descriptor: :FAULT, :NOP or :TRAP.
   (undefined-opcode :fault :type (member :fault :nop :trap))
   (properties nil :type list))
@@ -636,15 +644,62 @@ matched by name so a machine defined in any package is found."
 ;; file, at compile time rather than only after loading.
 (defvar *machines* (make-hash-table :test 'eq))
 
+;; An ISA is the architecture half of a machine: the storage layout, instruction
+;; word, instructions and modes every CPU built on it shares. It is a
+;; MACHINE-DESCRIPTOR so the storage readers work on either half.
+(defstruct (isa-descriptor (:include machine-descriptor)))
+
+(defvar *isas* (make-hash-table :test 'eq))
+
+(defvar *instruction-generation* 0
+  "Moves whenever an ISA or CPU is defined or an instruction registered, so a
+CPU's cached view of its ISA's instructions knows to rebuild.")
+
 (defun find-machine-descriptor (name)
   (or (gethash name *machines*)
       (%lookup-error 'unknown-machine name "No machine named ~S has been defined with DEFMACHINE" name)))
 
-(defun %machine-children (name)
-  "Descriptors of every machine registered with parent NAME."
-  (loop for descriptor being the hash-values of *machines*
+(defun find-isa-descriptor (name)
+  (or (gethash name *isas*)
+      (%lookup-error 'unknown-isa name "No ISA named ~S has been defined with DEFISA or DEFMACHINE" name)))
+
+(defun %find-any-descriptor (name)
+  "The CPU named NAME, else the ISA. For what the two share, such as cell width."
+  (or (gethash name *machines*) (gethash name *isas*) (find-machine-descriptor name)))
+
+(defun %machine-isa (machine-name)
+  "The name of the ISA behind CPU MACHINE-NAME."
+  (machine-descriptor-isa (find-machine-descriptor machine-name)))
+
+(defun %fresh-view (descriptor)
+  "DESCRIPTOR, its instruction tables rebuilt first when it is a CPU whose ISA
+has changed."
+  (when (and (machine-descriptor-isa descriptor)
+             (/= (machine-descriptor-view-generation descriptor) *instruction-generation*))
+    (%rebuild-cpu-view descriptor))
+  descriptor)
+
+(defun machine-descriptor-instructions (descriptor)
+  (machine-descriptor-instruction-table (%fresh-view descriptor)))
+
+(defun machine-descriptor-opcodes (descriptor)
+  (machine-descriptor-opcode-table (%fresh-view descriptor)))
+
+(defun machine-descriptor-disabled-opcodes (descriptor)
+  (machine-descriptor-disabled-table (%fresh-view descriptor)))
+
+(defun %isa-children (name)
+  "Descriptors of every ISA registered with parent NAME."
+  (loop for descriptor being the hash-values of *isas*
         when (eq (machine-descriptor-parent descriptor) name)
           collect descriptor))
+
+(defun %isa-ancestors (name)
+  "Names of ISA NAME's parent, grandparent and so on, nearest first."
+  (loop for parent = (let ((d (gethash name *isas*))) (and d (machine-descriptor-parent d)))
+          then (let ((d (gethash parent *isas*))) (and d (machine-descriptor-parent d)))
+        while parent
+        collect parent))
 
 (defun %machine-ancestors (name)
   "Names of NAME's parent, grandparent and so on, nearest first."

@@ -5,4 +5,4 @@
   (memory ram :width 8 :addr-width 16))
 
 (defmode cli-leak-probe "(" expr ")")
-(defmode (cli-leak-local (:machine cli-local-mode)) "[" expr "]")
+(defmode (cli-leak-local (:isa cli-local-mode)) "[" expr "]")

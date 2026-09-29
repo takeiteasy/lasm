@@ -1070,7 +1070,7 @@ looks like."
   (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'kc-mid)))
   (fiveam:is (equal '(kc-mid ka-lit) (%outer-options 'kc-top))))
 
-;;; #29 -- machine-local modes: (defmode (NAME (:machine M)) ...) shadows a
+;;; #29 -- machine-local modes: (defmode (NAME (:isa M)) ...) shadows a
 ;;; global of the same name for M and its descendants.
 
 (defmachine lm-a (register a :width 8) (register pc :width 16) (memory ram :width 8 :addr-width 16))
@@ -1078,8 +1078,8 @@ looks like."
 (defmachine (lm-b-child (:extends lm-b)) (clock-speed 2))
 
 (defmode lm-shared "<" expr ">" :width 1)
-(defmode (lm-shared (:machine lm-a)) "(" expr ")" :width 1)
-(defmode (lm-shared (:machine lm-b)) "[" expr "]" :width 1)
+(defmode (lm-shared (:isa lm-a)) "(" expr ")" :width 1)
+(defmode (lm-shared (:isa lm-b)) "[" expr "]" :width 1)
 
 (definstruction lm-a ldv (modes lm-shared) (encoding (opcode 1) (operand :mode)) (semantics (set! a operand)))
 (definstruction lm-b ldv (modes lm-shared) (encoding (opcode 2) (operand :mode)) (semantics (set! a operand)))
@@ -1108,33 +1108,33 @@ looks like."
   (fiveam:is (eq (find-mode-descriptor 'lm-shared 'lm-b-child)
                  (let ((*mode-scope* 'lm-b-child)) (find-mode-descriptor 'lm-shared)))))
 
-(defmode (lm-only-a (:machine lm-a)) "@" expr)
+(defmode (lm-only-a (:isa lm-a)) "@" expr)
 
 (fiveam:test machine-local-only-mode-is-invisible-elsewhere
   (fiveam:is (find-mode-descriptor 'lm-only-a 'lm-a))
   (fiveam:signals unknown-mode (find-mode-descriptor 'lm-only-a 'lm-b))
   (fiveam:signals unknown-mode (find-mode-descriptor 'lm-only-a)))
 
-(defmode (lm-sfx (:machine lm-a)) expr :suffix "lmq")
+(defmode (lm-sfx (:isa lm-a)) expr :suffix "lmq")
 
 (fiveam:test machine-local-suffix-is-scoped
   (fiveam:is (eq 'lm-sfx (mode-descriptor-name (find-mode-by-suffix "lmq" 'lm-a))))
   (fiveam:is (null (find-mode-by-suffix "lmq" 'lm-b)))
   (fiveam:is (null (find-mode-by-suffix "lmq" nil)))
-  (fiveam:signals mode-definition-error (eval '(defmode (lm-sfx2 (:machine lm-a)) expr :suffix "lmq")))
-  (eval '(defmode (lm-sfx2 (:machine lm-b)) expr :suffix "lmq"))
+  (fiveam:signals mode-definition-error (eval '(defmode (lm-sfx2 (:isa lm-a)) expr :suffix "lmq")))
+  (eval '(defmode (lm-sfx2 (:isa lm-b)) expr :suffix "lmq"))
   (fiveam:signals mode-definition-error (eval '(defmode lm-sfx3 expr :suffix "lmq"))))
 
 (fiveam:test defmode-machine-head-is-validated
-  (fiveam:signals mode-definition-error (eval '(defmode (lm-bad (:machine no-such-machine)) "a" expr)))
-  (fiveam:signals mode-definition-error (eval '(defmode (lm-bad (:machine)) "a" expr)))
+  (fiveam:signals mode-definition-error (eval '(defmode (lm-bad (:isa no-such-machine)) "a" expr)))
+  (fiveam:signals mode-definition-error (eval '(defmode (lm-bad (:isa)) "a" expr)))
   (fiveam:signals mode-definition-error (eval '(defmode (lm-bad (:machin lm-a)) "a" expr)))
   (fiveam:signals mode-definition-error (eval '(defmode (lm-bad) "a" expr))))
 
 (defmode lm-inner "i" expr)
 (defmode lm-sel "s" expr)
 (defmode lm-wrap (one-of lm-inner lm-sel))
-(defmode (lm-inner (:machine lm-b)) "j" expr)
+(defmode (lm-inner (:isa lm-b)) "j" expr)
 
 (fiveam:test one-of-alternative-resolves-through-the-machine-scope
   (flet ((alternative-literal (scope)
@@ -1150,18 +1150,18 @@ looks like."
 
 (defmachine lm-stale (register pc :width 16) (memory ram :width 8 :addr-width 16))
 (defmachine lm-other (register pc :width 16) (memory ram :width 8 :addr-width 16))
-(defmode (lm-st (:machine lm-stale)) "(" expr ")")
+(defmode (lm-st (:isa lm-stale)) "(" expr ")")
 (defmode lm-st2 "(" expr ")")
 (definstruction lm-stale lmst (modes lm-st) (encoding (opcode 1) (operand v :width 1)) (semantics))
 (definstruction lm-other lmst (modes lm-st2) (encoding (opcode 1) (operand v :width 1)) (semantics))
 
 (fiveam:test redefining-a-local-mode-warns-only-for-its-machines-instructions
-  (let ((warnings (rs-stale-warnings '(defmode (lm-st (:machine lm-stale)) "[" expr "]"))))
+  (let ((warnings (rs-stale-warnings '(defmode (lm-st (:isa lm-stale)) "[" expr "]"))))
     (fiveam:is (= 1 (length warnings)))
     (fiveam:is (equal '((lm-stale . "LMST")) (stale-mode-instructions (first warnings))))))
 
 (fiveam:test shadowing-a-global-warns-about-instructions-compiled-against-it
-  (let ((warnings (rs-stale-warnings '(defmode (lm-st2 (:machine lm-other)) "{" expr "}"))))
+  (let ((warnings (rs-stale-warnings '(defmode (lm-st2 (:isa lm-other)) "{" expr "}"))))
     (fiveam:is (= 1 (length warnings)))
     (fiveam:is (equal '((lm-other . "LMST")) (stale-mode-instructions (first warnings))))))
 

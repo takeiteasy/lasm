@@ -225,6 +225,7 @@ compile time is signalled again when the fasl loads. See
 (define-condition lookup-error (usage-error)
   ((name :initarg :name :reader lookup-error-name)))
 (define-condition unknown-machine (lookup-error) ())
+(define-condition unknown-isa (lookup-error) ())
 (define-condition unknown-mode (lookup-error) ())
 (define-condition unknown-lexer (lookup-error) ())
 

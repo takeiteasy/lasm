@@ -292,7 +292,7 @@ default layout, or, when DESCRIPTOR names one (WORD-LAYOUT-NAME), the
 alternate it was resolved against. NIL on an ordinary byte-encoded machine.
 Looked up via DESCRIPTOR's own MACHINE slot rather than cached on the
 descriptor, so it can't drift from the machine descriptor it names."
-  (let ((default (machine-descriptor-instruction-word (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+  (let ((default (machine-descriptor-instruction-word (find-isa-descriptor (instruction-descriptor-machine descriptor)))))
     (and default (instruction-word-layout-named default (instruction-descriptor-word-layout-name descriptor)))))
 
 (defun instruction-descriptor-size (descriptor)
@@ -562,7 +562,7 @@ descriptor with a SUB-OPCODE-less one at the same byte-machine opcode is still
 an OPCODE-CONFLICT (:SUB-OPCODE-REQUIRED) -- decode could not tell whether the
 cell after the opcode is a sub-opcode or the first operand -- and so is a
 collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
-  (let* ((md (find-machine-descriptor machine-name))
+  (let* ((md (find-isa-descriptor machine-name))
          (name (instruction-descriptor-name (first descriptors)))
          (wordp (%word-machine-p machine-name))
          (order-computed (when wordp
@@ -576,14 +576,17 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
                                       (when (eq kind :install)
                                         (%check-registration child name copies :evict t))))))
     (declare (ignore order-computed))
-    (setf (gethash name (machine-descriptor-own-instructions md)) t
-          (machine-descriptor-removed-instructions md)
-          (remove name (machine-descriptor-removed-instructions md) :test #'string=))
+    (setf (gethash name (machine-descriptor-own-instructions md)) t)
+    (let ((cpu (gethash machine-name *machines*)))
+      (when (and cpu (eq (machine-descriptor-isa cpu) machine-name))
+        (setf (machine-descriptor-removed-instructions cpu)
+              (remove name (machine-descriptor-removed-instructions cpu) :test #'string=))))
     (%install-registration md name descriptors :evicted target-evicted)
     (loop for (child kind copies evicted) in checked
           do (ecase kind
                (:install (%install-registration child name copies :evicted evicted))
                (:disable (%install-disabled child name copies))))
+    (incf *instruction-generation*)
     descriptors))
 
 ;;; Registration is validated first (%CHECK-REGISTRATION, no side effects),
@@ -767,6 +770,46 @@ honouring CHILD's removals and cycle overrides."
                              (%copy-descriptor-family bucket child-name nil))))
              (machine-descriptor-disabled-opcodes parent))))
 
+(defun %rebuild-cpu-view (cpu)
+  "Fill CPU's instruction, opcode and disabled-opcode tables from its ISA's,
+honouring CPU's removals and cycle overrides. A descriptor is shared with the
+ISA unless a cycle override needs its own copy."
+  (let* ((isa (find-isa-descriptor (machine-descriptor-isa cpu)))
+         (isa-name (machine-descriptor-name isa))
+         (cycles (machine-descriptor-instruction-cycles cpu))
+         (removed (machine-descriptor-removed-instructions cpu))
+         (copies (make-hash-table :test 'eq))
+         (instructions (make-hash-table :test 'equal))
+         (opcodes (make-hash-table :test 'eql))
+         (disabled (make-hash-table :test 'eql)))
+    (maphash (lambda (mnemonic descriptors)
+               (let* ((cost (cdr (assoc mnemonic cycles :test #'string=)))
+                      (new (if cost (%copy-descriptor-family descriptors isa-name cost) descriptors)))
+                 (loop for old in descriptors
+                       for copy in new
+                       do (setf (gethash old copies) copy))
+                 (unless (member mnemonic removed :test #'string=)
+                   (setf (gethash mnemonic instructions) new))))
+             (machine-descriptor-instruction-table isa))
+    (maphash (lambda (opcode bucket)
+               (let (live dead)
+                 (dolist (old bucket)
+                   (let ((copy (gethash old copies)))
+                     (if (member (instruction-descriptor-name old) removed :test #'string=)
+                         (cl:push copy dead)
+                         (cl:push copy live))))
+                 (when live (setf (gethash opcode opcodes) (nreverse live)))
+                 (when dead (setf (gethash opcode disabled) (nreverse dead)))))
+             (machine-descriptor-opcode-table isa))
+    (maphash (lambda (opcode bucket)
+               (setf (gethash opcode disabled) (append (gethash opcode disabled) bucket)))
+             (machine-descriptor-disabled-table isa))
+    (setf (machine-descriptor-instruction-table cpu) instructions
+          (machine-descriptor-opcode-table cpu) opcodes
+          (machine-descriptor-disabled-table cpu) disabled
+          (machine-descriptor-word-decode-table cpu) nil
+          (machine-descriptor-view-generation cpu) *instruction-generation*)))
+
 (defun %collect-propagation (md name descriptors)
   "Plan of (CHILD KIND COPIES) for every descendant of MD that inherits a new
 or redefined mnemonic NAME: :INSTALL onto a descendant that still has it,
@@ -774,7 +817,7 @@ or redefined mnemonic NAME: :INSTALL onto a descendant that still has it,
 whose compatibility with its parent no longer holds, keeps its subtree as is."
   (let ((plan '()))
     (labels ((walk (parent source)
-               (dolist (child (%machine-children (machine-descriptor-name parent)))
+               (dolist (child (%isa-children (machine-descriptor-name parent)))
                  (cond
                    ((gethash name (machine-descriptor-own-instructions child)))
                    ((not (handler-case (progn (%check-inheritance-compatible parent child) t)
@@ -805,7 +848,7 @@ whose compatibility with its parent no longer holds, keeps its subtree as is."
   "Look up the list of INSTRUCTION-DESCRIPTOR variants registered under
 MNEMONIC (a string or symbol, matched case-insensitively) on machine
 MACHINE-NAME. Signals UNKNOWN-INSTRUCTION if none is registered."
-  (let ((md (find-machine-descriptor machine-name))
+  (let ((md (%find-any-descriptor machine-name))
         (key (string-upcase (string mnemonic))))
     (or (gethash key (machine-descriptor-instructions md))
         (error 'unknown-instruction :machine machine-name :mnemonic mnemonic))))
@@ -841,7 +884,7 @@ only when every entry declares its own distinct SUB-OPCODE --
 to pick which. A byte-encoded machine's opcode table otherwise holds exactly
 one entry per key, enforced at registration time. Signals UNKNOWN-INSTRUCTION
 if none is registered."
-  (let ((md (find-machine-descriptor machine-name)))
+  (let ((md (%find-any-descriptor machine-name)))
     (or (gethash opcode (machine-descriptor-opcodes md))
         (error 'unknown-instruction :machine machine-name :opcode opcode))))
 
@@ -868,7 +911,7 @@ sub-opcode-cell) behavior when distinct co-tenants share an opcode."
 ;; ABSOLUTE is an ordinary DEFMODE with no special standing (formerly
 ;; %DEFAULT-ABSOLUTE-WIDTH).
 (defun %default-address-width (machine-name)
-  (let* ((descriptor (find-machine-descriptor machine-name))
+  (let* ((descriptor (find-isa-descriptor machine-name))
          (mem-elements (remove-if-not (lambda (e) (eq (storage-element-kind e) :memory))
                                        (machine-descriptor-elements descriptor))))
     (cond
@@ -956,7 +999,7 @@ shadowed inside (semantics ...) -- see %CHECK-OPERAND-NAMES. Despite the
 name (kept for history), this now covers banked registers and their
 aliases too -- a macrolet or alias symbol-macro binding shadows exactly as
 silently as a scalar symbol-macrolet one."
-  (let ((descriptor (find-machine-descriptor machine-name)))
+  (let ((descriptor (find-isa-descriptor machine-name)))
     (loop for element in (machine-descriptor-elements descriptor)
           when (member (storage-element-kind element) '(:flag :register))
             append (cons (storage-element-name element) (storage-element-names element)))))
@@ -994,7 +1037,7 @@ an absolute target at render time (disassembler.lisp's %OPERAND-RENDER-
 VALUES) and a signed hole may decode negative (decoder.lisp's per-hole sign
 extension) -- either would corrupt a bank index rather than merely mis-render
 one, so this is checked unconditionally, not only when :REGISTER is given."
-  (let ((descriptor (find-machine-descriptor machine)))
+  (let ((descriptor (find-isa-descriptor machine)))
     (loop for register in registers
           for alts in hole-alternatives
           for source in (or hole-sources (%mode-hole-sources mode))
@@ -1667,12 +1710,13 @@ on each descendant holding a copy."
                (labels ((patch (machine-name)
                           (dolist (descriptor (gethash (string-upcase (string name))
                                                        (machine-descriptor-instructions
-                                                        (find-machine-descriptor machine-name))))
+                                                        (find-isa-descriptor machine-name))))
                             (when (eq (instruction-descriptor-semantics-fn descriptor) installed)
                               (setf (instruction-descriptor-semantics-fn descriptor) function)))
-                          (dolist (child (%machine-children machine-name))
+                          (dolist (child (%isa-children machine-name))
                             (patch (machine-descriptor-name child)))))
                  (patch machine-name)
+                 (incf *instruction-generation*)
                  (setf installed function)))
              (promote ()
                (install (%compile-definition form name))))
@@ -2339,7 +2383,7 @@ STEPS (%PREFIX-STEPS) selects a nested component."
 (machine.lisp) -- DEFINSTRUCTION branches on this to pick the
 word-field/variant encoding path below instead of the byte-encoded
 (operand :mode)/(operand :width n) one."
-  (and (machine-descriptor-instruction-word (find-machine-descriptor machine-name)) t))
+  (and (machine-descriptor-instruction-word (find-isa-descriptor machine-name)) t))
 
 (defun %sibling-combos-p (a b)
   "T if descriptors A and B are sibling combos %EXPAND-WORD-COMBOS (below)
@@ -3712,7 +3756,7 @@ Returns bindings and forms; menus and semantics are shared within a shape."
 (operand ...) subclause was given -- a word-encoded operand has no default ~
 field to fall back to" machine name mode-name (%mode-hole-count mode)))
   (let* ((layout (instruction-word-layout-named
-                   (machine-descriptor-instruction-word (find-machine-descriptor machine-name))
+                   (machine-descriptor-instruction-word (find-isa-descriptor machine-name))
                    layout-name))
          (for-choice-alist (%parse-for-choice-subclauses mode for-choice-subclauses
                                                         operand-subclauses))
@@ -3831,7 +3875,7 @@ eventually select, since machine.lisp validates every alternate's OPCODE
 field identical in width and shift to the default's."
   (when (%word-machine-p machine)
     (let ((width (second (instruction-word-field (machine-descriptor-instruction-word
-                                                    (find-machine-descriptor machine))
+                                                    (find-isa-descriptor machine))
                                                   'opcode))))
       (when (or (minusp opcode) (>= opcode (ash 1 width)))
         (%definstruction-error "DEFINSTRUCTION ~S ~S: opcode ~D does not fit the ~D-bit OPCODE field"
@@ -4019,7 +4063,7 @@ word-encoded machine -- ~S declares no instruction-word clause"
              machine name context machine))
     (%definition-bind (layout-name) (rest layout-subclause)
       (unless (instruction-word-layout-named
-               (machine-descriptor-instruction-word (find-machine-descriptor machine))
+               (machine-descriptor-instruction-word (find-isa-descriptor machine))
                layout-name)
         (%definstruction-error "DEFINSTRUCTION ~S ~S~@[ ~S~]: no instruction-word layout named ~S on machine ~S"
                machine name context layout-name machine))
@@ -4377,7 +4421,7 @@ MACROLET; a CHOICE-CASE is read before any expansion. A LET or LET* variable bou
 CHOICE-CASE carries the clauses that return non-nil, or nil, into the branches of an IF, or of
 a WHEN, UNLESS, AND or COND, testing it, or its NOT or NULL; a clause whose result is not a
 literal may return either."
-  (let* ((descriptor (find-machine-descriptor machine))
+  (let* ((descriptor (find-isa-descriptor machine))
          (writes '()))
     (labels ((note (symbol conditions)
                (when (and symbol (symbolp symbol))
@@ -4543,7 +4587,7 @@ literal may return either."
 unless MACHINE declares that level."
   (when clause
     (let* ((level (second clause))
-           (privilege (machine-descriptor-privilege (find-machine-descriptor machine))))
+           (privilege (machine-descriptor-privilege (find-isa-descriptor machine))))
       (unless (and (= (length clause) 2) (symbolp level))
         (%definstruction-error "DEFINSTRUCTION ~S ~S: expected (privilege LEVEL), got ~S" machine name clause))
       (unless privilege
@@ -4775,7 +4819,7 @@ layout has no effect" machine name))
                  (%check-word-opcode machine name opcode)
                  (let* ((layout (and (%word-machine-p machine)
                                       (instruction-word-layout-named
-                                       (machine-descriptor-instruction-word (find-machine-descriptor machine))
+                                       (machine-descriptor-instruction-word (find-isa-descriptor machine))
                                        layout-name)))
                         (constants (%parse-field-value-subclauses machine name nil layout layout-name
                                                                     field-value-subclauses nil))
@@ -4908,7 +4952,7 @@ cell goes at which address."
 (defun %word-emit-order (descriptor choices)
   "Hole indices in field order, with fieldless words following their owner."
   (let* ((indices (loop for i below (length choices) collect i))
-         (machine (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+         (machine (find-isa-descriptor (instruction-descriptor-machine descriptor)))
          (default (machine-descriptor-instruction-word machine))
          (order (and default (instruction-word-layout-extra-word-order default))))
     (if (null order)

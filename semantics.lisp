@@ -191,7 +191,7 @@ I becomes (REGREF MACHINE-VAR 'REG 6), no run-time index needed, so
 (set! I val) reaches (SETF (REGREF ...) VAL) exactly like any scalar
 register's symbol-macro. The (V idx) macrolet stays available alongside
 these for a run-time-computed index."
-  (let ((descriptor (find-machine-descriptor machine-name)))
+  (let ((descriptor (%find-any-descriptor machine-name)))
     (let (symbol-macros stack-names memory-names banked-names)
       (dolist (element (machine-descriptor-elements descriptor))
         (case (storage-element-kind element)

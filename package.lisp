@@ -57,6 +57,7 @@
    #:lookup-error
    #:lookup-error-name
    #:unknown-machine
+   #:unknown-isa
    #:unknown-mode
    #:unknown-lexer
    #:unknown-backend
@@ -112,6 +113,7 @@
    #:make-machine
    #:reset
    #:find-machine-descriptor
+   #:find-isa-descriptor
    #:machine-descriptor
    #:machine-descriptor-name
    #:machine-descriptor-elements

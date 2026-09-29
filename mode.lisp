@@ -84,15 +84,15 @@
   ;; that reference a redefined one.
   (defvar *mode-generation* 0)
   (defvar *shape-in-progress* nil)
-  ;; Machine name -> (mode name -> descriptor) for machine-local modes.
+  ;; ISA name -> (mode name -> descriptor) for ISA-local modes.
   (defvar *machine-modes* (make-hash-table :test 'eq))
   (defvar *mode-scope* nil
-    "The machine whose local modes shadow the global ones, or NIL for globals only."))
+    "The ISA whose local modes shadow the global ones, or NIL for globals only."))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun %scope-chain (scope)
     "SCOPE and its :EXTENDS ancestors, nearest first."
-    (and scope (cons scope (%machine-ancestors scope))))
+    (and scope (cons scope (%isa-ancestors scope))))
 
   (defun %lookup-mode (name scope)
     (or (loop for machine in (%scope-chain scope)
@@ -742,12 +742,12 @@ a mode with no varying :ONE-OF element."
                                     (pushnew (cons (instruction-descriptor-machine d) mnemonic) result
                                              :test #'equal)))))
                             (machine-descriptor-instructions md))))
-               *machines*)
+               *isas*)
       (nreverse result)))
 
   (defun %machines-seeing-mode (mode)
     "Machines whose scope resolves MODE's name to MODE itself."
-    (loop for machine being the hash-keys of *machines*
+    (loop for machine being the hash-keys of *isas*
           when (eq (%lookup-mode (mode-descriptor-name mode) machine) mode)
             collect machine))
 
@@ -785,20 +785,20 @@ for the global scope and every machine that does not shadow it."
                                                           instructions)))))))
 
   (defun %split-defmode-head (head)
-    "(VALUES NAME MACHINE) for DEFMODE's NAME or (NAME (:MACHINE M))."
+    "(VALUES NAME ISA) for DEFMODE's NAME or (NAME (:ISA A))."
     (cond ((symbolp head) (values head nil))
           ((and (consp head) (symbolp (first head)) (first head)
                 (equal (length head) 2) (consp (second head))
-                (eq (first (second head)) :machine)
+                (eq (first (second head)) :isa)
                 (equal (length (second head)) 2) (symbolp (second (second head)))
                 (second (second head)))
            (values (first head) (second (second head))))
-          (t (%defmode-error "DEFMODE: the name must be a symbol or (NAME (:MACHINE M)), got ~S" head))))
+          (t (%defmode-error "DEFMODE: the name must be a symbol or (NAME (:ISA A)), got ~S" head))))
 
   (defun %register-mode (head body)
     (multiple-value-bind (name machine) (%split-defmode-head head)
-      (when (and machine (not (gethash machine *machines*)))
-        (%defmode-error "DEFMODE ~S: no machine named ~S has been defined with DEFMACHINE" name machine))
+      (when (and machine (not (gethash machine *isas*)))
+        (%defmode-error "DEFMODE ~S: no ISA named ~S has been defined with DEFISA or DEFMACHINE" name machine))
       (let* ((*mode-scope* machine)
              (old (%lookup-mode name machine))
              (new (build-mode-descriptor name body machine)))

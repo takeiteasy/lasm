@@ -790,12 +790,12 @@ already and stays uncached."
 Signals if MACHINE-NAME declares none or more than one. Name-based wrapper
 around %DESCRIPTOR-RESOLVE-MEMORY for every caller outside DEFMACHINE's own
 expansion (the assembler, the emulator, DEFINSTRUCTION)."
-  (%descriptor-resolve-memory (find-machine-descriptor machine-name) memory))
+  (%descriptor-resolve-memory (%find-any-descriptor machine-name) memory))
 
 (defun %machine-cell-width (machine-name &optional memory-name)
   "MACHINE-NAME's code cell width in bits. Name-based wrapper around
 %DESCRIPTOR-CELL-WIDTH for every caller outside DEFMACHINE's own expansion."
-  (%descriptor-cell-width (find-machine-descriptor machine-name) memory-name))
+  (%descriptor-cell-width (%find-any-descriptor machine-name) memory-name))
 
 ;;; Memory / endian resolution -- exact twin of the cell-width trio
 ;;; above, same rationale: one place decides a machine's cell ordering so
@@ -843,7 +843,7 @@ rationale as CELL-WIDTH-CACHE."
 (defun %machine-endian (machine-name &optional memory-name)
   "MACHINE-NAME's cell endianness. Name-based wrapper around
 %DESCRIPTOR-ENDIAN for every caller outside DEFMACHINE's own expansion."
-  (%descriptor-endian (find-machine-descriptor machine-name) memory-name))
+  (%descriptor-endian (%find-any-descriptor machine-name) memory-name))
 
 (defun parse-undefined-opcode-clause (form)
   (%definition-bind (policy) form
@@ -1063,18 +1063,18 @@ DESCRIPTOR's finished elements."
     (values (nreverse elements) instruction-word clock-speed (nreverse devices) interrupts
             (nreverse stack-pointers) undefined-opcode properties privilege idle-cycles reset-pc)))
 
-(defun build-machine-descriptor (name clauses)
+(defun build-machine-descriptor (name clauses &key (constructor #'make-machine-descriptor))
   (multiple-value-bind (elements instruction-word clock-speed devices interrupts stack-pointers
                         undefined-opcode properties privilege idle-cycles reset-pc)
       (parse-machine-clauses clauses)
-    (let ((descriptor (make-machine-descriptor :name name :instruction-word instruction-word
-                                                :clock-speed clock-speed :reset-pc reset-pc
-                                                :devices devices
-                                                :interrupts interrupts :privilege privilege
-                                                :idle-cycles idle-cycles
-                                                :undefined-opcode undefined-opcode
-                                                :properties properties
-                                                :source-clauses clauses))
+    (let ((descriptor (funcall constructor :name name :instruction-word instruction-word
+                                           :clock-speed clock-speed :reset-pc reset-pc
+                                           :devices devices
+                                           :interrupts interrupts :privilege privilege
+                                           :idle-cycles idle-cycles
+                                           :undefined-opcode undefined-opcode
+                                           :properties properties
+                                           :source-clauses clauses))
           (seen (make-hash-table :test 'eq)))
       (dolist (element elements)
         (when (gethash (storage-element-name element) seen)
@@ -1230,9 +1230,8 @@ instructions are compiled against the parent's" head))
   (or (and (member (first clause) head-names) (eq (second clause) name))
       (and (eq (first clause) 'flags) (member name (rest clause) :key #'%flag-entry-name))))
 
-(defun %remove-machine-clauses (machine-name merged child-clauses storage-names device-names)
-  "MERGED with the register/flag STORAGE-NAMES and the DEVICE-NAMES removed.
-Signals when CHILD-CLAUSES redeclare a removed name, and warns for a name MERGED lacks."
+(defun %check-removals (machine-name merged child-clauses storage-names device-names)
+  "Signal when CHILD-CLAUSES redeclare a removed name, and warn for a name MERGED lacks."
   (flet ((check (names heads)
            (dolist (name names)
              (when (some (lambda (c) (%clause-declares-p c heads name)) child-clauses)
@@ -1243,7 +1242,10 @@ Signals when CHILD-CLAUSES redeclare a removed name, and warns for a name MERGED
                      :format-arguments (list machine-name name
                                              (if (eq (first heads) 'device) "device" "register or flag")))))))
     (check storage-names '(register stack memory))
-    (check device-names '(device)))
+    (check device-names '(device))))
+
+(defun %drop-removed-clauses (merged storage-names device-names)
+  "MERGED with the register/flag STORAGE-NAMES and the DEVICE-NAMES removed."
   (loop for clause in merged
         for kept = (case (first clause)
                      ((register stack memory) (unless (member (second clause) storage-names) clause))
@@ -1337,55 +1339,164 @@ Signals when CHILD-CLAUSES redeclare a removed name, and warns for a name MERGED
 (defun %mnemonic-key (designator)
   (string-upcase (string designator)))
 
+(defparameter *removal-clause-heads*
+  '(without-instructions instruction-cycles without-storage without-devices))
+
+(defparameter *cpu-clause-heads*
+  (append '(device clock-speed reset-pc idle undefined-opcode properties) *removal-clause-heads*))
+
+(defparameter *cpu-interrupt-keys* '(:queue :on-overflow :cycles :max-depth))
+
+(defun %split-interrupts-clause (clause)
+  "Values the ISA's and the CPU's part of an (interrupts ...) CLAUSE; NIL for an empty part."
+  (let ((plist (rest clause)))
+    (if (oddp (length plist))
+        (values clause nil)
+        (let (isa cpu)
+          (loop for (key value) on plist by #'cddr
+                do (if (member key *cpu-interrupt-keys*)
+                       (setf cpu (append cpu (list key value)))
+                       (setf isa (append isa (list key value)))))
+          (values (and isa (cons 'interrupts isa)) (and cpu (cons 'interrupts cpu)))))))
+
+(defun %declared-names (clauses)
+  (loop for clause in clauses
+        append (case (first clause)
+                 ((register stack memory) (list (second clause)))
+                 (flags (mapcar #'%flag-entry-name (rest clause))))))
+
+(defun %split-machine-clauses (clauses known)
+  "Values the ISA's and the CPU's clauses of a DEFMACHINE body. KNOWN names the
+storage the ISA being extended already declares: a clause naming it overrides
+it on the CPU, and any other declares new storage on the ISA."
+  (let (isa cpu)
+    (dolist (clause clauses)
+      (cond
+        ((member (first clause) *cpu-clause-heads*) (cl:push clause cpu))
+        ((member (first clause) '(register stack))
+         (if (member (second clause) known)
+             (cl:push clause cpu)
+             (cl:push clause isa)))
+        ((eq (first clause) 'memory)
+         (if (member (second clause) known)
+             (cl:push clause cpu)
+             (let ((regions (remove-if-not #'%region-form-p (cddr clause))))
+               (cl:push (list* 'memory (second clause) (remove-if #'%region-form-p (cddr clause))) isa)
+               (when regions (cl:push (list* 'memory (second clause) regions) cpu)))))
+        ((eq (first clause) 'interrupts)
+         (multiple-value-bind (isa-part cpu-part) (%split-interrupts-clause clause)
+           (when isa-part (cl:push isa-part isa))
+           (when cpu-part (cl:push cpu-part cpu))))
+        (t (cl:push clause isa))))
+    (values (nreverse isa) (nreverse cpu))))
+
+(defun %build-isa (name parent clauses)
+  "The ISA descriptor NAME from CLAUSES, over ISA PARENT's when given. Registers nothing."
+  (if (null parent)
+      (build-machine-descriptor name clauses :constructor #'make-isa-descriptor)
+      (let ((parent-md (or (gethash parent *isas*)
+                           (%defmachine-error "Machine ~S extends ~S, which has not been defined" name parent))))
+        (when (or (eq name parent) (member name (%isa-ancestors parent)))
+          (%defmachine-error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
+        (let ((child (build-machine-descriptor
+                      name (%merge-machine-clauses (machine-descriptor-source-clauses parent-md) clauses)
+                      :constructor #'make-isa-descriptor)))
+          (%check-inheritance-compatible parent-md child)
+          (setf (machine-descriptor-parent child) parent)
+          (%inherit-instructions parent-md child)
+          child))))
+
+(defun %clause-list (heads clauses)
+  (loop for c in clauses when (eq (first c) heads) append (rest c)))
+
+(defun %build-cpu (name isa parent clauses)
+  "The CPU descriptor NAME of the ISA descriptor ISA from CLAUSES, over CPU
+PARENT's when given. Registers nothing."
+  (let ((parent-md (when parent
+                     (or (gethash parent *machines*)
+                         (%defmachine-error "Machine ~S extends ~S, which has not been defined" name parent)))))
+    (when (and parent (or (eq name parent) (member name (%machine-ancestors parent))))
+      (%defmachine-error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
+    (let* ((removals (mapcar #'%mnemonic-key (%clause-list 'without-instructions clauses)))
+           (cycles (mapcar (lambda (entry)
+                             (%definition-bind (mnemonic n) entry
+                               (unless (and (integerp n) (>= n 0))
+                                 (%defmachine-error "instruction-cycles ~S must be a non-negative integer, got ~S"
+                                                    mnemonic n))
+                               (cons (%mnemonic-key mnemonic) n)))
+                           (%clause-list 'instruction-cycles clauses)))
+           (removed-storage (%clause-list 'without-storage clauses))
+           (removed-devices (%clause-list 'without-devices clauses))
+           (plain (remove-if (lambda (c) (member (first c) *removal-clause-heads*)) clauses))
+           (cpu-clauses (if parent-md
+                            (%merge-machine-clauses (machine-descriptor-cpu-clauses parent-md) plain)
+                            plain))
+           (merged (%merge-machine-clauses (machine-descriptor-source-clauses isa) cpu-clauses))
+           (redeclared (lambda (removed heads)
+                         (remove-if (lambda (n) (some (lambda (c) (%clause-declares-p c heads n)) plain))
+                                    removed)))
+           (inherited-storage (and parent-md
+                                   (funcall redeclared (machine-descriptor-removed-storage parent-md)
+                                            '(register stack memory))))
+           (inherited-devices (and parent-md
+                                   (funcall redeclared (machine-descriptor-removed-devices parent-md)
+                                            '(device)))))
+      (%check-removals name merged plain removed-storage removed-devices)
+      (let ((cpu (build-machine-descriptor
+                  name (%drop-removed-clauses merged (append inherited-storage removed-storage)
+                                              (append inherited-devices removed-devices))))
+            (isa-tables (machine-descriptor-instruction-table isa)))
+        (dolist (key (append removals (mapcar #'car cycles)))
+          (unless (gethash key isa-tables)
+            (warn 'simple-style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
+                                        :format-arguments (list name key (machine-descriptor-name isa)))))
+        (dolist (entry cycles)
+          (when (member (car entry) removals :test #'string=)
+            (%defmachine-error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
+        (setf (machine-descriptor-isa cpu) (machine-descriptor-name isa)
+              (machine-descriptor-parent cpu) parent
+              (machine-descriptor-cpu-clauses cpu) cpu-clauses
+              (machine-descriptor-removed-storage cpu)
+              (remove-duplicates (append inherited-storage removed-storage))
+              (machine-descriptor-removed-devices cpu)
+              (remove-duplicates (append inherited-devices removed-devices))
+              (machine-descriptor-removed-instructions cpu)
+              (remove-duplicates (append removals (and parent-md (machine-descriptor-removed-instructions parent-md)))
+                                 :test #'string=)
+              (machine-descriptor-instruction-cycles cpu)
+              (append cycles (and parent-md
+                                  (remove-if (lambda (e) (assoc (car e) cycles :test #'string=))
+                                             (machine-descriptor-instruction-cycles parent-md)))))
+        (%check-inheritance-compatible isa cpu)
+        cpu))))
+
+(defun %register-machine (isa cpu)
+  "Register ISA (when given) and CPU together, so a definition that failed
+above changed nothing."
+  (when isa (setf (gethash (machine-descriptor-name isa) *isas*) isa))
+  (setf (gethash (machine-descriptor-name cpu) *machines*) cpu)
+  (incf *instruction-generation*)
+  cpu)
+
 (defun %define-machine (name parent clauses)
-  "Build and register machine NAME. With PARENT, CLAUSES merge over PARENT's
-and the parent's instructions are copied in."
+  "Build and register the ISA and the CPU NAME. With PARENT, CLAUSES merge over
+PARENT's."
   (%with-definition (name machine-definition-error)
-    (if (null parent)
-        (setf (gethash name *machines*) (build-machine-descriptor name clauses))
-        (let ((parent-md (or (gethash parent *machines*)
-                             (%defmachine-error "Machine ~S extends ~S, which has not been defined" name parent))))
-          (when (or (eq name parent) (member name (%machine-ancestors parent)))
-            (%defmachine-error "Machine ~S cannot extend ~S: that would form a cycle" name parent))
-          (let* ((removals (loop for c in clauses when (eq (first c) 'without-instructions)
-                                 append (mapcar #'%mnemonic-key (rest c))))
-                 (cycles (loop for c in clauses when (eq (first c) 'instruction-cycles)
-                               append (mapcar (lambda (entry)
-                                                (%definition-bind (mnemonic n) entry
-                                                  (unless (and (integerp n) (>= n 0))
-                                                    (%defmachine-error "instruction-cycles ~S must be a non-negative integer, got ~S"
-                                                           mnemonic n))
-                                                  (cons (%mnemonic-key mnemonic) n)))
-                                              (rest c))))
-                 (removed-storage (loop for c in clauses when (eq (first c) 'without-storage)
-                                        append (rest c)))
-                 (removed-devices (loop for c in clauses when (eq (first c) 'without-devices)
-                                        append (rest c)))
-                 (plain (remove-if (lambda (c) (member (first c) '(without-instructions instruction-cycles
-                                                                   without-storage without-devices)))
-                                   clauses))
-                 (child (build-machine-descriptor
-                         name (%remove-machine-clauses
-                               name
-                               (%merge-machine-clauses (machine-descriptor-source-clauses parent-md) plain)
-                               plain removed-storage removed-devices))))
-            (dolist (key (append removals (mapcar #'car cycles)))
-              (unless (gethash key (machine-descriptor-instructions parent-md))
-                (warn 'simple-style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"
-                   :format-arguments (list name key parent))))
-            (dolist (entry cycles)
-              (when (member (car entry) removals :test #'string=)
-                (%defmachine-error "Machine ~S: ~A is both removed and given a cycle cost" name (car entry))))
-            (setf (machine-descriptor-removed-storage child)
-                  (remove-duplicates (copy-list removed-storage)))
-            (%check-inheritance-compatible parent-md child)
-            (setf (machine-descriptor-parent child) parent
-                  (machine-descriptor-removed-instructions child)
-                  (remove-duplicates (append removals (machine-descriptor-removed-instructions parent-md))
-                                     :test #'string=)
-                  (machine-descriptor-instruction-cycles child) cycles)
-            (%inherit-instructions parent-md child)
-            (setf (gethash name *machines*) child))))))
+    (when (null parent)
+      (dolist (clause clauses)
+        (when (member (first clause) *removal-clause-heads*)
+          (%defmachine-error "DEFMACHINE: ~S is only valid on a machine declared with (:extends parent)"
+                             (first clause)))))
+    (let ((known (and parent
+                      (%declared-names
+                       (machine-descriptor-source-clauses
+                        (or (gethash parent *isas*)
+                            (%defmachine-error "Machine ~S extends ~S, which has not been defined"
+                                               name parent)))))))
+      (multiple-value-bind (isa-clauses cpu-clauses) (%split-machine-clauses clauses known)
+        (let* ((isa (%build-isa name parent isa-clauses))
+               (cpu (%build-cpu name isa parent cpu-clauses)))
+          (%register-machine isa cpu))))))
 
 (defun %parse-machine-name (name-spec)
   "Values NAME and PARENT from a DEFMACHINE name or (NAME (:extends PARENT))."

@@ -118,7 +118,7 @@ shadowed. Returns the candidate and whether it is a removed one."
                                   dead (gethash opcode (machine-descriptor-opcodes descriptor))))))
             (values found (and found (member found dead) t)))))))
 
-(defun %shadowing-descriptor (descriptor cells)
+(defun %shadowing-descriptor (descriptor cells machine-name)
   "For a (fallback) DESCRIPTOR encoded as CELLS, the other descriptor that
 decodes those cells instead, or NIL. A second value is true when that
 descriptor was removed from the machine, so the cells decode as nothing."
@@ -130,7 +130,7 @@ descriptor was removed from the machine, so the cells decode as nothing."
                                (instruction-word-layout-endian layout))))
       (multiple-value-bind (found disabledp)
           (%find-word-decode-candidate
-           (find-machine-descriptor (instruction-descriptor-machine descriptor))
+           (find-machine-descriptor machine-name)
            layout word)
         (and found
              (not (eq found descriptor))
@@ -208,7 +208,7 @@ field choices rather than the descriptor's encoding-size variant."
          (cell-width (instruction-word-layout-cell-width layout))
          (endian (instruction-word-layout-endian layout))
          (word (%fetch-cells read-cell address width-cells cell-width endian))
-         (machine (find-machine-descriptor machine-name))
+         (machine (%fresh-view (find-machine-descriptor machine-name)))
          (table (%word-decode-table machine layout))
          (descriptor (if table
                          (%word-decode-entry machine layout table

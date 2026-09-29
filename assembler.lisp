@@ -1706,7 +1706,7 @@ field (must be between ~D and ~D)"
   (let ((registers (instruction-descriptor-operand-registers descriptor)))
     (when (some #'identity registers)
       (let ((table (machine-descriptor-table
-                    (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+                    (find-isa-descriptor (instruction-descriptor-machine descriptor)))))
         (loop for register in registers
               for value in values
               when register
@@ -1731,7 +1731,7 @@ contiguous instruction stream could."
     (adjust-array cells n :fill-pointer n :initial-element 0))
   cells)
 
-(defun %encode (sized-entries symbols origin final-address cell-width endian)
+(defun %encode (sized-entries symbols origin final-address cell-width endian machine)
   "Evaluate SIZED-ENTRIES (%LAYOUT's tagged output) against the completed
 symbol table SYMBOLS and write each entry's cells at its own address (minus
 ORIGIN) into a cell vector, CELL-WIDTH bits per element, sized to
@@ -1815,7 +1815,7 @@ ordered by region then bank; overlapping output in one bank is an error."
                  (let* ((encoded (%encode-instruction-resolved descriptor values cell-width endian))
                         (shadow nil)
                         (removedp nil))
-                   (multiple-value-setq (shadow removedp) (%shadowing-descriptor descriptor encoded))
+                   (multiple-value-setq (shadow removedp) (%shadowing-descriptor descriptor encoded machine))
                    (when shadow
                      (%assembly-error line (if removedp
                                                "~A: this encoding is the removed instruction ~A"
@@ -1931,7 +1931,7 @@ by the cell width and endianness, inside the context ASSEMBLE-STATEMENTS sets up
   `(with-source-context ,source
      (let* ((cell-width (%machine-cell-width ,machine ,memory))
             (*cell-width* cell-width)
-            (*mode-scope* ,machine)
+            (*mode-scope* (%machine-isa ,machine))
             (endian (%machine-endian ,machine ,memory))
             (*byte-order* (%endian-byte-order endian))
             (*banked-regions*
@@ -1987,7 +1987,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
       (symbols sized final-address asm-origin info label-banks cell-width endian)
     (multiple-value-bind (cells bank-images)
         (let ((*label-banks* label-banks))
-          (%encode sized symbols asm-origin final-address cell-width endian))
+          (%encode sized symbols asm-origin final-address cell-width endian machine))
       (make-assembly :cells cells :banks bank-images
                      :cell-width cell-width
                      :origin asm-origin :symbols symbols :symbol-info info

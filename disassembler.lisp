@@ -402,8 +402,15 @@ lists every site that declares a prefix, whatever the policy."
   "DESCRIPTOR's own OPERAND-REGISTERS, hole-aligned, resolved from
 storage-element names to STORAGE-ELEMENTs -- NIL throughout for a descriptor
 with no :REGISTER hole, same shape as OPERAND-NAMES/OPERAND-WIDTHS."
-  (let ((table (machine-descriptor-table (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+  (let ((table (machine-descriptor-table (find-isa-descriptor (instruction-descriptor-machine descriptor)))))
     (mapcar (lambda (r) (and r (gethash r table))) (instruction-descriptor-operand-registers descriptor))))
+
+(defvar *disassembly-machine* nil
+  "The machine being disassembled for, whose removed instructions have no variants.")
+
+(defun %descriptor-variants (descriptor)
+  (find-instruction-variants (or *disassembly-machine* (instruction-descriptor-machine descriptor))
+                             (instruction-descriptor-name descriptor)))
 
 (defun %mnemonic-suffix-text (descriptor lexer)
   "The gas-style forced-mode suffix (mode.lisp's DEFMODE :SUFFIX, e.g. \"w\")
@@ -414,8 +421,7 @@ MODE-SUFFIX-SEPARATOR to write it with."
   (let* ((mode (instruction-descriptor-mode descriptor))
          (suffix (and mode (mode-descriptor-suffix mode))))
     (and suffix
-         (rest (find-instruction-variants (instruction-descriptor-machine descriptor)
-                                           (instruction-descriptor-name descriptor)))
+         (rest (%descriptor-variants descriptor))
          (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor lexer))
          suffix)))
 
@@ -433,11 +439,10 @@ DESCRIPTOR's decoded one. T when TEXT cannot be re-assembled."
   (handler-case
       (let ((*register-alias-elements*
               (machine-descriptor-register-alias-elements
-               (find-machine-descriptor (instruction-descriptor-machine descriptor)))))
+               (find-isa-descriptor (instruction-descriptor-machine descriptor)))))
         (multiple-value-bind (chosen asts choices selections)
             (%choose-variant (first (parse text :lexer lexer))
-                             (find-instruction-variants (instruction-descriptor-machine descriptor)
-                                                        (instruction-descriptor-name descriptor))
+                             (%descriptor-variants descriptor)
                              address :cell-width cell-width)
           (declare (ignore asts))
           (loop for (site field) in sites
@@ -461,7 +466,7 @@ selects it. Each line declaring a prefix is re-parsed and re-selected."
                                  (%operand-render-values descriptor values address size)
                                  lexer reverse-symbols choices (%hole-elements descriptor)
                                  (machine-descriptor-register-alias-elements
-                                  (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+                                  (find-isa-descriptor (instruction-descriptor-machine descriptor)))
                                  choice-selections separator policy)))
     (let ((sites (nth-value 1 (render nil))) (policy nil))
       (when sites
@@ -485,7 +490,7 @@ selects it. Each line declaring a prefix is re-parsed and re-selected."
                 (%render-operand-text mode (%operand-render-values descriptor values address size)
                                        lexer reverse-symbols choices (%hole-elements descriptor)
                                        (machine-descriptor-register-alias-elements
-                                        (find-machine-descriptor (instruction-descriptor-machine descriptor)))
+                                        (find-isa-descriptor (instruction-descriptor-machine descriptor)))
                                        choice-selections separator
                                        (and separator
                                             (%needed-prefix-policy descriptor values address size cell-width lexer
@@ -551,7 +556,8 @@ Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
 of round-trip fidelity."
   (unless machine (%disassembler-usage-error "DISASSEMBLE-CELLS: :MACHINE is required"))
-  (let* ((*mode-scope* machine)
+  (let* ((*mode-scope* (%machine-isa machine))
+         (*disassembly-machine* machine)
          (end (or end (+ origin (length cells))))
          (read-cell (vector-cell-reader cells :origin origin :end end))
          (lines (%disassemble-raw-lines read-cell origin end machine memory
@@ -740,7 +746,8 @@ is inspection, not execution, so it must not trigger a :DEVICE region's
   (unless (and start count)
     (%disassembler-usage-error "DISASSEMBLE-MEMORY: :START and :COUNT are both required"))
   (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
-         (*mode-scope* machine-name)
+         (*mode-scope* (%machine-isa machine-name))
+         (*disassembly-machine* machine-name)
          (memory (%resolve-memory machine-name memory))
          (read-cell (machine-peek-reader machine memory))
          (end (+ start count))

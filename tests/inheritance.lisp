@@ -397,10 +397,10 @@ stop" :machine 'fam-w8))
 ;;; #29 -- a child machine inherits its parent's local modes and can shadow them.
 
 (defmachine fam-modes-base (register pc :width 16) (memory ram :width 8 :addr-width 16))
-(defmode (fam-mode (:machine fam-modes-base)) "(" expr ")" :width 1)
+(defmode (fam-mode (:isa fam-modes-base)) "(" expr ")" :width 1)
 (defmachine (fam-modes-child (:extends fam-modes-base)) (clock-speed 2))
 (defmachine (fam-modes-shadow (:extends fam-modes-base)) (clock-speed 3))
-(defmode (fam-mode (:machine fam-modes-shadow)) "[" expr "]" :width 1)
+(defmode (fam-mode (:isa fam-modes-shadow)) "[" expr "]" :width 1)
 (definstruction fam-modes-base fmv (modes fam-mode) (encoding (opcode 1) (operand :mode)) (semantics))
 (definstruction fam-modes-shadow fmw (modes fam-mode) (encoding (opcode 2) (operand :mode)) (semantics))
 

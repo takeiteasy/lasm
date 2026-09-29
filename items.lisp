@@ -1244,7 +1244,7 @@ A value that depends on a label is checked when the assembler encodes it."
             (*items-serial* 0)
             (*items-used-names* (make-hash-table :test 'equal))
             (*items-global-label-seen* nil)
-            (*mode-scope* machine*)
+            (*mode-scope* (%machine-isa machine*))
             (*register-alias-elements*
               (machine-descriptor-register-alias-elements (find-machine-descriptor machine*))))
        ,@body)))
