@@ -65,8 +65,9 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL wraps on
                ; overflow.
-    spellings  ; ((ELEMENTS . ORDER)...) alternate spellings of PATTERN; ORDER
-               ; gives each spelled hole's index in PATTERN (%PARSE-SPELLING)
+    spellings  ; ((ELEMENTS ORDER FILLS)...) alternate spellings of PATTERN; ORDER
+               ; gives each spelled hole's index in PATTERN and FILLS the
+               ; ((index . constant)...) holes it leaves out (%PARSE-SPELLING)
     shape-cache)  ; (GENERATION SCOPE VARYING KEYED STRICTP), read through %MODE-SHAPE
   )
 
@@ -247,32 +248,48 @@ options start at the first keyword symbol; everything before it is pattern."
           (values body nil))))
 
   (defun %parse-spelling (name pattern spelling)
-    "(ELEMENTS . ORDER) for a :SPELLING of PATTERN: string literals and
-(HOLE i) references to PATTERN's i-th hole, each used once."
+    "(ELEMENTS ORDER FILLS) for a :SPELLING of PATTERN: string literals,
+(HOLE i) references to PATTERN's i-th hole, and (HOLE i := n) fillers that
+give hole i the constant n without writing it. Each hole appears once. ORDER
+lists the spelled holes' indices and FILLS is ((i . n)...)."
     (let ((holes (remove :expr pattern :key #'first :test-not #'eq))
-          (order nil))
+          (order nil)
+          (fills nil))
       (when (find :one-of pattern :key #'first)
         (%defmode-error "DEFMODE ~S: :SPELLING cannot be used on a mode with a ONE-OF" name))
       (unless (and (consp spelling) spelling)
-        (%defmode-error "DEFMODE ~S: :SPELLING needs a list of string literals and (HOLE i), got ~S"
+        (%defmode-error "DEFMODE ~S: :SPELLING needs a list of string literals, (HOLE i) and (HOLE i := n), got ~S"
                         name spelling))
       (let ((elements
-              (mapcar (lambda (el)
-                        (cond ((stringp el) (list :literal el))
-                              ((and (consp el) (symbolp (first el))
-                                    (string-equal (symbol-name (first el)) "HOLE")
-                                    (= (length el) 2) (integerp (second el))
-                                    (< -1 (second el) (length holes)))
-                               (cl:push (second el) order)
-                               (nth (second el) holes))
-                              (t (%defmode-error "DEFMODE ~S: malformed :SPELLING element ~S -- expected ~
-a string literal or (HOLE i) with i below the mode's ~D hole~:P" name el (length holes)))))
-                      spelling)))
-        (setf order (nreverse order))
-        (unless (equal (sort (copy-list order) #'<) (loop for i below (length holes) collect i))
+              (loop for el in spelling
+                    for hole-p = (and (consp el) (symbolp (first el))
+                                      (string-equal (symbol-name (first el)) "HOLE"))
+                    for index = (and hole-p (consp (rest el)) (second el))
+                    for filler-p = (and hole-p (= (length el) 4) (eq (third el) :=))
+                    if (stringp el)
+                      collect (list :literal el)
+                    else if (and hole-p (integerp index) (< -1 index (length holes))
+                                 (or (= (length el) 2) filler-p))
+                           if filler-p
+                             do (unless (integerp (fourth el))
+                                  (%defmode-error "DEFMODE ~S: :SPELLING filler ~S needs an integer value" name el))
+                                (when (second (nth index holes))
+                                  (%defmode-error "DEFMODE ~S: :SPELLING cannot fill the register hole ~D -- ~
+a constant is not a register alias" name index))
+                                (cl:push (cons index (fourth el)) fills)
+                           else
+                             collect (nth index holes)
+                             and do (cl:push index order)
+                           end
+                    else do (%defmode-error "DEFMODE ~S: malformed :SPELLING element ~S -- expected ~
+a string literal, (HOLE i) or (HOLE i := n) with i below the mode's ~D hole~:P" name el (length holes)))))
+        (setf order (nreverse order)
+              fills (nreverse fills))
+        (unless (equal (sort (append order (mapcar #'car fills)) #'<)
+                       (loop for i below (length holes) collect i))
           (%defmode-error "DEFMODE ~S: :SPELLING ~S must use each of the mode's ~D hole~:P exactly once"
                           name spelling (length holes)))
-        (cons elements order))))
+        (list elements order fills))))
 
   (defun %mode-syntaxes (mode)
     "Every pattern MODE matches: its own, then each spelling."
@@ -1082,14 +1099,22 @@ as a number, or NIL. ASTS lists ALT's hole values in pattern order."
                  (let ((alias (%numeric-register-alias ast banks)))
                    (when alias (return alias))))))))
 
+(defun %mode-spellings-with-pattern (mode)
+  "MODE's (ELEMENTS ORDER FILLS) syntaxes: the pattern itself, whose holes
+are all spelled in order, then each spelling."
+  (let ((pattern (mode-descriptor-pattern mode)))
+    (cons (list pattern (loop for i below (count :expr pattern :key #'first) collect i) nil)
+          (mode-descriptor-spellings mode))))
+
 (defun %match-mode-syntaxes (tokens mode tail start end require-end)
   "%MATCH-MODE-ELEMENTS of MODE's pattern, then each spelling, each followed by
 TAIL. The best score wins and the pattern itself wins a tie. A spelling's
-holes, and their forcing prefixes, come back in the pattern's hole order."
+holes, and their forcing prefixes, come back in the pattern's hole order, with
+its filled holes as constants and TAIL's holes after them."
   (if (null (mode-descriptor-spellings mode))
       (%match-mode-elements tokens (append (mode-descriptor-pattern mode) tail) start end require-end)
       (let (best best-score first-failure-token first-message)
-        (loop for (elements . order) in (cons (list (mode-descriptor-pattern mode)) (mode-descriptor-spellings mode))
+        (loop for (elements order fills) in (%mode-spellings-with-pattern mode)
               do (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties picks)
                      (%match-mode-elements tokens (append elements tail) start end require-end)
                    (cond ((not okp)
@@ -1098,14 +1123,18 @@ holes, and their forcing prefixes, come back in the pattern's hole order."
                                          (not (%register-alias-message-p first-message))))
                             (setf first-failure-token failure-token first-message message)))
                          ((%score> score best-score)
-                          (flet ((in-pattern-order (holes)
-                                   (let ((ordered (copy-list holes)))
+                          (flet ((in-pattern-order (holes filler)
+                                   (let ((ordered (make-list (+ (length order) (length fills)))))
                                      (loop for hole in holes
                                            for index in order
                                            do (setf (nth index ordered) hole))
-                                     ordered)))
-                            (setf best (list (in-pattern-order asts) choices next-i t nil nil selections score
-                                             (in-pattern-order suffixes) ties picks)
+                                     (loop for (index . value) in fills
+                                           do (setf (nth index ordered) (funcall filler value)))
+                                     (append ordered (nthcdr (length order) holes)))))
+                            (setf best (list (in-pattern-order asts (lambda (value) (make-expr-number :value value)))
+                                             (in-pattern-order choices (constantly nil))
+                                             next-i t nil nil selections score
+                                             (in-pattern-order suffixes (constantly nil)) ties picks)
                                   best-score score))))))
         (if best
             (values-list best)

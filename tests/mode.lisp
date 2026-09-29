@@ -1193,6 +1193,49 @@ looks like."
     (fiveam:is (eq 'test-spell-pick (pick "[sp + 2]")))
     (fiveam:is (eq 'test-bracket (pick "[label]")))))
 
+(defmode test-spell-sprel "[" "sp" "+" expr "]"
+  :spelling ("peek" (hole 0 := 0))
+  :spelling ("[" "sp" "]" (hole 0 := 0)))
+(defmode test-spell-pair "(" expr "," expr ")"
+  :spelling ("at" (hole 1) (hole 0 := 7)))
+
+(defmachine spell-fill-machine
+  (register pc :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16 (field opcode 8) (field src 8)))
+(definstruction spell-fill-machine ld
+  (modes test-spell-sprel)
+  (encoding (opcode 1) (operand off :field src (variant :else (extra-word :escape #x1a))))
+  (semantics nil))
+
+(fiveam:test spelling-fills-a-hole-with-a-constant
+  (flet ((cells (text)
+           (assembly-cells (assemble text :machine 'spell-fill-machine))))
+    (fiveam:is (equalp (cells "ld [sp + 0]") (cells "ld peek")))
+    (fiveam:is (equalp (cells "ld [sp + 0]") (cells "ld [sp]")))
+    (fiveam:is (equalp '(#x011a 0) (coerce (cells "ld peek") 'list)))
+    (fiveam:is (equalp '(#x011a 5) (coerce (cells "ld [sp + 5]") 'list)))))
+
+(fiveam:test spelling-binds-a-filled-hole-in-pattern-order
+  (let ((asts (try-match-operand-mode (%tokens-for "at 4") 'test-spell-pair)))
+    (fiveam:is (= 7 (expr-number-value (first asts))))
+    (fiveam:is (= 4 (expr-number-value (second asts))))))
+
+(defmode test-spell-then-expr (one-of test-spell-sprel test-bracket) "," expr)
+
+(fiveam:test filled-spelling-keeps-the-holes-after-it
+  (let ((asts (try-match-operand-mode (%tokens-for "peek, 9") 'test-spell-then-expr)))
+    (fiveam:is (equal '(0 9) (mapcar #'expr-number-value asts)))))
+
+(fiveam:test filled-spelling-outscores-a-wider-alternative
+  (defmode test-spell-fill-any (one-of test-bracket test-spell-sprel))
+  (fiveam:is (eq 'test-spell-sprel
+                 (first (first (nth-value 7 (try-match-operand-mode (%tokens-for "[sp]") 'test-spell-fill-any)))))))
+
+(fiveam:test filled-spelling-shows-in-the-accepted-modes-text
+  (fiveam:is (search "peek" (%mode-syntax-text (find-mode-descriptor 'test-spell-sprel))))
+  (fiveam:is (search "[sp]" (%mode-syntax-text (find-mode-descriptor 'test-spell-sprel)))))
+
 (fiveam:test spelling-rejects-malformed-definitions
   (dolist (form '((defmode bad-spell-hole "pick" expr :spelling ("[" (hole 1) "]"))
                   (defmode bad-spell-missing "pick" expr :spelling ("[" "sp" "]"))
@@ -1200,7 +1243,12 @@ looks like."
                   (defmode bad-spell-element "pick" expr :spelling (42 (hole 0)))
                   (defmode bad-spell-empty "pick" expr :spelling ())
                   (defmode bad-spell-repeat "pick" expr :spelling ("pick" (hole 0)))
-                  (defmode bad-spell-one-of (one-of test-bracket test-paren) :spelling ("x"))))
+                  (defmode bad-spell-one-of (one-of test-bracket test-paren) :spelling ("x"))
+                  (defmode bad-spell-fill-twice "pick" expr :spelling ("x" (hole 0) (hole 0 := 1)))
+                  (defmode bad-spell-fill-value "pick" expr :spelling ("x" (hole 0 := "a")))
+                  (defmode bad-spell-fill-index "pick" expr :spelling ("x" (hole 1 := 0)))
+                  (defmode bad-spell-fill-register "pick" (expr :register bank) :spelling ("x" (hole 0 := 0)))
+                  (defmode bad-spell-fill-form "pick" expr :spelling ("x" (hole 0 = 0)))))
     (fiveam:signals mode-definition-error (eval form) "~S" form)))
 
 (fiveam:test spelling-shared-with-another-alternative-signals-error

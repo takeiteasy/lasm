@@ -79,6 +79,17 @@ Each hole appears once, in any order:
   :spelling ("[" (hole 1) "+" (hole 0) "]"))
 ```
 
+`(hole i := n)` leaves hole `i` out of the spelling and binds it to the
+integer `n`. Every hole is either spelled or filled, once:
+
+```lisp
+(defmode sprel "[" "sp" "+" expr "]"
+  :spelling ("peek" (hole 0 := 0))
+  :spelling ("[" "sp" "]" (hole 0 := 0)))
+```
+
+`peek` and `[sp]` encode as `[sp + 0]`. A `:register` hole cannot be filled.
+
 `[sp + 3]` and `pick 3` select the same alternative, so both encode alike and
 the [disassembler](disassembler.md) prints the pattern's own spelling. A
 spelling inherits its holes' options, such as `:register`. A spelling scores
