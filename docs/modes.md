@@ -15,7 +15,8 @@ to an encoding and semantics. See [Per-operand modes](operand-modes.md) for
 
 ```lisp
 (defmode NAME pattern-element...
-  [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t])
+  [:width n] [:signed t] [:relative t] [:suffix "s"] [:strict t]
+  [:spelling (element...)]...)
 ```
 
 A malformed definition signals `mode-definition-error`.
@@ -41,6 +42,7 @@ uses them. A mode is global unless it is [machine-local](#machine-local-modes).
 | `:relative t` | Encode a signed PC-relative offset; implies `:signed t`. |
 | `:suffix "s"` | Allow a mnemonic suffix such as `lda.w`. |
 | `:strict t` | Signal `assembly-error` instead of wrapping an out-of-range value. |
+| `:spelling (element...)` | Accept another [spelling](#alternate-spellings) of the pattern. May repeat. |
 
 ### Declare narrower modes before wider ones
 
@@ -63,6 +65,27 @@ A more specific pattern wins before value selection; see
 width rounded to cells. A mode with several `expr` holes needs an operand
 field for each hole. Hole options can override mode-wide signedness or
 relativeness; see [Per-operand modes](operand-modes.md#per-hole-attributes).
+
+## Alternate spellings
+
+`:spelling` gives a mode a second syntax that binds the same holes. Strings
+are literals and `(hole i)` is the pattern's `i`th hole, counted from zero.
+Each hole appears once, in any order:
+
+```lisp
+(defmode peek "peek" :spelling ("[" "sp" "]"))
+(defmode pick "pick" expr :spelling ("[" "sp" "+" (hole 0) "]"))
+(defmode idx "[" (expr :register reg) "+" expr "]"
+  :spelling ("[" (hole 1) "+" (hole 0) "]"))
+```
+
+`[sp + 3]` and `pick 3` select the same alternative, so both encode alike and
+the [disassembler](disassembler.md) prints the pattern's own spelling. A
+spelling inherits its holes' options, such as `:register`. A spelling scores
+by its own literals, so `[sp]` outranks `"[" expr "]"`; the pattern itself
+wins a tie. A mode with a `one-of` cannot have spellings. A spelling equal to
+another syntax of the mode, or of a sibling `one-of` alternative, signals
+`mode-definition-error`.
 
 ## Signed operands
 

@@ -136,9 +136,8 @@ Hardware
 (defmode d-sp "sp")
 (defmode d-pc "pc")
 (defmode d-ex "ex")
-;; TODO: `[sp]` and `[sp + n]` spellings; see docs/examples.md#limitations.
-(defmode d-peek "peek")
-(defmode d-pick "pick" expr)
+(defmode d-peek "peek" :spelling ("[" "sp" "]"))
+(defmode d-pick "pick" expr :spelling ("[" "sp" "+" (hole 0) "]"))
 (defmode d-pop "pop")
 (defmode d-push "push")
 

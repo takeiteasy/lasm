@@ -1164,3 +1164,46 @@ looks like."
   (let ((warnings (rs-stale-warnings '(defmode (lm-st2 (:machine lm-other)) "{" expr "}"))))
     (fiveam:is (= 1 (length warnings)))
     (fiveam:is (equal '((lm-other . "LMST")) (stale-mode-instructions (first warnings))))))
+
+;;; :SPELLING
+
+(defmode test-spell-peek "peek" :spelling ("[" "sp" "]"))
+(defmode test-spell-pick "pick" expr :spelling ("[" "sp" "+" (hole 0) "]"))
+(defmode test-spell-index "[" (expr :register bank) "+" expr "]"
+  :spelling ("[" (hole 1) "+" (hole 0) "]"))
+(defmode test-spell-any (one-of test-bracket test-spell-peek test-spell-pick test-spell-index))
+
+(fiveam:test spelling-matches-a-hole-less-mode
+  (fiveam:is-true (nth-value 1 (try-match-operand-mode (%tokens-for "peek") 'test-spell-peek)))
+  (fiveam:is-true (nth-value 1 (try-match-operand-mode (%tokens-for "[sp]") 'test-spell-peek)))
+  (fiveam:is-false (nth-value 1 (try-match-operand-mode (%tokens-for "[bp]") 'test-spell-peek))))
+
+(fiveam:test spelling-binds-holes-in-pattern-order
+  (let ((*register-alias-elements*
+          (machine-descriptor-register-alias-elements (find-machine-descriptor 'test-machine))))
+    (dolist (text '("[bank1 + 4]" "[4 + bank1]"))
+      (let ((asts (try-match-operand-mode (%tokens-for text) 'test-spell-index)))
+        (fiveam:is (expr-label-p (first asts)) "~A" text)
+        (fiveam:is (= 4 (expr-number-value (second asts))) "~A" text)))))
+
+(fiveam:test spelling-outscores-a-wider-alternative
+  (flet ((pick (text)
+           (first (first (nth-value 7 (try-match-operand-mode (%tokens-for text) 'test-spell-any))))))
+    (fiveam:is (eq 'test-spell-peek (pick "[sp]")))
+    (fiveam:is (eq 'test-spell-pick (pick "[sp + 2]")))
+    (fiveam:is (eq 'test-bracket (pick "[label]")))))
+
+(fiveam:test spelling-rejects-malformed-definitions
+  (dolist (form '((defmode bad-spell-hole "pick" expr :spelling ("[" (hole 1) "]"))
+                  (defmode bad-spell-missing "pick" expr :spelling ("[" "sp" "]"))
+                  (defmode bad-spell-twice "pick" expr :spelling ("[" (hole 0) (hole 0) "]"))
+                  (defmode bad-spell-element "pick" expr :spelling (42 (hole 0)))
+                  (defmode bad-spell-empty "pick" expr :spelling ())
+                  (defmode bad-spell-repeat "pick" expr :spelling ("pick" (hole 0)))
+                  (defmode bad-spell-one-of (one-of test-bracket test-paren) :spelling ("x"))))
+    (fiveam:signals mode-definition-error (eval form) "~S" form)))
+
+(fiveam:test spelling-shared-with-another-alternative-signals-error
+  (fiveam:signals mode-definition-error
+    (eval '(progn (defmode test-spell-peek-clash "peek" :spelling ("[" "sp" "]"))
+                  (defmode bad-spell-clash (one-of test-spell-peek test-spell-peek-clash))))))

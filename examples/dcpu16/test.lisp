@@ -48,6 +48,9 @@
           ("set push, a" #x0301)
           ("set a, peek" #x6401)
           ("set a, pick 3" #x6801 3)
+          ("set a, [sp]" #x6401)
+          ("set a, [sp + 3]" #x6801 3)
+          ("set [sp], a" #x0321)
           ("set a, sp" #x6c01)
           ("set a, pc" #x7001)
           ("set a, ex" #x7401)
@@ -99,6 +102,13 @@ hwi 1")
     (fiveam:is (= 7 (length lines)))
     (fiveam:is (equalp (assembly-cells assembly)
                        (assembly-cells (assemble (format nil "~{~A~%~}" lines) :machine 'dcpu16))))))
+
+(fiveam:test stack-pointer-spellings-disassemble-canonically
+  (let ((lines (mapcar #'disassembly-line-text
+                       (disassemble-assembly (assemble "set a, [sp]
+set a, [sp + 3]" :machine 'dcpu16)
+                                             :machine 'dcpu16 :labels nil))))
+    (fiveam:is (equal '("set a,peek" "set a,pick$3") lines))))
 
 ;;; Arithmetic and EX.
 

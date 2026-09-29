@@ -44,7 +44,8 @@ break the next tie. Declaration order breaks any remaining tie and reports
 (defmode followed (one-of plain marked) "," "Y")
 ```
 
-`5 X, Y` selects `marked` because `plain` leaves `X` unmatched. An
+`5 X, Y` selects `marked` because `plain` leaves `X` unmatched. Each
+alternative's [spellings](modes.md#alternate-spellings) compete the same way. An
 alternative with the same syntax as another requires its own `:suffix`;
 without a prefix, the first declared one wins.
 

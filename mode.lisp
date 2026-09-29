@@ -65,6 +65,8 @@
                ; that makes every mode strict, including a mode-less
                ; instruction's bare operand. Default NIL wraps on
                ; overflow.
+    spellings  ; ((ELEMENTS . ORDER)...) alternate spellings of PATTERN; ORDER
+               ; gives each spelled hole's index in PATTERN (%PARSE-SPELLING)
     shape-cache)  ; (GENERATION SCOPE VARYING KEYED STRICTP), read through %MODE-SHAPE
   )
 
@@ -243,6 +245,39 @@ options start at the first keyword symbol; everything before it is pattern."
       (if pos
           (values (subseq body 0 pos) (subseq body pos))
           (values body nil))))
+
+  (defun %parse-spelling (name pattern spelling)
+    "(ELEMENTS . ORDER) for a :SPELLING of PATTERN: string literals and
+(HOLE i) references to PATTERN's i-th hole, each used once."
+    (let ((holes (remove :expr pattern :key #'first :test-not #'eq))
+          (order nil))
+      (when (find :one-of pattern :key #'first)
+        (%defmode-error "DEFMODE ~S: :SPELLING cannot be used on a mode with a ONE-OF" name))
+      (unless (and (consp spelling) spelling)
+        (%defmode-error "DEFMODE ~S: :SPELLING needs a list of string literals and (HOLE i), got ~S"
+                        name spelling))
+      (let ((elements
+              (mapcar (lambda (el)
+                        (cond ((stringp el) (list :literal el))
+                              ((and (consp el) (symbolp (first el))
+                                    (string-equal (symbol-name (first el)) "HOLE")
+                                    (= (length el) 2) (integerp (second el))
+                                    (< -1 (second el) (length holes)))
+                               (cl:push (second el) order)
+                               (nth (second el) holes))
+                              (t (%defmode-error "DEFMODE ~S: malformed :SPELLING element ~S -- expected ~
+a string literal or (HOLE i) with i below the mode's ~D hole~:P" name el (length holes)))))
+                      spelling)))
+        (setf order (nreverse order))
+        (unless (equal (sort (copy-list order) #'<) (loop for i below (length holes) collect i))
+          (%defmode-error "DEFMODE ~S: :SPELLING ~S must use each of the mode's ~D hole~:P exactly once"
+                          name spelling (length holes)))
+        (cons elements order))))
+
+  (defun %mode-syntaxes (mode)
+    "Every pattern MODE matches: its own, then each spelling."
+    (cons (mode-descriptor-pattern mode)
+          (mapcar #'car (mode-descriptor-spellings mode))))
 
   (defun %key-head (key)
     (if (consp key) (first key) key))
@@ -521,7 +556,7 @@ alternatives instead"
                      name (mode-descriptor-name alt))))
           (loop for (alt . later) on alts
                 do (dolist (other later)
-                     (when (and (equalp (mode-descriptor-pattern alt) (mode-descriptor-pattern other))
+                     (when (and (intersection (%mode-syntaxes alt) (%mode-syntaxes other) :test #'equalp)
                                 (not (and (mode-descriptor-suffix alt) (mode-descriptor-suffix other))))
                        (%defmode-error "DEFMODE ~S: ONE-OF alternatives ~S and ~S have identical syntax ~
 -- nothing could ever choose between them (give both a :SUFFIX to select by prefix)"
@@ -617,19 +652,30 @@ a mode with no varying :ONE-OF element."
           ;; A literal-only mode is useful as a fixed alternative in a ONE-OF.
           ;; It contributes no operand value; the enclosing instruction can
           ;; attach its encoding with a named choice slot.
-          (%definition-bind (&key width relative signed suffix strict) options
-            (when (and relative (not (eq signed t)) (member :signed options))
-              (%defmode-error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
+          (let* ((spellings (and (evenp (length options))
+                                 (loop for (key value) on options by #'cddr
+                                       when (eq key :spelling)
+                                         collect (%parse-spelling name pattern value))))
+                 (options (if spellings
+                              (loop for (key value) on options by #'cddr
+                                    unless (eq key :spelling) append (list key value))
+                              options)))
+            (loop for (spelling . later) on (mapcar #'car spellings)
+                  do (when (or (equalp spelling pattern) (member spelling later :test #'equalp))
+                       (%defmode-error "DEFMODE ~S: :SPELLING repeats another syntax of the mode" name)))
+            (%definition-bind (&key width relative signed suffix strict) options
+              (when (and relative (not (eq signed t)) (member :signed options))
+                (%defmode-error "DEFMODE ~S: :RELATIVE T implies :SIGNED T -- do not pass ~
 :SIGNED NIL alongside it" name))
-            (%check-suffix-collision name suffix machine)
-            (let ((descriptor
-                    (make-mode-descriptor :name name :machine machine :pattern pattern :width width
-                                          :relativep relative :signedp (or relative signed)
-                                          :suffix suffix :strictp strict)))
+              (%check-suffix-collision name suffix machine)
+              (let ((descriptor
+                      (make-mode-descriptor :name name :machine machine :pattern pattern :width width
+                                            :relativep relative :signedp (or relative signed)
+                                            :suffix suffix :strictp strict :spellings spellings)))
               (dolist (element pattern)
                 (when (eq (first element) :expr)
                   (%expr-hole-attribute element descriptor :signed)))
-              descriptor)))))))
+              descriptor))))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun %mode-references (mode)
@@ -664,7 +710,8 @@ a mode with no varying :ONE-OF element."
   (defun %mode-signature (mode)
     (list (mode-descriptor-pattern mode) (mode-descriptor-width mode)
           (mode-descriptor-relativep mode) (mode-descriptor-signedp mode)
-          (mode-descriptor-strictp mode) (mode-descriptor-suffix mode)))
+          (mode-descriptor-strictp mode) (mode-descriptor-suffix mode)
+          (mode-descriptor-spellings mode)))
 
   (defun %instructions-using-modes (mode-names machines)
     "((MACHINE . MNEMONIC)...) of instructions defined on MACHINES whose mode is in MODE-NAMES."
@@ -752,7 +799,8 @@ A hole may use (EXPR :REGISTER name :SIGNED boolean :RELATIVE boolean).
 Hole options override mode-wide :SIGNED and :RELATIVE defaults. A relative
 hole is signed, and any number of holes may be relative. :WIDTH supplies
 the default operand width; :SUFFIX forces a mode at assembly time; :STRICT
-checks ordinary operand ranges. See docs/modes.md."
+checks ordinary operand ranges. Each :SPELLING (string | (HOLE i))... is
+another syntax for the same holes. See docs/modes.md."
   (%definition-toplevel-form `(%register-mode ',name ',pattern)
                              `',(if (consp name) (first name) name)))
 
@@ -938,9 +986,8 @@ alternative's own pattern; the markers are never part of a DEFMODE pattern."
                               (if (mode-descriptor-keyedp alt)
                                   (append (%mode-keyed-elements alt) *recorded-elements*)
                                   *recorded-elements*)))
-                        (%match-mode-elements tokens
-                                              (append (mode-descriptor-pattern alt)
-                                                      (cons (list :end-of alt-name start) rest-elements))
+                        (%match-mode-syntaxes tokens alt
+                                              (cons (list :end-of alt-name start) rest-elements)
                                               start end require-end))
                     (cond
                       ((not okp) (setf last-failure-token failure-token last-message message))
@@ -986,6 +1033,33 @@ alternative's own pattern; the markers are never part of a DEFMODE pattern."
                  (values-list best)
                  (values nil nil nil nil last-failure-token last-message))))))))
 
+(defun %match-mode-syntaxes (tokens mode tail start end require-end)
+  "%MATCH-MODE-ELEMENTS of MODE's pattern, then each spelling, each followed by
+TAIL. The best score wins and the pattern itself wins a tie. A spelling's
+holes, and their forcing prefixes, come back in the pattern's hole order."
+  (if (null (mode-descriptor-spellings mode))
+      (%match-mode-elements tokens (append (mode-descriptor-pattern mode) tail) start end require-end)
+      (let (best best-score first-failure-token first-message)
+        (loop for (elements . order) in (cons (list (mode-descriptor-pattern mode)) (mode-descriptor-spellings mode))
+              do (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties picks)
+                     (%match-mode-elements tokens (append elements tail) start end require-end)
+                   (cond ((not okp)
+                          (unless first-message
+                            (setf first-failure-token failure-token first-message message)))
+                         ((%score> score best-score)
+                          (flet ((in-pattern-order (holes)
+                                   (let ((ordered (copy-list holes)))
+                                     (loop for hole in holes
+                                           for index in order
+                                           do (setf (nth index ordered) hole))
+                                     ordered)))
+                            (setf best (list (in-pattern-order asts) choices next-i t nil nil selections score
+                                             (in-pattern-order suffixes) ties picks)
+                                  best-score score))))))
+        (if best
+            (values-list best)
+            (values nil nil nil nil first-failure-token first-message)))))
+
 (defun %match-mode-pattern (tokens mode)
   "Match the SIMPLE-VECTOR TOKENS against MODE's pattern from the start.
 Returns (VALUES asts okp failure-token message choices): on success ASTS is
@@ -1000,7 +1074,7 @@ MODE-DESCRIPTORs, one per hole in ASTS, NIL for a hole not governed by any
 that only bind the first four are unaffected by."
   (let ((end (length tokens)))
     (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties picks)
-        (%match-mode-elements tokens (mode-descriptor-pattern mode) 0 end t)
+        (%match-mode-syntaxes tokens mode nil 0 end t)
       (declare (ignore next-i))
       (cond
          ((not okp) (values nil nil failure-token message nil nil nil nil (cons 0 0) nil))
