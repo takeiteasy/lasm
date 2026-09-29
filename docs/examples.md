@@ -111,4 +111,3 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 | `[5 + b]` assembles as the address `[6]`; write the register first. | [#411](https://todo.sr.ht/~takeiteasy/lasm/411) |
 | `0xffff` takes a next word; `-1` packs into the instruction. | [#412](https://todo.sr.ht/~takeiteasy/lasm/412) |
 | IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |
-| A machine that reaches memory through a single pointer register cannot be a `.lsp` target. | [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |

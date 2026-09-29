@@ -88,7 +88,6 @@ so both halves read the slot at the same depth.[^push] Without one the call is
 | --- | --- |
 | A word is exactly two registers. | [#423](https://todo.sr.ht/~takeiteasy/lasm/423) |
 | A half is a register, not a memory cell, so the 6502 has too few registers. | [#424](https://todo.sr.ht/~takeiteasy/lasm/424) |
-| `peek` and `poke` go through the backend's own two-register-address instruction; a dedicated pointer register is not modelled. | [#417](https://todo.sr.ht/~takeiteasy/lasm/417) |
 
 [^clobbers]: `(:clobbers a)` and `(:clobbers ab)` both mark `ab`.
 
