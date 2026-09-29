@@ -913,3 +913,27 @@ call .inner" :cpu 'callfoo))
                     'backend-definition-error))
   (fiveam:is (typep (%backend-error-of '(defbackend bk-isa-bad-4 (:machine bk-isa)))
                     'backend-definition-error)))
+
+;;; operand kinds that collide with function operators (#444)
+
+(fiveam:test an-operand-kind-named-like-a-function-operator-is-a-definition-error
+  (dolist (name '(mem bank defined lowcell highcell))
+    (let ((c (%backend-error-of `(defbackend bk-fnop-bad (:extends callfoo-abi)
+                                   (operands (,name call-reg))))))
+      (fiveam:is (typep c 'backend-definition-error))
+      (fiveam:is (search "function operator" (princ-to-string c))))))
+
+(deflexer bk-fnop-syntax
+  (comment-styles (";" :line))
+  (number-formats (:dec :default))
+  (label-suffix ":")
+  (function-operators ("at" :mem)))
+
+(fiveam:test a-kind-named-like-a-custom-lexers-function-operator-fails-in-items
+  (eval '(defbackend bk-fnop-abi (:extends callfoo-abi)
+          (operands (at call-reg))))
+  (let ((c (handler-case (progn (assemble-items '((hlt)) :backend 'bk-fnop-abi :lexer 'bk-fnop-syntax) nil)
+             (usage-error (e) e))))
+    (fiveam:is (typep c 'usage-error))
+    (fiveam:is (search "function operator" (princ-to-string c))))
+  (fiveam:is (assemble-items '((hlt)) :backend 'bk-fnop-abi)))

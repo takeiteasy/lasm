@@ -378,6 +378,8 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
             (%backend-error "operands: ~S is not a kind name" kind))
           (when (%expression-operator kind)
             (%backend-error "operands: ~A is an expression operator, not a kind name" key))
+          (when (member key *function-operator-keywords* :test #'string-equal)
+            (%backend-error "operands: ~A is a function operator (~(~A~)(...)), not a kind name" key key))
           (when (assoc key result :test #'string=)
             (%backend-error "operands: kind ~A is declared twice" key))
           (let ((mode-name (%find-mode-name mode machine)))

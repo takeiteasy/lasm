@@ -93,7 +93,7 @@ relative to it.
 
 `(KIND MODE)` names an addressing mode by a short kind. An [item](items.md#operands)
 writes `(KIND value...)`; the values fill the mode's `expr` holes in order.
-A kind cannot be an expression operator such as `+`.
+A kind cannot be an expression operator such as `+`, or a lexer's function operator: `bank`, `lowcell`, `highcell`, `defined` and `mem` in the default lexer. A kind that a custom lexer spells as a function operator is rejected when items are assembled with it.
 
 ```lisp
 (operands (imm call-imm) (sp-idx call-sp-idx))

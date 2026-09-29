@@ -1246,6 +1246,12 @@ of its ISA or an ISA extending it."
                         (t (%signal-usage-error 'usage-error "items need a :cpu or a :backend"))))
          (lexer (or (%find-by-name lexer *lexers*)
                     (%lookup-error 'unknown-lexer lexer "No lexer named ~S" lexer))))
+    (when backend
+      (loop for (spelling) in (lexer-descriptor-function-operators (find-lexer-descriptor lexer))
+            for kind = (assoc spelling (backend-descriptor-operands backend) :test #'string-equal)
+            when kind
+              do (%signal-usage-error 'usage-error "backend ~A has an operand kind ~A, which lexer ~A reads as a function operator"
+                                      (backend-descriptor-name backend) (car kind) lexer)))
     (values backend machine lexer)))
 
 (defmacro %with-items-context ((backend machine lexer &optional memory) &body body)
