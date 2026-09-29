@@ -80,6 +80,7 @@
                (:file "inheritance")
                (:file "isa")
                (:file "identity")
+               (:file "defdevice")
                (:file "directive")
                (:file "include")
                (:file "macro")

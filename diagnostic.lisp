@@ -226,6 +226,7 @@ compile time is signalled again when the fasl loads. See
   ((name :initarg :name :reader lookup-error-name)))
 (define-condition unknown-machine (lookup-error) ())
 (define-condition unknown-isa (lookup-error) ())
+(define-condition unknown-device-definition (lookup-error) ())
 (define-condition unknown-mode (lookup-error) ())
 (define-condition unknown-lexer (lookup-error) ())
 
@@ -412,7 +413,7 @@ MODE-DESCRIPTOR.")
 (defparameter *dsl-clause-heads*
   (let ((table (make-hash-table :test #'equal)))
     (dolist (head '(register stack memory flags instruction-word clock-speed reset-pc device
-                    stack-pointer interrupts undefined-opcode properties identity privilege idle
+                    stack-pointer interrupts undefined-opcode properties identity privilege idle devices
                     without-instructions instruction-cycles without-storage without-devices
                     region field layout extra-word-order
                     modes encoding semantics cycles opcode operand field-value for-choice

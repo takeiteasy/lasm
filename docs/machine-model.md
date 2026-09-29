@@ -30,7 +30,7 @@ one namespace.
 | `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
 | `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
-| `(device NAME ...)` | Bus-addressed peripheral. | [Devices](devices.md) |
+| `(device NAME ...)`, `(devices ENTRY...)` | Bus-addressed peripheral, declared inline or attached from a `defdevice`. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
 | `(reset-pc n)` | Value `make-machine` and `reset` give the `PC` register, default `0`. | [Runtime state](#runtime-state) |
 | `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |

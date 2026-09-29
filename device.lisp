@@ -37,7 +37,7 @@ table (machine.lisp) would have rejected at DEFMACHINE time."
 
 ;;; Attach / detach
 
-(defun attach-device (machine name &key id version manufacturer init tick receive detach save load read write)
+(defun attach-device (machine name &key device id version manufacturer init tick receive detach save load read write)
   "Attach a device to MACHINE's bus and return its (fixed) index.
 
 NAME either names a DEVICE-DESCRIPTOR already declared on MACHINE's own
@@ -47,6 +47,8 @@ or is a fresh symbol, checked against MACHINE's whole namespace exactly as a
 declared device's name is (%DEVICE-NAME-TAKEN-P), with the identity/hooks
 given inline the same way a (device ...) clause's keywords are. Inline
 :READ/:WRITE are the hooks BIND-REGION routes a memory region through.
+:DEVICE names a DEFDEVICE to copy under the fresh NAME, the other keywords
+overriding its own.
 
 Appended after every existing bus entry, declared or attached -- indices are
 never reused (DETACH-DEVICE leaves a hole rather than shrinking the bus), so
@@ -59,10 +61,18 @@ an index returned here stays valid until this device itself is detached."
                  (when (%device-name-taken-p machine name)
                    (%emulator-usage-error "attach-device ~S on machine ~S: name already in use"
                           name (machine-descriptor-name descriptor)))
-                 (make-device-descriptor :name name :id (or id 0) :version (or version 0)
-                                          :manufacturer (or manufacturer 0)
-                                          :init init :tick tick :receive receive :detach detach
-                                          :save save :load load :read read :write write)))))
+                 (if device
+                     (derive-device (find-device-definition device) name
+                                    (loop for (key value) on (list :id id :version version :manufacturer manufacturer
+                                                                   :init init :tick tick :receive receive
+                                                                   :detach detach :save save :load load
+                                                                   :read read :write write)
+                                            by #'cddr
+                                          when value append (list key value)))
+                     (make-device-descriptor :name name :id (or id 0) :version (or version 0)
+                                              :manufacturer (or manufacturer 0)
+                                              :init init :tick tick :receive receive :detach detach
+                                              :save save :load load :read read :write write))))))
     (let ((devices (machine-devices machine)))
       (vector-push-extend (%instantiate-device machine device-descriptor (fill-pointer devices))
                            devices))))

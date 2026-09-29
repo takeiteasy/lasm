@@ -7,7 +7,7 @@
 - [Machine model](machine-model.md) — storage elements and `defmachine`
 - [Machine families](machine-families.md) — `(:extends ...)`, inherited instructions, removal, undefined-opcode policy
 - [Conditions](conditions.md) — every condition type and its readers
-- [Devices](devices.md) — the device bus, `(device ...)`, attach/detach, ticking
+- [Devices](devices.md) — `defdevice`, the device bus, attach/detach, ticking
 - [Interrupts](interrupts.md) — `(interrupts ...)`, delivery, masking, overflow policy
 - [Privilege levels](privilege.md) — `(privilege ...)`, level-gated regions, instructions, registers, flags and stacks, delivery levels
 - [Semantics vocabulary](semantics.md) — `with-machine` and the DSL operators

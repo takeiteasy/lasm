@@ -58,6 +58,7 @@
    #:lookup-error-name
    #:unknown-machine
    #:unknown-isa
+   #:unknown-device-definition
    #:unknown-mode
    #:unknown-lexer
    #:unknown-backend
@@ -111,6 +112,8 @@
    ;; Machine definition
    #:defisa
    #:defcpu
+   #:defdevice
+   #:find-device-definition
    #:defmachine
    #:make-machine
    #:reset

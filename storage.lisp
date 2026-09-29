@@ -341,6 +341,15 @@ to NIL by host actions (the debugger's write) that must reach gated memory.")
   ;; This device's signals ignore every mask.
   (non-maskable nil :type boolean))
 
+;; Devices defined once with DEFDEVICE, keyed by name; a CPU's (devices ...)
+;; entry and ATTACH-DEVICE :DEVICE copy one.
+(defvar *device-definitions* (make-hash-table :test 'eq))
+
+(defun find-device-definition (name)
+  "The DEVICE-DESCRIPTOR DEFDEVICE defined as NAME."
+  (or (gethash name *device-definitions*)
+      (%lookup-error 'unknown-device-definition name "No device named ~S has been defined with DEFDEVICE" name)))
+
 ;; A machine's declared (interrupts ...) clause (machine.lisp) -- the
 ;; vector/message/save registers are held here as plain symbol names by
 ;; PARSE-INTERRUPTS-CLAUSE, then resolved against the machine's own storage

@@ -92,6 +92,12 @@ Hardware
 
 (in-package #:dcpu16)
 
+;;; Devices. Their hooks live in devices.lisp. See docs/devices.md.
+(defdevice clock :id #x12d0b402 :version 1 :manufacturer #x1c6c8b36
+  :init clock-init :tick clock-tick :receive clock-receive)
+(defdevice keyboard :id #x30cf7406 :version 1 :manufacturer #x1c6c8b36
+  :init keyboard-init :receive keyboard-receive)
+
 ;;; Storage. REG is a bank of eight registers whose :NAMES let source write
 ;;; `a` for register 0. SP is a plain register that STACK-POINTER turns into a
 ;;; downward-growing stack in RAM, so PUSH, POP and interrupt delivery use it.
@@ -118,10 +124,7 @@ Hardware
     (extra-word-order av bv))
   (clock-speed 100000)
   (undefined-opcode :fault)
-  (device clock :id #x12d0b402 :version 1 :manufacturer #x1c6c8b36
-                :init clock-init :tick clock-tick :receive clock-receive)
-  (device keyboard :id #x30cf7406 :version 1 :manufacturer #x1c6c8b36
-                   :init keyboard-init :receive keyboard-receive))
+  (devices clock keyboard))
 
 ;;; Operand syntax. Each `defmode` is one way to write a value; a register-
 ;;; qualified hole makes `[a]` a register lookup and `[5]` a memory address.

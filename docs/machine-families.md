@@ -38,6 +38,7 @@ A child clause is merged over the parent's clause of the same kind:
 | Clause | Merge |
 |---|---|
 | `register`, `stack`, `memory`, `device` | matched by name; the child's keywords override the parent's, the rest are kept |
+| `devices` | each entry matched by name and merged in place; new entries are appended after the inherited devices |
 | `memory` `(region ...)` forms | if the child gives any, they replace the parent's regions |
 | `flags` | added to the parent's |
 | `interrupts`, `identity`, `properties`, `idle` | merged key by key |

@@ -1,18 +1,57 @@
 # Devices
 
-A `(device ...)` clause adds a bus-addressed peripheral. A `:device`
+`defdevice` defines a bus-addressed peripheral once; a CPU's `(devices ...)`
+clause attaches it. A `:device`
 [memory region](machine-model.md#memory-regions) can bind to it, so one
 object is both enumerated and memory-mapped.
 
 ```lisp
-(defmachine devfoo
-  (register pc :width 16)
-  (memory ram :width 8 :addr-width 16)
-  (device clock :id #x0001 :version 1 :manufacturer #x1000
-    :init clock-init :tick clock-tick))
+(defdevice clock :id #x0001 :version 1 :manufacturer #x1000
+  :init clock-init :tick clock-tick)
+
+(defdevice serial :id #x5E7 :init serial-init :receive serial-receive)
+
+(defcpu (devfoo (:isa devarch))
+  (devices clock
+           (com1 :device serial)
+           (com2 :device serial :id #x5E8)))
 ```
 
-## `defmachine`'s `device` clause
+## `defdevice` and `devices`
+
+```lisp
+(defdevice NAME [:id n] [:version n] [:manufacturer n] [:priority n]
+                [:non-maskable t/nil] [:init fn] [:tick fn] [:receive fn]
+                [:detach fn] [:save fn] [:load fn] [:read fn] [:write fn])
+
+(devices ENTRY...)          ; ENTRY is NAME or (NAME [:device DEF] key value...)
+```
+
+| Entry | Attaches |
+| --- | --- |
+| `clock` | The definition `clock`, as `clock`. |
+| `(com1 :device serial)` | The definition `serial`, as `com1`. |
+| `(com2 :device serial :id 9)` | `serial` as `com2`, with `:id` overridden. |
+
+An entry's name is its bus name and shares the [namespace](machine-model.md)
+of storage, regions and other devices. Each attachment has its own state, so
+one definition can attach twice. A CPU copies the definition when it is
+defined.[^copy]
+
+`devices` and `device` entries take bus indices in clause order. A child CPU
+merges an entry of the same name in place and appends new ones after the
+inherited devices; [`without-devices`](machine-families.md#child-only-clauses)
+drops one. A child cannot merge a `devices` entry with `device`, or the
+reverse.
+
+## Inline `device` clause
+
+A one-off device can be declared in the CPU itself:
+
+```lisp
+(defcpu (devfoo (:isa devarch))
+  (device led :id #x0002 :write led-write))
+```
 
 ```lisp
 (device NAME [:id n] [:version n] [:manufacturer n] [:priority n]
@@ -42,11 +81,13 @@ still enumerable.
 
 Declared devices receive fixed indices in declaration order.
 `attach-device` appends another instance or a new host device; it takes the
-same keywords as the clause, including `:read`/`:write`.
+same keywords as the clause, including `:read`/`:write`. `:device` names a
+`defdevice` to copy under the new name, the other keywords overriding it.
 `detach-device` leaves a hole so other indices stay stable.
 
 ```lisp
 (attach-device machine 'host-sensor :id #x0003 :version 1)
+(attach-device machine 'com3 :device 'serial :id #x5E9)
 ```
 
 | Function | Result |
@@ -143,3 +184,8 @@ or drops the signal when none is installed. Machines with an `(interrupts
 
 - Interrupt delivery and idle steps tick devices once for their whole cost;
   they have no body to subdivide.
+- Redefining a `defdevice` does not change CPUs already defined. ([#449](https://todo.sr.ht/~takeiteasy/lasm/449))
+
+[^copy]: A `defdevice` is copied into the CPU's descriptor when `defcpu` runs,
+    so re-evaluate the CPU after redefining a device. The hook names are
+    symbols, so redefining a hook function takes effect at once.

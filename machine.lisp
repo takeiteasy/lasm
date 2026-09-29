@@ -1015,6 +1015,39 @@ DESCRIPTOR's finished elements."
             do (%defmachine-error "properties: duplicate key ~S" key)))
   (copy-list form))
 
+;; A device descriptor as the keywords (device NAME ...) takes, so an override
+;; is a plist merge that PARSE-DEVICE-CLAUSE validates like any other device.
+(defun %device-plist (descriptor)
+  (list :id (device-descriptor-id descriptor) :version (device-descriptor-version descriptor)
+        :manufacturer (device-descriptor-manufacturer descriptor)
+        :init (device-descriptor-init descriptor) :tick (device-descriptor-tick descriptor)
+        :receive (device-descriptor-receive descriptor) :detach (device-descriptor-detach descriptor)
+        :save (device-descriptor-save descriptor) :load (device-descriptor-load descriptor)
+        :read (device-descriptor-read descriptor) :write (device-descriptor-write descriptor)
+        :priority (device-descriptor-priority descriptor)
+        :non-maskable (device-descriptor-non-maskable descriptor)))
+
+(defun derive-device (definition name overrides)
+  "A copy of the device DEFINITION named NAME, with the keyword plist OVERRIDES applied."
+  (parse-device-clause (cons name (%plist-merge (%device-plist definition) overrides))))
+
+(defun %device-entry-name (entry)
+  (if (consp entry) (first entry) entry))
+
+(defun %normalise-device-entry (entry)
+  (if (consp entry) entry (list entry)))
+
+(defun parse-devices-entry (entry)
+  "The device descriptor of one (devices ...) ENTRY: NAME, or (NAME [:device DEF] key...)."
+  (let ((entry (%normalise-device-entry entry)))
+    (unless (and (symbolp (first entry)) (first entry) (evenp (length (rest entry))))
+      (%defmachine-error "devices: expected NAME or (NAME [:device DEF] key value...), got ~S" entry))
+    (let ((overrides (rest entry)))
+      (derive-device (find-device-definition (or (getf overrides :device) (first entry)))
+                     (first entry)
+                     (loop for (key value) on overrides by #'cddr
+                           unless (eq key :device) append (list key value))))))
+
 (defun parse-identity-clause (form)
   "Values the plist of the identity keys FORM gives (:model :id :version
 :manufacturer) and whether it is :required."
@@ -1054,6 +1087,7 @@ DESCRIPTOR's finished elements."
            (%defmachine-error "DEFMACHINE: more than one reset-pc clause"))
          (setf reset-pc (parse-reset-pc-clause (rest clause))))
         (device (cl:push (parse-device-clause (rest clause)) devices))
+        (devices (dolist (entry (rest clause)) (cl:push (parse-devices-entry entry) devices)))
         (interrupts
          (when interrupts
            (%defmachine-error "DEFMACHINE: more than one interrupts clause"))
@@ -1215,6 +1249,11 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
                                 (remove-if #'%region-form-p child-body))))
       (list* head name (append plist regions)))))
 
+(defun %devices-entry-position (clauses name)
+  "The index in CLAUSES of the (devices ...) clause with an entry named NAME."
+  (position-if (lambda (c) (and (eq (first c) 'devices) (find name (rest c) :key #'%device-entry-name)))
+               clauses))
+
 (defun %merge-machine-clauses (parent-clauses child-clauses)
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
 existing register/stack/memory/device merges into the parent's in place, a new
@@ -1229,6 +1268,9 @@ key by key (interrupts, properties, identity, privilege, idle); flags are additi
            (%defmachine-error "DEFMACHINE: a machine extending another cannot declare ~S -- inherited ~
 instructions are compiled against the parent's" head))
           ((register stack memory device)
+           (when (and (eq head 'device) (%devices-entry-position merged (second clause)))
+             (%defmachine-error "DEFMACHINE: ~S is a (devices ...) entry of the parent; merge it with (devices (~S ...))"
+                                (second clause) (second clause)))
            (let ((position (position-if (lambda (p) (and (eq (first p) head)
                                                           (eq (second p) (second clause))))
                                         merged)))
@@ -1236,6 +1278,27 @@ instructions are compiled against the parent's" head))
                  (setf (nth position merged)
                        (%merge-keyed-clause (nth position merged) clause))
                  (cl:push clause added))))
+          (devices
+           (let (new)
+             (dolist (entry (rest clause))
+               (let* ((entry (%normalise-device-entry entry))
+                      (position (%devices-entry-position merged (first entry))))
+                 (cond
+                   (position
+                    (let* ((old (nth position merged))
+                           (old-entry (find (first entry) (rest old) :key #'%device-entry-name)))
+                      (setf (nth position merged)
+                            (cons 'devices
+                                  (substitute (cons (first entry)
+                                                    (%plist-merge (rest (%normalise-device-entry old-entry))
+                                                                  (rest entry)))
+                                              old-entry (rest old))))))
+                   ((position-if (lambda (p) (and (eq (first p) 'device) (eq (second p) (first entry))))
+                                 merged)
+                    (%defmachine-error "DEFMACHINE: ~S is an inline (device ...) of the parent; merge it with (device ~S ...)"
+                                       (first entry) (first entry)))
+                   (t (cl:push entry new)))))
+             (when new (cl:push (cons 'devices (nreverse new)) added))))
           (flags
            (let ((known (loop for p in merged when (eq (first p) 'flags)
                               append (mapcar #'%flag-entry-name (rest p)))))
@@ -1257,8 +1320,10 @@ instructions are compiled against the parent's" head))
 
 (defun %clause-declares-p (clause head-names name)
   "True when CLAUSE declares NAME: a keyed clause whose head is in HEAD-NAMES, or a flags entry."
-  (or (and (member (first clause) head-names) (eq (second clause) name))
-      (and (eq (first clause) 'flags) (member name (rest clause) :key #'%flag-entry-name))))
+  (or (and (member (first clause) head-names) (not (eq (first clause) 'devices)) (eq (second clause) name))
+      (and (eq (first clause) 'flags) (member name (rest clause) :key #'%flag-entry-name))
+      (and (eq (first clause) 'devices) (member 'devices head-names)
+           (member name (rest clause) :key #'%device-entry-name))))
 
 (defun %check-removals (machine-name merged child-clauses storage-names device-names)
   "Signal when CHILD-CLAUSES redeclare a removed name, and warn for a name MERGED lacks."
@@ -1272,7 +1337,7 @@ instructions are compiled against the parent's" head))
                      :format-arguments (list machine-name name
                                              (if (eq (first heads) 'device) "device" "register or flag")))))))
     (check storage-names '(register stack memory))
-    (check device-names '(device))))
+    (check device-names '(device devices))))
 
 (defun %drop-removed-clauses (merged storage-names device-names)
   "MERGED with the register/flag STORAGE-NAMES and the DEVICE-NAMES removed."
@@ -1280,6 +1345,9 @@ instructions are compiled against the parent's" head))
         for kept = (case (first clause)
                      ((register stack memory) (unless (member (second clause) storage-names) clause))
                      (device (unless (member (second clause) device-names) clause))
+                     (devices (let ((entries (remove-if (lambda (e) (member (%device-entry-name e) device-names))
+                                                        (rest clause))))
+                                (when entries (cons 'devices entries))))
                      (flags (let ((entries (remove-if (lambda (e) (member (%flag-entry-name e) storage-names))
                                                       (rest clause))))
                               (when entries (cons 'flags entries))))
@@ -1373,7 +1441,7 @@ instructions are compiled against the parent's" head))
   '(without-instructions instruction-cycles without-storage without-devices))
 
 (defparameter *cpu-clause-heads*
-  (append '(device clock-speed reset-pc idle undefined-opcode properties) *removal-clause-heads*))
+  (append '(device devices clock-speed reset-pc idle undefined-opcode properties) *removal-clause-heads*))
 
 (defparameter *cpu-interrupt-keys* '(:queue :on-overflow :cycles :max-depth))
 
@@ -1502,7 +1570,7 @@ PARENT's when given. Registers nothing."
                                             '(register stack memory))))
            (inherited-devices (and parent-md
                                    (funcall redeclared (machine-descriptor-removed-devices parent-md)
-                                            '(device)))))
+                                            '(device devices)))))
       (%check-removals name merged plain removed-storage removed-devices)
       (let ((cpu (build-machine-descriptor
                   name (%drop-removed-clauses merged (append inherited-storage removed-storage)
@@ -1598,7 +1666,7 @@ each key one of ALLOWED and given once."
 
 (defparameter *dsl-known-machine-heads*
   '(register stack memory flags instruction-word stack-pointer interrupts privilege
-    device clock-speed reset-pc idle undefined-opcode properties identity
+    device devices clock-speed reset-pc idle undefined-opcode properties identity
     without-instructions instruction-cycles without-storage without-devices))
 
 (defun %check-clause-heads (clauses definer allowed hint)
@@ -1692,6 +1760,24 @@ lacks. See docs/isa.md."
        `(%define-cpu ',cpu-name ',(getf options :isa) ',(getf options :extends)
                      ',(mapcar #'%dsl-machine-clause clauses))
        `',cpu-name))))
+
+(defun %define-device (name keys)
+  "Build and register the device NAME from the keywords KEYS of a (device ...) clause."
+  (%with-definition (name machine-definition-error)
+    (setf (gethash name *device-definitions*) (parse-device-clause (cons name keys)))))
+
+(defmacro defdevice (name &rest keys)
+  "Define the device NAME once, for any CPU to attach with (devices NAME ...) or
+ATTACH-DEVICE :DEVICE. KEYS are a (device ...) clause's:
+     [:id n] [:version n] [:manufacturer n] [:priority n] [:non-maskable t/nil]
+     [:init fn] [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
+     [:read fn] [:write fn]
+Hooks are bare function names. A CPU copies the definition when it is defined,
+so redefining a device does not reach CPUs already built. See docs/devices.md."
+  (%expanding-definition
+    (%definition-toplevel-form
+     `(%define-device ',name ',keys)
+     `',name)))
 
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:

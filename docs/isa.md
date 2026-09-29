@@ -39,7 +39,7 @@ its cycle overrides applied.
 | `defisa` | `defcpu` |
 | --- | --- |
 | `register`, `stack`, `memory` (no regions), `flags` | `register NAME :width n`, `memory NAME :addr-width n` and `(region ...)`, for names the ISA declares |
-| `instruction-word`, `stack-pointer` | `device`, `clock-speed`, `reset-pc`, `idle` |
+| `instruction-word`, `stack-pointer` | `device`, `devices`, `clock-speed`, `reset-pc`, `idle` |
 | `interrupts` without `:queue`, `:on-overflow`, `:cycles`, `:max-depth` | `interrupts` with only those keys |
 | `privilege` | `undefined-opcode`, `properties` |
 | `identity :required t` | `identity :model :id :version :manufacturer` |
