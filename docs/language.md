@@ -382,7 +382,7 @@ holds a value across other code. It also needs `(registers :operand KIND)`
 and `(frame :slot KIND)`, and defines these [operations](backends.md#language-operations)
 for the forms a program uses. A missing one is a compile error naming the form.
 With [static frames](static-frames.md) it needs no `:get`, `:set`, `:alloc`,
-`:free`, `:push` or `:pop`. With [register pairs](register-pairs.md) every one of
+`:free`, `:push` or `:pop`, unless a function is recursive. With [register pairs](register-pairs.md) every one of
 those registers is a pair.
 
 | Operation | Does |

@@ -133,6 +133,8 @@
 (defvar *cc-arrays* nil "An EQ table from a DEFARRAY's label to the vector of its elements' bindings.")
 (defvar *cc-escaped* nil "Upcased names of the DEFARRAYs used other than as the base of an AREF or ASET, so any element may change.")
 (defvar *cc-frames* :stack "Where locals live: :STACK, in frame slots, or :STATIC, at fixed addresses laid out from the call graph.")
+(defvar *cc-stack-functions* nil "Upcased names of the functions that keep a stack frame under static frames, because they lie in a cycle of the call graph.")
+(defvar *cc-stack-function* nil "T while compiling a function in *CC-STACK-FUNCTIONS*.")
 (defvar *cc-calls* nil "(CALLER CALLEE FORM FUNCTION), reversed, for each call a static frame layout must account for.")
 (defvar *cc-caller* nil "The upcased name of the function being compiled.")
 (defvar *cc-frame-label* nil "The label of the function being compiled, which its static slots' labels are made from.")
@@ -248,8 +250,13 @@ cannot be a register alias or a generated label."
               (backend-descriptor-name *cc-backend*) name))
   (%cc-emit (list* :op name args)))
 
-(defun %cc-static-p ()
+(defun %cc-static-calls-p ()
+  "T when calls pass their arguments in static words: every function of a static-frames program."
   (eq *cc-frames* :static))
+
+(defun %cc-static-p ()
+  "T when the function being compiled keeps its locals at fixed addresses."
+  (and (%cc-static-calls-p) (not *cc-stack-function*)))
 
 (defun %cc-slot-label (function-label index)
   "The label of slot INDEX in the static frame of the function labelled FUNCTION-LABEL."
@@ -354,7 +361,7 @@ cannot be a register alias or a generated label."
       (%cc-fail form "unknown function ~A" (%source-name (second form) nil)))
     (pushnew (cdr entry) *cc-value-arities*)
     (pushnew key *cc-taken* :test #'string=)
-    (cond ((%cc-static-p)
+    (cond ((%cc-static-calls-p)
            (pushnew key *cc-entered* :test #'string=)
            (%cc-entry-label (car entry)))
           (t (car entry)))))
@@ -444,7 +451,7 @@ cannot be a register alias or a generated label."
 
 (defun %cc-note-call (callee form)
   "Record that the function being compiled calls CALLEE, an upcased name, at FORM."
-  (when (%cc-static-p)
+  (when (%cc-static-calls-p)
     (cl:push (list *cc-caller* callee form *cc-function*) *cc-calls*)))
 
 (defun %cc-note-escapes (tree)
@@ -612,9 +619,15 @@ can do that a :caller-saved register does not survive."
             register)
           (first (usable *cc-volatile*))))))
 
+(defun %cc-load-slot (slot register register-name)
+  "The frame SLOT's value into REGISTER."
+  (if (eq (first slot) :static)
+      (%cc-load-label (second slot) register register-name)
+      (%cc-op :get register slot)))
+
 (defun %cc-load-leaf-slot (slot)
-  "The static SLOT's value into the accumulator."
-  (%cc-load-label (second slot) *cc-acc* *cc-acc-name*))
+  "The frame SLOT's value into the accumulator."
+  (%cc-load-slot slot *cc-acc* *cc-acc-name*))
 
 (defun %cc-to-temp (form)
   "FORM's value into the temp register, leaving the accumulator as it is.
@@ -1303,7 +1316,7 @@ accumulator or a register (docs/language.md#backend-requirements)."
 (defun %cc-call-callee (key label args form)
   "Call the function named KEY, labelled LABEL, with ARGS."
   (%cc-hold-arguments key args)
-  (if (%cc-static-p)
+  (if (%cc-static-calls-p)
       (%cc-static-call key label args form)
       (let ((slots (%cc-args-to-slots args)))
         (%cc-emit (list* :call label slots))
@@ -1419,14 +1432,14 @@ ARGS: none of them can change it (%CC-SWAPPABLE-P)."
            (target (%cc-register-operand register))
            (name (%cc-symbol (string-downcase register))))
       (if callee-slot
-          (%cc-load-label (second callee-slot) target name)
+          (%cc-load-slot callee-slot target name)
           (%cc-load-leaf callee target name))
       (%cc-emit (list :call target))
       (dotimes (i held) (%cc-free)))
     (when callee-slot (%cc-free))))
 
 (defun %cc-indirect-funcall (callee args)
-  (when (%cc-static-p)
+  (when (%cc-static-calls-p)
     (return-from %cc-indirect-funcall (%cc-static-indirect-funcall callee args)))
   (let ((form *cc-form*) (function *cc-function*)
         (callee-slot (unless (%cc-callee-late-p callee args)
@@ -2048,6 +2061,7 @@ names must stay literal for the rest of the compiler to resolve."
   "The (:function LABEL ...) item for BODY, already macro-expanded."
   (let* ((*cc-out* '()) (*cc-env* '()) (*cc-next* 0) (*cc-max* 0) (*cc-depth* 0) (*cc-loop-depth* 0) (*cc-site-weight* 1) (*cc-saves* '())
          (*cc-frame-label* label) (*cc-caller* (%designator-name name))
+         (*cc-stack-function* (and (member *cc-caller* *cc-stack-functions* :test #'string=) t))
          (arg-registers (let ((args (getf (backend-descriptor-call *cc-backend*) :args)))
                           (if (eq args :stack) 0 (length args)))))
     (loop for param in params
@@ -2057,6 +2071,11 @@ names must stay literal for the rest of the compiler to resolve."
                  (%cc-fail name "~A is a parameter twice" (%source-name param nil)))
                (cond ((%cc-static-p)
                       (cl:push (cons key (%cc-alloc)) *cc-env*))
+                     ((%cc-static-calls-p)
+                      (let ((slot (%cc-alloc)) (*cc-form* name))
+                        (%cc-load-label (%cc-slot-label label index) *cc-acc* *cc-acc-name*)
+                        (%cc-op :set slot *cc-acc*)
+                        (cl:push (cons key slot) *cc-env*)))
                      ((< index arg-registers)
                       (let ((slot (%cc-alloc)))
                         (let ((*cc-form* name))
@@ -2071,11 +2090,12 @@ names must stay literal for the rest of the compiler to resolve."
                                   for index from *cc-max*
                                   collect (cons name (%cc-slot-label label index)))))
            (items (nreverse (cl:push (list :return) *cc-out*))))
-      (setf (gethash *cc-caller* *cc-sizes*) (+ *cc-max* (length save-slots)))
+      (setf (gethash *cc-caller* *cc-sizes*)
+            (if *cc-stack-function* (length params) (+ *cc-max* (length save-slots))))
       (list* :function label
              (append (if (%cc-static-p)
                          (list :args 0 :locals 0 :frame nil)
-                         (list :args (length params) :locals *cc-max*))
+                         (list :args (if (%cc-static-calls-p) 0 (length params)) :locals *cc-max*))
                      ;; A preserved register %CC-TAKE used; the backend's
                      ;; own :callee-saved convention pushes and pops it, which
                      ;; also restores it correctly across an early (return).
@@ -2157,8 +2177,45 @@ register, so any of these are free once nothing above still needs them."
 ;; Static frames. A function's frame sits after every frame of its callers, so
 ;; a function and the ones it calls never share an address, and functions that
 ;; are never live together do. That holds only while no function is live
-;; twice: recursion is an error.
-(defun %cc-check-recursion ()
+;; twice, so a function in a cycle of the call graph keeps a stack frame
+;; instead, or the program is an error when the backend has none.
+(defun %cc-stack-frames-p ()
+  "T when the backend has what a function's stack frame needs."
+  (and (getf (backend-descriptor-frame *cc-backend*) :slot)
+       (every #'%cc-op-p '(:get :set :alloc :free :push :pop))))
+
+(defun %cc-call-cycles ()
+  "An EQUAL table, upcased function name -> the number of its group of functions that call each other, for each function that lies in a cycle of the call graph or calls itself."
+  (let ((edges (make-hash-table :test 'equal)) (order (make-hash-table :test 'equal))
+        (low (make-hash-table :test 'equal)) (open (make-hash-table :test 'equal))
+        (cycles (make-hash-table :test 'equal)) (stack '()) (count 0) (groups 0))
+    (loop for (caller callee) in (reverse *cc-calls*)
+          do (pushnew callee (gethash caller edges) :test #'string=))
+    (labels ((visit (key)
+               (setf (gethash key order) count (gethash key low) count (gethash key open) t)
+               (incf count)
+               (cl:push key stack)
+               (dolist (callee (reverse (gethash key edges)))
+                 (cond ((not (gethash callee order))
+                        (visit callee)
+                        (setf (gethash key low) (min (gethash key low) (gethash callee low))))
+                       ((gethash callee open)
+                        (setf (gethash key low) (min (gethash key low) (gethash callee order))))))
+               (when (= (gethash key low) (gethash key order))
+                 (let ((members '()))
+                   (loop for member = (cl:pop stack)
+                         do (setf (gethash member open) nil)
+                            (cl:push member members)
+                         until (string= member key))
+                   (when (or (rest members) (member key (gethash key edges) :test #'string=))
+                     (dolist (member members)
+                       (setf (gethash member cycles) groups))
+                     (incf groups))))))
+      (loop for key being the hash-keys of edges
+            unless (gethash key order) do (visit key)))
+    cycles))
+
+(defun %cc-fail-recursion ()
   "Fail at the first call that closes a cycle in the call graph."
   (let ((edges (make-hash-table :test 'equal)) (state (make-hash-table :test 'equal)))
     (dolist (edge (reverse *cc-calls*))
@@ -2172,14 +2229,25 @@ register, so any of these are free once nothing above still needs them."
                      (:active
                       (let ((*cc-function* function))
                         (if (string= key callee)
-                            (%cc-fail form "~(~A~) calls itself; static frames do not support recursion" key)
-                            (%cc-fail form "~(~{~A~^ calls ~}~) is recursive; static frames do not support recursion"
+                            (%cc-fail form "~(~A~) calls itself; a recursive function needs a stack frame, and the backend has no stack operations" key)
+                            (%cc-fail form "~(~{~A~^ calls ~}~) is recursive; a recursive function needs a stack frame, and the backend has no stack operations"
                                       (append (member callee (reverse (cons key path)) :test #'string=)
                                               (list callee))))))
                      ((nil) (visit callee (cons key path))))))
                (setf (gethash key state) :done)))
       (loop for (caller) in (reverse *cc-calls*)
             unless (gethash caller state) do (visit caller '())))))
+
+(defun %cc-check-recursion ()
+  "The upcased names of the functions in a cycle of the call graph. Fails at the first call that closes one when the backend has no stack frames, or when the cycles are not the functions already given stack frames."
+  (let ((cycles (%cc-call-cycles)))
+    (when (plusp (hash-table-count cycles))
+      (unless (%cc-stack-frames-p)
+        (%cc-fail-recursion))
+      (let ((cyclic (loop for key being the hash-keys of cycles collect key)))
+        (when (and *cc-stack-functions* (set-exclusive-or cyclic *cc-stack-functions* :test #'string=))
+          (%cc-fail nil "internal error: the call graph changed between compiles"))
+        cyclic))))
 
 (defun %cc-computed-edges ()
   "Add a call from each computed call's caller to each function with an entry thunk that its target can be. An unknown target can be any that takes as many arguments."
@@ -2202,16 +2270,29 @@ register, so any of these are free once nothing above still needs them."
 
 (defun %cc-static-area (definitions)
   "The items reserving every static frame. A function's frame starts after the
-frames of its callers, so two functions share the slots at an address."
-  (let ((callers (make-hash-table :test 'equal)) (offsets (make-hash-table :test 'equal)))
+frames of its callers, so two functions share the slots at an address. The
+functions that call each other start together, after the callers outside them."
+  (let ((callers (make-hash-table :test 'equal)) (offsets (make-hash-table :test 'equal))
+        (cycles (%cc-call-cycles)))
     (loop for (caller callee) in *cc-calls*
           do (pushnew caller (gethash callee callers) :test #'string=))
-    (labels ((offset (key)
+    (labels ((group (key)
+               (let ((number (gethash key cycles)))
+                 (if number
+                     (loop for member being the hash-keys of cycles using (hash-value at)
+                           when (= at number) collect member)
+                     (list key))))
+             (offset (key)
                (or (gethash key offsets)
-                   (setf (gethash key offsets)
-                         (reduce #'max (mapcar (lambda (caller) (+ (offset caller) (gethash caller *cc-sizes* 0)))
-                                               (gethash key callers))
-                                 :initial-value 0)))))
+                   (let* ((group (group key))
+                          (base (reduce #'max
+                                        (loop for member in group
+                                              append (loop for caller in (gethash member callers)
+                                                           unless (member caller group :test #'string=)
+                                                             collect (+ (offset caller) (gethash caller *cc-sizes* 0))))
+                                        :initial-value 0)))
+                     (dolist (member group base)
+                       (setf (gethash member offsets) base))))))
       (let* ((slots (loop for (name nil nil label) in definitions
                           for key = (%designator-name name)
                           append (loop for index below (gethash key *cc-sizes* 0)
@@ -2381,17 +2462,28 @@ POSITIONS, SOURCE and FILE, as READ-SOURCE and READ-SOURCE-FROM-STRING set
 them on an ITEMS-PROGRAM, let errors report FILE:LINE:COLUMN. OPTIMIZE
 is :SIZE, the fewest instructions, or :SPEED, which also holds an operand
 across calls in a preserved register shared by two or more sites. FRAMES is
-:STATIC, which gives locals fixed addresses and rejects recursion, :STACK,
-or NIL for what the backend's (frame :static t) says."
+:STATIC, which gives locals fixed addresses and a function that calls itself,
+directly or not, a stack frame when the backend has one, :STACK, or NIL for
+what the backend's (frame :static t) says."
   (unless backend
     (%cc-fail nil "compiling needs a backend"))
   (unless (member optimize '(:size :speed))
     (%cc-fail nil ":optimize must be :size or :speed, got ~S" optimize))
   (unless (member frames '(nil :static :stack))
     (%cc-fail nil ":frames must be :static or :stack, got ~S" frames))
+  (flet ((compile-with (stack-functions)
+           (%cc-compile-program forms backend positions source file optimize frames stack-functions)))
+    (multiple-value-bind (items cyclic) (compile-with '())
+      (if cyclic
+          (values (compile-with cyclic))
+          items))))
+
+(defun %cc-compile-program (forms backend positions source file optimize frames stack-functions)
+  "(VALUES ITEMS CYCLIC): COMPILE-PROGRAM's items with STACK-FUNCTIONS, upcased names, given stack frames, and the upcased names of the functions that lie in a cycle of the call graph."
   (let ((*cc-backend* (find-backend backend))
         (*cc-frames* (or frames (if (getf (backend-descriptor-frame (find-backend backend)) :static) :static :stack)))
         (*cc-calls* '()) (*cc-caller* nil) (*cc-frame-label* nil) (*cc-sizes* (make-hash-table :test 'equal))
+        (*cc-stack-functions* stack-functions) (*cc-stack-function* nil) (cyclic '())
         (*cc-entered* '()) (*cc-computed-calls* '()) (*cc-block-size* 0)
         (*cc-optimize* optimize) (*cc-shared* nil) (*cc-counting* nil)
         (*cc-functions* (make-hash-table :test 'equal))
@@ -2432,21 +2524,23 @@ or NIL for what the backend's (frame :static t) says."
         (let ((stub (nreverse *cc-out*))
               (functions (mapcar #'%cc-function definitions)))
           (%cc-check-indirect-calls)
-          (when (%cc-static-p)
+          (when (%cc-static-calls-p)
             (%cc-computed-edges)
-            (%cc-check-recursion))
-          (append stub
+            (setf cyclic (%cc-check-recursion)))
+          (values
+           (append stub
                   (loop for (name) in definitions
                         for function in functions
                         for key = (%designator-name name)
-                        append (and (%cc-static-p) (member key *cc-entered* :test #'string=)
+                        append (and (%cc-static-calls-p) (member key *cc-entered* :test #'string=)
                                     (%cc-entry-thunk key))
                         collect function)
                   (loop for (label) in globals
                         append (list (list :label label)
                                      (list :directive (%cc-symbol "res") *cc-word-cells*)))
-                  (and (%cc-static-p) (%cc-static-area definitions))
-                  data))))))
+                  (and (%cc-static-calls-p) (%cc-static-area definitions))
+                  data)
+           cyclic))))))
 
 ;;; Source files
 

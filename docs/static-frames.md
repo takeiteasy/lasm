@@ -2,7 +2,8 @@
 
 A [`.lsp`](language.md) program keeps its locals and arguments at fixed
 addresses, not in stack frames, so a machine with no SP-relative addressing (the
-6502, CHIP-8) can be a target. The cost: no recursion.
+6502, CHIP-8) can be a target. A function that calls itself keeps a stack frame, so
+the backend needs stack operations only for recursion.
 
 ```lisp
 (defun square (n) (* n n))
@@ -28,7 +29,8 @@ other frames.
 | Backend | `(frame :static t)` in [`defbackend`](backends.md#frame) | last |
 
 A backend with `(frame :static t)` and no stack operations only works in static
-mode; a program can still ask for `stack` when the backend defines them.
+mode, and cannot run a [recursive](#recursion) program; a program can still ask
+for `stack` when the backend defines them.
 
 ## What a backend needs
 
@@ -48,7 +50,7 @@ function's own frame, not with `:push` and `:pop`.
 | --- | --- |
 | A parameter or `let` variable is a frame slot | It is a labelled word, `sf`*function*`x`*n* |
 | A call pushes its arguments | A call stores each into the callee's parameter word |
-| A function allocates its slots on entry | Its words are reserved once, after the code |
+| A function allocates its slots on entry | Its words are reserved once, after the code; a recursive function [keeps stack frames](#recursion) |
 | A `:callee-saved` register a function uses is pushed and popped | It is stored in an extra word of the function's frame, and loaded back before every `(:return)`[^saved] |
 | Slots are live for one call | Functions that never run together share addresses |[^layout]
 | A computed call passes its arguments on the stack | It stores them in a shared block, `sfx0`…, and the target's entry thunk copies them |
@@ -72,15 +74,28 @@ like a global's, not a frame slot.
 
 ## Recursion
 
-A cycle in the call graph, direct or through other functions, is a compile error
-at the call that closes it.
+A function in a cycle of the call graph, calling itself directly or through other
+functions, keeps a stack frame. Every other function keeps its static frame.
+
+```lisp
+(defun fact (n) (if (< n 2) 1 (* n (fact (- n 1)))))
+(defun main () (fact 5))                                  ; main: static, fact: stack
+```
+
+Calls pass arguments the same way to both: the caller stores each into the
+callee's parameter word. A stack function's prologue copies its words into frame
+slots, so a recursive call can store the next arguments in them at once.[^cycles]
+
+A backend needs `:get`, `:set`, `:alloc`, `:free`, `:push`, `:pop` and
+`(frame :slot ...)` for that. Without them a cycle is a compile error at the call
+that closes it.
 
 ```
-fact.lsp:14:8: fact calls itself; static frames do not support recursion (in (fact (- n 1))) (function fact)
+fact.lsp:14:8: fact calls itself; a recursive function needs a stack frame, and the backend has no stack operations (in (fact (- n 1))) (function fact)
 ```
 
 ```
-a calls b calls a is recursive; static frames do not support recursion
+a calls b calls a is recursive; a recursive function needs a stack frame, and the backend has no stack operations
 ```
 
 An `(asm ...)` that writes a function's label counts as a call to it. A
@@ -111,12 +126,6 @@ taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
 
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| A recursive function is an error; it cannot keep a stack frame. | [#420](https://todo.sr.ht/~takeiteasy/lasm/420) |
-
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
   pushed share out. A function's offset is the largest offset plus size among
@@ -126,6 +135,11 @@ taken to be any entered function that takes as many arguments.
 [^saved]: The word follows the function's other slots, so a callee's frame never
   overlaps it. The register is stored at the function's start, and each restore
   loads it back with the accumulator left alone, so the return value survives.
+
+[^cycles]: The call graph is compiled once with every frame static to find the
+  cycles, then again with a stack frame for each function in one. The functions
+  of a cycle share the words after those of every function that calls into it,
+  and a static function they call lies beyond them.
 
 [^staging]: Only the arguments before the last one that may call are held; the
   rest are stored directly. A call, a `funcall` and any `(asm ...)` may call.

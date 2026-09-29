@@ -1712,10 +1712,9 @@ two |#
   (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "stack")
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped" out)))
-  (multiple-value-bind (status out err) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "static")
-    (declare (ignore out))
-    (fiveam:is (/= 0 status))
-    (fiveam:is (search "calls itself" err)))
+  (multiple-value-bind (status out) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "static")
+    (fiveam:is (= 0 status))
+    (fiveam:is (search "stopped" out)))
   (multiple-value-bind (status out err) (%cl-cli "run" (%cli-path "tests/fixtures/cli/fact.lsp") "--frames" "heap")
     (declare (ignore out))
     (fiveam:is (/= 0 status))
@@ -1762,6 +1761,86 @@ two |#
 (fiveam:test static-frames-save-a-callee-saved-asm-clobber
   (let ((ops (%cl-function-ops (%cl-compile (first (third +cl-static-saved-programs+)) 'cl-static-abi) "f")))
     (fiveam:is (find-if (lambda (op) (and (equal "poke" (first op)) (equal "c" (car (last op))))) ops))))
+
+;;; #420: a recursive function keeps a stack frame
+
+(defparameter +cl-static-recursive-programs+
+  '(("(defun fact (n) (if (< n 2) 1 (* n (fact (- n 1))))) (defun main () (fact 5))" . 120)
+    ("(defun even (n) (if (= n 0) 1 (odd (- n 1)))) (defun odd (n) (if (= n 0) 0 (even (- n 1)))) (defun main () (+ (even 10) (* 2 (odd 7))))" . 3)
+    ("(defun sum (n) (if (< n 1) 0 (+ n (sum (- n 1))))) (defun twice (x) (+ x x)) (defun main () (twice (sum 4)))" . 20)
+    ("(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (defun main () (fib 10))" . 55)
+    ("(defun f (a b) (if (< a 1) b (f (- a 1) (+ b a)))) (defun main () (f 4 0))" . 10)
+    ("(defun h (x) (* x 3)) (defun f (n) (if (< n 1) 0 (+ (h n) (f (- n 1))))) (defun main () (f 3))" . 18)
+    ("(defun f (n) (if (< n 1) 0 (+ 1 (f (- n 1))))) (defun g (x) (f x)) (defun main () (+ (g 3) (g 5)))" . 8)
+    ("(defvar fp 0) (defun f (n) (if (< n 1) 0 (+ n (funcall fp (- n 1))))) (defun main () (set fp (function f)) (funcall fp 4))" . 10)
+    ("(defarray tbl ((function f))) (defun f (n) (if (< n 1) 0 (+ n (funcall (aref tbl 0) (- n 1))))) (defun main () (f 4))" . 10)
+    ("(defun f (n) (if (< n 1) 0 (+ (* n 2) (f (- n 1))))) (defun main () (let ((i 0) (r 0)) (while (< i 2) (set r (+ (* r 3) (f 2))) (set i (+ i 1))) r))" . 24))
+  "Recursive programs, and the value main leaves in the accumulator.")
+
+(fiveam:test static-frames-run-recursive-programs-on-a-stack-backend
+  (dolist (optimize '(:size :speed))
+    (loop for (source . expected) in +cl-static-recursive-programs+
+          do (let ((m (let ((backend (find-backend 'callfoo-lang-abi))
+                            (machine (make-machine 'callfoo)))
+                        (declare (ignore backend))
+                        (load-program machine
+                                      (assemble-items (compile-program (items-program-items (read-source-from-string source))
+                                                                       :backend 'callfoo-lang-abi :frames :static :optimize optimize)
+                                                      :backend 'callfoo-lang-abi))
+                        (setf (sref machine 'sp) +cv-sp+)
+                        (run machine :max-steps 100000)
+                        machine)))
+               (fiveam:is (= expected (%cv-a m)) "~A ~A" optimize source)
+               (fiveam:is (= +cv-sp+ (sref m 'sp)) "~A ~A" optimize source)))))
+
+(defun %cl-static-frames-items (source)
+  (compile-program (items-program-items (read-source-from-string source))
+                   :backend 'callfoo-lang-abi :frames :static))
+
+(fiveam:test static-frames-run-every-stack-program-on-a-stack-backend
+  (loop for (source . expected) in +cl-programs+
+        unless (search ":op :set" source)
+          do (let ((m (make-machine 'callfoo)))
+               (load-program m (assemble-items (%cl-static-frames-items source) :backend 'callfoo-lang-abi))
+               (setf (sref m 'sp) +cv-sp+)
+               (run m :max-steps 100000)
+               (fiveam:is (= expected (%cv-a m)) "~A" source))))
+
+(fiveam:test only-a-function-in-a-cycle-keeps-a-stack-frame
+  (let ((items (%cl-static-frames-items "(defun h (x) (* x 3)) (defun f (n) (if (< n 1) 0 (+ (h n) (f (- n 1))))) (defun main () (f 3))")))
+    (fiveam:is (member :frame (%cl-function-options items "h")))
+    (fiveam:is (not (member :frame (%cl-function-options items "f"))))
+    (fiveam:is (member :frame (%cl-function-options items "main")))
+    (fiveam:is (zerop (getf (%cl-function-options items "h") :locals)))
+    (fiveam:is (plusp (getf (%cl-function-options items "f") :locals)))))
+
+(fiveam:test a-stack-function-copies-its-parameters-from-the-static-words
+  (let* ((ops (%cl-function-ops (%cl-static-frames-items "(defun f (a b) (if (< a 1) b (f (- a 1) (+ b a)))) (defun main () (f 4 0))") "f"))
+         (sets (loop for op in ops for index from 0 when (string= "set" (first op)) collect index)))
+    (fiveam:is (< (second sets) (position "get" ops :key #'first :test #'string=))
+               "a set for each parameter, before the body reads a slot")))
+
+(fiveam:test recursive-and-static-functions-do-not-share-addresses
+  (flet ((reserved (source)
+           (count-if (lambda (item) (and (consp item) (eq (first item) :directive) (string-equal (second item) "res")))
+                     (%cl-static-frames-items source))))
+    (fiveam:is (= 2 (reserved "(defun f (n) (if (< n 1) 0 (f (- n 1)))) (defun main () (let ((x 1)) (+ x (f 2))))"))
+               "main's word, then f's, which lies after it")
+    (fiveam:is (= 1 (reserved "(defun a (n) (if (< n 1) 0 (b (- n 1)))) (defun b (n) (if (< n 1) 0 (a (- n 1)))) (defun main () (a 3))"))
+               "the one word a and b share")))
+
+(fiveam:test static-frames-still-report-recursion-without-stack-operations
+  (dolist (source '("(defun f (n) (if n (f (- n 1)) 0)) (defun main () (f 3))"
+                    "(defun a (n) (b n)) (defun b (n) (a n)) (defun main () (a 1))"))
+    (fiveam:is (search "needs a stack frame" (%cl-static-fail source)) "~A" source)))
+
+(fiveam:test a-recursive-function-with-macros-compiles-twice
+  (let ((m (make-machine 'callfoo)))
+    (load-program m (assemble-items (%cl-static-frames-items "(defmacro dec (x) `(- ,x 1)) (defun fact (n) (if (< n 2) 1 (* n (fact (dec n))))) (defun main () (fact 5))")
+                                    :backend 'callfoo-lang-abi))
+    (setf (sref m 'sp) +cv-sp+)
+    (run m :max-steps 100000)
+    (fiveam:is (= 120 (%cv-a m)))))
 
 ;;; #429: a load and store by label
 
