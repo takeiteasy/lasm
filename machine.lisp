@@ -1507,7 +1507,10 @@ it on the CPU, and any other declares new storage on the ISA."
 (defun %build-isa (name parent clauses)
   "The ISA descriptor NAME from CLAUSES, over ISA PARENT's when given. Registers nothing."
   (if (null parent)
-      (build-machine-descriptor name clauses :constructor #'make-isa-descriptor)
+      (let ((isa (build-machine-descriptor name clauses :constructor #'make-isa-descriptor)))
+        (setf (machine-descriptor-instruction-table isa) (isa-descriptor-own-instructions isa)
+              (machine-descriptor-opcode-table isa) (isa-descriptor-own-opcodes isa))
+        isa)
       (let ((parent-md (or (gethash parent *isas*)
                            (%defmachine-error "Machine ~S extends ~S, which has not been defined" name parent))))
         (when (or (eq name parent) (member name (%isa-ancestors parent)))
@@ -1517,7 +1520,6 @@ it on the CPU, and any other declares new storage on the ISA."
                       :constructor #'make-isa-descriptor)))
           (%check-inheritance-compatible parent-md child)
           (setf (machine-descriptor-parent child) parent)
-          (%inherit-instructions parent-md child)
           child))))
 
 (defun %clause-list (heads clauses)
@@ -1575,7 +1577,7 @@ PARENT's when given. Registers nothing."
       (let ((cpu (build-machine-descriptor
                   name (%drop-removed-clauses merged (append inherited-storage removed-storage)
                                               (append inherited-devices removed-devices))))
-            (isa-tables (machine-descriptor-instruction-table isa)))
+            (isa-tables (machine-descriptor-instructions isa)))
         (dolist (key (append removals (mapcar #'car cycles)))
           (unless (gethash key isa-tables)
             (warn 'simple-style-warning :format-control "Machine ~S: ~A is not an instruction of ~S"

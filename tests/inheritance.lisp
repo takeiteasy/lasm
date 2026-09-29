@@ -50,15 +50,13 @@
     (multiple-value-bind (reason steps condition) (run m)
       (values m reason steps condition))))
 
-(fiveam:test extends-records-parent-and-retargets-copies
+(fiveam:test extends-records-parent-and-shares-its-instructions
   (fiveam:is (eq 'fam-base (machine-descriptor-parent (find-machine-descriptor 'fam-lite))))
   (fiveam:is (null (machine-descriptor-parent (find-machine-descriptor 'fam-base))))
-  (dolist (mnemonic '("LDA" "INC" "HLT"))
-    (fiveam:is (eq 'fam-base
-                   (instruction-descriptor-machine (find-instruction 'fam-base mnemonic))))
-    (fiveam:is (eq 'fam-turbo
-                   (instruction-descriptor-machine (find-instruction 'fam-turbo mnemonic)))))
-  (fiveam:is (not (eq (find-instruction 'fam-base "LDA") (find-instruction 'fam-turbo "LDA")))))
+  (dolist (mnemonic '("LDA" "HLT"))
+    (fiveam:is (eq (find-instruction 'fam-base mnemonic) (find-instruction 'fam-turbo mnemonic))))
+  (fiveam:is (not (eq (find-instruction 'fam-base "INC") (find-instruction 'fam-turbo "INC"))))
+  (fiveam:is (eq 'fam-base (instruction-descriptor-machine (find-instruction 'fam-turbo "INC")))))
 
 (fiveam:test child-runs-inherited-instructions
   (multiple-value-bind (m reason) (fam-run 'fam-turbo '(#x10 5 #x20 #x00))
@@ -189,8 +187,8 @@
 (fiveam:test later-parent-definitions-reach-descendants
   (eval '(definstruction fam-p-base late (encoding (opcode 2)) (semantics nil) (cycles 2)))
   (fiveam:is (= 2 (instruction-descriptor-opcode (find-instruction 'fam-p-mid "LATE"))))
-  (fiveam:is (eq 'fam-p-mid (instruction-descriptor-machine (find-instruction 'fam-p-mid "LATE"))))
-  (fiveam:is (eq 'fam-p-leaf (instruction-descriptor-machine (find-instruction 'fam-p-leaf "LATE"))))
+  (fiveam:is (eq 'fam-p-base (instruction-descriptor-machine (find-instruction 'fam-p-mid "LATE"))))
+  (fiveam:is (eq 'fam-p-base (instruction-descriptor-machine (find-instruction 'fam-p-leaf "LATE"))))
   (fiveam:is (= 4 (instruction-descriptor-cycles (find-instruction 'fam-p-mid "LATE"))))
   (fiveam:is (= 4 (instruction-descriptor-cycles (find-instruction 'fam-p-leaf "LATE"))))
   (fiveam:is (= 2 (instruction-descriptor-cycles (find-instruction 'fam-p-base "LATE")))))
@@ -238,6 +236,59 @@
   (fiveam:signals unknown-instruction (find-instruction 'fam-r-base "QUX"))
   (fiveam:is (string= "MINE" (instruction-descriptor-name
                               (find-instruction-by-opcode 'fam-r-child 6)))))
+
+;;; A child ISA holds only its own instructions and reads the rest through its parent.
+
+(defisa fam-v-root
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8))
+
+(definstruction fam-v-root vone (encoding (opcode 1)) (semantics nil))
+(definstruction fam-v-root vtwo (encoding (opcode 2)) (semantics nil))
+
+(defisa (fam-v-mid (:extends fam-v-root)))
+(defisa (fam-v-leaf (:extends fam-v-mid)))
+
+(definstruction fam-v-mid vtwo (encoding (opcode 3)) (semantics nil))
+(definstruction fam-v-mid vmid (encoding (opcode 4)) (semantics nil))
+
+(defcpu (fam-v-cpu (:isa fam-v-leaf)))
+
+(defun fam-v-own (isa)
+  (sort (loop for mnemonic being the hash-keys of (isa-descriptor-own-instructions (find-isa-descriptor isa))
+              collect mnemonic)
+        #'string<))
+
+(fiveam:test a-child-isa-holds-only-its-own-instructions
+  (fiveam:is (equal '("VMID" "VTWO") (fam-v-own 'fam-v-mid)))
+  (fiveam:is (null (fam-v-own 'fam-v-leaf)))
+  (fiveam:is (eq (find-instruction 'fam-v-root "VONE") (find-instruction 'fam-v-leaf "VONE"))))
+
+(fiveam:test a-childs-own-mnemonic-shadows-the-parents-through-the-chain
+  (dolist (machine '(fam-v-mid fam-v-leaf fam-v-cpu))
+    (fiveam:is (= 3 (instruction-descriptor-opcode (find-instruction machine "VTWO"))))
+    (fiveam:signals unknown-instruction (find-instruction-by-opcode machine 2)))
+  (fiveam:is (= 2 (instruction-descriptor-opcode (find-instruction 'fam-v-root "VTWO"))))
+  (fiveam:signals unknown-instruction (find-instruction 'fam-v-root "VMID")))
+
+(fiveam:test a-definition-after-the-child-exists-reaches-its-cpus-unevaluated
+  (eval '(definstruction fam-v-root vlate (encoding (opcode 9)) (semantics nil)))
+  (dolist (machine '(fam-v-mid fam-v-leaf fam-v-cpu))
+    (fiveam:is (eq (find-instruction 'fam-v-root "VLATE") (find-instruction machine "VLATE")))))
+
+(fiveam:test a-mnemonic-dropped-by-reloading-the-parent-leaves-the-child
+  (eval '(defisa fam-v-drop-root (register pc :width 8) (memory ram :width 8 :addr-width 8)))
+  (eval '(definstruction fam-v-drop-root vgone (encoding (opcode 1)) (semantics nil)))
+  (eval '(defisa (fam-v-drop-child (:extends fam-v-drop-root))))
+  (fiveam:is (find-instruction 'fam-v-drop-child "VGONE"))
+  (eval '(defisa fam-v-drop-root (register pc :width 8) (memory ram :width 8 :addr-width 8)))
+  (fiveam:signals unknown-instruction (find-instruction 'fam-v-drop-child "VGONE")))
+
+(fiveam:test a-parent-conflict-with-a-descendants-own-instruction-changes-nothing
+  (fiveam:signals opcode-conflict
+    (eval '(definstruction fam-v-root vclash (encoding (opcode 4)) (semantics nil))))
+  (fiveam:signals unknown-instruction (find-instruction 'fam-v-root "VCLASH"))
+  (fiveam:signals unknown-instruction (find-instruction 'fam-v-leaf "VCLASH")))
 
 ;;; Regions
 
@@ -349,7 +400,7 @@ stop" :cpu 'fam-w8-child))
       (fiveam:is (= 100 (sref m 'a)))
       (fiveam:is (= 7 (machine-cycles m)))))
   (dolist (descriptor (find-instruction-variants 'fam-w8-child "LOADV"))
-    (fiveam:is (eq 'fam-w8-child (instruction-descriptor-machine descriptor)))
+    (fiveam:is (eq 'fam-w8 (instruction-descriptor-machine descriptor)))
     (fiveam:is (not (member descriptor (find-instruction-variants 'fam-w8 "LOADV"))))))
 
 (fiveam:test nop-skips-a-removed-word-instruction-with-its-extra-word

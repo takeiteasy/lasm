@@ -609,17 +609,14 @@ machine's default layout -- callers hold no other kind."
   ;; list a child merges onto in turn.
   (parent nil :type (or null symbol))
   (source-clauses nil :type list)
-  ;; A CPU's ISA name; NIL on an ISA, whose tables are authoritative. A CPU's
-  ;; instruction, opcode and disabled-opcode tables are a view of its ISA's,
-  ;; rebuilt when *INSTRUCTION-GENERATION* moves past VIEW-GENERATION.
+  ;; A CPU's ISA name; NIL on an ISA. A CPU's, and a child ISA's, instruction and
+  ;; opcode tables are a view of the ISA or parent, rebuilt when
+  ;; *INSTRUCTION-GENERATION* moves past VIEW-GENERATION.
   (isa nil :type (or null symbol))
   (view-generation -1 :type fixnum)
   ;; The merged CPU-side clauses, and the device names removed so far.
   (cpu-clauses nil :type list)
   (removed-devices nil :type list)
-  ;; Upcased mnemonics defined directly on this machine, which parent
-  ;; propagation never overwrites.
-  (own-instructions (make-hash-table :test 'equal))
   ;; Upcased mnemonics removed from this machine, including inherited removals.
   (removed-instructions nil :type list)
   ;; Names of the registers and flags this machine removed from its
@@ -660,13 +657,17 @@ matched by name so a machine defined in any package is found."
 ;; An ISA is the architecture half of a machine: the storage layout, instruction
 ;; word, instructions and modes every CPU built on it shares. It is a
 ;; MACHINE-DESCRIPTOR so the storage readers work on either half.
-(defstruct (isa-descriptor (:include machine-descriptor)))
+;; An ISA holds only the instructions defined on it. A root ISA's instruction
+;; and opcode tables are these; a child's are a view rebuilt over its parent's.
+(defstruct (isa-descriptor (:include machine-descriptor))
+  (own-instructions (make-hash-table :test 'equal))
+  (own-opcodes (make-hash-table :test 'eql)))
 
 (defvar *isas* (make-hash-table :test 'eq))
 
 (defvar *instruction-generation* 0
   "Moves whenever an ISA or CPU is defined or an instruction registered, so a
-CPU's cached view of its ISA's instructions knows to rebuild.")
+cached view of an ISA's or parent's instructions knows to rebuild.")
 
 (defun find-machine-descriptor (name)
   (or (gethash name *machines*)
@@ -685,11 +686,13 @@ CPU's cached view of its ISA's instructions knows to rebuild.")
   (machine-descriptor-isa (find-machine-descriptor machine-name)))
 
 (defun %fresh-view (descriptor)
-  "DESCRIPTOR, its instruction tables rebuilt first when it is a CPU whose ISA
-has changed."
-  (when (and (machine-descriptor-isa descriptor)
+  "DESCRIPTOR, its instruction tables rebuilt first when it is a CPU or a child
+ISA whose ISA or parent has changed."
+  (when (and (or (machine-descriptor-isa descriptor) (machine-descriptor-parent descriptor))
              (/= (machine-descriptor-view-generation descriptor) *instruction-generation*))
-    (%rebuild-cpu-view descriptor))
+    (if (machine-descriptor-isa descriptor)
+        (%rebuild-cpu-view descriptor)
+        (%rebuild-isa-view descriptor)))
   descriptor)
 
 (defun machine-descriptor-instructions (descriptor)

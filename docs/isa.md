@@ -82,8 +82,6 @@ Use `defisa` and `defcpu` when one architecture has several models.
 
 ## Limitations
 
-- An ISA that extends an ISA holds copies of its parent's instructions.
-  [#448](https://todo.sr.ht/~takeiteasy/lasm/448)
 - `(defmachine (NAME (:extends P)))` needs an ISA named `P`, so it cannot
   extend a CPU defined with `defcpu` alone. Use `defcpu` with `:extends`.
 

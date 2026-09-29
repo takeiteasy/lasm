@@ -568,24 +568,15 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
          (order-computed (when wordp
                            (dolist (descriptor descriptors t)
                              (setf (instruction-descriptor-word-decode-order descriptor)
-                                   (%compute-word-decode-order descriptor)))))
-         (plan (%collect-propagation md name descriptors))
-         (target-evicted (%check-registration md name descriptors))
-         (checked (loop for (child kind copies) in plan
-                        collect (list child kind copies
-                                      (when (eq kind :install)
-                                        (%check-registration child name copies :evict t))))))
+                                   (%compute-word-decode-order descriptor))))))
     (declare (ignore order-computed))
-    (setf (gethash name (machine-descriptor-own-instructions md)) t)
+    (dolist (isa (cons md (%inheriting-isas md name)))
+      (%check-registration isa name descriptors))
     (let ((cpu (gethash machine-name *machines*)))
       (when (and cpu (eq (machine-descriptor-isa cpu) machine-name))
         (setf (machine-descriptor-removed-instructions cpu)
               (remove name (machine-descriptor-removed-instructions cpu) :test #'string=))))
-    (%install-registration md name descriptors :evicted target-evicted)
-    (loop for (child kind copies evicted) in checked
-          do (ecase kind
-               (:install (%install-registration child name copies :evicted evicted))
-               (:disable (%install-disabled child name copies))))
+    (%install-registration md name descriptors)
     (incf *instruction-generation*)
     descriptors))
 
@@ -604,127 +595,76 @@ collision on the same SUB-OPCODE value (:DUPLICATE-SUB-OPCODE)."
     additions))
 
 (declaim (notinline %check-opcode-decodable!)) ; the tests wrap it, which ECL bypasses for a call in the same file
-(defun %check-registration (md name descriptors &key evict)
+(defun %check-registration (md name descriptors)
   "Signal OPCODE-CONFLICT if DESCRIPTORS (mnemonic NAME) cannot join MD's
-opcode buckets. With EVICT, a conflict against an inherited mnemonic (one MD
-did not define itself) is not an error: the mnemonics that must be replaced
-are returned instead."
+opcode buckets."
   (let* ((machine-name (machine-descriptor-name md))
          (wordp (%word-machine-p machine-name))
-         (*word-bit-constraints-cache* (when wordp (make-hash-table :test #'eq)))
-         (own (machine-descriptor-own-instructions md))
-         (evicted '()))
-    (flet ((inherited-p (other)
-             (and evict (not (gethash (instruction-descriptor-name other) own)))))
-      (maphash
-       (lambda (opcode new)
-         (let ((kept (remove name (gethash opcode (machine-descriptor-opcodes md))
-                             :key #'instruction-descriptor-name :test #'string=)))
-           (if wordp
-               (let ((groups (remove-duplicates kept :test #'%sibling-combos-p)))
-                 (dolist (descriptor new)
-                   (unless (find descriptor groups :test #'%sibling-combos-p)
-                     (dolist (other groups)
-                       (handler-case (%check-opcode-decodable! machine-name name descriptor other)
-                         (opcode-conflict (c)
-                           (if (inherited-p other)
-                               (pushnew (instruction-descriptor-name other) evicted :test #'string=)
-                               (error c)))))
-                     (cl:push descriptor groups))))
-               (let ((checked (copy-list kept)))
-                 (dolist (descriptor new)
-                   (let ((sub (instruction-descriptor-sub-opcode descriptor)))
-                     (dolist (other checked)
-                       (flet ((conflict (reason)
-                                (if (inherited-p other)
-                                    (pushnew (instruction-descriptor-name other) evicted :test #'string=)
-                                    (error 'opcode-conflict :machine machine-name :opcode opcode
-                                                            :mnemonic name
-                                                            :other-mnemonic (instruction-descriptor-name other)
-                                                            :reason reason))))
-                         (cond
-                           ((and sub (instruction-descriptor-sub-opcode other))
-                            (when (= sub (instruction-descriptor-sub-opcode other))
-                              (conflict :duplicate-sub-opcode)))
-                           ((or sub (instruction-descriptor-sub-opcode other))
-                            (conflict :sub-opcode-required))
-                           (t
-                            (conflict (when (string= name (instruction-descriptor-name other))
-                                        :undecodable-byte-machine))))))
-                     (cl:push descriptor checked)))))))
-       (%registration-additions descriptors)))
-    evicted))
+         (*word-bit-constraints-cache* (when wordp (make-hash-table :test #'eq))))
+    (maphash
+     (lambda (opcode new)
+       (let ((kept (remove name (gethash opcode (machine-descriptor-opcodes md))
+                           :key #'instruction-descriptor-name :test #'string=)))
+         (if wordp
+             (let ((groups (remove-duplicates kept :test #'%sibling-combos-p)))
+               (dolist (descriptor new)
+                 (unless (find descriptor groups :test #'%sibling-combos-p)
+                   (dolist (other groups)
+                     (%check-opcode-decodable! machine-name name descriptor other))
+                   (cl:push descriptor groups))))
+             (let ((checked (copy-list kept)))
+               (dolist (descriptor new)
+                 (let ((sub (instruction-descriptor-sub-opcode descriptor)))
+                   (dolist (other checked)
+                     (flet ((conflict (reason)
+                              (error 'opcode-conflict :machine machine-name :opcode opcode
+                                                      :mnemonic name
+                                                      :other-mnemonic (instruction-descriptor-name other)
+                                                      :reason reason)))
+                       (cond
+                         ((and sub (instruction-descriptor-sub-opcode other))
+                          (when (= sub (instruction-descriptor-sub-opcode other))
+                            (conflict :duplicate-sub-opcode)))
+                         ((or sub (instruction-descriptor-sub-opcode other))
+                          (conflict :sub-opcode-required))
+                         (t
+                          (conflict (when (string= name (instruction-descriptor-name other))
+                                      :undecodable-byte-machine))))))
+                   (cl:push descriptor checked)))))))
+     (%registration-additions descriptors))))
 
-(defun %drop-mnemonic (md name)
-  "Remove every descriptor of mnemonic NAME from MD's instruction and opcode tables."
-  (remhash name (machine-descriptor-instructions md))
-  (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
-          using (hash-value bucket)
-        do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
-             (if kept
-                 (setf (gethash opcode (machine-descriptor-opcodes md)) kept)
-                 (remhash opcode (machine-descriptor-opcodes md))))))
-
-(defun %clear-disabled (md name descriptors)
-  "Forget MD's removed-descriptor sizing entries for NAME and at the opcodes DESCRIPTORS occupy."
-  (let ((table (machine-descriptor-disabled-opcodes md)))
-    (dolist (descriptor descriptors)
-      (remhash (instruction-descriptor-opcode descriptor) table))
-    (loop for opcode being the hash-keys of table
+(defun %install-registration (isa name descriptors)
+  "Apply a registration %CHECK-REGISTRATION accepted, to ISA's own tables."
+  (let ((wordp (%word-machine-p (machine-descriptor-name isa)))
+        (additions (%registration-additions descriptors))
+        (own-opcodes (isa-descriptor-own-opcodes isa)))
+    (setf (machine-descriptor-word-decode-table isa) nil)
+    (loop for opcode being the hash-keys of own-opcodes
             using (hash-value bucket)
           do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
                (if kept
-                   (setf (gethash opcode table) kept)
-                   (remhash opcode table))))))
-
-(defun %install-registration (md name descriptors &key evicted)
-  "Apply a registration %CHECK-REGISTRATION accepted."
-  (let ((wordp (%word-machine-p (machine-descriptor-name md)))
-        (additions (%registration-additions descriptors)))
-    (setf (machine-descriptor-word-decode-table md) nil)
-    (%clear-disabled md name descriptors)
-    (dolist (mnemonic evicted)
-      (%drop-mnemonic md mnemonic))
-    (loop for opcode being the hash-keys of (machine-descriptor-opcodes md)
-            using (hash-value bucket)
-          do (let ((kept (remove name bucket :key #'instruction-descriptor-name :test #'string=)))
-               (if kept
-                   (setf (gethash opcode (machine-descriptor-opcodes md)) kept)
-                   (remhash opcode (machine-descriptor-opcodes md)))))
+                   (setf (gethash opcode own-opcodes) kept)
+                   (remhash opcode own-opcodes))))
     (maphash (lambda (opcode new)
-               (let ((bucket (gethash opcode (machine-descriptor-opcodes md))))
-                 (setf (gethash opcode (machine-descriptor-opcodes md))
+               (let ((bucket (gethash opcode own-opcodes)))
+                 (setf (gethash opcode own-opcodes)
                        (if wordp
                            (%insert-by-specificity new bucket)
                            (append bucket new)))))
              additions)
-    (setf (gethash name (machine-descriptor-instructions md)) descriptors)))
+    (setf (gethash name (isa-descriptor-own-instructions isa)) descriptors)))
 
-(defun %install-disabled (md name descriptors)
-  "Record DESCRIPTORS (mnemonic NAME) as removed from MD: kept only so an undefined-opcode
-:NOP can size them and word decode can rank them."
-  (let ((table (machine-descriptor-disabled-opcodes md)))
-    (setf (machine-descriptor-word-decode-table md) nil)
-    (%clear-disabled md name '())
-    (dolist (descriptor descriptors)
-      (let ((opcode (instruction-descriptor-opcode descriptor)))
-        (setf (gethash opcode table)
-              (%insert-by-specificity (list descriptor) (gethash opcode table)))))))
+;;; ISA families: an ISA holds only its own instructions. A child ISA and a CPU
+;;; read them through a view rebuilt when *INSTRUCTION-GENERATION* moves, so the
+;;; chain flattens from the root ISA to the leaf and nothing is copied.
 
-;;; ISA families: a child ISA holds its own copy of every inherited descriptor,
-;;; re-targeted at the child. A CPU reads its ISA's table through a view instead.
-;;; TODO: a child ISA copies per level and propagates each later definition;
-;;; flatten the ISA chain in the CPU view instead (#448).
-
-(defun %copy-descriptor-family (descriptors machine-name cycles)
-  "Shallow copies of DESCRIPTORS re-targeted at MACHINE-NAME, in order. CYCLES,
-when given, replaces each copy's cycle cost. Word-encoded siblings get a new
-sibling index keyed by the same field lists."
+(defun %retime-descriptor-family (descriptors cycles)
+  "Shallow copies of DESCRIPTORS with cycle cost CYCLES, in order. Word-encoded
+siblings get a new sibling index keyed by the same field lists."
   (let ((indexes (make-hash-table :test 'eq))
         (copies (mapcar (lambda (descriptor)
                           (let ((copy (copy-instruction-descriptor descriptor)))
-                            (setf (instruction-descriptor-machine copy) machine-name)
-                            (when cycles (setf (instruction-descriptor-cycles copy) cycles))
+                            (setf (instruction-descriptor-cycles copy) cycles)
                             copy))
                         descriptors)))
     (loop for old in descriptors
@@ -737,47 +677,43 @@ sibling index keyed by the same field lists."
                        (instruction-descriptor-word-siblings copy) new)))
     copies))
 
-(defun %inherit-instructions (parent child)
-  "Fill CHILD's instruction, opcode and disabled-opcode tables from PARENT's,
-honouring CHILD's removals and cycle overrides."
-  (let ((copies (make-hash-table :test 'eq))
-        (cycles (machine-descriptor-instruction-cycles child))
-        (removed (machine-descriptor-removed-instructions child))
-        (child-name (machine-descriptor-name child)))
+(defun %rebuild-isa-view (isa)
+  "Fill child ISA's instruction and opcode tables from its parent's view, with
+ISA's own instructions shadowing an inherited mnemonic of the same name."
+  (let* ((parent (find-isa-descriptor (machine-descriptor-parent isa)))
+         (own (isa-descriptor-own-instructions isa))
+         (wordp (and (machine-descriptor-instruction-word isa) t))
+         (instructions (make-hash-table :test 'equal))
+         (opcodes (make-hash-table :test 'eql)))
     (maphash (lambda (mnemonic descriptors)
-               (let ((new (%copy-descriptor-family
-                           descriptors child-name (cdr (assoc mnemonic cycles :test #'string=)))))
-                 (loop for old in descriptors
-                       for copy in new
-                       do (setf (gethash old copies) copy))
-                 (unless (member mnemonic removed :test #'string=)
-                   (setf (gethash mnemonic (machine-descriptor-instructions child)) new))))
+               (unless (gethash mnemonic own)
+                 (setf (gethash mnemonic instructions) descriptors)))
              (machine-descriptor-instructions parent))
     (maphash (lambda (opcode bucket)
-               (let (live disabled)
-                 (dolist (old bucket)
-                   (let ((copy (gethash old copies)))
-                     (if (member (instruction-descriptor-name old) removed :test #'string=)
-                         (cl:push copy disabled)
-                         (cl:push copy live))))
-                 (when live
-                   (setf (gethash opcode (machine-descriptor-opcodes child)) (nreverse live)))
-                 (when disabled
-                   (setf (gethash opcode (machine-descriptor-disabled-opcodes child))
-                         (nreverse disabled)))))
+               (let ((kept (remove-if (lambda (descriptor)
+                                        (gethash (instruction-descriptor-name descriptor) own))
+                                      bucket)))
+                 (when kept (setf (gethash opcode opcodes) kept))))
              (machine-descriptor-opcodes parent))
+    (maphash (lambda (mnemonic descriptors)
+               (setf (gethash mnemonic instructions) descriptors))
+             own)
     (maphash (lambda (opcode bucket)
-               (setf (gethash opcode (machine-descriptor-disabled-opcodes child))
-                     (append (gethash opcode (machine-descriptor-disabled-opcodes child))
-                             (%copy-descriptor-family bucket child-name nil))))
-             (machine-descriptor-disabled-opcodes parent))))
+               (setf (gethash opcode opcodes)
+                     (if wordp
+                         (%insert-by-specificity bucket (gethash opcode opcodes))
+                         (append (gethash opcode opcodes) bucket))))
+             (isa-descriptor-own-opcodes isa))
+    (setf (machine-descriptor-instruction-table isa) instructions
+          (machine-descriptor-opcode-table isa) opcodes
+          (machine-descriptor-word-decode-table isa) nil
+          (machine-descriptor-view-generation isa) *instruction-generation*)))
 
 (defun %rebuild-cpu-view (cpu)
-  "Fill CPU's instruction, opcode and disabled-opcode tables from its ISA's,
+  "Fill CPU's instruction, opcode and disabled-opcode tables from its ISA's view,
 honouring CPU's removals and cycle overrides. A descriptor is shared with the
 ISA unless a cycle override needs its own copy."
   (let* ((isa (find-isa-descriptor (machine-descriptor-isa cpu)))
-         (isa-name (machine-descriptor-name isa))
          (cycles (machine-descriptor-instruction-cycles cpu))
          (removed (machine-descriptor-removed-instructions cpu))
          (copies (make-hash-table :test 'eq))
@@ -786,13 +722,13 @@ ISA unless a cycle override needs its own copy."
          (disabled (make-hash-table :test 'eql)))
     (maphash (lambda (mnemonic descriptors)
                (let* ((cost (cdr (assoc mnemonic cycles :test #'string=)))
-                      (new (if cost (%copy-descriptor-family descriptors isa-name cost) descriptors)))
+                      (new (if cost (%retime-descriptor-family descriptors cost) descriptors)))
                  (loop for old in descriptors
                        for copy in new
                        do (setf (gethash old copies) copy))
                  (unless (member mnemonic removed :test #'string=)
                    (setf (gethash mnemonic instructions) new))))
-             (machine-descriptor-instruction-table isa))
+             (machine-descriptor-instructions isa))
     (maphash (lambda (opcode bucket)
                (let (live dead)
                  (dolist (old bucket)
@@ -802,43 +738,22 @@ ISA unless a cycle override needs its own copy."
                          (cl:push copy live))))
                  (when live (setf (gethash opcode opcodes) (nreverse live)))
                  (when dead (setf (gethash opcode disabled) (nreverse dead)))))
-             (machine-descriptor-opcode-table isa))
-    (maphash (lambda (opcode bucket)
-               (setf (gethash opcode disabled) (append (gethash opcode disabled) bucket)))
-             (machine-descriptor-disabled-table isa))
+             (machine-descriptor-opcodes isa))
     (setf (machine-descriptor-instruction-table cpu) instructions
           (machine-descriptor-opcode-table cpu) opcodes
           (machine-descriptor-disabled-table cpu) disabled
           (machine-descriptor-word-decode-table cpu) nil
           (machine-descriptor-view-generation cpu) *instruction-generation*)))
 
-(defun %collect-propagation (md name descriptors)
-  "Plan of (CHILD KIND COPIES) for every descendant of MD that inherits a new
-or redefined mnemonic NAME: :INSTALL onto a descendant that still has it,
-:DISABLE onto one that removed it. A descendant that defines NAME itself, or
-whose compatibility with its parent no longer holds, keeps its subtree as is."
-  (let ((plan '()))
-    (labels ((walk (parent source)
-               (dolist (child (%isa-children (machine-descriptor-name parent)))
-                 (cond
-                   ((gethash name (machine-descriptor-own-instructions child)))
-                   ((not (handler-case (progn (%check-inheritance-compatible parent child) t)
-                           (error (c)
-                             (warn 'simple-style-warning :format-control "~A; re-evaluate its DEFMACHINE"
-                                 :format-arguments (list c))
-                             nil))))
-                   (t
-                    (let* ((removedp (member name (machine-descriptor-removed-instructions child)
-                                             :test #'string=))
-                           (copies (%copy-descriptor-family
-                                    source (machine-descriptor-name child)
-                                    (unless removedp
-                                      (cdr (assoc name (machine-descriptor-instruction-cycles child)
-                                                  :test #'string=))))))
-                      (cl:push (list child (if removedp :disable :install) copies) plan)
-                      (walk child copies)))))))
-      (walk md descriptors))
-    (nreverse plan)))
+(defun %inheriting-isas (isa name)
+  "The descendants of ISA that see its mnemonic NAME: those with no nearer ISA
+defining NAME themselves."
+  (labels ((walk (parent)
+             (mapcan (lambda (child)
+                       (unless (gethash name (isa-descriptor-own-instructions child))
+                         (cons child (walk child))))
+                     (%isa-children (machine-descriptor-name parent)))))
+    (walk isa)))
 
 (defun %collect-instruction-descriptors (&rest groups)
   "Flatten descriptor-family lists while accepting ordinary descriptor forms."
@@ -1705,21 +1620,17 @@ default policy.")
 (defun %lazy-instruction-semantics (form machine-name name)
   "Compile on first use with a fast policy, then after
 *SEMANTICS-PROMOTION-CALLS* calls recompile at the default policy. Each tier
-replaces the previous function in every sibling descriptor, on the machine and
-on each descendant holding a copy."
+replaces the previous function in every sibling descriptor on the machine. A
+CPU's cycle-override copies pick it up when the generation bump rebuilds its view."
   (let (installed proxy (calls 0))
     (labels ((install (function)
-               (labels ((patch (machine-name)
-                          (dolist (descriptor (gethash (string-upcase (string name))
-                                                       (machine-descriptor-instructions
-                                                        (find-isa-descriptor machine-name))))
-                            (when (eq (instruction-descriptor-semantics-fn descriptor) installed)
-                              (setf (instruction-descriptor-semantics-fn descriptor) function)))
-                          (dolist (child (%isa-children machine-name))
-                            (patch (machine-descriptor-name child)))))
-                 (patch machine-name)
-                 (incf *instruction-generation*)
-                 (setf installed function)))
+               (dolist (descriptor (gethash (string-upcase (string name))
+                                            (machine-descriptor-instructions
+                                             (find-isa-descriptor machine-name))))
+                 (when (eq (instruction-descriptor-semantics-fn descriptor) installed)
+                   (setf (instruction-descriptor-semantics-fn descriptor) function)))
+               (incf *instruction-generation*)
+               (setf installed function))
              (promote ()
                (install (%compile-definition form name))))
       (setf proxy

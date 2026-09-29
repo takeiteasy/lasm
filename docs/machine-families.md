@@ -146,24 +146,20 @@ from semantics or host code:
 
 ## Later definitions
 
-A `definstruction` on an ISA reaches every CPU of it at once, and is copied to
-every child ISA except one that defines the mnemonic itself. A CPU that
-removed the mnemonic keeps it removed, and a CPU's cycle override applies to
-the new definition. An opcode conflict with a descendant's own
-instruction is an error and changes nothing.
+A `definstruction` on an ISA reaches every CPU of it and every child ISA at
+once, except a child ISA that defines the mnemonic itself. A CPU that removed
+the mnemonic keeps it removed, and a CPU's cycle override applies to the new
+definition. An opcode conflict with a descendant's own instruction is an error
+and changes nothing.
 
-A CPU reads its ISA's instructions through a view that applies its removals
-and cycle overrides, so a CPU holds no copies. A child ISA holds copies of
-its parent's.
+An ISA holds only its own instructions. A child ISA and a CPU read the chain
+from the root ISA through a view, so no instruction is copied and an
+inherited descriptor is the parent's own.[^view]
 
 ## Limitations
 
 - A change to a parent's `defmachine` clauses reaches existing children only
   when their `defmachine` forms are evaluated again.
-- A mnemonic dropped from a parent stays on its children until they are
-  re-evaluated.
-- An ISA that extends an ISA holds copies of its parent's instructions.
-  [#448](https://todo.sr.ht/~takeiteasy/lasm/448)
 - Removal is per mnemonic, not per addressing mode.
 - Memory and stack elements cannot be removed in a child.
   [#361](https://todo.sr.ht/~takeiteasy/lasm/361)
@@ -172,3 +168,6 @@ its parent's.
 
 [^removal]: An inherited instruction that still uses a removed register fails
     with `unknown-storage` when it runs. Remove it with `without-instructions`.
+[^view]: `instruction-descriptor-machine` of an inherited instruction names the
+    ISA that defines it. A child that keeps the parent's instruction word and
+    storage layout reads it the same way.
