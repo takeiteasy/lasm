@@ -4483,7 +4483,7 @@ literal may return either."
     (%definition-toplevel-form (if (%word-machine-p machine)
                                    `(%evaluate-instruction-registration ',registration)
                                    registration)
-                               `',name)))
+                               `',name :collect t :name name)))
 
 (defun %extract-fallback (machine name encoding-clause)
   "Return (VALUES ENCODING-CLAUSE FALLBACKP), ENCODING-CLAUSE without its

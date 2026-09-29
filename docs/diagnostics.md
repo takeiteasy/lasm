@@ -149,7 +149,57 @@ returns or in place of any other error escaping it, such as ASDF's
 Without the wrapper, `compile-file` reports the failure as a warning, and
 loading the fasl signals the typed condition again for `defmode`,
 `defmachine` (including a bad name spec), `defdirective` and `definstruction`
-(including a bad clause and `opcode-conflict`). See [Limitations](#limitations).
+(including a bad clause, a `semantics` body that fails to expand, and
+`opcode-conflict`).
+
+## Usage errors
+
+Misusing the library API, rather than a definition or a program's source,
+signals a `usage-error`. `usage-error-message` holds the text.
+
+| Condition | Signalled by |
+| --- | --- |
+| `debugger-usage-error` | Debugger commands and API: bad targets, indices, counts, banks |
+| `disassembler-usage-error` | Missing `:machine`, `:start` or `:count`, bad data regions |
+| `output-usage-error` | Cell widths, byte counts and ranges that a format cannot hold |
+| `emulator-usage-error` | `load-program`, `run*`, clock speed, devices, memory resolution |
+| `lookup-error` | `unknown-machine`, `unknown-mode`, `unknown-lexer`; `lookup-error-name` names the missing definition |
+
+`debug-command` reports any `lasm-error` as `Error: ...` text. A definer
+that names an unregistered machine or mode signals its own
+`*-definition-error` instead of the lookup error. A lambda-list mismatch in a
+definer form, such as an unknown keyword, is a definition error too.
+
+## Opcode conflicts
+
+`definstruction` signals `opcode-conflict` when two descriptors at one
+opcode cannot be distinguished at decode. Cell-encoded instructions can
+share an opcode with distinct sub-opcodes; word-encoded instructions can
+share one when their fields are distinguishable or a valid fallback is
+declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
+
+[^definition]
+
+### Under `compile-file`
+
+`compile-file` reports a definer's error as a compile-time error or warning
+and carries on. Wrap the build in `with-definition-errors` to get the typed
+condition:
+
+```lisp
+(handler-case (with-definition-errors (compile-file "machine.lisp"))
+  (definition-error (c) (definition-error-name c)))
+```
+
+It signals the first `definition-error` a definer raised, either when the body
+returns or in place of any other error escaping it, such as ASDF's
+`compile-file-error`.[^handled]
+
+Without the wrapper, `compile-file` reports the failure as a warning, and
+loading the fasl signals the typed condition again for `defmode`,
+`defmachine` (including a bad name spec), `defdirective` and `definstruction`
+(including a bad clause, a `semantics` body that fails to expand, and
+`opcode-conflict`).
 
 ## Usage errors
 

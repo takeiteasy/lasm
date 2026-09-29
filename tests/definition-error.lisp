@@ -142,13 +142,14 @@ returning the condition the load signals."
   (loop for (fixture type name) in
         '(("bad-instruction" instruction-definition-error compile-file-bad-instruction)
           ("bad-directive" directive-definition-error ".compile-file-bad")
-          ("bad-machine-name" machine-definition-error compile-file-bad-machine))
+          ("bad-machine-name" machine-definition-error compile-file-bad-machine)
+          ("bad-semantics" instruction-definition-error compile-file-bad-semantics))
         do (let ((c (%compile-and-load-fixture fixture)))
              (fiveam:is (typep c type))
              (fiveam:is (equalp (string name) (string (definition-error-name c)))))))
 
 (fiveam:test compile-file-of-an-expansion-time-failure-reports-failure
-  (loop for fixture in '("bad-instruction" "bad-directive" "bad-machine-name")
+  (loop for fixture in '("bad-instruction" "bad-directive" "bad-machine-name" "bad-semantics")
         do (let ((source (asdf:system-relative-pathname
                           :lasm (format nil "tests/fixtures/definition/~A.lisp" fixture)))
                  (output (uiop:tmpize-pathname (merge-pathnames "failure.fasl" (uiop:temporary-directory)))))

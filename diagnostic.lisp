@@ -160,11 +160,18 @@ return."
   (when *compile-file-truename*
     (warn "~A" condition)))
 
-(defun %tolerate-definition-error (thunk)
-  "Call THUNK at compile time; a DEFINITION-ERROR becomes a warning, leaving
-the load-time form to signal it."
-  (handler-case (funcall thunk)
-    (definition-error (c) (%warn-when-compiling-file c))))
+(defun %tolerate-definition-error (thunk failure collect name)
+  "Call THUNK at compile time; a DEFINITION-ERROR becomes a warning and is
+recorded in the cons FAILURE for the load-time form to replay. COLLECT also
+surfaces an error SBCL deferred while compiling THUNK's code; it would report
+one a definer handled itself, so only a definer that never does may set it."
+  (handler-case (if collect
+                    (let ((*definition-name* name))
+                      (with-definition-errors (funcall thunk)))
+                    (funcall thunk))
+    (definition-error (c)
+      (setf (car failure) (list (type-of c) (definition-error-message c) (definition-error-name c)))
+      (%warn-when-compiling-file c))))
 
 (defun %call-expanding-definition (thunk)
   "Call THUNK, a definer macro's expander. Under COMPILE-FILE a DEFINITION-ERROR
@@ -180,15 +187,28 @@ becomes a warning and the expansion is a form that signals it again at load."
 (defmacro %expanding-definition (&body body)
   `(%call-expanding-definition (lambda () ,@body)))
 
-(defun %definition-toplevel-form (registration result)
+(defun %registration-or-failure (failure)
+  "The load-time form: the recorded error, signalled again, or the registration."
+  (if (car failure)
+      (destructuring-bind (type message name) (car failure)
+        `(error ',type :message ,message :name ',name))
+      '(register)))
+
+(defun %definition-toplevel-form (registration result &key collect name)
   "Toplevel forms that run REGISTRATION at compile time, tolerating a
-DEFINITION-ERROR, and again at load and eval time, then yield RESULT."
-  `(macrolet ((register () ',registration))
-     (eval-when (:compile-toplevel)
-       (%tolerate-definition-error (lambda () (register))))
-     (eval-when (:load-toplevel :execute)
-       (register)
-       ,result)))
+DEFINITION-ERROR, and at load and eval time, then yield RESULT. A failure at
+compile time is signalled again when the fasl loads. See
+%TOLERATE-DEFINITION-ERROR for COLLECT."
+  (let ((failure (list nil)))
+    `(macrolet ((register () ',registration)
+                (evaluate-registration (&environment env)
+                  (list 'eval (list 'quote (macroexpand-1 '(register) env))))
+                (register-or-fail () (%registration-or-failure ',failure)))
+       (eval-when (:compile-toplevel)
+         (%tolerate-definition-error (lambda () (evaluate-registration)) ',failure ,collect ',name))
+       (eval-when (:load-toplevel :execute)
+         (register-or-fail)
+         ,result))))
 
 ;;; Usage errors: a caller misusing the library API or a tool's input, as
 ;;; opposed to a malformed definition (DEFINITION-ERROR) or program source.
