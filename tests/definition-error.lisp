@@ -137,3 +137,29 @@ returning the condition the load signals."
              (declare (ignore file warnings-p))
              (fiveam:is (eq t failure-p))))
       (uiop:delete-file-if-exists output))))
+
+(fiveam:test fasl-load-signals-the-typed-error-for-an-expansion-time-failure
+  (loop for (fixture type name) in
+        '(("bad-instruction" instruction-definition-error compile-file-bad-instruction)
+          ("bad-directive" directive-definition-error ".compile-file-bad")
+          ("bad-machine-name" machine-definition-error compile-file-bad-machine))
+        do (let ((c (%compile-and-load-fixture fixture)))
+             (fiveam:is (typep c type))
+             (fiveam:is (equalp (string name) (string (definition-error-name c)))))))
+
+(fiveam:test compile-file-of-an-expansion-time-failure-reports-failure
+  (loop for fixture in '("bad-instruction" "bad-directive" "bad-machine-name")
+        do (let ((source (asdf:system-relative-pathname
+                          :lasm (format nil "tests/fixtures/definition/~A.lisp" fixture)))
+                 (output (uiop:tmpize-pathname (merge-pathnames "failure.fasl" (uiop:temporary-directory)))))
+             (unwind-protect
+                  (let ((*error-output* (make-broadcast-stream))
+                        (*standard-output* (make-broadcast-stream)))
+                    (fiveam:is (eq t (nth-value 2 (compile-file source :output-file output)))))
+               (uiop:delete-file-if-exists output)))))
+
+(fiveam:test macroexpand-outside-compile-file-still-signals
+  (fiveam:signals instruction-definition-error
+    (macroexpand-1 '(definstruction instr-test-machine baddef-expand (bogus-clause))))
+  (fiveam:signals directive-definition-error
+    (macroexpand-1 '(defdirective ".badexpand" (x) (set-origin! x) (reserve x)))))

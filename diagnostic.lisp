@@ -166,6 +166,20 @@ the load-time form to signal it."
   (handler-case (funcall thunk)
     (definition-error (c) (%warn-when-compiling-file c))))
 
+(defun %call-expanding-definition (thunk)
+  "Call THUNK, a definer macro's expander. Under COMPILE-FILE a DEFINITION-ERROR
+becomes a warning and the expansion is a form that signals it again at load."
+  (if *compile-file-truename*
+      (handler-case (funcall thunk)
+        (definition-error (c)
+          (%warn-when-compiling-file c)
+          `(error ',(type-of c) :message ,(definition-error-message c)
+                                :name ',(definition-error-name c))))
+      (funcall thunk)))
+
+(defmacro %expanding-definition (&body body)
+  `(%call-expanding-definition (lambda () ,@body)))
+
 (defun %definition-toplevel-form (registration result)
   "Toplevel forms that run REGISTRATION at compile time, tolerating a
 DEFINITION-ERROR, and again at load and eval time, then yield RESULT."
@@ -220,6 +234,10 @@ LOOKUP-ERROR (an unregistered machine, mode or lexer) becomes a TYPE."
      (handler-bind ((lookup-error
                       (lambda (c) (%definition-error ',type "~A" (usage-error-message c)))))
        ,@body)))
+
+(defmacro %with-expanding-definition ((name type) &body body)
+  "%WITH-DEFINITION for a definer macro's expander."
+  `(%expanding-definition (%with-definition (,name ,type) ,@body)))
 
 (defmacro %definition-bind (lambda-list form &body body)
   "DESTRUCTURING-BIND, but a lambda-list mismatch of FORM inside a definer is

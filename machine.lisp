@@ -1570,6 +1570,7 @@ Registration happens inside an EVAL-WHEN so the resulting machine-descriptor
 is available at macroexpansion time, not only after this file is loaded --
 required for M1's DEFINSTRUCTION to resolve storage names/widths against a
 DEFMACHINE appearing earlier in the same file."
-  (multiple-value-bind (machine-name parent) (%parse-machine-name name)
-    (%definition-toplevel-form `(%define-machine ',machine-name ',parent ',(mapcar #'%dsl-machine-clause clauses))
-                               `',machine-name)))
+  (%expanding-definition
+    (multiple-value-bind (machine-name parent) (%parse-machine-name name)
+      (%definition-toplevel-form `(%define-machine ',machine-name ',parent ',(mapcar #'%dsl-machine-clause clauses))
+                                 `',machine-name))))

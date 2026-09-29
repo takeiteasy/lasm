@@ -214,7 +214,7 @@ Registers the resulting DIRECTIVE-DESCRIPTOR under NAME (upcased) in
 to one recognized action (rather than arbitrary Lisp) is what lets the
 assembler compute a directive statement's layout size without evaluating
 anything -- see this file's header comment."
-  (%with-definition (name directive-definition-error)
+  (%with-expanding-definition (name directive-definition-error)
     (unless (= (length body) 1)
       (%defdirective-error "DEFDIRECTIVE ~S: body must be exactly one action form" name))
     `(progn
