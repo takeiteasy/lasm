@@ -202,6 +202,14 @@ counted in tokens from the pattern's start."
 (defun %force-operand-p (operand)
   (and (consp operand) (%keyword-named-p (first operand) "FORCE")))
 
+(defun %check-whole-memory-pair (operand item)
+  "Signal items-malformed when OPERAND, (KIND PAIR), uses a memory pair whole."
+  (when (and (consp operand) (= (length operand) 2) (not (keywordp (first operand)))
+             (%pair-named (second operand))
+             (integerp (second (%pair-named (second operand)))))
+    (%items-fail 'items-malformed item "~A uses the memory pair ~A whole; write (:hi ~A) or (:lo ~A)"
+                 (first item) (second operand) (second operand) (second operand))))
+
 (defun %operand-tokens (operand item)
   "The tokens of OPERAND, the addressing mode it names, if any, its claims
 (MODE START END): the named mode over the whole operand, then its alternatives,
@@ -217,6 +225,9 @@ and whether it is a (:force ...) operand."
         (return-from %operand-tokens (values tokens mode claims t)))))
   (when (%frame-operand-p operand)
     (setf operand (%frame-operand operand item)))
+  (when (and (%half-form-p operand) *items-backend* (backend-pairs *items-backend*))
+    (setf operand (%half-of (first operand) (second operand) item)))
+  (%check-whole-memory-pair operand item)
   (if (and (consp operand) (not (%expression-head-p (first operand))))
       (let* ((head (first operand))
              (mode (cond ((and (keywordp head) (string= (symbol-name head) "MODE"))
@@ -365,15 +376,17 @@ alternative of the assembled instruction (see %CLAIM-RIVAL)."
          (some (lambda (key) (and (getf frame key) (%same-name-p (first value) (getf frame key))))
                '(:slot :stack-slot)))))
 
-(defun %half-name (which pair)
-  (string-downcase (if (%keyword-named-p which "HI") (second pair) (third pair))))
+(defun %half-value (which pair)
+  "The half WHICH of PAIR: a lowercase register name, or a memory address."
+  (let ((half (if (%keyword-named-p which "HI") (second pair) (third pair))))
+    (if (integerp half) half (string-downcase half))))
 
 (defun %half-of (which value item)
   "The half WHICH, :HI or :LO, of VALUE: a pair register or name, an integer, a label or an expression."
   (let ((pair (if (consp value) (and (= (length value) 2) (%pair-named (second value))) (%pair-named value))))
     (cond (pair (if (consp value)
-                    (list (first value) (%half-name which pair))
-                    (%half-name which pair)))
+                    (list (first value) (%half-value which pair))
+                    (%half-value which pair)))
           ((integerp value)
            (let ((width (fourth (first (backend-pairs *items-backend*)))))
              (ldb (byte width (if (%keyword-named-p which "HI") width 0)) value)))
@@ -600,7 +613,7 @@ cell holding that half, the word's cells lying in the memory's endian order."
         (let ((pair (%pair-named place)))
           (unless pair
             (%items-fail 'items-malformed item "cannot take the ~(~A~) half of ~S" (symbol-name which) operand))
-          (list (first operand) (%half-name which pair))))))
+          (list (first operand) (%half-value which pair))))))
 
 (defun %frame-operand (operand item)
   "The operand (:arg i) or (:local i) addresses in the current function; for (:hi ...) or
@@ -892,7 +905,9 @@ the stack pointer. A line whose operands leave variants that differ is left to %
                 do (let ((element (cl:pop elements)))
                      (case (first element)
                        (:expr (let ((value (cl:pop values)))
-                                (cl:push (if (and (second element) (atom value)) (funcall function value) value)
+                                (cl:push (if (and (atom value) (or (second element) (%pair-named value)))
+                                             (funcall function value)
+                                             value)
                                          mapped)))
                        (:one-of (let* ((name (cl:pop values))
                                        (alternative (find-if (lambda (candidate) (%same-name-p candidate name))

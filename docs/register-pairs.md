@@ -1,7 +1,7 @@
 # Register pairs
 
-A [backend](backends.md) names pairs of narrow registers, and a
-[`.lsp`](language.md) word lives in one. A program written for 16-bit words
+A [backend](backends.md) names pairs of narrow registers, or of memory cells,
+and a [`.lsp`](language.md) word lives in one. A program written for 16-bit words
 compiles for an 8-bit machine.
 
 ```lisp
@@ -20,7 +20,9 @@ lasm run fact.lsp -m pairfoo.lisp --backend pairfoo-lang-abi   # ab is 120 when 
 ```
 
 See [`tests/fixtures/cli/pairfoo.lisp`](../tests/fixtures/cli/pairfoo.lisp), a
-complete 8-bit machine with a carry chain, and
+complete 8-bit machine with a carry chain,
+[`tests/fixtures/cli/zpfoo.lisp`](../tests/fixtures/cli/zpfoo.lisp), one whose
+words live in [zero-page cells](#memory-halves), and
 [`examples/chip8/host.lisp`](../examples/chip8/host.lisp), the [CHIP-8 example's](examples.md#chip-8)
 8-bit host.
 
@@ -40,9 +42,10 @@ a value only in a pair:
 The first `:return` pair is the accumulator. A register that is in no role list
 is free for a template to use inside one operation.
 
-A pair is an error when a half is not a register, a register is in two pairs, the
-halves differ in width, or its name is a register, alias or pair. A backend with
-pairs needs every operation to write only its destination pair.
+A pair is an error when a half is neither a register nor a [memory address](#memory-halves),
+a half is in two pairs, the halves differ in width, or its name is a register,
+alias or pair. A backend with pairs needs every operation to write only its
+destination pair.
 
 ## Halves in templates
 
@@ -53,12 +56,41 @@ pair name is never an instruction operand.
 | --- | --- |
 | A register operand `(reg ab)` | `(reg b)` |
 | A pair name `ab`, as `:peek` and `:poke` take | The register `b` |
+| A memory operand `(zp w0)`, [memory halves](#memory-halves) | `(zp 16)` |
+| A pair name `w0`, memory halves | The address `16` |
 | An integer | The integer masked to the half's width; `-1` gives `255` |
 | A label or expression | `(& X 255)`, and `(& (>> X 8) 255)` for `:hi` |
 | A frame slot `(:local i)`, `(:arg i)` | A cell of that slot, or a register when the argument is one |
 
 Writing a pair whole, `(jzp r target)` for a pair `r`, is an `items-malformed`
 error.
+
+## Memory halves
+
+A machine with too few registers, such as the 6502 with A, X and Y, keeps a word
+in two memory cells. An integer half is the cell's address.
+
+```lisp
+(registers :pairs ((w0 #x11 #x10) (w1 #x13 #x12))
+           :return (w0) :scratch (w0 w1) :operand zp ...)
+(ops (:move (d s) (lda (:lo s)) (sta (:lo d)) (lda (:hi s)) (sta (:hi d)))
+     (:peek (d a) (ldw (zp (:hi d)) (zp (:lo d)) (zp (:hi a)) (zp (:lo a)))))
+```
+
+| Rule | Meaning |
+| --- | --- |
+| Address | An integer within the address space of the backend's memory: its stack pointer's, else the sole memory. |
+| Width | The memory's cell width. |
+| Kind | Every pair is registers or every pair is addresses; a pair does not mix them. |
+| Operands | `(:lo d)` of a `(zp w0)` operand is `(zp 16)`; a template that takes a pair name writes `(zp (:lo a))`. |
+| Registers | A register in no role list, the 6502's A, is free for a template to use. |
+| Cells | The halves need not be adjacent. Code and data must not lie over them. |
+| `(asm (:clobbers ...))` | Names a pair; a memory half has no name. |
+
+A raw instruction in a [`.lasm`](items.md#lasm-files) body takes a half too,
+`(lda (:lo (zp w0)))`. Using a memory pair whole, `(lda (zp w0))`, is an
+`items-malformed` error. A call [argument](#limitations) that is an integer or a label is
+moved as a cell operand; load it into the pair first with `:const`.
 
 ## Words and slots
 
@@ -87,9 +119,10 @@ so both halves read the slot at the same depth.[^push] Without one the call is
 | Limitation | Ticket |
 | --- | --- |
 | A word is exactly two registers. | [#423](https://todo.sr.ht/~takeiteasy/lasm/423) |
-| A half is a register, not a memory cell, so the 6502 has too few registers. | [#424](https://todo.sr.ht/~takeiteasy/lasm/424) |
+| A call argument that is an integer or a label is read as a cell, not a value. | [#452](https://todo.sr.ht/~takeiteasy/lasm/452) |
 
-[^clobbers]: `(:clobbers a)` and `(:clobbers ab)` both mark `ab`.
+[^clobbers]: `(:clobbers a)` and `(:clobbers ab)` both mark `ab`. A register that is in no
+  pair marks itself.
 
 [^endian]: A machine whose `:endian` is neither `:little` nor `:big` cannot have
   pairs. Slot cell `k` of a word in a `(frame :slot KIND)` operand is offset `n + k`.

@@ -48,7 +48,7 @@ Every name is a register or register alias of the machine.
 | `:stack-pointer` `:program-counter` `:frame-pointer` | One register. |
 | `:address` | The [pointer register](#pointer-register) that memory access goes through. |
 | `:operand` | The [operand kind](#operand-kinds) that writes a register. |
-| `:pairs` | `((NAME HIGH LOW)...)`: [register pairs](register-pairs.md), which every role list then names. |
+| `:pairs` | `((NAME HIGH LOW)...)`: [register pairs](register-pairs.md), or pairs of [memory cells](register-pairs.md#memory-halves) when HIGH and LOW are addresses. Every role list then names them. |
 
 A register cannot be both `:caller-saved` and `:callee-saved`. When the
 machine declares a [`stack-pointer`](machine-model.md#stacks), `:stack-pointer`

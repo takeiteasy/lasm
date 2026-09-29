@@ -564,7 +564,7 @@ escaped, and each function whose label it spells as taken."
                                       (backend-definition-error ()
                                         (%cc-fail form "~A in :clobbers is not a register" (%source-name name nil))))))
                       ;; A half clobbers the pair it belongs to.
-                      (or (first (find-if (lambda (pair) (member register (list (second pair) (third pair)) :test #'string=))
+                      (or (first (find-if (lambda (pair) (member register (list (second pair) (third pair)) :test #'equal))
                                           *backend-pairs*))
                           register)))
                   (rest item)))

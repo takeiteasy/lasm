@@ -146,8 +146,20 @@ within a cell."
 
 (defun backend-pairs (backend)
   "BACKEND's register pairs, each (NAME HIGH LOW WIDTH) with upcased names and WIDTH the bit
-width of a half."
+width of a half. A half is an upcased register name, or an integer memory address."
   (getf (backend-descriptor-registers (find-backend backend)) :pairs))
+
+(defun %pair-memory (descriptor)
+  "The memory element a pair backend's words live in: its stack pointer's, else the sole memory."
+  (let ((pointer (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
+                       return pointer)))
+    (if pointer
+        (descriptor-element descriptor (stack-pointer-descriptor-memory pointer))
+        (let ((memories (remove-if-not (lambda (element) (eq (storage-element-kind element) :memory))
+                                       (machine-descriptor-elements descriptor))))
+          (unless (= (length memories) 1)
+            (%backend-error "registers :pairs: address halves need one memory, or a stack pointer to name it"))
+          (first memories)))))
 
 (defun %pair-cell-width (descriptor)
   "The cell width, in bits, of the memory a pair backend's words live in."
@@ -233,8 +245,24 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
                               (machine-descriptor-elements descriptor)))))
     (storage-element-width element)))
 
+(defun %pair-half (descriptor key half)
+  "HALF of pair KEY: an integer memory address within the pair memory, else an upcased register name."
+  (cond ((not (integerp half))
+         (%backend-register-name descriptor half))
+        ((< -1 half (ash 1 (storage-element-addr-width (%pair-memory descriptor))))
+         half)
+        (t (%backend-error "registers :pairs: ~A: ~S is not an address of memory ~A"
+                           key half (storage-element-name (%pair-memory descriptor))))))
+
+(defun %pair-half-width (descriptor half)
+  "The bit width of pair half HALF: a register's, or the memory's cell for an address."
+  (if (integerp half)
+      (%pair-cell-width descriptor)
+      (%register-width descriptor half)))
+
 (defun %parse-pairs (descriptor entries)
-  "The (NAME HIGH LOW WIDTH) pairs the (registers :pairs ((NAME HIGH LOW)...)) ENTRIES declare."
+  "The (NAME HIGH LOW WIDTH) pairs the (registers :pairs ((NAME HIGH LOW)...)) ENTRIES declare. A
+half is a register, or an integer address in memory."
   (unless (and (listp entries) (null (cdr (last entries))))
     (%backend-error "registers :pairs: expected a list of (NAME HIGH LOW), got ~S" entries))
   (let ((*backend-pairs* nil) (result '()))
@@ -248,17 +276,23 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
           (when (or (assoc key result :test #'string=)
                     (ignore-errors (%backend-register-name descriptor name)))
             (%backend-error "registers :pairs: ~A is already a register, alias or pair" key))
-          (let ((high (%backend-register-name descriptor high))
-                (low (%backend-register-name descriptor low)))
-            (when (string= high low)
+          (let* ((address (integerp high))
+                 (high (%pair-half descriptor key high))
+                 (low (%pair-half descriptor key low)))
+            (unless (eq address (integerp low))
+              (%backend-error "registers :pairs: ~A mixes a register and a memory address; both halves are registers or both are addresses" key))
+            (when (and result (not (eq address (integerp (second (first result))))))
+              (%backend-error "registers :pairs: ~A and ~A differ in kind; every pair is registers or every pair is addresses"
+                              (first (first result)) key))
+            (when (equal high low)
               (%backend-error "registers :pairs: ~A uses ~A for both halves" key high))
             (dolist (half (list high low))
-              (let ((other (find-if (lambda (pair) (member half (list (second pair) (third pair)) :test #'string=))
+              (let ((other (find-if (lambda (pair) (member half (list (second pair) (third pair)) :test #'equal))
                                     result)))
                 (when other
                   (%backend-error "registers :pairs: ~A is a half of both ~A and ~A" half (first other) key))))
-            (let ((width (%register-width descriptor high)))
-              (unless (eql width (%register-width descriptor low))
+            (let ((width (%pair-half-width descriptor high)))
+              (unless (eql width (%pair-half-width descriptor low))
                 (%backend-error "registers :pairs: ~A and ~A, the halves of ~A, are not the same width" high low key))
               (cl:push (list key high low width) result))))))))
 

@@ -12,6 +12,11 @@
 
 (eval '(defbackend pf-static-abi (:extends pairfoo-lang-abi) (frame :static t)))
 
+(let ((*package* (find-package '#:lasm)))
+  (load (asdf:system-relative-pathname :lasm "tests/fixtures/cli/zpfoo.lisp")))
+
+(eval '(defbackend zf-static-abi (:extends zpfoo-lang-abi) (frame :static t)))
+
 ;;; Definition
 
 (fiveam:test a-backend-declares-register-pairs
@@ -239,3 +244,129 @@
                       "--backend" "pairfoo-lang-abi"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped" out))))
+
+;;; Memory halves: zpfoo-lang-abi (tests/fixtures/cli/zpfoo.lisp) keeps every word in two
+;;; zero-page cells.
+
+(fiveam:test a-pair-can-name-memory-cells
+  (fiveam:is (equal '(("W0" 17 16 8) ("W1" 19 18 8) ("W2" 21 20 8) ("W3" 32 48 8))
+                    (backend-pairs 'zpfoo-lang-abi)))
+  (fiveam:is (= 2 (backend-word-cells 'zpfoo-lang-abi)))
+  (fiveam:is (= 2 (backend-word-cells 'zf-static-abi))))
+
+(defparameter +zf-bad-backends+
+  '(("mixes a register and a memory address" (defbackend zf-bad-1 (:isa zpfoo) (registers :pairs ((w0 a 16)))))
+    ("mixes a register and a memory address" (defbackend zf-bad-2 (:isa zpfoo) (registers :pairs ((w0 16 a)))))
+    ("differ in kind" (defbackend zf-bad-3 (:extends zpfoo-lang-abi) (registers :pairs ((w0 #x11 #x10) (w1 a a)))))
+    ("both halves" (defbackend zf-bad-4 (:extends zpfoo-lang-abi) (registers :pairs ((w0 16 16)))))
+    ("is a half of both" (defbackend zf-bad-5 (:extends zpfoo-lang-abi) (registers :pairs ((w0 #x11 #x10) (w1 #x10 #x12)))))
+    ("is not an address" (defbackend zf-bad-6 (:extends zpfoo-lang-abi) (registers :pairs ((w0 65536 16)))))
+    ("is not an address" (defbackend zf-bad-7 (:extends zpfoo-lang-abi) (registers :pairs ((w0 -1 16)))))
+    ("is already a register" (defbackend zf-bad-8 (:extends zpfoo-lang-abi) (registers :pairs ((a 17 16))))))
+  "Memory-pair backends that fail to define, each with the words its error contains.")
+
+(fiveam:test a-bad-memory-pair-is-a-definition-error
+  (loop for (text form) in +zf-bad-backends+
+        do (let ((c (%backend-error-of form)))
+             (fiveam:is (typep c 'backend-definition-error) "~S" form)
+             (fiveam:is (and c (search text (princ-to-string c))) "~S: ~A" form c))))
+
+(defun %zf-expand (op &rest args)
+  (%pf-plain (backend-expand-op 'zpfoo-lang-abi op args)))
+
+(fiveam:test a-half-of-a-memory-pair-is-its-address
+  (fiveam:is (equal '(("lda" ("zp" 16)) ("sta" ("zp" 18)) ("lda" ("zp" 17)) ("sta" ("zp" 19)))
+                    (%zf-expand :move '(zp w1) '(zp w0))))
+  (fiveam:is (equal '(("ldw" ("zp" 19) ("zp" 18) ("zp" 17) ("zp" 16)))
+                    (%zf-expand :peek 'w1 'w0))
+             "a pair name splits into its addresses")
+  (fiveam:is (equal '(("lda" ("zp" 48)) ("sta" ("zp" 16)) ("lda" ("zp" 32)) ("sta" ("zp" 17)))
+                    (%zf-expand :move '(zp w0) '(zp w3)))
+             "the halves need not be adjacent"))
+
+(fiveam:test a-half-of-an-integer-or-label-is-unchanged-on-a-memory-pair
+  (fiveam:is (equal '(("ldi" ("imm" 52)) ("sta" ("zp" 16)) ("ldi" ("imm" 18)) ("sta" ("zp" 17)))
+                    (%zf-expand :const '(zp w0) 4660)))
+  (fiveam:is (equal '(("ldi" ("imm" ("&" "there" 255))) ("sta" ("zp" 16))
+                      ("ldi" ("imm" ("&" (">>" "there" 8) 255))) ("sta" ("zp" 17)))
+                    (%zf-expand :const '(zp w0) 'there))))
+
+(fiveam:test a-memory-pair-used-whole-is-an-items-error
+  (eval '(defbackend zf-whole-abi (:extends zpfoo-lang-abi)
+          (ops (:branch-zero (r target) (jzw r target)))))
+  (let ((c (handler-case (progn (backend-expand-op 'zf-whole-abi :branch-zero '((zp w0) done)) nil)
+             (items-malformed (c) c))))
+    (fiveam:is (typep c 'items-malformed))
+    (fiveam:is (and c (search "whole" (princ-to-string c))))))
+
+(fiveam:test a-raw-instruction-takes-a-half-of-a-memory-pair
+  (let ((by-half (assembly-cells (assemble-items '((lda (:lo (zp w1))) (sta (:hi (zp w3)))) :backend 'zpfoo-lang-abi)))
+        (by-address (assembly-cells (assemble-items '((lda (zp 18)) (sta (zp 32))) :backend 'zpfoo-lang-abi))))
+    (fiveam:is (equalp by-address by-half)))
+  (let ((c (handler-case (progn (assemble-items '((lda (zp w1))) :backend 'zpfoo-lang-abi) nil)
+             (items-malformed (c) c))))
+    (fiveam:is (typep c 'items-malformed))
+    (fiveam:is (and c (search "whole" (princ-to-string c))))))
+
+(fiveam:test asm-clobbers-a-memory-pair-by-name
+  (let ((*cc-backend* (find-backend 'zpfoo-lang-abi)))
+    (fiveam:is (equal '("W0") (%cc-asm-clobbers (list (%cc-symbol "asm") (list :clobbers (%cc-symbol "w0"))))))
+    (fiveam:is (equal '("A") (%cc-asm-clobbers (list (%cc-symbol "asm") (list :clobbers (%cc-symbol "a"))))))))
+
+(defparameter +zf-origin+ #x200)
+
+(defun %zf-run (source backend &optional (optimize :size))
+  "Compile, assemble and run SOURCE on zpfoo; returns the machine."
+  (let ((m (make-machine 'zpfoo)))
+    (load-program m (assemble-items (%cl-compile source backend optimize) :backend backend :origin +zf-origin+))
+    (setf (sref m 'sp) +pf-sp+)
+    (values m (run m :max-steps 400000))))
+
+(defun %zf-word (m)
+  (+ (* 256 (mref m 'ram #x11)) (mref m 'ram #x10)))
+
+(fiveam:test sixteen-bit-programs-run-in-zero-page-pairs
+  (dolist (backend '(zpfoo-lang-abi zpfoo-lang-reg-abi))
+    (loop for (source . expected) in (remove-if (lambda (entry) (search "asm" (car entry))) +pf-programs+)
+          do (multiple-value-bind (m reason) (%zf-run source backend)
+               (fiveam:is (eq :trap reason) "~A on ~A stopped with ~S" source backend reason)
+               (fiveam:is (= expected (%zf-word m)) "~A on ~A" source backend)
+               (fiveam:is (= +pf-sp+ (sref m 'sp)) "the stack is balanced: ~A on ~A" source backend)))))
+
+(fiveam:test an-asm-block-clobbers-a-memory-pair
+  (let ((m (%zf-run "(defun main () (let ((x 9)) (asm (:clobbers w0) (:op :const (zp w0) 3) (:op :set (:var x) (zp w0))) x))"
+                    'zpfoo-lang-abi)))
+    (fiveam:is (= 3 (%zf-word m)))))
+
+(fiveam:test optimize-speed-holds-values-in-callee-saved-memory-pairs
+  (loop for (source . expected) in (remove-if (lambda (entry) (search "asm" (car entry))) +pf-programs+)
+        do (let ((m (%zf-run source 'zpfoo-lang-abi :speed)))
+             (fiveam:is (= expected (%zf-word m)) "~A" source)
+             (fiveam:is (= +pf-sp+ (sref m 'sp)) "~A" source))))
+
+(fiveam:test static-frames-run-in-zero-page-pairs
+  (loop for optimize in '(:size :speed)
+        do (loop for (source . expected) in '(("(defun square (n) (* n n)) (defun sos (a b) (+ (square a) (square b))) (defun main () (sos 30 40))" . 2500)
+                                              ("(defun f (a b c) (let ((x (+ a b))) (* x c))) (defun main () (f 100 200 3))" . 900)
+                                              ("(defvar g 5) (defun f (a b) (+ a (* b g))) (defun main () (f (f 1 2) (f 3 4)))" . 126))
+                 do (let ((m (%zf-run source 'zf-static-abi optimize)))
+                      (fiveam:is (= expected (%zf-word m)) "~A ~A" optimize source)))))
+
+;;; Arguments that read each other's pairs are ordered by the pair they name.
+
+(fiveam:test call-arguments-that-swap-memory-pairs-are-ordered
+  (eval '(defbackend zf-swap-abi (:extends zpfoo-lang-abi)
+          (registers :scratch (w0 w3) :caller-saved (w1 w2) :callee-saved ())
+          (call :args (w1 w2) :order :left-to-right :cleanup :caller :return-address-slots 1)))
+  (let* ((items '((:op :const (zp w1) 10) (:op :const (zp w2) 3)
+                  (:call sub2 (zp w2) (zp w1))
+                  (:op :halt)
+                  (:function sub2 (:args 2)
+                    (:op :move (zp w0) (:arg 0))
+                    (:op :sub (zp w0) (:arg 1))
+                    (:return))))
+         (m (make-machine 'zpfoo)))
+    (load-program m (assemble-items items :backend 'zf-swap-abi :origin +zf-origin+))
+    (setf (sref m 'sp) +pf-sp+)
+    (run m :max-steps 1000)
+    (fiveam:is (= 65529 (%zf-word m)) "sub2 gets 3 and 10, so it returns 3 - 10")))
