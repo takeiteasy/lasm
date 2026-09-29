@@ -1922,6 +1922,31 @@ two |#
     (fiveam:is (= 2 (%cl-count-op "POINT" source 'cl-pointer-stack-abi)))
     (fiveam:is (= 6 (%cv-a (%cl-run source 'cl-pointer-stack-abi))))))
 
+;;; #436: a store reuses the register its value left
+
+(defparameter +cl-read-modify-write-programs+
+  '(("(defarray a (1 2 3 4)) (defun f (i) (aset a i (+ (aref a i) 1)) (aref a i)) (defun main () (f 2))" 1 4)
+    ("(defstring s \"abcd\" :packed) (defun f (i) (aset-byte s i (+ (aref-byte s i) 1)) (aref-byte s i)) (defun main () (f 1))" 1 99)
+    ("(defarray a (1 2 3 4)) (defun f (i) (aset a i (+ (aref a (+ i 1)) 1)) (aref a i)) (defun main () (f 1))" 2 4)
+    ("(defarray a (1 2 3 4)) (defun g () 1) (defun f (i) (aset a (+ i 1) (+ (g) 1)) (aref a 2)) (defun main () (f 1))" nil 2)
+    ("(defarray a (1 2 3 4)) (defun f (i) (aset a i (progn (set i 3) 9)) (aref a i)) (defun main () (f 1))" 2 4)
+    ("(defarray a (1 2 3 4)) (defun f (p) (poke p (+ (peek p) 1)) (peek p)) (defun main () (f a))" 1 2)
+    ("(defarray a (1 2 3 4)) (defun f (p) (poke p (+ (peek (+ p 1)) 1)) (peek p)) (defun main () (f a))" 2 3)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ 1 (aset a i (+ (aref a i) 1)))) (defun main () (f 2))" nil 5)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ 1 (aset a i (+ (aref a (+ i 1)) 1)))) (defun main () (f 1))" nil 5)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ 1 (aset a i 5))) (defun main () (f 2))" nil 6)
+    ("(defstring s \"abcd\" :packed) (defun f (i) (+ 1 (aset-byte s i (+ (aref-byte s i) 1)))) (defun main () (f 1))" nil 100)
+    ("(defarray a (1 2 3 4)) (defun f (p) (+ 1 (poke p (+ (peek p) 1)))) (defun main () (f a))" nil 3)))
+
+(fiveam:test a-store-reuses-the-register-its-value-left
+  (dolist (backend '(cl-pointer-poke-label-abi cl-pointer-stack-abi))
+    (loop for (source points nil) in +cl-read-modify-write-programs+
+          when points
+            do (fiveam:is (= points (%cl-count-op "POINT" source backend)) "~A ~A" backend source)))
+  (dolist (backend '(cl-pointer-byte-abi cl-pointer-poke-label-abi cl-pointer-stack-abi))
+    (loop for (source nil expected) in +cl-read-modify-write-programs+
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend))) "~A ~A" backend source))))
+
 ;;; #430: -label variants
 
 (eval `(defbackend cl-label-variant-abi (:extends cl-label-abi)

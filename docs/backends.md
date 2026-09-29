@@ -231,7 +231,7 @@ a variable in it is set. A [static frame](static-frames.md) that spills a tempor
 ;; (set g (+ g 1))  ->  :point-label gvg, :peek-pointer a, :add-imm a 1, :poke-pointer a
 ```
 
-`(aset a i (+ (aref a i) 1))` still reloads it ([Limitations](language.md#limitations)).
+A store compiles its value first when the address is such a computed address and the value sets no variable, so `(aset a i (+ (aref a i) 1))` points the register once.
 
 ## Branches
 

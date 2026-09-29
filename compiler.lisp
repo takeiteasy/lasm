@@ -1076,12 +1076,22 @@ comparison, to a landing that loads the result."
     (%cc-op operation *cc-acc-name*)))
 
 (defun %cc-write-through-pointer (address value operation)
-  "VALUE to the word or byte at ADDRESS through the :address register."
-  (let ((key (%cc-address-key address)))
-    (%cc-operands address value)
-    (%cc-op :point *cc-acc-name*)
-    (setf *cc-pointer* (and (not (%cc-may-set-p value)) key))
-    (%cc-op operation *cc-temp-name*)))
+  "VALUE to the word or byte at ADDRESS through the :address register, leaving VALUE in the accumulator.
+VALUE goes first when ADDRESS has a key and VALUE sets no variable, so a VALUE that read ADDRESS leaves the register pointing there."
+  (let ((key (%cc-address-key address))
+        (settles (%cc-may-set-p value)))
+    (cond ((and key (not settles) (not (%cc-leaf-p value)))
+           (%cc-expr value)
+           (unless (equal key *cc-pointer*)
+             (%cc-to-temp address)
+             (%cc-op :point *cc-temp-name*)
+             (setf *cc-pointer* key))
+           (%cc-op operation *cc-acc-name*))
+          (t (%cc-operands address value)
+             (%cc-op :point *cc-acc-name*)
+             (setf *cc-pointer* (and (not settles) key))
+             (%cc-op operation *cc-temp-name*)
+             (%cc-op :move *cc-acc* *cc-temp*)))))
 
 (defun %cc-peek (form)
   (%cc-check-length form 2 2)
@@ -1095,8 +1105,8 @@ comparison, to a landing that loads the result."
   (cond ((%cc-through-pointer-p)
          (%cc-write-through-pointer (second form) (third form) :poke-pointer))
         (t (%cc-operands (second form) (third form))
-           (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
-  (%cc-op :move *cc-acc* *cc-temp*))
+           (%cc-op :poke *cc-acc-name* *cc-temp-name*)
+           (%cc-op :move *cc-acc* *cc-temp*))))
 
 ;; (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
 ;; backend's optional :peek-byte/:poke-byte, for a machine whose registers are
@@ -1117,8 +1127,8 @@ comparison, to a landing that loads the result."
   (cond ((%cc-through-byte-pointer-p)
          (%cc-write-through-pointer (second form) (third form) :poke-byte-pointer))
         (t (%cc-operands (second form) (third form))
-           (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)))
-  (%cc-op :move *cc-acc* *cc-temp*))
+           (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)
+           (%cc-op :move *cc-acc* *cc-temp*))))
 
 ;; (aref A I)/(aset A I V) index by word, sugar for
 ;; (peek (+ A (* I W))) and (poke (+ A (* I W)) V), W = *CC-WORD-CELLS*.
