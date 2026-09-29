@@ -213,6 +213,13 @@ never notify it."
        (unwind-protect (progn ,@body)
          (setf (machine-access-hook ,m) ,hook)))))
 
+(defun %region-named (machine name)
+  "The name of the memory region of MACHINE called NAME, ignoring case, or NIL."
+  (loop for element in (machine-descriptor-elements (machine-descriptor machine))
+        do (loop for region in (storage-element-regions element)
+                 when (string-equal (symbol-name (memory-region-name region)) name)
+                   do (return-from %region-named (memory-region-name region)))))
+
 (defun %resolve-depth (session name)
   "The fixed stack NAME as (VALUES STACK :POINTER). Signals when NAME is not one."
   (let ((stack (%resolve-storage session name nil t)))
@@ -238,7 +245,7 @@ be read as a single value."
            (and (%resolve-storage session base nil t) (%resolve-depth session base)))))))
   (let* ((descriptor (machine-descriptor (debug-session-machine session)))
          (alias-element (gethash name (machine-descriptor-register-alias-elements descriptor)))
-         (symbol (find-symbol (string-upcase name) :lasm))
+         (symbol (%table-key-named (machine-descriptor-table descriptor) name))
          (element (and symbol (gethash symbol (machine-descriptor-table descriptor)))))
     (cond
       (alias-element
@@ -1694,7 +1701,7 @@ this call."
                      (t
                        (let* ((machine (debug-session-machine session))
                               (descriptor (machine-descriptor machine))
-                              (symbol (find-symbol (string-upcase rest) :lasm))
+                              (symbol (%table-key-named (machine-descriptor-table descriptor) rest))
                               (element (and symbol (gethash symbol (machine-descriptor-table descriptor))))
                               (alias-element (gethash rest (machine-descriptor-register-alias-elements descriptor))))
                          (cond
@@ -1725,11 +1732,13 @@ this call."
                    (multiple-value-bind (region-text bank-text) (%split-command rest)
                      (let ((bank (%parse-integer-maybe bank-text))
                            (region (and (plusp (length region-text))
-                                        (find-symbol (string-upcase region-text) :lasm))))
-                       (if (and region bank)
-                           (progn (debug-set-bank session region bank)
-                                  (format nil "~(~A~) bank ~D~%" region bank))
-                           "bank: usage: bank REGION N"))))
+                                        (%region-named (debug-session-machine session) region-text))))
+                       (cond ((and region bank)
+                              (debug-set-bank session region bank)
+                              (format nil "~(~A~) bank ~D~%" region bank))
+                             ((and bank (plusp (length region-text)))
+                              (%debugger-usage-error "no memory region named ~A" region-text))
+                             (t "bank: usage: bank REGION N")))))
                   ((string-equal cmd "where") (debug-where-text session))
                   ((string-equal cmd "save")
                    (multiple-value-bind (path format) (%split-save-arguments rest)

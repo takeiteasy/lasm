@@ -138,10 +138,8 @@ options:
   (loop for k being the hash-keys of table collect k))
 
 (defun %cli-named (text table what file)
-  (let ((symbol (find-symbol (string-upcase text) '#:lasm)))
-    (unless (and symbol (nth-value 1 (gethash symbol table)))
-      (%signal-usage-error 'usage-error "~A defines no ~A named ~A" file what text))
-    symbol))
+  (or (%table-key-named table text)
+      (%signal-usage-error 'usage-error "~A defines no ~A named ~A" file what text)))
 
 (defun %cli-pick-machine (file explicit)
   (if explicit

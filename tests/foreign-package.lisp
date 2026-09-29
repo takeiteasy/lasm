@@ -184,3 +184,20 @@ halt")
                      (assembly-cells (assemble "ld r 5
 ld [6]
 ld #7" :machine 'lasm-foreign-test::fpm8)))))
+
+(fiveam:test foreign-package-debugger-names-its-storage
+  (let* ((assembly (assemble "set push, 5
+halt" :machine 'lasm-foreign-test::fpm))
+         (machine (make-machine 'lasm-foreign-test::fpm)))
+    (load-program machine assembly)
+    (let ((session (make-debug-session machine :assembly assembly)))
+      (debug-command session "set sp = 100")
+      (fiveam:is (= 100 (sref machine 'lasm-foreign-test::sp)))
+      (fiveam:is (search "pc = 0" (debug-command session "print pc")))
+      (debug-watch session "sp" :access :write)
+      (fiveam:is (eq :watchpoint (debug-continue session))))))
+
+(fiveam:test foreign-package-machine-is-found-by-name
+  (fiveam:is (eq 'lasm-foreign-test::fpm (%table-key-named *machines* "fpm")))
+  (fiveam:is (eq 'lasm-foreign-test::fpm (%table-key-named *machines* "FPM")))
+  (fiveam:is (null (%table-key-named *machines* "no-such-machine"))))

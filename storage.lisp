@@ -622,6 +622,13 @@ machine's default layout -- callers hold no other kind."
       (error 'unknown-storage :machine (machine-descriptor-name descriptor)
                                :name name)))
 
+(defun %table-key-named (table name)
+  "The symbol key of TABLE named NAME, ignoring case, or NIL. Typed names are
+matched by name so a machine defined in any package is found."
+  (loop for key being the hash-keys of table
+        when (and (symbolp key) (string-equal (symbol-name key) name))
+          return key))
+
 ;; Registry of defined machine descriptors, keyed by machine name. Populated
 ;; by DEFMACHINE (see machine.lisp) inside an EVAL-WHEN so descriptors are
 ;; available at macroexpansion time -- this is what lets a later DEFINSTRUCTION
