@@ -904,3 +904,9 @@
       (check 6 nil
              '(variant (choice inline-primary) inline :range (0 7) :wrap 16)
              '(variant (choice inline-alternate) inline :range (0 7) :alias t)))))
+
+(fiveam:test accepted-modes-list-each-mode-once
+  (let ((variants (find-instruction-variants 'independent-choice-machine 'wrapc)))
+    (fiveam:is (< 1 (length variants)))
+    (fiveam:is (string= (%accepted-modes-text (list (first variants)))
+                        (%accepted-modes-text variants)))))

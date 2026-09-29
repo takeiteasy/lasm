@@ -140,15 +140,17 @@ e.g. \"expr|[expr]\"."
 (defun %accepted-modes-text (variants)
   "VARIANTS' (an instruction's list of INSTRUCTION-DESCRIPTOR) addressing
 modes, rendered as a comma-separated \"name (syntax)\" list for a mode-
-mismatch diagnostic -- a no-operand variant (MODE nil) renders as \"no
-operand\" instead."
+mismatch diagnostic, each mode once -- a no-operand variant (MODE nil)
+renders as \"no operand\" instead."
   (format nil "~{~A~^, ~}"
-          (mapcar (lambda (v)
-                    (let ((mode (instruction-descriptor-mode v)))
-                      (if mode
-                          (format nil "~(~A~) (~A)" (mode-descriptor-name mode) (%mode-syntax-text mode))
-                          "no operand")))
-                  variants)))
+          (remove-duplicates
+           (mapcar (lambda (v)
+                     (let ((mode (instruction-descriptor-mode v)))
+                       (if mode
+                           (format nil "~(~A~) (~A)" (mode-descriptor-name mode) (%mode-syntax-text mode))
+                           "no operand")))
+                   variants)
+           :test #'string= :from-end t)))
 
 ;;; Result
 
