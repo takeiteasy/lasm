@@ -221,6 +221,26 @@ cost)."
                (tick-devices machine cost)
                (values :nop cost))))))))
 
+(defun %skip-instruction (machine memory)
+  "The (skip-instruction) semantics primitive: advance PC past the instruction
+at PC, fetched from MEMORY, and return its descriptor, or :DECODE-FAILURE when
+it does not decode (PC then moves past its opcode extent). Runs and charges
+nothing."
+  (let* ((machine-name (machine-descriptor-name (machine-descriptor machine)))
+         (layout (machine-descriptor-instruction-word (machine-descriptor machine)))
+         (cell-width (unless layout (%machine-cell-width machine-name memory)))
+         (endian (unless layout (%machine-endian machine-name memory)))
+         (address (%sref machine 'pc))
+         (reader (machine-cell-reader machine memory)))
+    (multiple-value-bind (descriptor values size)
+        (%decode-instruction-at-resolved reader address machine-name layout cell-width endian)
+      (declare (ignore values))
+      (if (eq descriptor :decode-failure)
+          (setf (%sref machine 'pc)
+                (+ address (%undefined-opcode-extent reader address machine-name layout)))
+          (setf (%sref machine 'pc) (+ address size)))
+      descriptor)))
+
 (defun %locate-runtime-condition (condition machine address memory)
   "Record on CONDITION the instruction at ADDRESS that raised it, and its
 source line and nearest label when MACHINE retained a program covering it."

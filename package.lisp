@@ -326,6 +326,7 @@
    #:bit-set?
    #:page-crossed?
    #:elapse
+   #:skip-instruction
    #:machine
    #:choice-case
    #:instruction-size

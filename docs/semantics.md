@@ -31,6 +31,7 @@ access functions; see [Machine model](machine-model.md) and
 | `(idle)` | Mark the machine idle after semantics finishes. |
 | `(elapse n)` | Add `n` cycles and tick devices immediately, mid-body. Use it for runtime-dependent costs such as a taken branch. |
 | `(instruction-size)` | The decoded instruction's length in cells, so `(elapse (1- (instruction-size)))` charges a cycle per extra word. |
+| `(skip-instruction ['memory])` | Advance PC past the instruction at PC and return its descriptor, or `:decode-failure`. Nothing runs and no cycles are charged.[^skip] |
 | `(interrupt-return)` | Restore the state saved at interrupt delivery. |
 | `(zero? value)`, `(bit-set? value bit)` | Predicates for flag expressions. |
 | `(page-crossed? from to [page-size])` | Test whether two addresses cross a page boundary. |
@@ -100,3 +101,10 @@ machine instance:
   by `(stack-pointer ...)`. `stack-ref` uses a top-relative index into a
   fixed stack or such a register. `set-bank!` requires a banked region and checks bank range
   when executed. `interrupt-return` requires an interrupt declaration.
+
+[^skip]: Reads PC and the sole memory, or the named `'memory`, and fetches like
+  an instruction fetch. PC wraps at its register width. An undecodable
+  instruction moves PC past its opcode: one cell, or the full size of a removed
+  instruction. Chaining is up to the caller: loop while the returned descriptor
+  is the kind to skip through, e.g. DCPU-16's `IF*` conditionals in
+  `examples/dcpu16`.

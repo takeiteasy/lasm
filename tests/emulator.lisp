@@ -1765,3 +1765,45 @@ hlt" :machine 'stack-test-machine)))
     (eval '(defmachine idle-dup-clause-test
              (register pc :width 8) (memory ram :width 8 :addr-width 8)
              (idle :cycles 2) (idle :cycles 3)))))
+
+;;; #413: (skip-instruction) steps PC past the instruction at PC
+(definstruction emu-test-machine skp
+  (encoding (opcode #xE5))
+  (semantics (set! x (if (instruction-descriptor-p (skip-instruction)) 1 0))))
+
+(definstruction emu-test-machine skpr
+  (encoding (opcode #xE6))
+  (semantics (set! x (if (instruction-descriptor-p (skip-instruction 'ram)) 1 0))))
+
+(defun %skip-test-step (cells)
+  (let ((m (make-machine 'emu-test-machine)))
+    (load-program m cells :origin 0)
+    (step-machine m)
+    m))
+
+(fiveam:test skip-instruction-moves-past-a-multi-cell-instruction
+  (let ((m (%skip-test-step (list #xE5 #xA2 #x05 #x00))))
+    (fiveam:is (= 3 (sref m 'pc)))
+    (fiveam:is (= 1 (sref m 'x)))))
+
+(fiveam:test skip-instruction-takes-an-explicit-memory
+  (let ((m (%skip-test-step (list #xE6 #xCA #x00))))
+    (fiveam:is (= 2 (sref m 'pc)))
+    (fiveam:is (= 1 (sref m 'x)))))
+
+(fiveam:test skip-instruction-moves-one-cell-past-an-undecodable-opcode
+  (let ((m (%skip-test-step (list #xE5 #xFF #x00))))
+    (fiveam:is (= 2 (sref m 'pc)))
+    (fiveam:is (= 0 (sref m 'x)))))
+
+(fiveam:test skip-instruction-wraps-pc-at-its-register-width
+  (let ((m (make-machine 'emu-test-machine)))
+    (setf (mref m 'ram #xffff) #xE5)
+    (setf (sref m 'pc) #xffff)
+    (step-machine m)
+    (fiveam:is (= 1 (sref m 'pc)))))
+
+(fiveam:test skip-instruction-needs-a-pc-register
+  (eval '(defmachine skip-no-pc-test (register q :width 8) (memory ram :width 8 :addr-width 8)))
+  (fiveam:signals error
+    (eval '(with-machine (m skip-no-pc-test) (skip-instruction)))))

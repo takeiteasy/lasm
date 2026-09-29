@@ -378,26 +378,13 @@ Hardware
 ;;; Conditionals. A failed test skips the next instruction and, while the
 ;;; skipped one is itself an IF, the one after it, at one cycle each. The
 ;;; skipped instruction is decoded but not run, so its PUSH or POP does nothing.
-;; TODO: a semantics operator for this; see docs/examples.md#limitations.
-(defun skip-instructions (machine)
-  "Advance PC past the instruction at PC and any IF chain, returning how many
-instructions were skipped."
-  (let ((skipped 0))
-    (loop
-      (multiple-value-bind (descriptor values size)
-          (decode-instruction-at (machine-cell-reader machine 'ram) (sref machine 'pc) 'dcpu16)
-        (declare (ignore values))
-        (incf skipped)
-        (setf (sref machine 'pc) (wrap-value (+ (sref machine 'pc) (if (eq descriptor :decode-failure) 1 size))
-                                             16))
-        (unless (and (not (eq descriptor :decode-failure))
-                     (string= "IF" (instruction-descriptor-name descriptor) :end2 2))
-          (return skipped))))))
-
 (defmacro defconditional (name opcode test)
   `(defbasic ,name ,opcode 2
      (unless ,test
-       (elapse (skip-instructions machine)))))
+       (loop for skipped = (skip-instruction)
+             do (elapse 1)
+             while (and (instruction-descriptor-p skipped)
+                        (string= "IF" (instruction-descriptor-name skipped) :end2 2))))))
 
 (defconditional ifb #x10 (/= 0 (logand dst src)))
 (defconditional ifc #x11 (= 0 (logand dst src)))

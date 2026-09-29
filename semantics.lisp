@@ -143,7 +143,7 @@ when there is none, the sole (stack-pointer ...) register."
   "Evaluate BODY with every scalar storage/flag element of the machine
 descriptor MACHINE-NAME bound as a symbol-macro, plus the semantics
 operators SET!, MREF, PUSH, POP, STACK-POINTER, STACK-DEPTH, STACK-REF,
-SET-BANK!, SET-FLAGS!, TRAP, ELAPSE, and
+SET-BANK!, SET-FLAGS!, TRAP, ELAPSE, SKIP-INSTRUCTION, and
 INTERRUPT-RETURN.
 
 The device bus API (DEVICE-COUNT, DEVICE-INFO, DEVICE-SEND, device.lisp)
@@ -239,6 +239,10 @@ these for a run-time-computed index."
                                        machine-name)
                                (format nil "MREF on machine ~S: no memory element declared"
                                        machine-name)))
+             (skip-error (unless (let ((pc (gethash 'pc (machine-descriptor-table descriptor))))
+                                   (and pc (eq (storage-element-kind pc) :register)))
+                           (format nil "SKIP-INSTRUCTION on machine ~S: no register named PC"
+                                   machine-name)))
              (gates (loop for element in (machine-descriptor-elements descriptor)
                           when (or (storage-element-read-privilege element)
                                    (storage-element-write-privilege element)
@@ -401,6 +405,11 @@ clause declared" machine-name)))
                       ;; step's devices stay in lockstep with MACHINE-CYCLES.
                       (elapse (n)
                         `(%elapse ,',machine-var ,n))
+                      (skip-instruction (&optional (memory-name nil supplied-p))
+                        (when ',skip-error (%definstruction-error ',skip-error))
+                        (cond (supplied-p `(%skip-instruction ,',machine-var ,memory-name))
+                              (',sole-memory `(%skip-instruction ,',machine-var ',',sole-memory))
+                              (t (%definstruction-error ',memory-error))))
                       (interrupt-return ()
                         (when ',interrupt-error (%definstruction-error ',interrupt-error))
                         ',interrupt-form))

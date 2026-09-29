@@ -102,9 +102,3 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 | `(delay-timer m)`, `(sound-timer m)` | Timers. |
 | `(memory-byte m address)` | A byte of CHIP-8 memory. |
 | `(pixel m x y)`, `(display-rows m)` | The 64x32 display. |
-
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |
