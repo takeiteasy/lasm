@@ -159,7 +159,9 @@ inherited descriptor is the parent's own.[^view]
 ## Limitations
 
 - A change to a parent's `defmachine` clauses reaches existing children only
-  when their `defmachine` forms are evaluated again.
+  when their `defmachine` forms are evaluated again. Redefining a parent so a
+  child no longer fits it gives no warning; the child faults when it runs.
+  [#450](https://todo.sr.ht/~takeiteasy/lasm/450)
 - Removal is per mnemonic, not per addressing mode.
 - Memory and stack elements cannot be removed in a child.
   [#361](https://todo.sr.ht/~takeiteasy/lasm/361)
