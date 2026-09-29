@@ -220,35 +220,33 @@ Hardware
       (choice-case (,slot d-common)
         (d-reg (values :reg ,reg))
         (d-regind (values :mem (regref machine 'reg ,regind)))
-        (d-idx (elapse 1)
-               (values :mem (wrap (+ (regref machine 'reg ,idx) ,off))))
-        (d-mem (elapse 1) (values :mem (wrap ,mem)))
+        (d-idx (values :mem (wrap (+ (regref machine 'reg ,idx) ,off))))
+        (d-mem (values :mem (wrap ,mem)))
         (d-lit ,literal-form)
         (d-sp (values :sp 0))
         (d-pc (values :pc 0))
         (d-ex (values :ex 0))
         (d-peek (values :mem (sref machine 'sp)))
-        (d-pick (elapse 1)
-                (values :mem (wrap (+ (sref machine 'sp) ,pick))))))))
+        (d-pick (values :mem (wrap (+ (sref machine 'sp) ,pick))))))))
 
 (defmacro a-place ()
   `(resolve-operand a-slot
      (d-pop (let ((address (sref machine 'sp)))
               (setf (sref machine 'sp) (wrap (1+ address)))
               (values :mem address)))
-     (progn (unless (<= -1 alit 30) (elapse 1))
-            (values :lit (wrap alit)))
+     (values :lit (wrap alit))
      areg aregind aidx aoff amem apick))
 
 (defmacro b-place ()
   `(resolve-operand b-slot
      (d-push (values :mem (setf (sref machine 'sp) (wrap (1- (sref machine 'sp))))))
-     (progn (elapse 1) (values :lit (wrap blit)))
+     (values :lit (wrap blit))
      breg bregind bidx boff bmem bpick))
 
 ;; SRC is the value of `a`, DST is the value of `b`, and (STORE v) writes `b`.
+;; Each next word costs a cycle.
 (defmacro with-operands (&body body)
-  `(multiple-value-bind (a-kind a-datum) (a-place)
+  `(multiple-value-bind (a-kind a-datum) (progn (elapse (1- (instruction-size))) (a-place))
      (let ((src (place-get machine a-kind a-datum)))
        (declare (ignorable src))
        (multiple-value-bind (b-kind b-datum) (b-place)
@@ -278,6 +276,7 @@ Hardware
        ,@(operand-clauses 'a-slot 'av 'areg 'aregind 'aidx 'aoff 'amem 'alit 'apick))
      (cycles ,cycles)
      (semantics
+       (elapse (1- (instruction-size)))
        (multiple-value-bind (a-kind a-datum) (a-place)
          (let ((src (place-get machine a-kind a-datum)))
            (declare (ignorable src))

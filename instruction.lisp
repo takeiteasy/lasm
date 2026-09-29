@@ -1677,16 +1677,16 @@ on each descendant holding a copy."
              (promote ()
                (install (%compile-definition form name))))
       (setf proxy
-            (lambda (machine operands choices &optional selections mapping)
+            (lambda (machine operands choices &optional selections mapping size)
               (let ((fast (let ((*fast-compile-policy* '(optimize (compilation-speed 3) (debug 0))))
                             (%compile-definition form name))))
                 (setf calls 1)
                 (install
-                 (lambda (machine operands choices &optional selections mapping)
+                 (lambda (machine operands choices &optional selections mapping size)
                    (when (= (incf calls) *semantics-promotion-calls*)
                      (promote))
-                   (funcall fast machine operands choices selections mapping)))
-                (funcall fast machine operands choices selections mapping)))
+                   (funcall fast machine operands choices selections mapping size)))
+                (funcall fast machine operands choices selections mapping size)))
             installed proxy))
     proxy))
 
@@ -1716,6 +1716,7 @@ compile error, preserving typo protection."
     (%validate-choice-case-forms! form machine name operand-names hole-alternatives-list mode-operand-names
                                   named-slot-alternatives))
   (let* ((mapping-name (gensym "OPERAND-MAP"))
+         (size-name (gensym "SIZE"))
          (own-names (remove nil operand-names))
          (absent-names (set-difference (remove nil mode-operand-names) own-names))
          (named-bindings (loop for op-name in operand-names
@@ -1723,14 +1724,15 @@ compile error, preserving typo protection."
                                 when op-name
                                   collect `(,op-name (%semantics-operand operands ,i ,mapping-name))))
          (absent-bindings (mapcar (lambda (n) `(,n (%absent-choice-operand))) absent-names)))
-     (let ((form `(lambda (machine operands choices &optional selections ,mapping-name)
-                    (declare (ignorable operands choices selections ,mapping-name))
+     (let ((form `(lambda (machine operands choices &optional selections ,mapping-name ,size-name)
+                    (declare (ignorable operands choices selections ,mapping-name ,size-name))
                     (with-machine-bindings (machine ,machine)
                       (let ((operand (%semantics-operand operands 0 ,mapping-name))
                             ,@named-bindings
                             ,@absent-bindings)
                         (declare (ignorable operand ,@own-names ,@absent-names))
-                        (macrolet ((choice-case (choice-name &body clauses)
+                        (macrolet ((instruction-size () ',size-name)
+                                   (choice-case (choice-name &body clauses)
                                      (%choice-case-form choice-name clauses ',machine ',name
                                                         ',operand-names ',hole-alternatives-list
                                                         ',mode-operand-names ',named-slot-alternatives
@@ -4997,7 +4999,8 @@ its own should supply the same."
                                       (%machine-cell-width machine memory)
                                       (%machine-endian machine memory)))))
 
-(defun execute-instruction (descriptor machine values &optional choices)
+(defun execute-instruction (descriptor machine values &optional choices
+                              (size (instruction-descriptor-size descriptor)))
   "Execute instruction DESCRIPTOR against a live MACHINE instance, passing
 VALUES (a list of already-evaluated integers, one per operand encoding
 field, or NIL for a no-operand instruction) to its semantics -- OPERAND is
@@ -5012,10 +5015,14 @@ give (or on a cell-encoded machine with no hole-selected sub-opcode selector
 anywhere in this descriptor -- see %DECODE-CELL-INSTRUCTION,
 decoder.lisp) can omit it, in which case a (semantics ...) body's CHOICE-CASE
 (if it has one) sees every hole as unmatched, same as an operand not governed
-by any ONE-OF at all."
+by any ONE-OF at all.
+
+SIZE is the decoded length in cells, which a semantics body reads with
+\(INSTRUCTION-SIZE). It defaults to DESCRIPTOR's own size; STEP-MACHINE
+passes the size it decoded."
   (let ((function (instruction-descriptor-semantics-fn descriptor))
         (selections (instruction-descriptor-choice-selections descriptor))
         (mapping (instruction-descriptor-semantics-operand-map descriptor)))
     (if mapping
-        (funcall function machine values choices selections mapping)
-        (funcall function machine values choices selections))))
+        (funcall function machine values choices selections mapping size)
+        (funcall function machine values choices selections nil size))))

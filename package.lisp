@@ -328,6 +328,7 @@
    #:elapse
    #:machine
    #:choice-case
+   #:instruction-size
    #:pc
    #:opcode
 

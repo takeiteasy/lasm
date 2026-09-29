@@ -780,3 +780,53 @@
     (fiveam:is (equal '((src-slot nz-stk nz-pop)) selections)))
   (fiveam:is (not (equalp (assembly-cells (assemble "get POP" :machine 'nested-zero-machine))
                           (assembly-cells (assemble "get 0" :machine 'nested-zero-machine))))))
+
+;;; #439: (instruction-size) is the decoded length in cells
+
+(defmachine size-machine
+  (register a :width 16)
+  (register pc :width 16)
+  (memory ram :width 16 :addr-width 16 :cell-width 16)
+  (instruction-word :width 16
+    (field opcode 4)
+    (field dst 12)))
+
+(defmode size-mode "#" expr)
+
+(definstruction size-machine sizeof
+  (modes size-mode)
+  (encoding
+    (opcode 1)
+    (operand value :field dst
+      (variant (range 0 7) inline)
+      (variant :else (extra-word :escape #xfff) :suffix "w")))
+  (semantics (set! a (instruction-size))))
+
+(defmachine byte-size-machine
+  (register a :width 8)
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction byte-size-machine sizeof
+  (encoding (opcode #x01))
+  (semantics (set! a (instruction-size))))
+
+(definstruction byte-size-machine sizeimm
+  (modes immediate)
+  (encoding (opcode #x02) (operand :mode))
+  (semantics (set! a (instruction-size))))
+
+(defun size-after-step (source machine)
+  (let ((m (make-machine machine)))
+    (load-program m (assemble source :machine machine))
+    (step-machine m)
+    (sref m 'a)))
+
+(fiveam:test instruction-size-sees-the-decoded-variant
+  (fiveam:is (= 1 (size-after-step "sizeof #5" 'size-machine)))
+  (fiveam:is (= 2 (size-after-step "sizeof #w:5" 'size-machine)))
+  (fiveam:is (= 2 (size-after-step "sizeof #1000" 'size-machine))))
+
+(fiveam:test instruction-size-on-a-byte-machine
+  (fiveam:is (= 1 (size-after-step "sizeof" 'byte-size-machine)))
+  (fiveam:is (= 2 (size-after-step "sizeimm #7" 'byte-size-machine))))

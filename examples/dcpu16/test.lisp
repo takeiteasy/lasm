@@ -321,6 +321,12 @@ set a, 0x1000" 4)
           ("hwi 5" 4))
         do (fiveam:is (= cycles (cycles-of source)) "~A" source)))
 
+(fiveam:test hand-built-wide-literal-costs-its-next-word
+  (let ((machine (make-machine 'dcpu16)))
+    (setf (mref machine 'ram 0) #x7c01
+          (mref machine 'ram 1) 5)
+    (fiveam:is (= 2 (nth-value 1 (step-machine machine))))))
+
 (fiveam:test undefined-opcode-does-not-decode
   (let ((m (make-machine 'dcpu16)))
     (setf (mref m 'ram 0) #x03e0)

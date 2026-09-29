@@ -30,6 +30,7 @@ access functions; see [Machine model](machine-model.md) and
 | `(trap tag [data])` | Signal `lasm-trap`. |
 | `(idle)` | Mark the machine idle after semantics finishes. |
 | `(elapse n)` | Add `n` cycles and tick devices immediately, mid-body. Use it for runtime-dependent costs such as a taken branch. |
+| `(instruction-size)` | The decoded instruction's length in cells, so `(elapse (1- (instruction-size)))` charges a cycle per extra word. |
 | `(interrupt-return)` | Restore the state saved at interrupt delivery. |
 | `(zero? value)`, `(bit-set? value bit)` | Predicates for flag expressions. |
 | `(page-crossed? from to [page-size])` | Test whether two addresses cross a page boundary. |

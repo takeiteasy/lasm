@@ -191,6 +191,13 @@ taken branch:
 (semantics (when (zero? z) (set! pc operand) (elapse 1)))
 ```
 
+A cost that follows the instruction's length reads `(instruction-size)`, the
+decoded length in cells:
+
+```lisp
+(semantics (elapse (1- (instruction-size))) ...)
+```
+
 The cost contributes to cycle budgets and elapsed time, and devices receive
 it at the call, so a trapping step still ticks them. The [listing](listing.md#rendering-listing-text--print-listing)
 marks such instructions with `+` in its cycles column.

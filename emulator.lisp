@@ -325,7 +325,7 @@ decoded, not just the values."
                        (setf (%sref machine pc) (+ address size))
                        (incf (machine-cycles machine) cost)
                        (tick-devices machine cost)
-                       (execute-instruction descriptor machine values choices)
+                       (execute-instruction descriptor machine values choices size)
                        (values descriptor (- (machine-cycles machine) start-cycles))))))))
       (declare (dynamic-extent #'execute))
       (if (%privilege-interrupt-policy-p machine)
