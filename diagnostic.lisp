@@ -291,6 +291,14 @@ element match an operand equally well. HOLE is the element's first hole
 index and SLOT its slot name, or NIL. CHOSEN and ALTERNATIVES name the
 alternatives' own MODE-DESCRIPTORs."))
 
+(define-condition idle-unwakeable (lasm-warning)
+  ((machine :initarg :machine :reader idle-unwakeable-machine))
+  (:report (lambda (c s)
+             (format s "~S went idle with a zero interrupt vector and nothing queued; ~
+every signal is dropped, so it cannot wake" (idle-unwakeable-machine c))))
+  (:documentation "Signalled when MACHINE idles while :DROP-ON-ZERO-VECTOR would
+drop every signal, leaving no way to wake it short of WAKE-MACHINE."))
+
 (define-condition simple-style-warning (simple-condition style-warning) ()
   (:documentation "A STYLE-WARNING with a format control, as WARN takes on a string."))
 

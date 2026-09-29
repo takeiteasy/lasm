@@ -400,7 +400,8 @@ DURATION -- a plain STOP-P being present or absent doesn't by itself say
 which case this is, since DEBUG-CONTINUE always passes one, its breakpoint
 predicate) gates whether that idle-exhausted check runs at all: when the
 machine is *still* idle after a step, its pending interrupt queue is
-empty, and no live device remains on its bus, nothing left running this
+empty, and either no live device remains on its bus or every signal would be
+dropped at a zero vector (%IDLE-UNWAKEABLE-P), nothing left running this
 loop could ever wake it -- so this returns :IDLE itself rather than
 spinning to :MAX-STEPS, the same way a decode failure short-circuits
 rather than running the budget dry. A host can SIGNAL-INTERRUPT
@@ -438,7 +439,8 @@ exactly as it already can after :TRAP."
                             (eq result :idle)
                             (machine-idle machine)
                             (zerop (machine-interrupt-pending-count machine))
-                            (notany #'identity (machine-devices machine)))
+                            (or (notany #'identity (machine-devices machine))
+                                (%idle-unwakeable-p machine)))
                    (return-from %run-loop (values :idle (1+ steps)))))
              (lasm-trap (c)
                ;; The trapping instruction's semantics ran to completion (the

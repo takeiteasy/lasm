@@ -1005,6 +1005,23 @@ policy. Lives here, not interrupt.lisp, because %DEFAULT-INTERRUPT-HOOK below
       (%push-pending machine pending)))
   t)
 
+(defun %idle-unwakeable-p (machine)
+  "True when no signal can ever reach MACHINE: nothing is queued, and every
+handler-address place a signal would use reads 0 under :DROP-ON-ZERO-VECTOR."
+  (let ((interrupts (machine-descriptor-interrupts (machine-descriptor machine))))
+    (and interrupts
+         (interrupt-descriptor-drop-on-zero-vector interrupts)
+         (zerop (machine-interrupt-count machine))
+         (zerop (%interrupt-place machine (%interrupt-vector interrupts nil)))
+         (zerop (%interrupt-place machine (%interrupt-vector interrupts t))))))
+
+(defun %enter-idle (machine)
+  "Put MACHINE to sleep, warning when nothing can wake it."
+  (setf (machine-idle machine) t)
+  (when (%idle-unwakeable-p machine)
+    (warn 'idle-unwakeable :machine (machine-descriptor-name (machine-descriptor machine))))
+  t)
+
 ;; The hook MAKE-MACHINE below auto-installs onto MACHINE-INTERRUPT-
 ;; HOOK when the descriptor declares (interrupts ...) -- DEVICE-SIGNAL
 ;; (device.lisp) reaches this indirectly through the hook; a software

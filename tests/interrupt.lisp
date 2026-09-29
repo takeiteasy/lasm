@@ -1277,3 +1277,64 @@
                (stack sp :width 8 :depth 4)
                (memory ram :width 8 :addr-width 8)
                ,form)))))
+
+;;; Idle with nothing able to wake the machine (#165)
+
+(defmachine interrupt-nmi-idle-test-machine
+  (register pc :width 8) (register irq :width 8) (register nmi :width 8) (register a :width 8)
+  (stack sp :width 8 :depth 4)
+  (memory ram :width 8 :addr-width 8)
+  (interrupts :vector irq :nmi-vector nmi :message a :save (pc)))
+
+(definstruction interrupt-nmi-idle-test-machine slp (encoding (opcode 3)) (semantics (idle)))
+(definstruction interrupt-zero-vector-ok-test-machine slp (encoding (opcode 3)) (semantics (idle)))
+
+(defun %warnings-while-sleeping (machine &key (ia 0))
+  "The IDLE-UNWAKEABLE warnings signalled by running one SLP on MACHINE."
+  (let ((seen '()))
+    (setf (sref machine 'ia) ia)
+    (load-program machine (list #x03) :origin 0)
+    (handler-bind ((idle-unwakeable (lambda (c) (cl:push c seen) (muffle-warning c))))
+      (step-machine machine))
+    seen))
+
+(fiveam:test idle-with-a-zero-vector-warns
+  (let ((seen (%warnings-while-sleeping (make-machine 'interrupt-test-machine))))
+    (fiveam:is (= 1 (length seen)))
+    (fiveam:is (eq 'interrupt-test-machine (idle-unwakeable-machine (first seen))))))
+
+(fiveam:test idle-with-a-nonzero-vector-does-not-warn
+  (fiveam:is (null (%warnings-while-sleeping (make-machine 'interrupt-test-machine) :ia 5))))
+
+(fiveam:test idle-does-not-warn-when-zero-vector-drop-is-off
+  (let ((m (make-machine 'interrupt-zero-vector-ok-test-machine)))
+    (fiveam:is (null (%warnings-while-sleeping m)))))
+
+(fiveam:test a-queued-signal-keeps-a-zero-vector-machine-wakeable
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x0100)
+    (signal-interrupt m 1)
+    (setf (sref m 'ia) 0)
+    (fiveam:is (not (%idle-unwakeable-p m)))))
+
+(fiveam:test idle-does-not-warn-when-the-nmi-vector-is-nonzero
+  (let ((m (make-machine 'interrupt-nmi-idle-test-machine)))
+    (setf (sref m 'nmi) 9)
+    (load-program m (list #x03) :origin 0)
+    (let ((seen '()))
+      (handler-bind ((idle-unwakeable (lambda (c) (cl:push c seen) (muffle-warning c))))
+        (step-machine m))
+      (fiveam:is (null seen)))))
+
+(fiveam:test run-stops-idle-when-a-live-device-cannot-wake-a-zero-vector-machine
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) 0)
+    (load-program m (list #x03) :origin 0)
+    (handler-bind ((idle-unwakeable #'muffle-warning))
+      (fiveam:is (eq :idle (run m :max-steps 50))))))
+
+(fiveam:test run-keeps-idling-with-a-live-device-when-the-vector-is-set
+  (let ((m (make-machine 'interrupt-test-machine)))
+    (setf (sref m 'ia) #x0100)
+    (load-program m (list #x03) :origin 0)
+    (fiveam:is (eq :max-steps (run m :max-steps 20)))))

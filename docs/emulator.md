@@ -125,7 +125,7 @@ does not count. An idle step counts. Direct stepping still signals faults.
 | `:trap` | Semantics called `trap`; the condition is returned. |
 | `:fault` | A storage access failed; the condition is returned. |
 | `:decode-failure` | No instruction matches the fetched cells. |
-| `:idle` | No queued interrupt or live device can wake the idle machine. |
+| `:idle` | No queued interrupt or live device can wake the idle machine, or every signal would drop at a [zero vector](interrupts.md#zero-vector). |
 | `:max-steps` | The step budget is reached. |
 | `:max-cycles` | The cycle budget is reached in `run-for-cycles`. |
 | `:duration` | The duration budget is reached in `run-for-duration`. |

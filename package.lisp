@@ -100,6 +100,8 @@
    #:ambiguous-mode-mnemonic
    #:ambiguous-mode-chosen
    #:ambiguous-mode-alternatives
+   #:idle-unwakeable
+   #:idle-unwakeable-machine
    #:ambiguous-alternative
    #:ambiguous-alternative-hole
    #:ambiguous-alternative-slot

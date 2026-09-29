@@ -395,7 +395,7 @@ clause declared" machine-name)))
                       ;; the instruction's own cycle cost) still runs to
                       ;; completion.
                       (idle ()
-                        `(setf (machine-idle ,',machine-var) t))
+                        `(%enter-idle ,',machine-var))
                       ;; Counts and ticks devices now, so a trapping
                       ;; step's devices stay in lockstep with MACHINE-CYCLES.
                       (elapse (n)

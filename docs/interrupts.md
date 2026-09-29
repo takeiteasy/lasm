@@ -109,6 +109,11 @@ With `:drop-on-zero-vector t`, a signal is discarded while the vector
 register is zero. Set it to `nil` when a handler legitimately starts at
 address zero. Dropped signals never reach the queue.
 
+A machine that idles with an empty queue while every vector it could use
+reads zero can never wake through interrupts. `(idle)` then warns
+`idle-unwakeable`, and `run` returns `:idle` even with live devices attached.
+`wake-machine` still wakes it.
+
 ## Masking
 
 Masking delays delivery; it does not stop enqueueing. A masked queue still
@@ -202,9 +207,6 @@ hook in place as host wiring.
 
 ## Limitations
 
-- An idle machine with a zero vector and the default drop policy discards
-  every signal, so it cannot wake through interrupts. A diagnostic is
-  tracked in [ticket 165](https://todo.sr.ht/~takeiteasy/lasm/165).
 - A register-backed stack saves each place in one cell; splitting wider
   places across cells is unavailable.
 - Handler depth unwinds only through `interrupt-return`; a handler that
