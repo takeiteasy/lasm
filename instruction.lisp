@@ -711,8 +711,10 @@ are returned instead."
         (setf (gethash opcode table)
               (%insert-by-specificity (list descriptor) (gethash opcode table)))))))
 
-;;; Machine families: a child machine holds its own copy of every inherited
-;;; descriptor, re-targeted at the child, so decode never walks the chain.
+;;; ISA families: a child ISA holds its own copy of every inherited descriptor,
+;;; re-targeted at the child. A CPU reads its ISA's table through a view instead.
+;;; TODO: a child ISA copies per level and propagates each later definition;
+;;; flatten the ISA chain in the CPU view instead (#448).
 
 (defun %copy-descriptor-family (descriptors machine-name cycles)
   "Shallow copies of DESCRIPTORS re-targeted at MACHINE-NAME, in order. CYCLES,

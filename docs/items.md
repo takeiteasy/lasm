@@ -157,7 +157,7 @@ A `.lasm` file holds one `(:program (OPTION...) ITEM...)` form.
 | Option | Value |
 | --- | --- |
 | `:backend` | Backend name. |
-| `:machine` | Machine name, when there is no backend. |
+| `:cpu` | CPU name, when the backend names none. |
 | `:origin` | Start address. |
 | `:memory` | Memory element. |
 | `:lexer` | Lexer name. |

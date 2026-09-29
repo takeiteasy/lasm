@@ -4,6 +4,8 @@ A machine can extend another. The child inherits the parent's storage,
 clauses and instructions and states only what differs — the shape of a CPU
 family: one architecture, several models that add, remove or re-time
 instructions and differ in memory size, clock rate and identity.
+`defmachine` defines an [ISA and a CPU](isa.md) together; write `defisa` and
+`defcpu` when models share one ISA.
 
 ```lisp
 (defmachine anima16
@@ -27,7 +29,7 @@ instructions and differ in memory size, clock rate and identity.
 ```
 
 `(defmachine (NAME (:extends PARENT)) clause...)` — `PARENT` must already be
-defined. Chains can be any depth.
+defined as an ISA and a CPU. Chains can be any depth.
 
 ## Clause merging
 
@@ -46,17 +48,17 @@ device bus indices of the parent are kept.
 
 ## Backends
 
-A [backend](backends.md#inheritance) can extend another for the same machine or
-a descendant, so a family shares one compiler-target description.
+A [backend](backends.md#inheritance) can extend another for the same ISA or an
+ISA that extends it, so a family shares one compiler-target description.
 
 ## Modes
 
-A child sees its parent's [machine-local modes](modes.md#machine-local-modes)
-and can shadow them with `(defmode (NAME (:machine CHILD)) ...)`.
+A child sees its parent's [ISA-local modes](modes.md#isa-local-modes)
+and can shadow them with `(defmode (NAME (:isa CHILD)) ...)`.
 
-## What a child cannot change
+## What a CPU cannot change
 
-Inherited instructions are compiled against the parent's layout, so a child
+Instructions are compiled against the ISA's layout, so a CPU, or a child ISA,
 is rejected when it:
 
 - declares `instruction-word` or `stack-pointer`
@@ -123,13 +125,15 @@ from semantics or host code:
 
 ## Later definitions
 
-A `definstruction` on a parent is copied to every descendant, except one that
-defines the mnemonic itself or removed it. A descendant's cycle override
-applies to the new definition. An opcode conflict with a descendant's own
+A `definstruction` on an ISA reaches every CPU of it at once, and is copied to
+every child ISA except one that defines the mnemonic itself. A CPU that
+removed the mnemonic keeps it removed, and a CPU's cycle override applies to
+the new definition. An opcode conflict with a descendant's own
 instruction is an error and changes nothing.
 
-Each machine holds its own copies of the inherited instructions; nothing is
-looked up through the parent at run time.
+A CPU reads its ISA's instructions through a view that applies its removals
+and cycle overrides, so a CPU holds no copies. A child ISA holds copies of
+its parent's.
 
 ## Limitations
 
@@ -137,6 +141,8 @@ looked up through the parent at run time.
   when their `defmachine` forms are evaluated again.
 - A mnemonic dropped from a parent stays on its children until they are
   re-evaluated.
+- An ISA that extends an ISA holds copies of its parent's instructions.
+  [#448](https://todo.sr.ht/~takeiteasy/lasm/448)
 - Removal is per mnemonic, not per addressing mode.
 - Memory and stack elements cannot be removed in a child.
   [#361](https://todo.sr.ht/~takeiteasy/lasm/361)

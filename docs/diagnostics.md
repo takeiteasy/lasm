@@ -32,7 +32,7 @@ location and its body location as secondary detail.
 
 ```lisp
 (with-source-context source
-  (assemble-statements statements :machine 'sixtyfoo))
+  (assemble-statements statements :cpu 'sixtyfoo))
 ```
 
 ## Mode-mismatch diagnostics
@@ -86,7 +86,7 @@ or bind the global switch to turn an overflow into `assembly-error`:
 (defmode strict-imm "#" expr :width 1 :strict t)
 
 (let ((*strict-operand-range* t))
-  (assemble source :machine 'sixtyfoo))
+  (assemble source :cpu 'sixtyfoo))
 ```
 
 | Setting | Applies to |
@@ -166,7 +166,7 @@ signals a `usage-error`. `usage-error-message` holds the text.
 | Condition | Signalled by |
 | --- | --- |
 | `debugger-usage-error` | Debugger commands and API: bad targets, indices, counts, banks |
-| `disassembler-usage-error` | Missing `:machine`, `:start` or `:count`, bad data regions |
+| `disassembler-usage-error` | Missing `:cpu`, `:start` or `:count`, bad data regions |
 | `output-usage-error` | Cell widths, byte counts and ranges that a format cannot hold |
 | `emulator-usage-error` | `load-program`, `run*`, clock speed, devices, memory resolution |
 | `lookup-error` | `unknown-machine`, `unknown-mode`, `unknown-lexer`; `lookup-error-name` names the missing definition |
@@ -215,7 +215,7 @@ signals a `usage-error`. `usage-error-message` holds the text.
 | Condition | Signalled by |
 | --- | --- |
 | `debugger-usage-error` | Debugger commands and API: bad targets, indices, counts, banks |
-| `disassembler-usage-error` | Missing `:machine`, `:start` or `:count`, bad data regions |
+| `disassembler-usage-error` | Missing `:cpu`, `:start` or `:count`, bad data regions |
 | `output-usage-error` | Cell widths, byte counts and ranges that a format cannot hold |
 | `emulator-usage-error` | `load-program`, `run*`, clock speed, devices, memory resolution |
 | `lookup-error` | `unknown-machine`, `unknown-mode`, `unknown-lexer`; `lookup-error-name` names the missing definition |

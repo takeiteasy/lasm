@@ -2,7 +2,7 @@
 
 `machine-snapshot` captures a machine's runtime state as plain readable data;
 `restore-snapshot` puts it back. The same data can be written to and read
-from a file. Each `defmachine` provides these operations. Stateful devices can add hooks.
+from a file. Every CPU provides these operations. Stateful devices can add hooks.
 
 | Function | Behavior |
 |---|---|
@@ -10,7 +10,7 @@ from a file. Each `defmachine` provides these operations. Stateful devices can a
 | `restore-snapshot machine snapshot` | Replaces `machine`'s state and returns it. |
 | `write-snapshot snapshot path &key format` | Writes the snapshot, replacing any existing file. `format` is `:sexp` (default) or `:binary`. Returns `path`. Signals [`snapshot-unwritable`](#snapshot-data) before touching `path` for data it cannot store. |
 | `read-snapshot path` | The snapshot stored at `path`, in either format. |
-| `snapshot-assembly snapshot &key machine` | The assembly rebuilt from the [embedded program](#embedded-programs), or `nil` when there is none. |
+| `snapshot-assembly snapshot &key cpu` | The assembly rebuilt from the [embedded program](#embedded-programs), or `nil` when there is none. |
 
 ```lisp
 (let ((m (make-machine 'sixtyfoo)))
@@ -99,7 +99,7 @@ text it renders as.
 
 ## Versioning and validation
 
-A snapshot carries a version (`+snapshot-version+`), machine name, storage
+A snapshot carries a version (`+snapshot-version+`), CPU name, storage
 layout and bank layout. `restore-snapshot` checks all three
 and the payload itself before it changes anything, so a rejected snapshot
 leaves the machine untouched.
@@ -107,7 +107,7 @@ leaves the machine untouched.
 | Condition | Signalled when |
 |---|---|
 | `snapshot-version-mismatch` | The snapshot's version is not `+snapshot-version+`. |
-| `snapshot-machine-mismatch` | The snapshot is for another machine, or the storage or bank layout differs. |
+| `snapshot-machine-mismatch` | The snapshot is for another CPU, or the storage or bank layout differs. |
 | `snapshot-malformed` | The payload is structurally invalid, a value does not fit its cell, or a file is not a readable snapshot. |
 | `snapshot-unwritable` | `write-snapshot` is given circular data or a value outside [the allowed data](#snapshot-data). |
 | `snapshot-device-unknown` | A saved device is neither declared on the machine nor already attached. |
@@ -126,7 +126,7 @@ is malformed too, and a binary format this lasm does not read signals
 `snapshot-version-mismatch`. A binding to a missing
 device or an unbindable region is malformed too.
 `snapshot-assembly` signals `snapshot-malformed` for a damaged `:program` and
-`snapshot-machine-mismatch` for another machine's.
+`snapshot-machine-mismatch` for another CPU's.
 
 ## Devices
 

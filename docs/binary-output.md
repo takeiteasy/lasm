@@ -14,7 +14,7 @@ flasher, a hex viewer.
 
 An 8-bit cell is one byte. A wider cell splits into bytes ordered by the
 memory element's `:endian` ([Machine model](machine-model.md)): `:little`
-writes the low byte at the lower offset. `:machine` (with `:memory` when the
+writes the low byte at the lower offset. `:cpu` (with `:memory` when the
 machine has several memory elements) supplies the endianness, or pass `:endian`
 directly. A cell wider than 8 bits with neither signals. A memory element with
 a grouped order such as `(:big :little 2)` orders the bytes inside each cell by

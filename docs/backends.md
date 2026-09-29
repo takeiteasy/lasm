@@ -1,8 +1,8 @@
 # Backends
 
-`defbackend` describes a machine as a compiler target: register roles, a
+`defbackend` describes an ISA as a compiler target: register roles, a
 calling convention, frame layout, the operand kinds a front end may name, and
-primitive operations. A backend is separate from `defmachine`; one machine can
+primitive operations. A backend is separate from `defisa`; one ISA can
 have several. [Items](items.md) are assembled against one.
 
 ```lisp
@@ -17,7 +17,9 @@ have several. [Items](items.md) are assembled against one.
        (:return () (ret))))
 ```
 
-The machine, modes and instructions must already be defined. Registers,
+The ISA, modes and instructions must already be defined. Items assemble for a
+CPU: the backend's `(:cpu NAME)`, else the CPU named like the ISA, else the
+`:cpu` passed to `assemble-items`. Registers,
 modes and mnemonics are matched by name, so a backend can be written in any
 package. A mistake signals `backend-definition-error`.
 
@@ -281,7 +283,7 @@ variant without a mode.
 
 `(defbackend CHILD (:extends PARENT) clause...)` starts from the parent's
 clauses. The child's clauses merge over them and the result is checked against
-the child's machine.
+the child's ISA or CPU.
 
 ```lisp
 (defbackend callfoo-fp-abi (:extends callfoo-abi :isa callfoo-fp)
@@ -299,10 +301,12 @@ the child's machine.
 | `branches` `stack-writers` | The child's clause replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 
-`:machine` defaults to the parent's machine. When given, it must be that machine
-or one that [extends it](machine-families.md). Every operation, register and mode
-is checked again on the child's machine, so an operation using an instruction the
-child machine removed is an error until the child overrides or drops it.
+`:isa` defaults to the parent's ISA. When given, it must be that ISA or one that
+[extends it](isa.md#extending). `(:cpu NAME)` narrows a backend to one CPU of the
+ISA; a child inherits its parent's CPU, and may name that CPU or one extending it.
+Every operation, register and mode is checked again against the child's CPU, or
+its ISA without one, so an operation using an instruction the CPU removed is an
+error until the child overrides or drops it.
 Redefining a parent rebuilds its children, and their children, from their own
 clauses. If one no longer builds, the redefinition is a `backend-definition-error`
 naming it, and every backend stays as it was. A `without-ops` name the new
@@ -315,7 +319,7 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | --- | --- |
 | `(find-backend name)` | The `backend-descriptor`; `unknown-backend` if none. |
 | `(backend-stack-writers name)` | The [stack writers](#stack-writers) as `(MNEMONIC MODE...)`, upcased and sorted. |
-| `backend-descriptor-machine` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
+| `backend-descriptor-isa` `-cpu` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
 

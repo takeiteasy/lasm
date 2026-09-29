@@ -3,6 +3,7 @@
 - [Getting started](getting-started.md) — install, load, run the example and tests
 - [Examples](examples.md) — packaged emulators loaded through ASDF
 - [Memory audit](memory-audit.md) — measured build, runtime and per-CPU costs
+- [ISA and CPU](isa.md) — `defisa`, `defcpu`, and how `defmachine` splits into both
 - [Machine model](machine-model.md) — storage elements and `defmachine`
 - [Machine families](machine-families.md) — `(:extends ...)`, inherited instructions, removal, undefined-opcode policy
 - [Conditions](conditions.md) — every condition type and its readers

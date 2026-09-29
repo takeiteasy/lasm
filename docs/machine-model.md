@@ -1,7 +1,9 @@
 # Machine model
 
 `defmachine` declares storage and execution settings. A machine can combine
-registers, stacks, memory, devices, and instruction-word layouts.
+registers, stacks, memory, devices, and instruction-word layouts. It defines
+an [ISA and a CPU](isa.md) of one name; the clauses below apply to `defisa`
+and `defcpu` as that page splits them.
 
 ```lisp
 (defmachine sixtyfoo

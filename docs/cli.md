@@ -17,17 +17,17 @@ See [`tests/fixtures/cli/`](../tests/fixtures/cli/sixtyfoo.lisp) for a runnable 
 [calling convention](conventions.md). [`swap.lasm`](../tests/fixtures/cli/swap.lasm)
 swaps register arguments through a scratch register. [`framed.lasm`](../tests/fixtures/cli/framed.lasm)
 uses a [frame pointer](conventions.md#frame-pointer) on
-[`callfoo-fp.lisp`](../tests/fixtures/cli/callfoo-fp.lisp), which defines two machines
+[`callfoo-fp.lisp`](../tests/fixtures/cli/callfoo-fp.lisp), which defines two CPUs
 and is run with `--cpu callfoo-fp`.
 
 ## Machine files
 
-A `.lisp` machine file holds the DSL forms — `deflexer`, `defmachine`, `defmode`,
+A `.lisp` machine file holds the DSL forms — `deflexer`, `defisa`, `defcpu`, `defmachine`, `defmode`,
 `definstruction`, `defdirective`, `defbackend` — read in the `lasm` package, so no
 `in-package` line is needed. Definitions live only for one command.
 
-The file's sole machine and sole lexer are used. A file defining several
-machines needs `--cpu`; several lexers need `--lexer`. With no lexer
+The file's sole CPU and sole lexer are used. A file defining several
+CPUs needs `--cpu`; several lexers need `--lexer`. A `defmachine` is one CPU. With no lexer
 defined, the default lexer is used.
 
 ## Items programs
@@ -42,7 +42,7 @@ lasm run double.lasm -m callfoo.lisp
 
 The program names its backend, or `--backend NAME` does. `--origin` and
 `--memory` override the program's own options. A file that defines several
-machines needs `--cpu`.
+CPUs needs `--cpu`.
 
 ## Source programs
 
@@ -143,7 +143,7 @@ written through the [library](snapshots.md#embedded-programs) without an
 assembly) needs `FILE`.
 
 A snapshot that is unreadable, has no program to resume from, or belongs to
-another machine exits 1; see
+another CPU exits 1; see
 [Snapshots](snapshots.md#versioning-and-validation).
 
 ## Exit status

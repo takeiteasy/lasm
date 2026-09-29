@@ -6,7 +6,7 @@
 
 (in-package #:lasm)
 
-(defconstant +snapshot-version+ 6)
+(defconstant +snapshot-version+ 7)
 
 (define-condition snapshot-error (lasm-error)
   ((detail :initarg :detail :reader snapshot-error-detail))
