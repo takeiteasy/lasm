@@ -21,7 +21,8 @@
 ;;;; global. (peek-byte A)/(poke-byte A V) are the backend's optional
 ;;;; :peek-byte/:poke-byte, byte-addressing within a word, for a machine whose
 ;;;; registers are wider than its cells, or :peek-byte-pointer/:poke-byte-pointer
-;;;; through the :address register.
+;;;; through the :address register. (aref-byte S I)/(aset-byte S I V) without them
+;;;; go through the cell: a peek/poke, a shift and a mask.
 ;;;;
 ;;;; (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
 ;;;; as fit (a .packz directive), byte order from the memory's endianness; (aref-byte S I)/(aset-byte
@@ -1202,17 +1203,57 @@ VALUE goes first when ADDRESS has a key and VALUE sets no variable, so a VALUE t
 (defun %cc-direct-character-p ()
   (and (= *cc-word-cells* 1) (= (backend-cell-bytes *cc-backend*) 1)))
 
+;; With no byte operation, a character is reached through its cell: the cell
+;; at S + I / k, shifted by the character's place in it (k characters a cell,
+;; a power of two, ordered by the memory's endianness). The internal
+;; names have spaces, which no source symbol can spell.
+(defparameter +cc-byte-cell+ (make-symbol "BYTE CELL"))
+(defparameter +cc-byte-shift+ (make-symbol "BYTE SHIFT"))
+(defparameter +cc-byte-value+ (make-symbol "BYTE VALUE"))
+
+(defun %cc-word-lowered-p (byte-ops pointer-ops)
+  "T when characters are reached through their cell: no operation in BYTE-OPS or POINTER-OPS exists, and a cell holds a power of two characters, more than one, of a one-cell word."
+  (let ((characters (backend-cell-bytes *cc-backend*)))
+    (and (= *cc-word-cells* 1)
+         (> characters 1)
+         (= (logcount characters) 1)
+         (notany #'%cc-op-p byte-ops)
+         (notany #'%cc-op-p pointer-ops))))
+
+(defun %cc-character-shift (index)
+  "The form for the bit offset of character INDEX within its cell."
+  (multiple-value-bind (characters endian) (backend-cell-bytes *cc-backend*)
+    (let ((place (list 'logand index (1- characters))))
+      (list 'shl (if (eq endian :big) (list '- (1- characters) place) place) 3))))
+
+(defun %cc-character-cell (string index)
+  (list '+ string (list 'shr index (1- (integer-length (backend-cell-bytes *cc-backend*))))))
+
 (defun %cc-aref-byte (form)
   (%cc-check-length form 3 3)
-  (if (%cc-direct-character-p)
-      (%cc-aref (list* 'aref (rest form)))
-      (%cc-peek-byte (list 'peek-byte (list '+ (list +cc-byte-address+ (second form)) (third form))))))
+  (destructuring-bind (string index) (rest form)
+    (cond ((%cc-direct-character-p)
+           (%cc-aref (list* 'aref (rest form))))
+          ((%cc-word-lowered-p '(:peek-byte) '(:peek-byte-pointer))
+           (%cc-expr `(logand (shr (peek ,(%cc-character-cell string index)) ,(%cc-character-shift index)) 255)))
+          (t (%cc-peek-byte (list 'peek-byte (list '+ (list +cc-byte-address+ string) index)))))))
 
+;; The store reads and writes the cell, so unlike a byte-store instruction
+;; it can lose an interrupt's write to the cell's other character.
 (defun %cc-aset-byte (form)
   (%cc-check-length form 4 4)
-  (if (%cc-direct-character-p)
-      (%cc-aset (list* 'aset (rest form)))
-      (%cc-poke-byte (list 'poke-byte (list '+ (list +cc-byte-address+ (second form)) (third form)) (fourth form)))))
+  (destructuring-bind (string index value) (rest form)
+    (cond ((%cc-direct-character-p)
+           (%cc-aset (list* 'aset (rest form))))
+          ((%cc-word-lowered-p '(:poke-byte) '(:poke-byte-pointer))
+           (%cc-expr `(let ((,+cc-byte-cell+ ,(%cc-character-cell string index))
+                            (,+cc-byte-shift+ ,(%cc-character-shift index))
+                            (,+cc-byte-value+ ,value))
+                        (poke ,+cc-byte-cell+
+                              (logior (logand (peek ,+cc-byte-cell+) (logxor (shl 255 ,+cc-byte-shift+) -1))
+                                      (shl (logand ,+cc-byte-value+ 255) ,+cc-byte-shift+)))
+                        ,+cc-byte-value+)))
+          (t (%cc-poke-byte (list 'poke-byte (list '+ (list +cc-byte-address+ string) index) value))))))
 
 ;; An early return. Pending temporaries (each binary operator's left
 ;; operand, or a POKE's address) sit on the stack above the frame's own

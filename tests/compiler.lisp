@@ -1024,6 +1024,10 @@
   (fiveam:is (= 1 (backend-cell-bytes 'cl-b8-abi)))
   (fiveam:is (= 2 (backend-cell-bytes 'callfoo-lang-abi)))
   (fiveam:is (eq :big (nth-value 1 (backend-cell-bytes 'cl-be-abi))))
+  (let ((*cc-backend* (find-backend 'cl-be-abi)))
+    (fiveam:is (equal '(shl (- 1 (logand 0 1)) 3) (%cc-character-shift 0)) "big-endian: characters count from the high end"))
+  (let ((*cc-backend* (find-backend 'callfoo-lang-abi)))
+    (fiveam:is (equal '(shl (logand 0 1) 3) (%cc-character-shift 0)) "little-endian: from the low end"))
   (let ((*cc-backend* (find-backend 'cl-b8-abi)) (*cc-word-cells* 1))
     (fiveam:is (%cc-direct-character-p) "one character a cell and one cell a word: a character is a word"))
   (let ((*cc-backend* (find-backend 'widefoo-lang-abi)) (*cc-word-cells* 2))
@@ -1039,11 +1043,34 @@
     (fiveam:is (= 98 (%cv-a (%cl-run source 'cl-byte-address-abi))))))
 
 (defbackend cl-no-peek-byte-abi (:extends callfoo-lang-abi)
-  (without-ops :peek-byte))
+  (without-ops :peek-byte :poke-byte))
 
-(fiveam:test a-packed-string-needs-the-byte-operations-and-8-bit-characters
-  (fiveam:is (search "needs the operation :peek-byte"
-                     (%cl-fail "(defstring s \"a\" :packed) (defun main () (aref-byte s 0))" 'cl-no-peek-byte-abi)))
+(defbackend cl-no-shr-abi (:extends cl-no-peek-byte-abi)
+  (without-ops :shr))
+
+(defbackend cl-no-poke-byte-abi (:extends callfoo-lang-abi)
+  (without-ops :poke-byte))
+
+(fiveam:test a-packed-string-without-byte-operations-goes-through-its-cells
+  (dolist (case +cl-packed-programs+)
+    (destructuring-bind (source . expected) case
+      (fiveam:is (= expected (%cv-a (%cl-run source 'cl-no-peek-byte-abi))) "~A" source)
+      (fiveam:is (not (intersection '("PEEK-BYTE" "POKE-BYTE") (%cl-op-names (%cl-compile source 'cl-no-peek-byte-abi))
+                                    :test #'string=)))))
+  (fiveam:is (= 205 (%cv-a (%cl-run "(defarray a 2)
+                 (defun main () (aset-byte a 3 200) (aset-byte a 0 5) (+ (aref-byte a 3) (aref a 0)))"
+                                    'cl-no-peek-byte-abi))))
+  (fiveam:is (= 66 (%cv-a (%cl-run "(defstring s \"ab\" :packed) (defun main () (aset-byte s 1 66))" 'cl-no-peek-byte-abi)))
+             "an aset-byte is its value")
+  (fiveam:is (= 16737 (%cv-a (%cl-run "(defstring s \"ab\" :packed)
+      (defun main () (aset-byte s 1 65) (+ (aref-byte s 0) (* 256 (aref-byte s 1))))" 'cl-no-poke-byte-abi)))
+             "each direction falls back on its own operation"))
+
+(fiveam:test word-lowered-byte-access-names-the-operation-it-lacks
+  (fiveam:is (search "needs the operation :shr"
+                     (%cl-fail "(defstring s \"a\" :packed) (defun main () (aref-byte s 0))" 'cl-no-shr-abi))))
+
+(fiveam:test a-packed-string-needs-8-bit-characters-and-a-declared-form
   (fiveam:is (search "8-bit characters"
                      (%cl-fail (format nil "(defstring s \"~C\" :packed) (defun main () 1)" (code-char 300)))))
   (fiveam:is (search "expected (defstring"

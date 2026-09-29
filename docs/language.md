@@ -195,6 +195,11 @@ with 16-bit cells, `"abc"` is two cells and `(aref-byte S 1)` is `98`.
 whose cell holds one character and whose word is one cell needs neither: there
 `aref-byte` is `aref`. A packed string's `aref` returns its raw cells.
 
+A backend with no byte operation for a direction, and a one-cell word holding a
+power of two characters, gets that direction through the cell: a `peek`/`poke` of
+cell `S + I / k` with a shift and mask, so the string may lie anywhere the
+cell address reaches.[^bytecell]
+
 `(aref-byte A I)`/`(aset-byte A I V)` also take a `defarray`, numbering the bytes of its
 cells the same way.
 
@@ -392,7 +397,7 @@ those registers is a pair.
 | `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
 | `:peek-label (d label)` `:poke-label (label s)` | Optional: a word at a label, for a global, a [static frame](static-frames.md) slot or a constant-index `aref`/`aset`. Without them, `:const` then `:peek`/`:poke`. |
 | `:point (r)` `:point-label (label)` `:peek-pointer (d)` `:poke-pointer (s)` `:peek-byte-pointer (d)` `:poke-byte-pointer (s)` | Optional: memory access through the backend's [pointer register](backends.md#pointer-register). |
-| `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed only by `peek-byte`/`poke-byte` and, on most machines, `aref-byte`/`aset-byte` (#366, #379), unless the backend has `:peek-byte-pointer`/`:poke-byte-pointer`. |
+| `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed by `peek-byte`/`poke-byte`. `aref-byte`/`aset-byte` use them, or the byte-pointer operations, or else [the cell](#arrays-strings-and-byte-access) with `:shl :shr :and :or :xor`. |
 | `:byte-address (d)` | Optional: `d`, a cell address, becomes the byte address `:peek-byte` takes. Default: times the characters a cell holds. |
 | `:jump (target)` `:branch-zero (r target)` | Jump; jump when `r` is `0`. |
 | `:halt ()` | Stops the machine. |
@@ -619,3 +624,9 @@ With several arities taken, a wrong one that another function has is not caught 
   entry depth, then emits the function's ordinary exit. A register the
   allocator holds a value in needs nothing here: the function's ordinary
   exit restores every `:save` register regardless of how it is reached.
+
+[^bytecell]: With `k` characters a cell, character `I` is at bits `8 * (I mod k)`
+    of the cell, counted from the low end on a little-endian memory and the high
+    end on a big-endian one. A store reads the cell, replaces the character and
+    writes it back, so an interrupt that writes the cell's other character
+    between the two is lost; a byte-store instruction has no such window.
