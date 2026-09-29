@@ -39,7 +39,13 @@ location and its body location as secondary detail.
 
 A mismatched operand names the instruction, echoes its operand text, and
 lists accepted mode syntax. Forced mode and hole prefixes also report
-accepted forms. A `one-of` displays alternatives separated by `|`.
+accepted forms. A `one-of` displays alternatives separated by `|`, in braces
+when other elements surround it, and a mode lists its `:spelling`s after its
+pattern. A register-qualified hole shows its bank name:
+
+```text
+d-ba ({push|reg|[reg]|[reg+expr]|[expr+reg]|[expr]|expr|sp|pick expr|[sp+expr]},{pop|...})
+```
 
 ## Unknown mnemonic
 

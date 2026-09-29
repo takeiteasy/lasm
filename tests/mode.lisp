@@ -1230,3 +1230,20 @@ looks like."
     (handler-case (match-operand-mode (%tokens-for "[bank1 + 1]") 'test-alias-with-register)
       (parse-failure (c)
         (fiveam:is (search "Register alias bank1" (lasm-syntax-error-message c)))))))
+
+;;; Mode syntax text (assembler.lisp): what a mismatch diagnostic prints
+
+(defmode test-syntax-tail (one-of test-bracket test-paren) "," "Y")
+(defmode test-syntax-word "pick" expr)
+
+(fiveam:test mode-syntax-text-renders-what-a-program-writes
+  (flet ((text (name) (%mode-syntax-text (find-mode-descriptor name))))
+    (fiveam:is (string= "#expr" (text 'immediate)))
+    (fiveam:is (string= "(expr),Y" (text 'indirect-y)))
+    (fiveam:is (string= "pick expr" (text 'test-syntax-word)))
+    (fiveam:is (string= "peek|[sp]" (text 'test-spell-peek)))
+    (fiveam:is (string= "pick expr|[sp+expr]" (text 'test-spell-pick)))
+    (fiveam:is (string= "[bank+expr]|[expr+bank]" (text 'test-spell-index)))
+    (fiveam:is (string= "[expr]|peek|[sp]|pick expr|[sp+expr]|[bank+expr]|[expr+bank]"
+                        (text 'test-spell-any)))
+    (fiveam:is (string= "{[expr]|(expr)},Y" (text 'test-syntax-tail)))))

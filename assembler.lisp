@@ -121,21 +121,44 @@ e.g. \"(#5),Y\". Not a re-lexing round-trip (no whitespace is reinserted
 between tokens), just enough to name what was given."
   (format nil "~{~A~}" (map 'list #'token-text tokens)))
 
+(defun %join-syntax-pieces (pieces)
+  "PIECES concatenated, with a space wherever two word-like tokens would run
+together (`pick` `expr` -> \"pick expr\")."
+  (with-output-to-string (out)
+    (let ((previous nil))
+      (dolist (piece pieces)
+        (when (and previous (plusp (length previous)) (plusp (length piece))
+                   (alphanumericp (char previous (1- (length previous))))
+                   (alphanumericp (char piece 0)))
+          (write-char #\Space out))
+        (write-string piece out)
+        (setf previous piece)))))
+
+(defun %join-syntax-alternatives (texts)
+  (format nil "~{~A~^|~}" (remove-duplicates texts :test #'string= :from-end t)))
+
+(defun %pattern-syntax-text (pattern)
+  "PATTERN (a mode's elements) rendered as the syntax a program writes: literals
+verbatim, a plain hole as \"expr\", a register-qualified hole as its bank's
+name, and a ONE-OF as its alternatives joined with \"|\", in braces when other
+elements surround it."
+  (%join-syntax-pieces
+   (mapcar (lambda (element)
+             (ecase (first element)
+               (:literal (second element))
+               (:expr (if (second element) (string-downcase (symbol-name (second element))) "expr"))
+               (:one-of (let ((text (%join-syntax-alternatives
+                                     (mapcar (lambda (name) (%mode-syntax-text (find-mode-descriptor name)))
+                                             (%one-of-alternatives element)))))
+                          (if (rest pattern) (format nil "{~A}" text) text)))))
+           pattern)))
+
 (defun %mode-syntax-text (mode)
-  "MODE's own pattern (mode.lisp), rendered back to the syntax a program
-would write to select it, e.g. IMMEDIATE -> \"#expr\", INDIRECT-Y ->
-\"(expr),Y\" -- an :EXPR hole prints as the literal word \"expr\", and a
-:ONE-OF element as its alternatives' own syntax joined with \"|\",
-e.g. \"expr|[expr]\"."
-  (format nil "~{~A~}"
-          (mapcar (lambda (el)
-                    (ecase (first el)
-                      (:literal (second el))
-                       (:expr "expr")
-                       (:one-of (format nil "~{~A~^|~}"
-                                         (mapcar (lambda (name) (%mode-syntax-text (find-mode-descriptor name)))
-                                                (%one-of-alternatives el))))))
-                   (mode-descriptor-pattern mode))))
+  "MODE's syntax as a program writes it, its spellings after the pattern
+itself: IMMEDIATE -> \"#expr\", INDIRECT-Y -> \"(expr),Y\", a ONE-OF of
+`expr` and `[expr]` -> \"expr|[expr]\", and `pick expr` with a `[sp + expr]`
+spelling -> \"pick expr|[sp+expr]\"."
+  (%join-syntax-alternatives (mapcar #'%pattern-syntax-text (%mode-syntaxes mode))))
 
 (defun %accepted-modes-text (variants)
   "VARIANTS' (an instruction's list of INSTRUCTION-DESCRIPTOR) addressing
