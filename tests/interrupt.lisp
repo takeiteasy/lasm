@@ -1338,3 +1338,39 @@
     (setf (sref m 'ia) #x0100)
     (load-program m (list #x03) :origin 0)
     (fiveam:is (eq :max-steps (run m :max-steps 20)))))
+
+;;; Generated semantics lambdas do not warn about variables the body skips
+
+(defvar *quiet-machines* 0)
+
+(defun %warnings-compiling (semantics)
+  "The warnings raised by defining and first running an instruction whose
+SEMANTICS is the given form, on a fresh word-encoded machine with an
+interrupts clause; the trap or stack underflow that run ends in is ignored.
+The test system's proclaimed style-warning muffling is lifted for the run."
+  (let* ((name (intern (format nil "QUIET-SEMANTICS-~D" (incf *quiet-machines*)) '#:lasm))
+         warnings)
+    #+sbcl (proclaim '(sb-ext:unmuffle-conditions style-warning))
+    (handler-bind ((warning (lambda (c)
+                              (cl:push (princ-to-string c) warnings)
+                              (muffle-warning c))))
+      (eval `(defmachine ,name
+               (register pc :width 16)
+               (register ia :width 16)
+               (register a :width 16)
+               (stack sp :width 16 :depth 8)
+               (memory ram :width 16 :addr-width 16 :cell-width 16)
+               (instruction-word :width 16 (field opcode 8) (field rest 8))
+               (interrupts :vector ia :message a :save (pc) :cycles 0)))
+      (eval `(definstruction ,name probe (encoding (opcode 1)) (semantics ,semantics)))
+      (let ((machine (make-machine name)))
+        (load-program machine (assemble "probe" :machine name))
+        (ignore-errors (step-machine machine))))
+    #+sbcl (proclaim '(sb-ext:muffle-conditions style-warning))
+    warnings))
+
+(fiveam:test semantics-that-never-uses-the-machine-compiles-without-warnings
+  (fiveam:is (null (%warnings-compiling '(trap :halt)))))
+
+(fiveam:test interrupt-return-compiles-without-warnings-when-the-level-is-not-saved
+  (fiveam:is (null (%warnings-compiling '(interrupt-return)))))

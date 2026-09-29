@@ -1725,7 +1725,7 @@ compile error, preserving typo protection."
                                   collect `(,op-name (%semantics-operand operands ,i ,mapping-name))))
          (absent-bindings (mapcar (lambda (n) `(,n (%absent-choice-operand))) absent-names)))
      (let ((form `(lambda (machine operands choices &optional selections ,mapping-name ,size-name)
-                    (declare (ignorable operands choices selections ,mapping-name ,size-name))
+                    (declare (ignorable machine operands choices selections ,mapping-name ,size-name))
                     (with-machine-bindings (machine ,machine)
                       (let ((operand (%semantics-operand operands 0 ,mapping-name))
                             ,@named-bindings
