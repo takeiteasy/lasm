@@ -140,7 +140,7 @@
 
 (defun %foreign-run (source)
   (let ((machine (make-machine 'lasm-foreign-test::fpm)))
-    (load-program machine (assemble source :machine 'lasm-foreign-test::fpm))
+    (load-program machine (assemble source :cpu 'lasm-foreign-test::fpm))
     (values machine (run machine))))
 
 (fiveam:test foreign-package-machine-assembles-and-runs
@@ -160,7 +160,7 @@ halt")
 (fiveam:test foreign-package-machine-encodes-like-dcpu
   (fiveam:is (equalp #(#x9801 #x7c21 1000)
                      (assembly-cells (assemble "set a, 5
-set b, 1000" :machine 'lasm-foreign-test::fpm)))))
+set b, 1000" :cpu 'lasm-foreign-test::fpm)))))
 
 (fiveam:test foreign-package-device-and-interrupt
   (multiple-value-bind (m reason) (%foreign-run "hwi 0
@@ -168,7 +168,7 @@ halt")
     (fiveam:is (eq :trap reason))
     (fiveam:is (= 42 (regref m 'lasm-foreign-test::reg 2))))
   (let ((m (make-machine 'lasm-foreign-test::fpm)))
-    (load-program m (assemble "halt" :machine 'lasm-foreign-test::fpm))
+    (load-program m (assemble "halt" :cpu 'lasm-foreign-test::fpm))
     (setf (sref m 'lasm-foreign-test::ia) #x0100
           (sref m 'lasm-foreign-test::sp) #x8000)
     (signal-interrupt m 9)
@@ -183,11 +183,11 @@ halt")
   (fiveam:is (equalp #(1 5 0 2 6 0 3 7 0)
                      (assembly-cells (assemble "ld r 5
 ld [6]
-ld #7" :machine 'lasm-foreign-test::fpm8)))))
+ld #7" :cpu 'lasm-foreign-test::fpm8)))))
 
 (fiveam:test foreign-package-debugger-names-its-storage
   (let* ((assembly (assemble "set push, 5
-halt" :machine 'lasm-foreign-test::fpm))
+halt" :cpu 'lasm-foreign-test::fpm))
          (machine (make-machine 'lasm-foreign-test::fpm)))
     (load-program machine assembly)
     (let ((session (make-debug-session machine :assembly assembly)))

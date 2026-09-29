@@ -5,7 +5,7 @@ and editing of state to a live machine. Attach an assembly for symbols and sourc
 locations.
 
 ```lisp
-(let* ((assembly (assemble source :machine 'sixtyfoo))
+(let* ((assembly (assemble source :cpu 'sixtyfoo))
        (machine (make-machine 'sixtyfoo)))
   (load-program machine assembly)
   (let ((session (make-debug-session machine :assembly assembly)))

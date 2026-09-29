@@ -137,7 +137,7 @@
   (let ((m (%priv-machine)))
     (%poke m 'ram #x10 5)
     (fiveam:is (= 5 (mpeek m 'ram #x10)))
-    (load-program m (assemble "nop" :machine 'priv-machine) :origin #x20)
+    (load-program m (assemble "nop" :cpu 'priv-machine) :origin #x20)
     (fiveam:is (= 1 (mpeek m 'ram #x20)))))
 
 (fiveam:test fetch-from-a-gated-region-faults
@@ -177,7 +177,7 @@
 
 (defun %priv-run (name level source)
   (let ((m (%priv-machine name level)))
-    (load-program m (assemble source :machine name :origin #x200))
+    (load-program m (assemble source :cpu name :origin #x200))
     m))
 
 (fiveam:test instruction-gate-faults-before-executing
@@ -238,7 +238,7 @@ rte")))
   (let ((m (%priv-machine 'priv-child)))
     (fiveam:is (eq 'user (privilege-level m)))
     (fiveam:signals privilege-violation (mref m 'ram #x10))
-    (load-program m (assemble "rte" :machine 'priv-child :origin #x200))
+    (load-program m (assemble "rte" :cpu 'priv-child :origin #x200))
     (fiveam:signals privilege-violation (step-machine m))))
 
 (fiveam:test child-machine-cannot-change-inherited-levels

@@ -32,7 +32,7 @@ loop:   sta $10
 
 (defun bench-session (steps history)
   (let ((machine (make-machine 'bench-machine)))
-    (load-program machine (assemble *source* :machine 'bench-machine :origin #x100))
+    (load-program machine (assemble *source* :cpu 'bench-machine :origin #x100))
     (make-debug-session machine :assembly (machine-program machine)
                                 :history (and history (+ steps 100)))))
 
@@ -60,7 +60,7 @@ loop:   sta $10
   (assert (plusp steps))
   (format t "~&~D steps, checkpoint every ~D~%" steps *debug-checkpoint-interval*)
   (let ((machine (make-machine 'bench-machine)))
-    (load-program machine (assemble *source* :machine 'bench-machine :origin #x100))
+    (load-program machine (assemble *source* :cpu 'bench-machine :origin #x100))
     (report "run" (seconds (lambda () (run machine :max-steps steps))) steps))
   (bench-forward "continue, no history" steps)
   (bench-forward "continue, history" steps :history t)

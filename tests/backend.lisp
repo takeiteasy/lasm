@@ -134,14 +134,14 @@ ret
     (fiveam:is (eq 'callfoo (backend-descriptor-machine backend)))
     (fiveam:is (eq 'call-reg (cdr (assoc "REG" (backend-descriptor-operands backend) :test #'string=))))
     (fiveam:is (equalp (assembly-cells (assemble "push #7
-ret" :machine 'callfoo))
+ret" :cpu 'callfoo))
                        (assembly-cells (assemble-items '((:op :push 7) (:op :ret)) :backend 'bk-other-abi))))))
 
 ;;; Assembling items
 
 (fiveam:test items-assemble-to-the-cells-of-the-equivalent-source
   (let ((from-items (assemble-items *double-items* :backend 'callfoo-abi))
-        (from-source (assemble *double-source* :machine 'callfoo)))
+        (from-source (assemble *double-source* :cpu 'callfoo)))
     (fiveam:is (equalp (assembly-cells from-source) (assembly-cells from-items)))
     (fiveam:is (equalp (assembly-symbols from-source) (assembly-symbols from-items)))))
 
@@ -149,7 +149,7 @@ ret" :machine 'callfoo))
   (let* ((text (render-items *double-items* :backend 'callfoo-abi))
          (assembly (assemble-items *double-items* :backend 'callfoo-abi)))
     (fiveam:is (equalp (assembly-cells assembly)
-                       (assembly-cells (assemble text :machine 'callfoo))))
+                       (assembly-cells (assemble text :cpu 'callfoo))))
     (fiveam:is (string= text (assembly-source assembly)))))
 
 (fiveam:test items-listing-points-at-the-rendered-lines
@@ -167,53 +167,53 @@ ret" :machine 'callfoo))
 
 (fiveam:test items-need-a-machine-or-a-backend
   (fiveam:signals usage-error (assemble-items '((hlt))))
-  (fiveam:is (equalp (assembly-cells (assemble "hlt" :machine 'callfoo))
-                     (assembly-cells (assemble-items '((hlt)) :machine 'callfoo))))
-  (fiveam:signals usage-error (assemble-items '((hlt)) :backend 'callfoo-abi :machine 'bk-ld-machine)))
+  (fiveam:is (equalp (assembly-cells (assemble "hlt" :cpu 'callfoo))
+                     (assembly-cells (assemble-items '((hlt)) :cpu 'callfoo))))
+  (fiveam:signals usage-error (assemble-items '((hlt)) :backend 'callfoo-abi :cpu 'bk-ld-machine)))
 
 (fiveam:test items-accept-a-mode-named-directly-and-bare-expressions
-  (let ((direct (assemble-items '((ldi (:mode call-reg b) (:mode call-imm 5))) :machine 'callfoo))
-        (bare (assemble-items '((call 6) (call (+ 2 4)) (call (- 0 1))) :machine 'callfoo)))
-    (fiveam:is (equalp (assembly-cells (assemble "ldi b, #5" :machine 'callfoo)) (assembly-cells direct)))
+  (let ((direct (assemble-items '((ldi (:mode call-reg b) (:mode call-imm 5))) :cpu 'callfoo))
+        (bare (assemble-items '((call 6) (call (+ 2 4)) (call (- 0 1))) :cpu 'callfoo)))
+    (fiveam:is (equalp (assembly-cells (assemble "ldi b, #5" :cpu 'callfoo)) (assembly-cells direct)))
     (fiveam:is (equalp (assembly-cells (assemble "call 6
 call (2 + 4)
-call (0 - 1)" :machine 'callfoo))
+call (0 - 1)" :cpu 'callfoo))
                        (assembly-cells bare)))))
 
 (fiveam:test items-fold-expressions-labels-and-negative-numbers
   (fiveam:is (equalp (assembly-cells (assemble "start:
 .word (start + 5), -3, (2 * (1 + 1))
 call (end + 0)
-end:" :machine 'callfoo))
+end:" :cpu 'callfoo))
                      (assembly-cells (assemble-items '((:label start)
                                                        (:directive ".word" (+ start 5) (- 3) (* 2 (+ 1 1)))
                                                        (call (+ end 0))
                                                        (:label end))
-                                                     :machine 'callfoo)))))
+                                                     :cpu 'callfoo)))))
 
 (fiveam:test items-directives-take-strings-and-a-dot-is-optional
-  (fiveam:is (equalp (assembly-cells (assemble ".word 1, 2" :machine 'callfoo))
-                     (assembly-cells (assemble-items '((:directive word 1 2)) :machine 'callfoo))))
-  (fiveam:is (equalp (assembly-cells (assemble ".ascii \"hi\"" :machine 'callfoo))
-                     (assembly-cells (assemble-items '((:directive ".ascii" "hi")) :machine 'callfoo)))))
+  (fiveam:is (equalp (assembly-cells (assemble ".word 1, 2" :cpu 'callfoo))
+                     (assembly-cells (assemble-items '((:directive word 1 2)) :cpu 'callfoo))))
+  (fiveam:is (equalp (assembly-cells (assemble ".ascii \"hi\"" :cpu 'callfoo))
+                     (assembly-cells (assemble-items '((:directive ".ascii" "hi")) :cpu 'callfoo)))))
 
 (fiveam:test items-names-fold-symbols-and-keep-strings
-  (let ((symbols (assemble-items '((:label |Mixed|) (:label plain) (:label "Exact")) :machine 'callfoo)))
+  (let ((symbols (assemble-items '((:label |Mixed|) (:label plain) (:label "Exact")) :cpu 'callfoo)))
     (fiveam:is (equal '("Exact" "Mixed" "plain")
                       (sort (loop for name being the hash-keys of (assembly-symbols symbols) collect name)
                             #'string<)))))
 
 (fiveam:test items-local-labels-follow-the-lexer
-  (let ((assembly (assemble-items '((:label outer) (:label .inner) (call .inner)) :machine 'callfoo)))
+  (let ((assembly (assemble-items '((:label outer) (:label .inner) (call .inner)) :cpu 'callfoo)))
     (fiveam:is (equalp (assembly-cells (assemble "outer:
 .inner:
-call .inner" :machine 'callfoo))
+call .inner" :cpu 'callfoo))
                        (assembly-cells assembly)))))
 
 (fiveam:test backend-ops-substitute-arguments
   (fiveam:is (equal '((add (reg a) (reg b))) (backend-expand-op 'callfoo-abi :add '((reg a) (reg b)))))
   (fiveam:is (equal '((ldi (reg a) (imm 3))) (backend-expand-op 'callfoo-abi 'load '((reg a) 3))))
-  (fiveam:is (equalp (assembly-cells (assemble "ldi c, #9" :machine 'callfoo))
+  (fiveam:is (equalp (assembly-cells (assemble "ldi c, #9" :cpu 'callfoo))
                      (assembly-cells (assemble-items '((:op :load (reg c) 9)) :backend 'callfoo-abi)))))
 
 ;;; Operand-kind clauses (#365): several clauses may share an operation name,
@@ -270,8 +270,8 @@ call .inner" :machine 'callfoo))
     (fiveam:is (typep (%items-error-of items :backend 'callfoo-abi) 'items-malformed) "~S" items)))
 
 (fiveam:test items-operands-need-a-backend-for-kinds-and-ops
-  (fiveam:is (typep (%items-error-of '((ldi (reg a) (imm 1))) :machine 'callfoo) 'items-malformed))
-  (fiveam:is (typep (%items-error-of '((:op :ret)) :machine 'callfoo) 'items-malformed)))
+  (fiveam:is (typep (%items-error-of '((ldi (reg a) (imm 1))) :cpu 'callfoo) 'items-malformed))
+  (fiveam:is (typep (%items-error-of '((:op :ret)) :cpu 'callfoo) 'items-malformed)))
 
 (fiveam:test an-operand-that-does-not-match-its-mode-is-an-error
   (fiveam:is (typep (%items-error-of '((ldi (reg 5) (imm 1))) :backend 'callfoo-abi) 'items-operand-mismatch))
@@ -303,42 +303,42 @@ call .inner" :machine 'callfoo))
   (semantics (set! (r v) 0)))
 
 (fiveam:test an-alternative-that-only-exists-in-another-slot-is-not-a-rival
-  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs b) (:mode bk-ld-reg c))) :machine 'bk-ld-machine)))
-  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs 5) (:mode bk-ld-ind c))) :machine 'bk-ld-machine))))
+  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs b) (:mode bk-ld-reg c))) :cpu 'bk-ld-machine)))
+  (fiveam:is (null (%items-error-of '((ld2 (:mode bk-ld-abs 5) (:mode bk-ld-ind c))) :cpu 'bk-ld-machine))))
 
 (fiveam:test a-nested-alternative-the-assembler-did-not-pick-is-an-error
-  (let ((c (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs b))) :machine 'bk-ld-machine)))
+  (let ((c (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs b))) :cpu 'bk-ld-machine)))
     (fiveam:is (typep c 'items-operand-mismatch))
     (fiveam:is (search "BK-LD-IND" (items-error-detail c)))
     (fiveam:is (search "BK-LD-ABS" (items-error-detail c))))
-  (fiveam:is (null (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs 100))) :machine 'bk-ld-machine))))
+  (fiveam:is (null (%items-error-of '((ld (:mode bk-ld-mode a bk-ld-abs 100))) :cpu 'bk-ld-machine))))
 
 (fiveam:test an-alternative-declaration-order-loses-is-an-error
   (handler-bind ((warning #'muffle-warning))
-    (fiveam:is (null (%items-error-of '((:label x) (tie (:mode bk-tie-first x))) :machine 'bk-ld-machine)))
-    (let ((c (%items-error-of '((:label x) (tie (:mode bk-tie-second x))) :machine 'bk-ld-machine)))
+    (fiveam:is (null (%items-error-of '((:label x) (tie (:mode bk-tie-first x))) :cpu 'bk-ld-machine)))
+    (let ((c (%items-error-of '((:label x) (tie (:mode bk-tie-second x))) :cpu 'bk-ld-machine)))
       (fiveam:is (typep c 'items-operand-mismatch))
       (fiveam:is (search "BK-TIE-FIRST" (items-error-detail c))))))
 
 (fiveam:test width-relaxation-between-variants-is-not-a-mismatch
-  (let ((assembly (assemble-items '((lda (:mode absolute 5))) :machine 'instr-test-machine)))
+  (let ((assembly (assemble-items '((lda (:mode absolute 5))) :cpu 'instr-test-machine)))
     (fiveam:is (eq 'zero-page (mode-descriptor-name
                                (instruction-descriptor-mode
                                 (listing-line-descriptor (first (assembly-listing assembly)))))))))
 
 (fiveam:test force-writes-the-mode-suffix-and-stops-relaxation
   (let* ((items '((lda (:force (:mode absolute 5)))))
-         (assembly (assemble-items items :machine 'instr-test-machine)))
+         (assembly (assemble-items items :cpu 'instr-test-machine)))
     (fiveam:is (eq 'absolute (mode-descriptor-name
                               (instruction-descriptor-mode
                                (listing-line-descriptor (first (assembly-listing assembly)))))))
-    (fiveam:is (search "lda.w 5" (render-items items :machine 'instr-test-machine)))
-    (fiveam:is (< (items-size '((lda (:mode absolute 5))) :machine 'instr-test-machine)
-                  (items-size items :machine 'instr-test-machine)))))
+    (fiveam:is (search "lda.w 5" (render-items items :cpu 'instr-test-machine)))
+    (fiveam:is (< (items-size '((lda (:mode absolute 5))) :cpu 'instr-test-machine)
+                  (items-size items :cpu 'instr-test-machine)))))
 
 (fiveam:test force-is-malformed-when-it-cannot-name-one-variant
   (flet ((detail (items &rest keys)
-           (let ((c (apply #'%items-error-of items :machine 'instr-test-machine keys)))
+           (let ((c (apply #'%items-error-of items :cpu 'instr-test-machine keys)))
              (and (typep c 'items-malformed) (items-error-detail c)))))
     (fiveam:is (search "no suffix" (detail '((lda (:force (:mode immediate 5)))))))
     (fiveam:is (search "not a mode of" (detail '((ldx (:force (:mode absolute 5)))))))
@@ -360,30 +360,30 @@ call .inner" :machine 'callfoo))
 
 (fiveam:test a-forced-mode-is-range-checked-against-the-selected-memory
   (let ((items '((lda (:force (:mode zero-page 300))))))
-    (dolist (call (list (lambda (memory) (assemble-items items :machine 'bk-two-cells-machine :memory memory))
-                        (lambda (memory) (render-items items :machine 'bk-two-cells-machine :memory memory))
-                        (lambda (memory) (items-size items :machine 'bk-two-cells-machine :memory memory))))
+    (dolist (call (list (lambda (memory) (assemble-items items :cpu 'bk-two-cells-machine :memory memory))
+                        (lambda (memory) (render-items items :cpu 'bk-two-cells-machine :memory memory))
+                        (lambda (memory) (items-size items :cpu 'bk-two-cells-machine :memory memory))))
       (fiveam:signals items-operand-mismatch (funcall call 'narrow))
       (fiveam:finishes (funcall call 'wide)))))
 
 (fiveam:test a-forced-mode-rejects-a-value-that-does-not-fit
   (flet ((detail (items)
-           (let ((c (%items-error-of items :machine 'instr-test-machine)))
+           (let ((c (%items-error-of items :cpu 'instr-test-machine)))
              (and (typep c 'items-operand-mismatch) (items-error-detail c)))))
     (fiveam:is (search "300 does not fit the forced mode ZERO-PAGE" (detail '((lda (:force (:mode zero-page 300)))))))
     (fiveam:is (search "300 does not fit" (detail '((lda (:force (:mode zero-page (+ 200 100))))))))
     (fiveam:is (null (detail '((lda (:force (:mode zero-page 255)))))))
     (fiveam:is (null (detail '((lda (:force (:mode absolute 300)))))))
     (fiveam:signals items-operand-mismatch
-      (render-items '((lda (:force (:mode zero-page 300)))) :machine 'instr-test-machine))))
+      (render-items '((lda (:force (:mode zero-page 300)))) :cpu 'instr-test-machine))))
 
 (fiveam:test a-forced-mode-checks-a-label-value-when-assembling
   (fiveam:signals assembly-error
     (assemble-items '((:directive equ big 300) (lda (:force (:mode zero-page big))))
-                    :machine 'instr-test-machine)))
+                    :cpu 'instr-test-machine)))
 
 (fiveam:test assembler-errors-point-into-the-rendered-source
-  (let ((c (handler-case (assemble-items '((:label x) (call missing)) :machine 'callfoo)
+  (let ((c (handler-case (assemble-items '((:label x) (call missing)) :cpu 'callfoo)
              (lasm-error (c) c))))
     (fiveam:is (typep c 'lasm-error))
     (fiveam:is (search "missing" (princ-to-string (diagnostic-text c))))))
@@ -401,7 +401,7 @@ call .inner" :machine 'callfoo))
     (fiveam:is (= 4 (items-program-origin program)))
     (fiveam:is (null (find-symbol "ZZQUNIQUE" '#:lasm)))
     (fiveam:is (null (symbol-package (second (first (items-program-items program))))))
-    (fiveam:is (equalp (assembly-cells (assemble "hlt" :machine 'callfoo :origin 4))
+    (fiveam:is (equalp (assembly-cells (assemble "hlt" :cpu 'callfoo :origin 4))
                        (assembly-cells (assemble-items (items-program-items program)
                                                        :backend (items-program-backend program)
                                                        :origin (items-program-origin program)))))))
@@ -440,14 +440,14 @@ call .inner" :machine 'callfoo))
     (lambda (path)
       (let ((assembly (assemble-items-file path)))
         (fiveam:is (= 4 (assembly-origin assembly)))
-        (fiveam:is (equalp (assembly-cells (assemble "hlt" :machine 'callfoo)) (assembly-cells assembly))))
+        (fiveam:is (equalp (assembly-cells (assemble "hlt" :cpu 'callfoo)) (assembly-cells assembly))))
       (fiveam:is (= 9 (assembly-origin (assemble-items-file path :origin 9))))
-      (fiveam:signals usage-error (assemble-items-file path :machine 'bk-ld-machine)))))
+      (fiveam:signals usage-error (assemble-items-file path :cpu 'bk-ld-machine)))))
 
 ;;; #372: positioned items errors
 
 (fiveam:test an-items-file-error-reports-its-line-and-column
-  (%call-with-items-file (format nil "(:program (:machine callfoo)~%  (:frobnicate))~%")
+  (%call-with-items-file (format nil "(:program (:cpu callfoo)~%  (:frobnicate))~%")
     (lambda (path)
       (handler-case (assemble-items-file path)
         (items-malformed (c)
@@ -459,8 +459,8 @@ call .inner" :machine 'callfoo))
 
 (fiveam:test an-items-error-from-a-string-has-a-line-but-no-file
   (let ((program (read-items-from-string
-                  (format nil "(:program (:machine callfoo)~%  (:frobnicate))~%"))))
-    (handler-case (assemble-items (items-program-items program) :machine 'callfoo
+                  (format nil "(:program (:cpu callfoo)~%  (:frobnicate))~%"))))
+    (handler-case (assemble-items (items-program-items program) :cpu 'callfoo
                                   :positions (items-program-positions program)
                                   :source (items-program-source program))
       (items-malformed (c)
@@ -468,7 +468,7 @@ call .inner" :machine 'callfoo))
         (fiveam:is (null (lasm-syntax-error-file c)))))))
 
 (fiveam:test assemble-items-on-raw-items-has-no-position
-  (handler-case (assemble-items '((:frobnicate)) :machine 'callfoo)
+  (handler-case (assemble-items '((:frobnicate)) :cpu 'callfoo)
     (items-malformed (c)
       (fiveam:is (null (lasm-syntax-error-line c))))))
 
@@ -476,10 +476,10 @@ call .inner" :machine 'callfoo))
   (uiop:with-temporary-file (:pathname included :type "asm" :stream out)
     (write-string "hlt" out)
     :close-stream
-    (%call-with-items-file (format nil "(:program (:machine callfoo) (:directive \".include\" ~S))"
+    (%call-with-items-file (format nil "(:program (:cpu callfoo) (:directive \".include\" ~S))"
                                    (file-namestring included))
       (lambda (path)
-        (fiveam:is (equalp (assembly-cells (assemble "hlt" :machine 'callfoo))
+        (fiveam:is (equalp (assembly-cells (assemble "hlt" :cpu 'callfoo))
                            (assembly-cells (assemble-items-file path))))))))
 
 (fiveam:test items-file-assemblies-snapshot-and-rebuild
@@ -487,7 +487,7 @@ call .inner" :machine 'callfoo))
     (lambda (path)
       (let* ((assembly (assemble-items-file path))
              (snapshot (machine-snapshot (make-machine 'callfoo) :assembly assembly))
-             (rebuilt (snapshot-assembly snapshot :machine 'callfoo)))
+             (rebuilt (snapshot-assembly snapshot :cpu 'callfoo)))
         (fiveam:is (equalp (assembly-cells assembly) (assembly-cells rebuilt)))
         (fiveam:is (string= (assembly-source assembly) (assembly-source rebuilt)))))))
 
@@ -499,11 +499,11 @@ call .inner" :machine 'callfoo))
                                             "test")))))
 
 (fiveam:test a-one-of-mode-takes-its-alternative-name-first
-  (fiveam:is (equalp (assembly-cells (assemble "ld a, [b]" :machine 'bk-ld-machine))
+  (fiveam:is (equalp (assembly-cells (assemble "ld a, [b]" :cpu 'bk-ld-machine))
                      (assembly-cells (assemble-items '((ld (reg a) (:mode bk-ld-ind b))) :backend 'bk-ld-abi))))
-  (fiveam:is (equalp (assembly-cells (assemble "ld a, [b]" :machine 'bk-ld-machine))
-                     (assembly-cells (assemble-items '((ld (:mode bk-ld-mode a bk-ld-ind b))) :machine 'bk-ld-machine))))
-  (fiveam:is (typep (%items-error-of '((ld (:mode bk-ld-mode a nope b))) :machine 'bk-ld-machine)
+  (fiveam:is (equalp (assembly-cells (assemble "ld a, [b]" :cpu 'bk-ld-machine))
+                     (assembly-cells (assemble-items '((ld (:mode bk-ld-mode a bk-ld-ind b))) :cpu 'bk-ld-machine))))
+  (fiveam:is (typep (%items-error-of '((ld (:mode bk-ld-mode a nope b))) :cpu 'bk-ld-machine)
                     'items-malformed)))
 
 ;;; Inheritance (#323)
@@ -653,25 +653,25 @@ call .inner" :machine 'callfoo))
 
 (fiveam:test items-size-equals-the-assembled-size-of-a-closed-program
   (let ((items '((br end) (nop) (:label end) (nop))))
-    (fiveam:is (= (%cell-count items :machine 'bk-br-machine)
-                  (items-size items :machine 'bk-br-machine)))
-    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine)))))
+    (fiveam:is (= (%cell-count items :cpu 'bk-br-machine)
+                  (items-size items :cpu 'bk-br-machine)))
+    (fiveam:is (= 4 (items-size items :cpu 'bk-br-machine)))))
 
 (fiveam:test items-size-sizes-a-label-the-items-never-define-by-assume
   (let ((items '((br elsewhere) (nop))))
-    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine)))
-    (fiveam:is (= 4 (items-size items :machine 'bk-br-machine :assume :widest)))
-    (fiveam:is (= 3 (items-size items :machine 'bk-br-machine :assume :narrowest)))))
+    (fiveam:is (= 4 (items-size items :cpu 'bk-br-machine)))
+    (fiveam:is (= 4 (items-size items :cpu 'bk-br-machine :assume :widest)))
+    (fiveam:is (= 3 (items-size items :cpu 'bk-br-machine :assume :narrowest)))))
 
 (fiveam:test items-size-keeps-a-branch-to-a-label-the-items-define-short
-  (fiveam:is (= 3 (items-size '((br next) (:label next) (nop)) :machine 'bk-br-machine :assume :widest))))
+  (fiveam:is (= 3 (items-size '((br next) (:label next) (nop)) :cpu 'bk-br-machine :assume :widest))))
 
 (fiveam:test items-size-counts-reserved-space-and-honours-the-origin
-  (fiveam:is (= 6 (items-size '((:directive res 5) (nop)) :machine 'bk-br-machine)))
-  (fiveam:is (= 2 (items-size '((nop) (nop)) :machine 'bk-br-machine :origin 300))))
+  (fiveam:is (= 6 (items-size '((:directive res 5) (nop)) :cpu 'bk-br-machine)))
+  (fiveam:is (= 2 (items-size '((nop) (nop)) :cpu 'bk-br-machine :origin 300))))
 
 (fiveam:test items-size-rejects-an-unknown-assumption
-  (fiveam:signals usage-error (items-size '((nop)) :machine 'bk-br-machine :assume :middle)))
+  (fiveam:signals usage-error (items-size '((nop)) :cpu 'bk-br-machine :assume :middle)))
 
 (fiveam:test items-size-signals-items-errors
   (fiveam:signals items-malformed (items-size '((:op :nosuch)) :backend 'bk-br-abi)))
@@ -690,7 +690,7 @@ call .inner" :machine 'callfoo))
     (fiveam:is (search ".skip__LASM_1:" source))
     (fiveam:is (search ".skip__LASM_2:" source))
     (fiveam:is (equalp (assembly-cells assembly)
-                       (assembly-cells (assemble source :machine 'bk-br-machine))))
+                       (assembly-cells (assemble source :cpu 'bk-br-machine))))
     (fiveam:is (equalp #(1 0 2 2 3 250 1 1 2 2 3 244 5) (assembly-cells assembly)))))
 
 (fiveam:test an-operation-label-is-global-before-any-global-label
@@ -756,7 +756,7 @@ call .inner" :machine 'callfoo))
          (source (render-items items :backend 'bk-br-abi :lexer 'bk-no-underscore-syntax)))
     (fiveam:is (search ".skipLASM1:" source))
     (fiveam:is (equalp (assembly-cells (assemble-items items :backend 'bk-br-abi :lexer 'bk-no-underscore-syntax))
-                       (assembly-cells (assemble source :machine 'bk-br-machine
+                       (assembly-cells (assemble source :cpu 'bk-br-machine
                                                         :lexer 'bk-no-underscore-syntax))))))
 
 ;;; branches and stack effects (#337, #338)
@@ -886,10 +886,10 @@ call .inner" :machine 'callfoo))
   (dolist (cpu '(bk-isa-full bk-isa-lite))
     (fiveam:is (equalp #(1 0 21)
                        (assembly-cells (assemble-items '((ld (reg a) (imm 21))) :backend 'bk-isa-abi
-                                                                                :machine cpu)))))
+                                                                                :cpu cpu)))))
   (fiveam:signals usage-error (assemble-items '((ld (reg a) (imm 21))) :backend 'bk-isa-abi))
   (fiveam:signals usage-error (assemble-items '((ld (reg a) (imm 21))) :backend 'bk-isa-abi
-                                                                      :machine 'callfoo)))
+                                                                      :cpu 'callfoo)))
 
 (fiveam:test a-backend-narrowed-to-a-cpu-checks-its-templates-against-that-cpu
   (fiveam:is (typep (%backend-error-of '(defbackend bk-isa-lite-abi (:extends bk-isa-abi :cpu bk-isa-lite)))
@@ -902,7 +902,7 @@ call .inner" :machine 'callfoo))
     (fiveam:is (equalp #(1 0 21)
                        (assembly-cells (assemble-items '((ld (reg a) (imm 21))) :backend 'bk-isa-lite-abi)))))
   (fiveam:signals usage-error (assemble-items '((ld (reg a) (imm 21))) :backend 'bk-isa-lite-abi
-                                                                      :machine 'bk-isa-full)))
+                                                                      :cpu 'bk-isa-full)))
 
 (fiveam:test a-backend-cannot-move-to-a-sibling-cpu-or-a-foreign-isa
   (fiveam:is (typep (%backend-error-of '(defbackend bk-isa-bad-1 (:extends bk-isa-lite-abi :cpu bk-isa-full)))

@@ -4,8 +4,8 @@ The disassembler decodes cells using the machine's instruction definitions.
 It can render source for reassembly or a listing for inspection.
 
 ```lisp
-(let* ((a (assemble source :machine 'sixtyfoo))
-       (lines (disassemble-assembly a :machine 'sixtyfoo)))
+(let* ((a (assemble source :cpu 'sixtyfoo))
+       (lines (disassemble-assembly a :cpu 'sixtyfoo)))
   (print-disassembly lines))
 ```
 

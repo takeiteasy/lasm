@@ -248,7 +248,7 @@
   (let* ((m (make-machine 'disasm-test-machine))
          (a (assemble "ldx #10
 lda $20
-hlt" :machine 'disasm-test-machine)))
+hlt" :cpu 'disasm-test-machine)))
     (load-program m a)
     (loop repeat 3
           do (let* ((pc-before (sref m 'pc))
@@ -267,7 +267,7 @@ hlt" :machine 'disasm-test-machine)))
   (let* ((m (make-machine 'disasm-word-machine))
          (a (assemble "set 5,5
 set 1,1000
-hlt" :machine 'disasm-word-machine)))
+hlt" :cpu 'disasm-word-machine)))
     (load-program m a)
     (loop repeat 3
           do (let* ((pc-before (sref m 'pc))
@@ -283,7 +283,7 @@ hlt" :machine 'disasm-word-machine)))
                      (fiveam:is (= (+ pc-before size) (sref m 'pc))))))))))
 
 (fiveam:test decode-values-sign-extended
-  (let ((a (assemble "ldsi #-1" :machine 'disasm-test-machine)))
+  (let ((a (assemble "ldsi #-1" :cpu 'disasm-test-machine)))
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'disasm-test-machine)
       (declare (ignore size))
@@ -297,7 +297,7 @@ hlt" :machine 'disasm-word-machine)))
   ;; stays true after #63 exactly as before it -- #63 only makes a
   ;; *:SIGNED T* hole's value-selected field sign-extend, never an
   ;; ungoverned one.
-  (let ((a (assemble "set 0,30" :machine 'disasm-word-machine)))
+  (let ((a (assemble "set 0,30" :cpu 'disasm-word-machine)))
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'disasm-word-machine)
       (declare (ignore size))
@@ -309,7 +309,7 @@ hlt" :machine 'disasm-word-machine)))
 ;; SIGNED-WORD-TEST-MACHINE) is the positive case DECODE-WORD-MACHINE-NEVER-
 ;; SIGN-EXTENDS above is deliberately not.
 (fiveam:test decode-signed-word-field-sign-extends
-  (let ((a (assemble "signset #-5" :machine 'signed-word-test-machine)))
+  (let ((a (assemble "signset #-5" :cpu 'signed-word-test-machine)))
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'signed-word-test-machine)
       (declare (ignore size))
@@ -320,8 +320,8 @@ hlt" :machine 'disasm-word-machine)))
 
 (fiveam:test disassemble-byte-program-text
   (let* ((a (assemble "ldx #10
-hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (= 2 (length lines)))
     (fiveam:is (string= "ldx #$A" (disassembly-line-text (first lines))))
     (fiveam:is (string= "hlt" (disassembly-line-text (second lines))))))
@@ -330,8 +330,8 @@ hlt" :machine 'disasm-test-machine))
   (let* ((a (assemble "ldx #$10
 ldix $10,X
 ldiy ($10),Y
-ldsr $2,S" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+ldsr $2,S" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "ldx #$10" (disassembly-line-text (first lines))))
     (fiveam:is (string= "ldix $10,X" (disassembly-line-text (second lines))))
     (fiveam:is (string= "ldiy ($10),Y" (disassembly-line-text (third lines))))
@@ -340,13 +340,13 @@ ldsr $2,S" :machine 'disasm-test-machine))
 (fiveam:test disassemble-relative-renders-absolute-target
   ;; A backward branch to its own address: at address 0, BRA is 2 cells wide,
   ;; so the next-instruction address is 2 -- an offset of -2 targets 0 again.
-  (let* ((a (assemble "bra *" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+  (let* ((a (assemble "bra *" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "bra $0" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-multi-hole-order
-  (let* ((a (assemble "movi $10,$20" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+  (let* ((a (assemble "movi $10,$20" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "movi $10,$20" (disassembly-line-text (first lines))))
     (fiveam:is (equal (list #x10 #x20) (disassembly-line-values (first lines))))))
 
@@ -356,8 +356,8 @@ ldsr $2,S" :machine 'disasm-test-machine))
   ;; back to BRM's own address (0) is -4 -- rendered back as the absolute
   ;; target 0 + 4 + -4 = 0. N's own value (9) renders plainly, untouched by
   ;; that adjustment.
-  (let* ((a (assemble "brm #*, 9" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+  (let* ((a (assemble "brm #*, 9" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "brm #$0,$9" (disassembly-line-text (first lines))))
     ;; DISASSEMBLY-LINE-VALUES holds DECODE-INSTRUCTION-AT's raw values --
     ;; TGT's still-relative offset (-4), not the rendered absolute target
@@ -374,18 +374,18 @@ ldsr $2,S" :machine 'disasm-test-machine))
   ;; DISASSEMBLE-ONE-OF-RENDERS-THE-MATCHED-ALTERNATIVE below for the case
   ;; where a real record exists) -- a documented fallback, not a bug in this
   ;; test.
-  (let* ((a (assemble "moo [$10]" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+  (let* ((a (assemble "moo [$10]" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "moo $10" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-one-of-renders-the-matched-alternative
   ;; #104/#117: COO is word-encoded with a CHOICE-selected field, so unlike
   ;; MOO's byte-encoded fallback above, the real alternative comes back --
   ;; "5" and "[5]" render distinctly, matching what was actually written.
-  (let* ((bare (disassemble-assembly (assemble "coo 5" :machine 'disasm-word-machine)
-                                      :machine 'disasm-word-machine :labels nil))
-         (indirect (disassemble-assembly (assemble "coo [5]" :machine 'disasm-word-machine)
-                                          :machine 'disasm-word-machine :labels nil)))
+  (let* ((bare (disassemble-assembly (assemble "coo 5" :cpu 'disasm-word-machine)
+                                      :cpu 'disasm-word-machine :labels nil))
+         (indirect (disassemble-assembly (assemble "coo [5]" :cpu 'disasm-word-machine)
+                                          :cpu 'disasm-word-machine :labels nil)))
     (fiveam:is (string= "coo $5" (disassembly-line-text (first bare))))
     (fiveam:is (string= "coo [$5]" (disassembly-line-text (first indirect))))))
 
@@ -401,23 +401,23 @@ ldsr $2,S" :machine 'disasm-test-machine))
   ;; #118: COOM mixes a CHOICE-selected row (DISASM-OO-REG) with a
   ;; value-selected one stamped DISASM-OO-IND -- both must render their own
   ;; matched syntax back, not just the CHOICE-selected one.
-  (let* ((bare (disassemble-assembly (assemble "coom 5" :machine 'disasm-word-machine)
-                                      :machine 'disasm-word-machine :labels nil))
-         (indirect (disassemble-assembly (assemble "coom [20]" :machine 'disasm-word-machine)
-                                          :machine 'disasm-word-machine :labels nil)))
+  (let* ((bare (disassemble-assembly (assemble "coom 5" :cpu 'disasm-word-machine)
+                                      :cpu 'disasm-word-machine :labels nil))
+         (indirect (disassemble-assembly (assemble "coom [20]" :cpu 'disasm-word-machine)
+                                          :cpu 'disasm-word-machine :labels nil)))
     (fiveam:is (string= "coom $5" (disassembly-line-text (first bare))))
     (fiveam:is (string= "coom [$14]" (disassembly-line-text (first indirect))))))
 
 (fiveam:test disassemble-no-operand-instruction
-  (let* ((a (assemble "hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+  (let* ((a (assemble "hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (string= "hlt" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-word-inline-and-extra-word
   (let* ((a (assemble "set 0,5
 set 1,1000
-hlt" :machine 'disasm-word-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil)))
+hlt" :cpu 'disasm-word-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-machine :labels nil)))
     (fiveam:is (= 1 (disassembly-line-size (first lines))))
     (fiveam:is (equal (list 0 5) (disassembly-line-values (first lines))))
     (fiveam:is (= 2 (disassembly-line-size (second lines))))
@@ -425,11 +425,11 @@ hlt" :machine 'disasm-word-machine))
     (fiveam:is (string= "set $1,$3E8" (disassembly-line-text (second lines))))))
 
 (fiveam:test print-disassembly-pads-cells-to-machine-width
-  (let* ((byte-lines (disassemble-cells (list #xFF) :machine 'disasm-test-machine :labels nil))
-         (word-cells (disassemble-cells (list #x3E8) :machine 'disasm-word-machine
+  (let* ((byte-lines (disassemble-cells (list #xFF) :cpu 'disasm-test-machine :labels nil))
+         (word-cells (disassemble-cells (list #x3E8) :cpu 'disasm-word-machine
                                         :labels nil :data-regions (list (cons 0 1))))
-         (word-assembly (assemble "set 1,1000" :machine 'disasm-word-machine))
-         (word-lines (disassemble-assembly word-assembly :machine 'disasm-word-machine :labels nil))
+         (word-assembly (assemble "set 1,1000" :cpu 'disasm-word-machine))
+         (word-lines (disassemble-assembly word-assembly :cpu 'disasm-word-machine :labels nil))
          (machine (make-machine 'disasm-word-machine)))
     (setf (mref machine 'ram 0) #x3E8)
     (let ((word-memory (disassemble-memory machine :memory 'ram :start 0 :count 1
@@ -444,19 +444,19 @@ hlt" :machine 'disasm-word-machine))
       (fiveam:is (search "  03E8" (with-output-to-string (s) (print-disassembly word-memory :stream s)))))))
 
 (fiveam:test disassemble-word-two-extra-words
-  (let* ((a (assemble "movx 20,1000" :machine 'disasm-word-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil)))
+  (let* ((a (assemble "movx 20,1000" :cpu 'disasm-word-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-machine :labels nil)))
     (fiveam:is (= 3 (disassembly-line-size (first lines))))
     (fiveam:is (equal (list 20 1000) (disassembly-line-values (first lines))))))
 
 (fiveam:test disassemble-mode-suffix-rendered
   (let* ((a (assemble "lda.z $10
-lda.w $10" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes t)))
+lda.w $10" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes t)))
     (fiveam:is (string= "lda.z $10" (disassembly-line-text (first lines))))
     (fiveam:is (string= "lda.w $10" (disassembly-line-text (second lines)))))
-  (let* ((a (assemble "lda.z $10" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+  (let* ((a (assemble "lda.z $10" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "lda $10" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-hex-prefix-from-lexer
@@ -465,8 +465,8 @@ lda.w $10" :machine 'disasm-test-machine))
     (number-formats (:hex "0x") (:dec :default))
     (label-suffix ":")
     (ident-chars :alnum "_"))
-  (let* ((a (assemble "ldx #10" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil
+  (let* ((a (assemble "ldx #10" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil
                                          :lexer 'disasm-0x-lexer)))
     (fiveam:is (string= "ldx #0xA" (disassembly-line-text (first lines))))))
 
@@ -475,13 +475,13 @@ lda.w $10" :machine 'disasm-test-machine))
   ;; which is also where its (self-relative) operand targets -- one line,
   ;; carrying both its own LABEL and an operand rendered as that same label.
   (let* ((a (assemble "start:
-bra start" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels t)))
+bra start" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels t)))
     (fiveam:is (string= "start" (disassembly-line-label (first lines))))
     (fiveam:is (string= "bra start" (disassembly-line-text (first lines)))))
   (let* ((a (assemble "start:
-bra start" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+bra start" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (null (disassembly-line-label (first lines))))
     (fiveam:is (string= "bra $0" (disassembly-line-text (first lines))))))
 
@@ -489,8 +489,8 @@ bra start" :machine 'disasm-test-machine))
   ;; FIVE is an .EQU folded to 5, an address no instruction in this program
   ;; starts at -- it must not be substituted into any operand rendering.
   (let* ((a (assemble ".equ five, 5
-ldx #5" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels t)))
+ldx #5" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels t)))
     (fiveam:is (string= "ldx #$5" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-symbol-info-fixes-equ-aliasing-and-trailing-label
@@ -504,14 +504,14 @@ ldx #5" :machine 'disasm-test-machine))
 hlt
 bra x
 bra end
-end:" :machine 'disasm-test-machine))
+end:" :cpu 'disasm-test-machine))
          ;; Legacy path: a bare ASSEMBLY-SYMBOLS table, no SYMBOL-INFO --
          ;; the discriminator doesn't exist, so the pre-#81 line-start
          ;; mitigation is all that's left, unchanged.
-         (legacy (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine
+         (legacy (disassemble-cells (assembly-cells a) :cpu 'disasm-test-machine
                                      :symbols (assembly-symbols a) :labels t))
          ;; Fixed path: DISASSEMBLE-ASSEMBLY passes SYMBOL-INFO automatically.
-         (fixed (disassemble-assembly a :machine 'disasm-test-machine :labels t)))
+         (fixed (disassemble-assembly a :cpu 'disasm-test-machine :labels t)))
     ;; Legacy: X's value (1) is a line start, so it's wrongly substituted --
     ;; the #81 bug, demonstrated here rather than fixed (no SYMBOL-INFO given).
     (fiveam:is (string= "bra x" (disassembly-line-text (second legacy))))
@@ -528,8 +528,8 @@ end:" :machine 'disasm-test-machine))
   ;; SYMBOL-INFO carries its own QUALIFIED-NAME/VALUE (assembler.lisp) -- a
   ;; caller may pass it with :SYMBOLS NIL and still get every real label.
   (let* ((a (assemble "start:
-bra start" :machine 'disasm-test-machine))
-         (lines (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine
+bra start" :cpu 'disasm-test-machine))
+         (lines (disassemble-cells (assembly-cells a) :cpu 'disasm-test-machine
                                     :symbol-info (assembly-symbol-info a) :labels t)))
     (fiveam:is (string= "start" (disassembly-line-label (first lines))))
     (fiveam:is (string= "bra start" (disassembly-line-text (first lines))))))
@@ -538,14 +538,14 @@ bra start" :machine 'disasm-test-machine))
   (let* ((a (assemble "loop: hlt
 .next: hlt
 bra .next
-loop.next: hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :data-regions nil)))
+loop.next: hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :data-regions nil)))
     (fiveam:is (search "$" (disassembly-line-text (third lines))))))
 
 ;;; Failure and bounds
 
 (fiveam:test disassemble-unknown-opcode-emits-data
-  (let* ((lines (disassemble-cells (list #xFF #xA2 10) :machine 'disasm-test-machine :labels nil)))
+  (let* ((lines (disassemble-cells (list #xFF #xA2 10) :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (= 2 (length lines)))
     (fiveam:is (null (disassembly-line-descriptor (first lines))))
     (fiveam:is (= 1 (disassembly-line-size (first lines))))
@@ -560,29 +560,29 @@ loop.next: hlt" :machine 'disasm-test-machine))
   (let* ((word (logior (ash 1 12) 100))
          (lo (logand word #xFF))
          (hi (logand (ash word -8) #xFF))
-         (lines (disassemble-cells (list lo hi) :machine 'word-test-machine :labels nil)))
+         (lines (disassemble-cells (list lo hi) :cpu 'word-test-machine :labels nil)))
     (fiveam:is (null (disassembly-line-descriptor (first lines))))
     (fiveam:is (= 1 (disassembly-line-size (first lines))))
     (fiveam:is (string= (format nil ".byte $~X" lo) (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-truncated-trailing-instruction
-  (let* ((a (assemble "ldx #10" :machine 'disasm-test-machine))
-         (lines (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine
+  (let* ((a (assemble "ldx #10" :cpu 'disasm-test-machine))
+         (lines (disassemble-cells (assembly-cells a) :cpu 'disasm-test-machine
                                                         :end 1 :labels nil)))
     (fiveam:is (= 1 (length lines)))
     (fiveam:is (null (disassembly-line-descriptor (first lines))))
     (fiveam:is (= 1 (disassembly-line-size (first lines))))))
 
 (fiveam:test disassemble-all-invalid-terminates
-  (let ((lines (disassemble-cells (list #xFF #xFF #xFF) :machine 'disasm-test-machine :labels nil)))
+  (let ((lines (disassemble-cells (list #xFF #xFF #xFF) :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (= 3 (length lines)))
     (fiveam:is (every (lambda (l) (null (disassembly-line-descriptor l))) lines))
     (fiveam:is (every (lambda (l) (= 1 (disassembly-line-size l))) lines))))
 
 (fiveam:test disassemble-non-zero-origin
   (let* ((a (assemble "bra *
-hlt" :machine 'disasm-test-machine :origin #x200))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil)))
+hlt" :cpu 'disasm-test-machine :origin #x200))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil)))
     (fiveam:is (= #x200 (disassembly-line-address (first lines))))
     (fiveam:is (= #x202 (disassembly-line-address (second lines))))
     (fiveam:is (string= "bra $200" (disassembly-line-text (first lines))))))
@@ -596,10 +596,10 @@ hlt" :machine 'disasm-test-machine :origin #x200))
 (fiveam:test disassemble-memory-matches-disassemble-cells
   (let* ((m (make-machine 'disasm-test-machine))
          (a (assemble "ldx #10
-hlt" :machine 'disasm-test-machine)))
+hlt" :cpu 'disasm-test-machine)))
     (load-program m a)
     (let ((from-memory (disassemble-memory m :start 0 :count (length (assembly-cells a)) :labels nil))
-          (from-cells (disassemble-cells (assembly-cells a) :machine 'disasm-test-machine :labels nil)))
+          (from-cells (disassemble-cells (assembly-cells a) :cpu 'disasm-test-machine :labels nil)))
       (fiveam:is (= (length from-cells) (length from-memory)))
       (loop for l1 in from-memory
             for l2 in from-cells
@@ -609,7 +609,7 @@ hlt" :machine 'disasm-test-machine)))
   (let* ((m (make-machine 'disasm-test-machine))
          (a (assemble "start: ldx #10
 loop: hlt
-        .byte $A2, $0A" :machine 'disasm-test-machine)))
+        .byte $A2, $0A" :cpu 'disasm-test-machine)))
     (load-program m a :origin #x40)
     (let ((lines (disassemble-memory m :start #x40 :count 5 :assembly a)))
       (fiveam:is (equal "start" (disassembly-line-label (first lines))))
@@ -623,20 +623,20 @@ loop: hlt
 lda.z $20
 movi $1,$2
 bra *
-hlt" :machine 'disasm-test-machine :origin #x200))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes t))
+hlt" :cpu 'disasm-test-machine :origin #x200))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes t))
          (text (disassembly-text lines :origin (assembly-origin a)))
-         (a2 (assemble text :machine 'disasm-test-machine)))
+         (a2 (assemble text :cpu 'disasm-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))
     (fiveam:is (= (assembly-origin a) (assembly-origin a2)))))
 
 (fiveam:test round-trip-word-machine
   (let* ((a (assemble "set 0,5
 set 1,1000
-hlt" :machine 'disasm-word-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil))
+hlt" :cpu 'disasm-word-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'disasm-word-machine)))
+         (a2 (assemble text :cpu 'disasm-word-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 ;;; #64: a program mixing all three of WORD-LAYOUTS-TEST-MACHINE's layouts
@@ -647,10 +647,10 @@ hlt" :machine 'disasm-word-machine))
   (let* ((a (assemble "setx 5, 200
 setwide 4000
 setnarrow 3, 2, 100
-hlt" :machine 'word-layouts-test-machine))
-         (lines (disassemble-assembly a :machine 'word-layouts-test-machine :labels nil))
+hlt" :cpu 'word-layouts-test-machine))
+         (lines (disassemble-assembly a :cpu 'word-layouts-test-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'word-layouts-test-machine)))
+         (a2 (assemble text :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 ;;; #136: three co-tenants at one opcode (FIELD-VALUE-TEST-MACHINE,
@@ -663,10 +663,10 @@ hlt" :machine 'word-layouts-test-machine))
   (let* ((a (assemble "incn 0
 decn 0
 zeroall
-hlt" :machine 'field-value-test-machine))
-         (lines (disassemble-assembly a :machine 'field-value-test-machine :labels nil))
+hlt" :cpu 'field-value-test-machine))
+         (lines (disassemble-assembly a :cpu 'field-value-test-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'field-value-test-machine)))
+         (a2 (assemble text :cpu 'field-value-test-machine)))
     (fiveam:is (equal '("INCN" "DECN" "ZEROALL" "HLT")
                        (mapcar (lambda (l) (instruction-descriptor-name (disassembly-line-descriptor l))) lines)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
@@ -681,15 +681,15 @@ hlt" :machine 'field-value-test-machine))
   ;; A backward branch to its own address: at address 0, WBRA is 2 cells
   ;; wide, so the next-instruction address is 2 -- an offset of -2 targets 0
   ;; again.
-  (let* ((a (assemble "wbra *" :machine 'word-relative-test-machine))
-         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil)))
+  (let* ((a (assemble "wbra *" :cpu 'word-relative-test-machine))
+         (lines (disassemble-assembly a :cpu 'word-relative-test-machine :labels nil)))
     (fiveam:is (string= "wbra $0" (disassembly-line-text (first lines))))))
 
 (fiveam:test round-trip-word-relative-inline
-  (let* ((a (assemble "loop: wbra loop" :machine 'word-relative-test-machine))
-         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))
+  (let* ((a (assemble "loop: wbra loop" :cpu 'word-relative-test-machine))
+         (lines (disassemble-assembly a :cpu 'word-relative-test-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'word-relative-test-machine)))
+         (a2 (assemble text :cpu 'word-relative-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 (fiveam:test round-trip-word-relative-extra-word
@@ -697,10 +697,10 @@ hlt" :machine 'field-value-test-machine))
                    (format s "start: wbra target~%")
                    (dotimes (i 300) (format s "wnop~%"))
                    (format s "target: wnop~%")))
-         (a (assemble source :machine 'word-relative-test-machine))
-         (lines (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))
+         (a (assemble source :cpu 'word-relative-test-machine))
+         (lines (disassemble-assembly a :cpu 'word-relative-test-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'word-relative-test-machine)))
+         (a2 (assemble text :cpu 'word-relative-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 (fiveam:test round-trip-sub-opcode-decodes-each-mode-back-to-itself
@@ -711,8 +711,8 @@ hlt" :machine 'field-value-test-machine))
   ;; and the listing's sizes must reflect the extra sub-opcode cell.
   (let* ((a (assemble "subop #10
 subop $20
-hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "subop #$A" (disassembly-line-text (first lines))))
     (fiveam:is (string= "subop $20" (disassembly-line-text (second lines))))
     ;; IMMEDIATE: 1 (opcode) + 1 (sub) + 1 (operand) = 3 cells.
@@ -721,18 +721,18 @@ hlt" :machine 'disasm-test-machine))
     ;; 16 over an 8-bit cell): 1 + 1 + 2 = 4 cells.
     (fiveam:is (= 4 (disassembly-line-size (second lines))))
     (let* ((text (disassembly-text lines))
-           (a2 (assemble text :machine 'disasm-test-machine)))
+           (a2 (assemble text :cpu 'disasm-test-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
 
 (fiveam:test round-trip-byte-varying-hole-counts-renders-the-alternative-written
   (let* ((a (assemble "vld 5
 vld [3, 4]
-hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "vld $5" (disassembly-line-text (first lines))))
     (fiveam:is (string= "vld [$3,$4]" (disassembly-line-text (second lines))))
     (fiveam:is (equalp (assembly-cells a)
-                       (assembly-cells (assemble (disassembly-text lines) :machine 'disasm-test-machine))))))
+                       (assembly-cells (assemble (disassembly-text lines) :cpu 'disasm-test-machine))))))
 
 (fiveam:test round-trip-relative-sibling-hole-decodes-back-to-itself
   ;; #130's own reproduction, at the disassembler level: BRM's TGT hole
@@ -741,12 +741,12 @@ hlt" :machine 'disasm-test-machine))
   ;; resolved absolute target, N untouched.
   (let* ((a (assemble "brm 10, 5
 loop: brm #loop, 9
-hlt" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :suffixes nil)))
+hlt" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "brm $A,$5" (disassembly-line-text (first lines))))
     (fiveam:is (string= "brm #$4,$9" (disassembly-line-text (second lines))))
     (let* ((text (disassembly-text lines))
-           (a2 (assemble text :machine 'disasm-test-machine)))
+           (a2 (assemble text :cpu 'disasm-test-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
 
 (fiveam:test round-trip-shared-opcode-decodes-each-mnemonic-back-to-itself
@@ -756,12 +756,12 @@ hlt" :machine 'disasm-test-machine))
   ;; :DECODE-FAILURE for one and the other's name for both.
   (let* ((a (assemble "sh1 0,5
 sh2 1,5
-hlt" :machine 'disasm-word-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-machine :labels nil)))
+hlt" :cpu 'disasm-word-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-machine :labels nil)))
     (fiveam:is (string= "sh1 $0,$5" (disassembly-line-text (first lines))))
     (fiveam:is (string= "sh2 $1,$5" (disassembly-line-text (second lines))))
     (let* ((text (disassembly-text lines))
-           (a2 (assemble text :machine 'disasm-word-machine)))
+           (a2 (assemble text :cpu 'disasm-word-machine)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells a2))))))
 
 ;;; #143: register-index operands disassemble as their own #72 :names alias.
@@ -813,14 +813,14 @@ hlt" :machine 'disasm-word-machine))
 
 (fiveam:test disassemble-byte-register-hole-renders-alias
   (let* ((a (assemble "ldv v1, #10
-hlt" :machine 'disasm-alias-machine))
-         (lines (disassemble-assembly a :machine 'disasm-alias-machine :labels nil)))
+hlt" :cpu 'disasm-alias-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-alias-machine :labels nil)))
     (fiveam:is (string= "ldv v1,#$A" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-word-register-hole-renders-alias
   (let* ((a (assemble "addr a, b
-hlt" :machine 'disasm-word-alias-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-alias-machine :labels nil)))
+hlt" :cpu 'disasm-word-alias-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-alias-machine :labels nil)))
     (fiveam:is (string= "addr a,b" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-register-hole-out-of-range-index-renders-hex
@@ -828,7 +828,7 @@ hlt" :machine 'disasm-word-alias-machine))
   ;; naming index 5 (LDV's X field is a full byte, well beyond V's own
   ;; :NAMES) has no alias to render -- REGISTER-ALIAS-AT falls through to
   ;; %RENDER-VALUE's ordinary hex rendering, never NIL/blank.
-  (let* ((lines (disassemble-cells (list #x01 5 10 #x00) :machine 'disasm-alias-machine :labels nil)))
+  (let* ((lines (disassemble-cells (list #x01 5 10 #x00) :cpu 'disasm-alias-machine :labels nil)))
     (fiveam:is (string= "ldv $5,#$A" (disassembly-line-text (first lines))))))
 
 (fiveam:test disassemble-register-alias-wins-over-a-same-valued-label
@@ -836,95 +836,95 @@ hlt" :machine 'disasm-word-alias-machine))
   ;; hole's own decoded value of 0 -- alias beats label, same as alias beats
   ;; a bare hex render.
   (let* ((a (assemble "ldv v0, #10
-hlt" :machine 'disasm-alias-machine))
+hlt" :cpu 'disasm-alias-machine))
          (symbols (let ((h (make-hash-table :test 'equal)))
                     (setf (gethash "zero" h) 0)
                     h))
-         (lines (disassemble-cells (coerce (assembly-cells a) 'list) :machine 'disasm-alias-machine
+         (lines (disassemble-cells (coerce (assembly-cells a) 'list) :cpu 'disasm-alias-machine
                                     :labels t :symbols symbols)))
     (fiveam:is (string= "ldv v0,#$A" (disassembly-line-text (first lines))))))
 
 (fiveam:test round-trip-byte-register-alias
   (let* ((a (assemble "ldv v2, #99
-hlt" :machine 'disasm-alias-machine))
-         (lines (disassemble-assembly a :machine 'disasm-alias-machine :labels nil))
+hlt" :cpu 'disasm-alias-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-alias-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'disasm-alias-machine)))
+         (a2 (assemble text :cpu 'disasm-alias-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 (fiveam:test round-trip-word-register-alias
   (let* ((a (assemble "addr c, d
-hlt" :machine 'disasm-word-alias-machine))
-         (lines (disassemble-assembly a :machine 'disasm-word-alias-machine :labels nil))
+hlt" :cpu 'disasm-word-alias-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-word-alias-machine :labels nil))
          (text (disassembly-text lines))
-         (a2 (assemble text :machine 'disasm-word-alias-machine)))
+         (a2 (assemble text :cpu 'disasm-word-alias-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells a2)))))
 
 (fiveam:test assemble-byte-register-hole-out-of-range-signals-error
-  (fiveam:signals assembly-error (assemble "ldv 4, #1" :machine 'disasm-alias-machine))
-  (fiveam:signals assembly-error (assemble "ldv -1, #1" :machine 'disasm-alias-machine))
+  (fiveam:signals assembly-error (assemble "ldv 4, #1" :cpu 'disasm-alias-machine))
+  (fiveam:signals assembly-error (assemble "ldv -1, #1" :cpu 'disasm-alias-machine))
   (fiveam:signals assembly-error (assemble ".equ n, 7
-ldv n, #1" :machine 'disasm-alias-machine))
-  (fiveam:finishes (assemble "ldv 3, #1" :machine 'disasm-alias-machine))
-  (fiveam:finishes (assemble "ldv v3, #1" :machine 'disasm-alias-machine)))
+ldv n, #1" :cpu 'disasm-alias-machine))
+  (fiveam:finishes (assemble "ldv 3, #1" :cpu 'disasm-alias-machine))
+  (fiveam:finishes (assemble "ldv v3, #1" :cpu 'disasm-alias-machine)))
 
 (fiveam:test assemble-word-register-hole-out-of-range-signals-error
-  (fiveam:signals assembly-error (assemble "addr 4, a" :machine 'disasm-word-alias-machine))
-  (fiveam:signals assembly-error (assemble "addr a, 9" :machine 'disasm-word-alias-machine))
-  (fiveam:finishes (assemble "addr d, c" :machine 'disasm-word-alias-machine)))
+  (fiveam:signals assembly-error (assemble "addr 4, a" :cpu 'disasm-word-alias-machine))
+  (fiveam:signals assembly-error (assemble "addr a, 9" :cpu 'disasm-word-alias-machine))
+  (fiveam:finishes (assemble "addr d, c" :cpu 'disasm-word-alias-machine)))
 
 (fiveam:test assemble-register-hole-ignores-non-register-operand
-  (fiveam:finishes (assemble "ldv v0, #200" :machine 'disasm-alias-machine)))
+  (fiveam:finishes (assemble "ldv v0, #200" :cpu 'disasm-alias-machine)))
 
 ;;; Data regions (#82)
 
 (fiveam:test disassemble-cells-data-region-suppresses-decode
   ;; $A2 $0A is LDX #$A; declared data, it renders as two .byte lines.
-  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :cpu 'disasm-test-machine
                                                              :labels nil :data-regions '((0 . 2)))))
     (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines)))
     (fiveam:is (null (disassembly-line-descriptor (first lines))))))
 
 (fiveam:test disassemble-cells-data-region-mid-stream
-  (let ((lines (disassemble-cells (list #xA2 #x01 #xA2 #x02 #xA2 #x03) :machine 'disasm-test-machine
+  (let ((lines (disassemble-cells (list #xA2 #x01 #xA2 #x02 #xA2 #x03) :cpu 'disasm-test-machine
                                                                        :labels nil :data-regions '((2 . 4)))))
     (fiveam:is (equal '("ldx #$1" ".byte $A2" ".byte $2" "ldx #$3") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test disassemble-cells-data-region-honours-origin
-  (let ((lines (disassemble-cells (list #xA2 #x0A) :machine 'disasm-test-machine :origin #x100
+  (let ((lines (disassemble-cells (list #xA2 #x0A) :cpu 'disasm-test-machine :origin #x100
                                                     :labels nil :data-regions '((#x100 . #x102)))))
     (fiveam:is (equal '(#x100 #x101) (mapcar #'disassembly-line-address lines)))
     (fiveam:is (every (lambda (l) (null (disassembly-line-descriptor l))) lines))))
 
 (fiveam:test disassemble-cells-instruction-never-straddles-a-region
   ;; LDX is 2 cells; a region starting at 1 forces its first cell to data.
-  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :cpu 'disasm-test-machine
                                                              :labels nil :data-regions '((1 . 2)))))
     (fiveam:is (equal '(".byte $A2" ".byte $A" "ldx #$B") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test disassemble-cells-data-regions-are-merged-and-unordered-ok
-  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :machine 'disasm-test-machine
+  (let ((lines (disassemble-cells (list #xA2 #x0A #xA2 #x0B) :cpu 'disasm-test-machine
                                                              :labels nil :data-regions '((2 . 3) (0 . 2) (1 . 4)))))
     (fiveam:is (= 4 (length lines)))
     (fiveam:is (every (lambda (l) (null (disassembly-line-descriptor l))) lines))))
 
 (fiveam:test disassemble-cells-rejects-malformed-data-region
   (dolist (bad '((2 . 2) (3 . 1) (-1 . 2) (a . 2) 5))
-    (fiveam:signals error (disassemble-cells (list 0 0 0) :machine 'disasm-test-machine
+    (fiveam:signals error (disassemble-cells (list 0 0 0) :cpu 'disasm-test-machine
                                                           :data-regions (list bad)))))
 
 (fiveam:test disassemble-assembly-derives-data-regions-from-listing
   (let* ((a (assemble "ldx #10
 table: .byte $A2, $0A
-hlt" :machine 'disasm-test-machine))
-         (auto (disassemble-assembly a :machine 'disasm-test-machine :labels nil))
-         (off (disassemble-assembly a :machine 'disasm-test-machine :labels nil :data-regions nil)))
+hlt" :cpu 'disasm-test-machine))
+         (auto (disassemble-assembly a :cpu 'disasm-test-machine :labels nil))
+         (off (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :data-regions nil)))
     (fiveam:is (equal '("ldx #$A" ".byte $A2" ".byte $A" "hlt") (mapcar #'disassembly-line-text auto)))
     (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (mapcar #'disassembly-line-text off)))))
 
 (fiveam:test disassemble-assembly-explicit-data-regions-override-auto
-  (let* ((a (assemble "table: .byte $A2, $0A" :machine 'disasm-test-machine))
-         (lines (disassemble-assembly a :machine 'disasm-test-machine :labels nil :data-regions '((0 . 1)))))
+  (let* ((a (assemble "table: .byte $A2, $0A" :cpu 'disasm-test-machine))
+         (lines (disassemble-assembly a :cpu 'disasm-test-machine :labels nil :data-regions '((0 . 1)))))
     (fiveam:is (equal '(".byte $A2" ".byte $A") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test disassemble-memory-data-regions
@@ -936,7 +936,7 @@ hlt" :machine 'disasm-test-machine))
 (fiveam:test disassemble-memory-derives-data-regions-from-assembly
   (let* ((a (assemble "ldx #10
 table: .byte $A2, $0A
-hlt" :machine 'disasm-test-machine))
+hlt" :cpu 'disasm-test-machine))
          (m (make-machine 'disasm-test-machine)))
     (load-program m a)
     (flet ((texts (&rest args)
@@ -975,23 +975,23 @@ hlt" :machine 'disasm-test-machine))
   (eval `(definstruction ,machine nop (encoding (opcode 1)) (semantics (trap :nop)))))
 
 (fiveam:test data-region-renders-long-lines-on-a-four-cell-word-machine
-  (let ((lines (disassemble-cells (list #x78 #x56 #x34 #x12 1 0 0 0) :machine 'disasm-long-le
+  (let ((lines (disassemble-cells (list #x78 #x56 #x34 #x12 1 0 0 0) :cpu 'disasm-long-le
                                                                      :labels nil :data-regions '((0 . 8)))))
     (fiveam:is (equal '(".long $12345678" ".long $1") (mapcar #'disassembly-line-text lines)))
     (fiveam:is (equal '(4 4) (mapcar #'disassembly-line-size lines)))))
 
 (fiveam:test data-region-of-two-cells-on-a-four-cell-word-machine-renders-a-word
-  (let ((lines (disassemble-cells (list #x34 #x12) :machine 'disasm-long-le
+  (let ((lines (disassemble-cells (list #x34 #x12) :cpu 'disasm-long-le
                                                    :labels nil :data-regions '((0 . 2)))))
     (fiveam:is (equal '(".word $1234") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-renders-word-lines-on-a-six-cell-word-machine
-  (let ((lines (disassemble-cells (list 1 0 2 0 3 0) :machine 'disasm-six-cell
+  (let ((lines (disassemble-cells (list 1 0 2 0 3 0) :cpu 'disasm-six-cell
                                                      :labels nil :data-regions '((0 . 6)))))
     (fiveam:is (equal '(".word $1" ".word $2" ".word $3") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-stays-byte-lines-on-a-three-cell-word-machine
-  (let ((lines (disassemble-cells (list 1 2 3 4) :machine 'disasm-three-cell
+  (let ((lines (disassemble-cells (list 1 2 3 4) :cpu 'disasm-three-cell
                                                  :labels nil :data-regions '((0 . 4)))))
     (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3" ".byte $4")
                       (mapcar #'disassembly-line-text lines)))))
@@ -999,9 +999,9 @@ hlt" :machine 'disasm-test-machine))
 (fiveam:test data-region-long-lines-round-trip
   (dolist (machine '(disasm-long-le disasm-long-pdp disasm-six-cell))
     (let* ((source (format nil "nop~%.long $12345678, $DEADBEEF~%.word $1234~%nop"))
-           (a (assemble source :machine machine))
-           (text (disassembly-text (disassemble-assembly a :machine machine :labels nil)))
-           (b (assemble text :machine machine)))
+           (a (assemble source :cpu machine))
+           (text (disassembly-text (disassemble-assembly a :cpu machine :labels nil)))
+           (b (assemble text :cpu machine)))
       (fiveam:is (eq (not (eq machine 'disasm-six-cell)) (and (search ".long" text) t)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells b))))))
 
@@ -1021,42 +1021,42 @@ hlt" :machine 'disasm-test-machine))
 (definstruction disasm-pair-be nop (encoding (opcode #x0001)) (semantics (trap :nop)))
 
 (fiveam:test data-region-renders-word-lines-on-a-two-cell-word-machine
-  (let ((lines (disassemble-cells (list #x34 #x12 #x78 #x56) :machine 'disasm-pair-le
+  (let ((lines (disassemble-cells (list #x34 #x12 #x78 #x56) :cpu 'disasm-pair-le
                                                              :labels nil :data-regions '((0 . 4)))))
     (fiveam:is (equal '(".word $1234" ".word $5678") (mapcar #'disassembly-line-text lines)))
     (fiveam:is (equal '(0 2) (mapcar #'disassembly-line-address lines)))
     (fiveam:is (equal '(2 2) (mapcar #'disassembly-line-size lines)))))
 
 (fiveam:test data-region-word-line-follows-the-memory-endian
-  (let ((lines (disassemble-cells (list #x12 #x34) :machine 'disasm-pair-be
+  (let ((lines (disassemble-cells (list #x12 #x34) :cpu 'disasm-pair-be
                                                    :labels nil :data-regions '((0 . 2)))))
     (fiveam:is (equal '(".word $1234") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-of-odd-length-stays-byte-lines
-  (let ((lines (disassemble-cells (list 1 2 3) :machine 'disasm-pair-le
+  (let ((lines (disassemble-cells (list 1 2 3) :cpu 'disasm-pair-le
                                                :labels nil :data-regions '((0 . 3)))))
     (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-is-clipped-to-the-disassembled-range-before-pairing
   ;; The declared 0..4 region is 4 cells, but only 3 are disassembled.
-  (let ((lines (disassemble-cells (list 1 2 3) :machine 'disasm-pair-le
+  (let ((lines (disassemble-cells (list 1 2 3) :cpu 'disasm-pair-le
                                                :labels nil :data-regions '((0 . 4)))))
     (fiveam:is (equal '(".byte $1" ".byte $2" ".byte $3") (mapcar #'disassembly-line-text lines))))
   ;; A region running past :END pairs only when the clipped length is even.
-  (let ((lines (disassemble-cells (list 1 2 3 4 5) :machine 'disasm-pair-le :origin 0 :end 4
+  (let ((lines (disassemble-cells (list 1 2 3 4 5) :cpu 'disasm-pair-le :origin 0 :end 4
                                                    :labels nil :data-regions '((0 . 9)))))
     (fiveam:is (equal '(".word $201" ".word $403") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-word-line-does-not-affect-a-one-cell-word-machine
-  (let ((lines (disassemble-cells (list #x3E8 #x3E9) :machine 'disasm-word-machine
+  (let ((lines (disassemble-cells (list #x3E8 #x3E9) :cpu 'disasm-word-machine
                                                      :labels nil :data-regions '((0 . 2)))))
     (fiveam:is (equal '(".byte $3E8" ".byte $3E9") (mapcar #'disassembly-line-text lines)))))
 
 (fiveam:test data-region-word-lines-round-trip
   (dolist (machine '(disasm-pair-le disasm-pair-be))
     (let* ((source (format nil "nop~%.word $1234, $BEEF~%nop"))
-           (a (assemble source :machine machine))
-           (text (disassembly-text (disassemble-assembly a :machine machine :labels nil)))
-           (b (assemble text :machine machine)))
+           (a (assemble source :cpu machine))
+           (text (disassembly-text (disassemble-assembly a :cpu machine :labels nil)))
+           (b (assemble text :cpu machine)))
       (fiveam:is (search ".word" text))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells b))))))

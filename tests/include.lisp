@@ -9,7 +9,7 @@
 
 (defun %assemble-include-fixture (name)
   (assemble-file (asdf:system-relative-pathname :lasm (format nil "tests/fixtures/include/~A" name))
-                 :machine 'instr-test-machine))
+                 :cpu 'instr-test-machine))
 
 (fiveam:test included-equ-and-macro-are-visible-to-the-includer
   (fiveam:is (equalp #(#xA2 10) (assembly-cells (%assemble-include-fixture "main.asm")))))
@@ -30,12 +30,12 @@
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
     (fiveam:is (equalp #(#xEA #xEA)
                        (assembly-cells (assemble "nop
-.include \"sub/c.asm\"" :machine 'instr-test-machine))))))
+.include \"sub/c.asm\"" :cpu 'instr-test-machine))))))
 
 (fiveam:test include-is-case-insensitive
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
     (fiveam:is (equalp #(#xEA)
-                       (assembly-cells (assemble ".INCLUDE \"sub/c.asm\"" :machine 'instr-test-machine))))))
+                       (assembly-cells (assemble ".INCLUDE \"sub/c.asm\"" :cpu 'instr-test-machine))))))
 
 ;;; Errors
 
@@ -139,14 +139,14 @@
     (fiveam:is (search "sym-macro-def.asm:2)" text))))
 
 (fiveam:test symbols-from-string-input-have-no-file
-  (let ((a (assemble (format nil "a: nop~%b: nop") :machine 'instr-test-machine)))
+  (let ((a (assemble (format nil "a: nop~%b: nop") :cpu 'instr-test-machine)))
     (fiveam:is (null (symbol-info-file (assembly-symbol a "a"))))
     (fiveam:is (search "line 2" (symbols-text a)))))
 
 (fiveam:test set-rebind-keeps-binding-order-distinct
   (let* ((a (assemble ".set n, 1
 .set n, 2
-after: nop" :machine 'instr-test-machine))
+after: nop" :cpu 'instr-test-machine))
          (n (assembly-symbol a "n"))
          (after (assembly-symbol a "after")))
     (fiveam:is (< (symbol-info-order n) (symbol-info-order after)))))
@@ -158,4 +158,4 @@ after: nop" :machine 'instr-test-machine))
     (fiveam:is (string= (namestring (truename main)) (source-unit-path root)))
     (fiveam:is (string= (namestring (truename (merge-pathnames "sub/b.asm" main)))
                         (source-unit-path child)))
-    (fiveam:is (null (source-unit-path (assembly-source-unit (assemble "nop" :machine 'instr-test-machine)))))))
+    (fiveam:is (null (source-unit-path (assembly-source-unit (assemble "nop" :cpu 'instr-test-machine)))))))

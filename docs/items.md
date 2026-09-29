@@ -112,8 +112,8 @@ cells `items` occupy, from their first cell to the end of the last, without
 encoding. A label the items never define is allowed.
 
 ```lisp
-(items-size '((br elsewhere) (nop)) :machine 'm)                    ; => 4
-(items-size '((br elsewhere) (nop)) :machine 'm :assume :narrowest) ; => 3
+(items-size '((br elsewhere) (nop)) :cpu 'm)                    ; => 4
+(items-size '((br elsewhere) (nop)) :cpu 'm :assume :narrowest) ; => 3
 ```
 
 | `:assume` | An operand naming a label the items do not define is sized at |

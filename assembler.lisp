@@ -1943,14 +1943,14 @@ by the cell width and endianness, inside the context ASSEMBLE-STATEMENTS sets up
        (declare (ignorable endian))
        (handler-bind ((lasm-syntax-error #'%locate-syntax-error))
          (multiple-value-bind ,(subseq vars 0 6)
-             (%layout (preprocess ,statements :machine ,machine :lexer ,lexer)
+             (%layout (preprocess ,statements :cpu ,machine :lexer ,lexer)
                       ,machine ,origin cell-width)
            (declare (ignorable ,@(subseq vars 0 6)))
            (let ,(list (list (nth 6 vars) 'cell-width) (list (nth 7 vars) 'endian))
              (declare (ignorable ,(nth 6 vars) ,(nth 7 vars)))
              ,@body))))))
 
-(defun assemble-statements (statements &key machine (lexer 'default) (origin 0) memory source source-unit)
+(defun assemble-statements (statements &key ((:cpu machine)) (lexer 'default) (origin 0) memory source source-unit)
   "Assemble a STATEMENT list (parser.lisp) targeting MACHINE into an
 ASSEMBLY. Runs PREPROCESS (preprocess.lisp) first, so both this entry
 point and ASSEMBLE (which reaches here after parsing) see .include, .macro/.endm
@@ -1995,7 +1995,7 @@ ASSEMBLY-SYMBOL-INFO, alongside ASSEMBLY-SYMBOLS itself."
                      :source-unit source-unit
                      :parameters (list :origin origin :memory memory :lexer lexer)))))
 
-(defun assemble (source &key machine (lexer 'default) (origin 0) memory file)
+(defun assemble (source &key ((:cpu machine)) (lexer 'default) (origin 0) memory file)
   "Tokenize and parse SOURCE with LEXER (lexer.lisp/parser.lisp), then
 ASSEMBLE-STATEMENTS the result targeting MACHINE. See ASSEMBLE-STATEMENTS
 for the conditions this can signal, plus LEX-ERROR/PARSE-FAILURE from the
@@ -2005,22 +2005,22 @@ diagnostics and listings when supplied."
   (multiple-value-bind (statements unit) (parse source :lexer lexer :file file)
     (with-source-unit unit
       (assemble-statements statements
-                           :machine machine :lexer lexer :origin origin :memory memory
+                           :cpu machine :lexer lexer :origin origin :memory memory
                            :source source :source-unit unit))))
 
-(defun assemble-file (path &key machine (lexer 'default) (origin 0) memory)
+(defun assemble-file (path &key ((:cpu machine)) (lexer 'default) (origin 0) memory)
   "Read the source file at PATH (conventionally .asm or .s) and ASSEMBLE its
 text; see ASSEMBLE for the keys and conditions. A missing or unreadable file
 signals the ordinary CL FILE-ERROR."
   (%assemble-source (%read-source-file path) path (truename path)
-                    :machine machine :lexer lexer :origin origin :memory memory))
+                    :cpu machine :lexer lexer :origin origin :memory memory))
 
-(defun %assemble-source (text display truename &key machine lexer origin memory)
+(defun %assemble-source (text display truename &key ((:cpu machine)) lexer origin memory)
   "ASSEMBLE TEXT as the file TRUENAME, shown as DISPLAY in diagnostics, with
 .include resolved against TRUENAME's directory."
   (let* ((*include-directory* (%file-directory truename))
          (*include-chain* (list truename))
-         (assembly (assemble text :machine machine :lexer lexer :origin origin :memory memory
+         (assembly (assemble text :cpu machine :lexer lexer :origin origin :memory memory
                                   :file display)))
     (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
     assembly))

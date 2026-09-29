@@ -34,7 +34,7 @@ a macro body statement, else the innermost file being included."
         (%file-directory truename)
         (or *include-directory* *default-pathname-defaults*))))
 
-(defun preprocess (statements &key machine (lexer 'default))
+(defun preprocess (statements &key ((:cpu machine)) (lexer 'default))
   "Resolve .include, .macro/.endm and .if/.elseif/.else/.endif in STATEMENTS.
 Included files are parsed with LEXER. MACHINE, when given, reserves its
 instruction names and register aliases from macros. A label on an .include,

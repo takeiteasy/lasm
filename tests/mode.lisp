@@ -1085,16 +1085,16 @@ looks like."
 (definstruction lm-b ldv (modes lm-shared) (encoding (opcode 2) (operand :mode)) (semantics (set! a operand)))
 
 (fiveam:test machines-share-a-mode-name-with-different-syntax
-  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "ldv (5)" :machine 'lm-a))))
-  (fiveam:is (equalp #(2 5) (assembly-cells (assemble "ldv [5]" :machine 'lm-b))))
-  (fiveam:signals lasm-error (assemble "ldv [5]" :machine 'lm-a))
-  (fiveam:signals lasm-error (assemble "ldv (5)" :machine 'lm-b)))
+  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "ldv (5)" :cpu 'lm-a))))
+  (fiveam:is (equalp #(2 5) (assembly-cells (assemble "ldv [5]" :cpu 'lm-b))))
+  (fiveam:signals lasm-error (assemble "ldv [5]" :cpu 'lm-a))
+  (fiveam:signals lasm-error (assemble "ldv (5)" :cpu 'lm-b)))
 
 (fiveam:test machine-local-modes-disassemble-in-their-own-syntax
   (fiveam:is (string= "ldv ($5)" (disassembly-line-text
-                                 (first (disassemble-cells #(1 5) :machine 'lm-a)))))
+                                 (first (disassemble-cells #(1 5) :cpu 'lm-a)))))
   (fiveam:is (string= "ldv [$5]" (disassembly-line-text
-                                 (first (disassemble-cells #(2 5) :machine 'lm-b))))))
+                                 (first (disassemble-cells #(2 5) :cpu 'lm-b))))))
 
 (fiveam:test machine-local-mode-leaves-the-global-mode-alone
   (fiveam:is (equal '("<" ">") (mapcar #'second (remove :expr (mode-descriptor-pattern (find-mode-descriptor 'lm-shared))
@@ -1210,7 +1210,7 @@ looks like."
 
 (fiveam:test spelling-fills-a-hole-with-a-constant
   (flet ((cells (text)
-           (assembly-cells (assemble text :machine 'spell-fill-machine))))
+           (assembly-cells (assemble text :cpu 'spell-fill-machine))))
     (fiveam:is (equalp (cells "ld [sp + 0]") (cells "ld peek")))
     (fiveam:is (equalp (cells "ld [sp + 0]") (cells "ld [sp]")))
     (fiveam:is (equalp '(#x011a 0) (coerce (cells "ld peek") 'list)))

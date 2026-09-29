@@ -14,7 +14,7 @@
   (fiveam:run! 'dcpu16-tests))
 
 (defun cells (source)
-  (coerce (assembly-cells (assemble source :machine 'dcpu16)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'dcpu16)) 'list))
 
 (defun run-source (source &key (max-steps 10000))
   "A machine that has run SOURCE until it halts on a jump to itself."
@@ -99,17 +99,17 @@ ife x, 0x1234
 set push, pick 3
 jsr 9
 hwi 1")
-         (assembly (assemble source :machine 'dcpu16))
+         (assembly (assemble source :cpu 'dcpu16))
          (lines (mapcar #'disassembly-line-text
-                        (disassemble-assembly assembly :machine 'dcpu16 :labels nil))))
+                        (disassemble-assembly assembly :cpu 'dcpu16 :labels nil))))
     (fiveam:is (= 7 (length lines)))
     (fiveam:is (equalp (assembly-cells assembly)
-                       (assembly-cells (assemble (format nil "~{~A~%~}" lines) :machine 'dcpu16))))))
+                       (assembly-cells (assemble (format nil "~{~A~%~}" lines) :cpu 'dcpu16))))))
 
 (fiveam:test all-ones-literal-disassembles-as-minus-one
   (let ((lines (mapcar #'disassembly-line-text
-                       (disassemble-assembly (assemble "set a, 0xffff" :machine 'dcpu16)
-                                             :machine 'dcpu16 :labels nil))))
+                       (disassemble-assembly (assemble "set a, 0xffff" :cpu 'dcpu16)
+                                             :cpu 'dcpu16 :labels nil))))
     (fiveam:is (equal '("set a,-1") lines))))
 
 (fiveam:test a-register-in-an-expression-is-an-error
@@ -119,8 +119,8 @@ hwi 1")
 (fiveam:test stack-pointer-spellings-disassemble-canonically
   (let ((lines (mapcar #'disassembly-line-text
                        (disassemble-assembly (assemble "set a, [sp]
-set a, [sp + 3]" :machine 'dcpu16)
-                                             :machine 'dcpu16 :labels nil))))
+set a, [sp + 3]" :cpu 'dcpu16)
+                                             :cpu 'dcpu16 :labels nil))))
     (fiveam:is (equal '("set a,peek" "set a,pick$3") lines))))
 
 ;;; Arithmetic and EX.

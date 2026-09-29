@@ -50,7 +50,7 @@
                   :file *items-file* :source *items-source-text*))))
 
 (defstruct items-program
-  items backend machine origin memory lexer
+  items backend cpu origin memory lexer
   optimize ; :SIZE or :SPEED, from a .lsp header only
   frames   ; :STATIC or :STACK, from a .lsp header only
   source   ; source text, for a program a reader with positions made
@@ -1238,12 +1238,12 @@ of its ISA or an ISA extending it."
                         ((and backend machine) (%find-machine-name machine))
                         (backend (or (backend-descriptor-machine backend)
                                      (%signal-usage-error 'usage-error
-                                                          "backend ~A targets ISA ~A, which has no machine of that name: pass :machine"
+                                                          "backend ~A targets ISA ~A, which has no CPU of that name: pass :cpu"
                                                           (backend-descriptor-name backend)
                                                           (backend-descriptor-isa backend))))
                         (machine (or (%find-machine-name machine)
                                      (%lookup-error 'unknown-machine machine "No machine named ~S" machine)))
-                        (t (%signal-usage-error 'usage-error "items need a :machine or a :backend"))))
+                        (t (%signal-usage-error 'usage-error "items need a :cpu or a :backend"))))
          (lexer (or (%find-by-name lexer *lexers*)
                     (%lookup-error 'unknown-lexer lexer "No lexer named ~S" lexer))))
     (values backend machine lexer)))
@@ -1309,7 +1309,7 @@ as ASSUME says, and return that layout's size."
         (%check-assembled-stack-lines (%build-listing sized) lines unit)
         (- final-address asm-origin)))))
 
-(defun render-items (items &key backend machine (lexer 'default) (origin 0) memory)
+(defun render-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory)
   "The assembly source text ITEMS render as. Assembling it gives the cells
 ASSEMBLE-ITEMS gives. MEMORY sizes the range check of a forced mode's operand. A line
 whose operands leave variants that differ in writing the stack pointer is judged by the
@@ -1326,7 +1326,7 @@ layout is left to ASSEMBLE-ITEMS."
           (lasm-syntax-error () nil)))
       text)))
 
-(defun assemble-items (items &key backend machine (lexer 'default) (origin 0) memory file positions source)
+(defun assemble-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory file positions source)
   "Assemble ITEMS, a list of items, for the machine of BACKEND (a name or
 BACKEND-DESCRIPTOR) or for MACHINE. Returns an ASSEMBLY like ASSEMBLE, whose
 source is the text RENDER-ITEMS gives; LEXER, ORIGIN and MEMORY are ASSEMBLE's.
@@ -1343,14 +1343,14 @@ let such an error report FILE:LINE:COLUMN."
         (setf (source-unit-file unit) *items-file*)
         (let ((assembly (with-source-unit unit
                           (assemble-statements statements
-                                               :machine *items-machine* :lexer *items-lexer* :origin origin
+                                               :cpu *items-machine* :lexer *items-lexer* :origin origin
                                                :memory *items-memory*
                                                :source text :source-unit unit))))
           (%check-choices assembly lines statements unit)
           (%check-assembled-stack-lines (assembly-listing assembly) lines unit)
           assembly)))))
 
-(defun items-size (items &key backend machine (lexer 'default) (origin 0) memory (assume :widest))
+(defun items-size (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory (assume :widest))
   "The cells ITEMS occupy, from their first cell to the end of their last, laid
 out as ASSEMBLE-ITEMS would but without encoding, so a label ITEMS never define
 is allowed. An operand naming such a label is sized at its :WIDEST or :NARROWEST
@@ -1382,7 +1382,7 @@ ASSEMBLE-ITEMS's."
     (loop for (key value) on options by #'cddr
           do (let ((name (and (keywordp key) (symbol-name key))))
                (cond ((equal name "BACKEND") (setf (items-program-backend program) value))
-                     ((equal name "MACHINE") (setf (items-program-machine program) value))
+                     ((equal name "CPU") (setf (items-program-cpu program) value))
                      ((equal name "MEMORY") (setf (items-program-memory program) value))
                      ((equal name "LEXER") (setf (items-program-lexer program) value))
                      ((equal name "ORIGIN")
@@ -1418,7 +1418,7 @@ STREAM reads from."
 
 (defun read-items (path)
   "The ITEMS-PROGRAM in the file PATH: one (:program (option...) item...) form,
-with options :backend, :machine, :memory, :lexer and :origin. The file is
+with options :backend, :cpu, :memory, :lexer and :origin. The file is
 untrusted: it is read without evaluation and without interning symbols.
 Signals ITEMS-MALFORMED for an unreadable or malformed file."
   (let ((text (%slurp-file path)))
@@ -1439,14 +1439,14 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
               (items-program-positions program) positions)
         program))))
 
-(defun %assemble-items-program (program path &key backend machine lexer origin memory)
+(defun %assemble-items-program (program path &key backend ((:cpu machine)) lexer origin memory)
   "Assemble the ITEMS-PROGRAM read from PATH; the keys override its options."
   (let* ((truename (truename path))
          (*include-directory* (%file-directory truename))
          (*include-chain* (list truename))
          (assembly (assemble-items (items-program-items program)
                                    :backend (or backend (items-program-backend program))
-                                   :machine (or machine (items-program-machine program))
+                                   :cpu (or machine (items-program-cpu program))
                                    :lexer (or lexer (items-program-lexer program) 'default)
                                    :origin (or origin (items-program-origin program) 0)
                                    :memory (or memory (items-program-memory program))
@@ -1456,8 +1456,8 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
     (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
     assembly))
 
-(defun assemble-items-file (path &key backend machine lexer origin memory)
+(defun assemble-items-file (path &key backend ((:cpu machine)) lexer origin memory)
   "Read the items program at PATH and assemble it. The keys override the
 program's own options."
   (%assemble-items-program (read-items path) path
-                           :backend backend :machine machine :lexer lexer :origin origin :memory memory))
+                           :backend backend :cpu machine :lexer lexer :origin origin :memory memory))

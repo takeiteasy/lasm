@@ -529,7 +529,7 @@ restriction is dropped, per %REVERSE-SYMBOLS). Returns LINES."
 
 ;;; Entry points
 
-(defun disassemble-cells (cells &key machine (origin 0) end symbols symbol-info (lexer 'default)
+(defun disassemble-cells (cells &key ((:cpu machine)) (origin 0) end symbols symbol-info (lexer 'default)
                                      (labels t) (suffixes t) memory data-regions)
   "Disassemble a bare sequence CELLS (e.g. an ASSEMBLY-CELLS vector) as if
 mapped into address space starting at ORIGIN, through address END (exclusive,
@@ -555,7 +555,7 @@ exclusive, are rendered as \".byte\" lines without decoding.
 Returns a list of DISASSEMBLY-LINE, ascending by address. See this file's
 header comment for the mid-stream decode-failure policy and the honest scope
 of round-trip fidelity."
-  (unless machine (%disassembler-usage-error "DISASSEMBLE-CELLS: :MACHINE is required"))
+  (unless machine (%disassembler-usage-error "DISASSEMBLE-CELLS: :CPU is required"))
   (let* ((*mode-scope* (%machine-isa machine))
          (*disassembly-machine* machine)
          (end (or end (+ origin (length cells))))
@@ -687,7 +687,7 @@ ASSEMBLY, with only that image's labels, its lines tagged with the image."
       (setf (disassembly-line-region l) region
             (disassembly-line-bank l) bank))))
 
-(defun disassemble-assembly (assembly &key machine (lexer 'default) (labels t) (suffixes t) memory
+(defun disassemble-assembly (assembly &key ((:cpu machine)) (lexer 'default) (labels t) (suffixes t) memory
                                            (data-regions :auto) bank region)
   "DISASSEMBLE-CELLS over an ASSEMBLY (assembler.lisp), pulling CELLS,
 ORIGIN, SYMBOLS, and SYMBOL-INFO off it directly -- the natural way to
@@ -706,14 +706,14 @@ disassembles that bank's image, placed at the region's addresses, over the
 addresses its listing entries cover. BANK :ALL returns the main image's lines
 followed by every bank image's, each line tagged with its REGION and BANK for
 DISASSEMBLY-TEXT."
-  (unless machine (%disassembler-usage-error "DISASSEMBLE-ASSEMBLY: :MACHINE is required"))
+  (unless machine (%disassembler-usage-error "DISASSEMBLE-ASSEMBLY: :CPU is required"))
   (let ((target-width (%machine-cell-width machine memory))
         (source-width (assembly-cell-width assembly)))
     (unless (= target-width source-width)
       (%disassembler-usage-error "DISASSEMBLE-ASSEMBLY on machine ~S: assembly's cell width (~D) does not ~
 match the machine's cell width (~D)" machine source-width target-width)))
   (flet ((image-lines (image)
-           (%disassemble-image assembly image :machine machine :lexer lexer :labels labels
+           (%disassemble-image assembly image :cpu machine :lexer lexer :labels labels
                                               :suffixes suffixes :memory memory
                                               :data-regions data-regions)))
     (cond

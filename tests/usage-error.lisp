@@ -39,7 +39,7 @@
   (let ((m (make-machine 'emu-test-machine)))
     (fiveam:signals emulator-usage-error (machine-elapsed-seconds m))
     (fiveam:signals emulator-usage-error
-      (load-program m (assemble "hlt" :machine 'emu-test-machine) :bank 1))))
+      (load-program m (assemble "hlt" :cpu 'emu-test-machine) :bank 1))))
 
 (fiveam:test output-misuse-is-an-output-usage-error
   (fiveam:signals output-usage-error
@@ -49,4 +49,4 @@
   (fiveam:signals output-usage-error
     (bytes-to-cells (list 1 2) 12 :packing :nibbles))
   (fiveam:signals output-usage-error
-    (assembly-bytes (assemble "hlt" :machine 'emu-test-machine) :packing :nibbles)))
+    (assembly-bytes (assemble "hlt" :cpu 'emu-test-machine) :packing :nibbles)))

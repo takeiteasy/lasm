@@ -20,7 +20,7 @@
   (cond ((if (eq packing :bits) (= cell-width 8) (<= cell-width 8)) :little)
         (endian (%check-endian endian 'output))
         (machine (%endian-byte-order (%machine-endian machine memory)))
-        (t (%output-usage-error "a ~D-bit cell needs :MACHINE or :ENDIAN to order its ~A"
+        (t (%output-usage-error "a ~D-bit cell needs :CPU or :ENDIAN to order its ~A"
                   cell-width (if (eq packing :bits) "bits" "bytes")))))
 
 (defun %stream-bit-position (k width endian)
@@ -82,7 +82,7 @@ by every bank from 0 to the highest used, each padded to the region's size."
                            parts)))))
           (apply #'concatenate `(vector (unsigned-byte ,width)) (nreverse parts))))))
 
-(defun assembly-bytes (assembly &key machine memory endian bank region (packing :pad))
+(defun assembly-bytes (assembly &key ((:cpu machine)) memory endian bank region (packing :pad))
   "ASSEMBLY's cells as a (vector (unsigned-byte 8)). A cell wider than 8 bits
 becomes CEILING(CELL-WIDTH/8) bytes, low byte first when ENDIAN is :LITTLE.
 ENDIAN defaults to MACHINE's (see %MACHINE-ENDIAN; MEMORY selects the memory
@@ -140,10 +140,10 @@ cells. COUNT, when given, must account for BYTES exactly: whole bytes under
                   (%output-usage-error "cell ~D value ~D does not fit ~D bits" c v cell-width))
                 (setf (aref cells c) v))))))))
 
-(defun write-binary (assembly path &key machine memory endian bank region (packing :pad))
+(defun write-binary (assembly path &key ((:cpu machine)) memory endian bank region (packing :pad))
   "Write ASSEMBLY-BYTES to PATH as a raw binary file, replacing any existing
 file. Returns PATH."
-  (let ((bytes (assembly-bytes assembly :machine machine :memory memory :endian endian
+  (let ((bytes (assembly-bytes assembly :cpu machine :memory memory :endian endian
                                          :bank bank :region region :packing packing)))
     (with-open-file (out path :direction :output :if-exists :supersede
                               :element-type '(unsigned-byte 8))
@@ -166,7 +166,7 @@ file. Returns PATH."
              (incf sum b))
     (format stream "~2,'0X~%" (ldb (byte 8 0) (- sum)))))
 
-(defun hex-text (assembly &key stream machine memory endian bank region (packing :pad))
+(defun hex-text (assembly &key stream ((:cpu machine)) memory endian bank region (packing :pad))
   "Render ASSEMBLY as Intel HEX: 16-byte data records, an extended linear
 address record wherever the upper 16 address bits change, and an end-of-file
 record. Addresses count bytes from ASSEMBLY-ORIGIN scaled by the cell size, so
@@ -176,7 +176,7 @@ signals when that is not a whole byte. With BANK the records start at that
 bank's region address. Keys are ASSEMBLY-BYTES'. Returns the text as a string when STREAM is
 NIL (default); otherwise writes to STREAM and returns NIL."
   (let* ((width (assembly-cell-width assembly))
-         (bytes (assembly-bytes assembly :machine machine :memory memory :endian endian
+         (bytes (assembly-bytes assembly :cpu machine :memory memory :endian endian
                                          :bank bank :region region :packing packing))
          (image (and bank (assembly-bank-image assembly (%bank-image-region assembly region) bank)))
          (origin (if image (bank-image-origin image) (assembly-origin assembly)))
@@ -202,10 +202,10 @@ NIL (default); otherwise writes to STREAM and returns NIL."
                  (%hex-record s 1 0 #()))))
     (if stream (progn (write-string body stream) nil) body)))
 
-(defun write-intel-hex (assembly path &key machine memory endian bank region (packing :pad))
+(defun write-intel-hex (assembly path &key ((:cpu machine)) memory endian bank region (packing :pad))
   "Write HEX-TEXT of ASSEMBLY to PATH, replacing any existing file. Returns
 PATH."
-  (let ((text (hex-text assembly :machine machine :memory memory :endian endian
+  (let ((text (hex-text assembly :cpu machine :memory memory :endian endian
                                   :bank bank :region region :packing packing)))
     (with-open-file (out path :direction :output :if-exists :supersede)
       (write-string text out))

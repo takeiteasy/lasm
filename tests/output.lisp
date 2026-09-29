@@ -25,17 +25,17 @@
 
 (fiveam:test assembly-bytes-8-bit-cells-are-the-cells
   (let ((a (assemble "ldx #10
-hlt" :machine 'disasm-test-machine)))
+hlt" :cpu 'disasm-test-machine)))
     (fiveam:is (equalp #(#xA2 10 0) (assembly-bytes a)))))
 
 (fiveam:test assembly-bytes-splits-wide-cells-by-machine-endian
   (let ((a (%cells-assembly 16 0 #x1234 #xABCD)))
-    (fiveam:is (equalp #(#x34 #x12 #xCD #xAB) (assembly-bytes a :machine 'disasm-word-machine)))
+    (fiveam:is (equalp #(#x34 #x12 #xCD #xAB) (assembly-bytes a :cpu 'disasm-word-machine)))
     (fiveam:is (equalp #(#x12 #x34 #xAB #xCD) (assembly-bytes a :endian :big)))))
 
 (fiveam:test assembly-bytes-assembled-word-program-uses-little-endian
-  (let ((a (assemble "hlt" :machine 'disasm-word-machine)))
-    (fiveam:is (= 2 (length (assembly-bytes a :machine 'disasm-word-machine))))))
+  (let ((a (assemble "hlt" :cpu 'disasm-word-machine)))
+    (fiveam:is (= 2 (length (assembly-bytes a :cpu 'disasm-word-machine))))))
 
 (fiveam:test assembly-bytes-wide-cells-need-an-endian-source
   (fiveam:signals error (assembly-bytes (%cells-assembly 16 0 1))))
@@ -97,7 +97,7 @@ hlt" :machine 'disasm-test-machine)))
 (fiveam:test write-binary-round-trips-through-a-file
   (uiop:with-temporary-file (:pathname path :type "bin")
     (let ((a (assemble "ldx #10
-hlt" :machine 'disasm-test-machine)))
+hlt" :cpu 'disasm-test-machine)))
       (fiveam:is (equal path (write-binary a path)))
       (fiveam:is (equalp (assembly-bytes a)
                          (with-open-file (in path :element-type '(unsigned-byte 8))
@@ -135,7 +135,7 @@ hlt" :machine 'disasm-test-machine)))
                       lines))))
 
 (fiveam:test hex-text-word-machine-addresses-count-bytes
-  (let ((lines (%hex-lines (hex-text (%cells-assembly 16 2 #x1234) :machine 'disasm-word-machine))))
+  (let ((lines (%hex-lines (hex-text (%cells-assembly 16 2 #x1234) :cpu 'disasm-word-machine))))
     (fiveam:is (string= ":02000400" (subseq (first lines) 0 9)))
     (fiveam:is (string= "3412" (subseq (first lines) 9 13)))))
 
@@ -161,7 +161,7 @@ hlt" :machine 'disasm-test-machine)))
 (fiveam:test assembly-bytes-mixed-endian-machine-orders-bytes-by-inner-order
   (let ((a (%cells-assembly 16 0 #x1234)))
     (fiveam:is (equalp #(#x34 #x12)
-                       (assembly-bytes a :machine 'mixed-endian-output-test-machine)))))
+                       (assembly-bytes a :cpu 'mixed-endian-output-test-machine)))))
 
 ;;; sub-byte-multiple cells in Intel HEX
 

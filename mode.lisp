@@ -16,10 +16,10 @@
 ;;;; form is compiled, not only after the file loads.
 ;;;;
 ;;;; Modes live in a global registry (mirroring *LEXERS*, lexer.lisp), plus an
-;;;; optional per-machine table: (DEFMODE (NAME (:MACHINE M)) ...) registers a
-;;;; mode only M and its descendants see, shadowing a global of the same name.
-;;;; Names resolve through *MODE-SCOPE*, the machine being defined, assembled
-;;;; or decoded.
+;;;; optional per-ISA table: (DEFMODE (NAME (:ISA A)) ...) registers a
+;;;; mode only A and its descendants see, shadowing a global of the same name.
+;;;; Names resolve through *MODE-SCOPE*, the ISA of the machine being defined,
+;;;; assembled or decoded.
 
 (in-package #:lasm)
 
@@ -810,7 +810,7 @@ for the global scope and every machine that does not shadow it."
 
 (defmacro defmode (name &body pattern)
   "Define a mode from literal tokens, EXPR holes, and ONE-OF alternatives.
-NAME may be (NAME (:MACHINE M)) to define a mode only machine M and its
+NAME may be (NAME (:ISA A)) to define a mode only ISA A and its
 descendants see, shadowing a global mode of the same name.
 A hole may use (EXPR :REGISTER name :SIGNED boolean :RELATIVE boolean).
 Hole options override mode-wide :SIGNED and :RELATIVE defaults. A relative

@@ -2611,10 +2611,10 @@ names one, and FRAMES is the backend's when neither does."
   "Compile the source file PATH to an ITEMS-PROGRAM."
   (compile-source (read-source path) :backend backend :optimize optimize :frames frames))
 
-(defun assemble-source-file (path &key backend machine lexer origin memory optimize frames)
+(defun assemble-source-file (path &key backend ((:cpu machine)) lexer origin memory optimize frames)
   "Compile the source file PATH and assemble it as ASSEMBLE-ITEMS-FILE does."
   (%assemble-items-program (compile-source-file path :backend backend :optimize optimize :frames frames) path
-                           :backend backend :machine machine :lexer lexer :origin origin :memory memory))
+                           :backend backend :cpu machine :lexer lexer :origin origin :memory memory))
 
 ;;; Writing
 
@@ -2640,7 +2640,7 @@ names one, and FRAMES is the backend's when neither does."
   "Write the ITEMS-PROGRAM as a .lasm file READ-ITEMS reads back."
   (let ((*print-gensym* nil) (*print-case* :downcase) (*print-pretty* nil) (*print-readably* nil)
         (options (loop for (key value) on (list :backend (items-program-backend program)
-                                                :machine (items-program-machine program)
+                                                :cpu (items-program-cpu program)
                                                 :origin (items-program-origin program)
                                                 :memory (items-program-memory program)
                                                 :lexer (items-program-lexer program))

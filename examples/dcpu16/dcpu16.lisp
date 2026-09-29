@@ -440,7 +440,7 @@ Hardware
 (defun load-dcpu16 (source)
   "A machine with the assembled SOURCE loaded at address 0."
   (let ((machine (make-machine 'dcpu16)))
-    (load-program machine (assemble source :machine 'dcpu16))
+    (load-program machine (assemble source :cpu 'dcpu16))
     machine))
 
 (defun reg-value (machine name)

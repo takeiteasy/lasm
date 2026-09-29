@@ -5,7 +5,7 @@ returns encoded memory cells.
 
 ```lisp
 (assemble "start: ldx #10
-        bne start" :lexer 'sixtyfoo-syntax :machine 'sixtyfoo)
+        bne start" :lexer 'sixtyfoo-syntax :cpu 'sixtyfoo)
 ```
 
 ## `assemble` / `assemble-statements`

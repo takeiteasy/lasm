@@ -95,10 +95,10 @@
 ;;; Removal and undefined-opcode policy
 
 (fiveam:test removed-mnemonic-is-unknown-to-the-assembler
-  (fiveam:signals unknown-instruction (assemble "inc" :machine 'fam-lite))
-  (fiveam:signals unknown-instruction (assemble "inc" :machine 'fam-lite-small))
-  (fiveam:finishes (assemble "inc" :machine 'fam-base))
-  (fiveam:finishes (assemble "lda #1" :machine 'fam-lite)))
+  (fiveam:signals unknown-instruction (assemble "inc" :cpu 'fam-lite))
+  (fiveam:signals unknown-instruction (assemble "inc" :cpu 'fam-lite-small))
+  (fiveam:finishes (assemble "inc" :cpu 'fam-base))
+  (fiveam:finishes (assemble "lda #1" :cpu 'fam-lite)))
 
 (fiveam:test fault-policy-stops-on-an-unassigned-opcode
   (multiple-value-bind (m reason steps) (fam-run 'fam-base '(#x77))
@@ -291,18 +291,18 @@
     (if (eq descriptor :decode-failure) descriptor (instruction-descriptor-name descriptor))))
 
 (fiveam:test removed-word-instruction-does-not-decode-as-its-fallback
-  (let ((cells (assembly-cells (assemble "fwcls" :machine 'fam-word))))
+  (let ((cells (assembly-cells (assemble "fwcls" :cpu 'fam-word))))
     (fiveam:is (string= "FWCLS" (fam-word-decoded-name 'fam-word cells)))
     (fiveam:is (eq :decode-failure (fam-word-decoded-name 'fam-word-lite cells)))
     (fiveam:is (eq :decode-failure (fam-word-decoded-name 'fam-word-trap cells)))))
 
 (fiveam:test fallback-still-decodes-other-words-on-the-child
-  (let ((cells (assembly-cells (assemble "fwsys $123" :machine 'fam-word-lite))))
+  (let ((cells (assembly-cells (assemble "fwsys $123" :cpu 'fam-word-lite))))
     (fiveam:is (string= "FWSYS" (fam-word-decoded-name 'fam-word-lite cells)))))
 
 (fiveam:test word-trap-carries-the-instruction-word
   (let ((m (make-machine 'fam-word-trap)))
-    (load-program m (assemble "fwcls" :machine 'fam-word))
+    (load-program m (assemble "fwcls" :cpu 'fam-word))
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 1 steps))
@@ -342,7 +342,7 @@
   (let ((m (make-machine 'fam-w8-child)))
     (load-program m (assemble "loadv 5
 loadv 100
-stop" :machine 'fam-w8-child))
+stop" :cpu 'fam-w8-child))
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 3 steps))
@@ -355,7 +355,7 @@ stop" :machine 'fam-w8-child))
 (fiveam:test nop-skips-a-removed-word-instruction-with-its-extra-word
   (let ((m (make-machine 'fam-w8-nop)))
     (load-program m (assemble "loadv 100
-stop" :machine 'fam-w8))
+stop" :cpu 'fam-w8))
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 2 steps))
@@ -381,9 +381,9 @@ stop" :machine 'fam-w8))
                       (mapcar #'instruction-descriptor-word-decode-order child)))))
 
 (fiveam:test assembler-rejects-a-fallback-encoding-of-a-removed-instruction
-  (fiveam:signals assembly-error (assemble "fwsys $0e0" :machine 'fam-word))
-  (fiveam:signals assembly-error (assemble "fwsys $0e0" :machine 'fam-word-lite))
-  (fiveam:finishes (assemble "fwsys $0e1" :machine 'fam-word-lite)))
+  (fiveam:signals assembly-error (assemble "fwsys $0e0" :cpu 'fam-word))
+  (fiveam:signals assembly-error (assemble "fwsys $0e0" :cpu 'fam-word-lite))
+  (fiveam:finishes (assemble "fwsys $0e1" :cpu 'fam-word-lite)))
 
 ;;; Snapshots
 
@@ -405,11 +405,11 @@ stop" :machine 'fam-w8))
 (definstruction fam-modes-shadow fmw (modes fam-mode) (encoding (opcode 2) (operand :mode)) (semantics))
 
 (fiveam:test child-machine-assembles-inherited-instruction-with-parent-local-mode
-  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :machine 'fam-modes-child)))))
+  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :cpu 'fam-modes-child)))))
 
 (fiveam:test child-shadowing-a-mode-leaves-inherited-instruction-on-the-parents-mode
-  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :machine 'fam-modes-shadow))))
-  (fiveam:is (equalp #(2 5) (assembly-cells (assemble "fmw [5]" :machine 'fam-modes-shadow)))))
+  (fiveam:is (equalp #(1 5) (assembly-cells (assemble "fmv (5)" :cpu 'fam-modes-shadow))))
+  (fiveam:is (equalp #(2 5) (assembly-cells (assemble "fmw [5]" :cpu 'fam-modes-shadow)))))
 
 (defmachine fam-sp-base
   (register sp :width 16)

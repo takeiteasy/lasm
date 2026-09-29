@@ -151,24 +151,24 @@
 
 (fiveam:test emit-lays-out-fields-of-any-width
   (fiveam:is (equalp #(1 0 0 2 0 0)
-                     (assembly-cells (assemble ".emit 3, 1, 2" :machine 'instr-test-machine))))
+                     (assembly-cells (assemble ".emit 3, 1, 2" :cpu 'instr-test-machine))))
   (fiveam:is (equalp #(0 0 1 0 0 2)
-                     (assembly-cells (assemble ".emit 3, 1, 2" :machine 'bigendian-test-machine))))
+                     (assembly-cells (assemble ".emit 3, 1, 2" :cpu 'bigendian-test-machine))))
   (fiveam:is (equalp #(1 0 0 0 0)
                      (assembly-cells (assemble ".emit 3, 1
-.emit 2, 0" :machine 'instr-test-machine)))))
+.emit 2, 0" :cpu 'instr-test-machine)))))
 
 (fiveam:test emit-takes-labels-and-strings
   (fiveam:is (equalp #(6 0 0 0 0 0 0)
                      (assembly-cells (assemble "start: .emit 3, end
 .emit 3, 0
-end: .emit 1, 0" :machine 'instr-test-machine))))
+end: .emit 1, 0" :cpu 'instr-test-machine))))
   (fiveam:is (equalp #(65 0 0 0 0 0)
-                     (assembly-cells (assemble ".emit 3, \"A\", 0" :machine 'instr-test-machine)))))
+                     (assembly-cells (assemble ".emit 3, \"A\", 0" :cpu 'instr-test-machine)))))
 
 (fiveam:test emit-rejects-a-missing-or-non-positive-width
   (dolist (source '(".emit" ".emit 0, 1" ".emit -1, 1"))
-    (fiveam:signals assembly-error (assemble source :machine 'instr-test-machine))))
+    (fiveam:signals assembly-error (assemble source :cpu 'instr-test-machine))))
 
 (fiveam:test defdirective-takes-a-width-parameter
   (defdirective ".test-wide" (width &rest v) (emit width v :terminator 0))
@@ -185,10 +185,10 @@ end: .emit 1, 0" :machine 'instr-test-machine))))
 (fiveam:test emit-width-depending-on-its-own-address-is-a-cycle
   (fiveam:signals assembly-error
     (assemble ".emit end - start, 1
-end:" :machine 'instr-test-machine))
+end:" :cpu 'instr-test-machine))
   (fiveam:signals assembly-error
     (assemble ".emit end, 1
-end: .byte 0" :machine 'instr-test-machine))
+end: .byte 0" :cpu 'instr-test-machine))
   (fiveam:is (equalp #(1 0 0)
                      (assembly-cells (assemble "w = 3
-.emit w, 1" :machine 'instr-test-machine)))))
+.emit w, 1" :cpu 'instr-test-machine)))))

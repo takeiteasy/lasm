@@ -432,7 +432,7 @@ reset at the start of each test that reads it.")
 
 (fiveam:test reset-keeps-program-loaded-into-rom
   (let ((m (make-machine 'rom-program-test-machine))
-        (a (assemble "nop" :machine 'rom-program-test-machine)))
+        (a (assemble "nop" :cpu 'rom-program-test-machine)))
     (load-program m a)
     (reset m)
     (fiveam:is (eq a (machine-program m)))
@@ -440,7 +440,7 @@ reset at the start of each test that reads it.")
 
 (fiveam:test reset-drops-program-loaded-into-ram
   (let ((m (make-machine 'rom-program-test-machine))
-        (a (assemble "nop" :machine 'rom-program-test-machine)))
+        (a (assemble "nop" :cpu 'rom-program-test-machine)))
     (load-program m a :origin #x100)
     (reset m)
     (fiveam:is (null (machine-program m)))
@@ -449,7 +449,7 @@ reset at the start of each test that reads it.")
 (fiveam:test reset-drops-program-straddling-rom-end
   (let ((m (make-machine 'rom-program-test-machine))
         (a (assemble "nop
-nop" :machine 'rom-program-test-machine)))
+nop" :cpu 'rom-program-test-machine)))
     (load-program m a :origin #xFF)
     (reset m)
     (fiveam:is (null (machine-program m)))))
@@ -721,8 +721,8 @@ nop" :machine 'rom-program-test-machine)))
 
 (fiveam:test reset-keeps-only-the-programs-loaded-into-rom
   (let ((m (make-machine 'rom-program-test-machine))
-        (bios (assemble "nop" :machine 'rom-program-test-machine))
-        (program (assemble "nop" :machine 'rom-program-test-machine :origin #x100)))
+        (bios (assemble "nop" :cpu 'rom-program-test-machine))
+        (program (assemble "nop" :cpu 'rom-program-test-machine :origin #x100)))
     (load-program m bios)
     (load-program m program)
     (fiveam:is (= 2 (length (machine-programs m))))

@@ -968,7 +968,7 @@
   (fiveam:is (search "needs the operation" (%cl-fail "(defarray arr 2) (defun main () 1)" 'cl-w3-abi)))
   (fiveam:is (equalp #(1 0 0 2 0 0 97 0 0 0 0 0)
                      (assembly-cells (assemble ".emit 3, 1, 2
-.emit 3, \"a\", 0" :machine 'cl-w3-machine)))))
+.emit 3, \"a\", 0" :cpu 'cl-w3-machine)))))
 
 ;;; #379: packed strings and (aref-byte S I)/(aset-byte S I V). callfoo's cells are
 ;;; 16 bits (two characters), widefoo's 8 (one, over a two-cell word).
@@ -1017,7 +1017,7 @@
              (registers :return (a) :scratch (a b) :operand reg)
              (operands (reg cl-lay-reg)))))
   (flet ((cells (machine text)
-           (coerce (assembly-cells (assemble (format nil ".packz ~S" text) :machine machine)) 'list)))
+           (coerce (assembly-cells (assemble (format nil ".packz ~S" text) :cpu machine)) 'list)))
     (fiveam:is (equal '(#x6162 #x6300) (cells 'cl-be-machine "abc")) "big-endian: the first character in the high bits")
     (fiveam:is (equal '(#x6261 #x0063) (cells 'callfoo "abc")) "little-endian: the first in the low bits")
     (fiveam:is (equal '(97 98 99 0) (cells 'cl-b8-machine "abc")) "an 8-bit cell holds one character"))

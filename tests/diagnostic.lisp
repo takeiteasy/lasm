@@ -87,7 +87,7 @@
 
 (fiveam:test undefined-label-points-to-label-token
   (handler-case
-      (assemble (format nil "nop~%bne missing + 1") :machine 'instr-test-machine)
+      (assemble (format nil "nop~%bne missing + 1") :cpu 'instr-test-machine)
     (unresolved-label (c)
       (fiveam:is (typep c 'lasm-syntax-error))
       (fiveam:is (string= "missing" (unresolved-label-name c)))
@@ -107,7 +107,7 @@
       (assemble ".macro bad
 ldx $5,X
 .endm
-bad" :machine 'instr-test-machine)
+bad" :cpu 'instr-test-machine)
     (assembly-error (condition)
       (fiveam:is (= 4 (lasm-syntax-error-line condition)))
       (fiveam:is (= 2 (lasm-syntax-error-definition-line condition)))
@@ -122,7 +122,7 @@ bad" :machine 'instr-test-machine)
         (assemble ".macro bad
 ldx #300
 .endm
-bad" :machine 'instr-test-machine)
+bad" :cpu 'instr-test-machine)
       (assembly-error (condition)
         (fiveam:is (= 4 (lasm-syntax-error-line condition)))
         (fiveam:is (= 2 (lasm-syntax-error-definition-line condition)))))))
@@ -131,7 +131,7 @@ bad" :machine 'instr-test-machine)
 
 (fiveam:test assemble-error-carries-source-on-its-condition
   (handler-case
-      (assemble "ldx $5,X" :machine 'instr-test-machine)
+      (assemble "ldx $5,X" :cpu 'instr-test-machine)
     (assembly-error (c)
       (fiveam:is (stringp (lasm-syntax-error-source c)))
       (fiveam:is (search "ldx $5,X" (lasm-syntax-error-source c))))))
@@ -165,7 +165,7 @@ bad" :machine 'instr-test-machine)
 
 (fiveam:test mode-mismatch-names-mnemonic-operand-and-accepted-modes
   (handler-case
-      (progn (assemble "ldx $5,X" :machine 'instr-test-machine) (fiveam:fail "did not signal"))
+      (progn (assemble "ldx $5,X" :cpu 'instr-test-machine) (fiveam:fail "did not signal"))
     (assembly-error (c)
       (let ((msg (lasm-syntax-error-message c)))
         (fiveam:is (search "ldx" msg))
@@ -179,7 +179,7 @@ bad" :machine 'instr-test-machine)
 
 (fiveam:test forced-suffix-mismatch-names-forced-mode-and-operand
   (handler-case
-      (progn (assemble "lda.z $10,X" :machine 'instr-test-machine) (fiveam:fail "did not signal"))
+      (progn (assemble "lda.z $10,X" :cpu 'instr-test-machine) (fiveam:fail "did not signal"))
     (assembly-error (c)
       (let ((msg (lasm-syntax-error-message c)))
         (fiveam:is (search "zero-page" msg))
@@ -189,7 +189,7 @@ bad" :machine 'instr-test-machine)
   ;; LDX only declares IMMEDIATE -- ".z" (ZERO-PAGE's suffix) names a real
   ;; mode, just not one of LDX's own variants.
   (handler-case
-      (progn (assemble "ldx.z #5" :machine 'instr-test-machine) (fiveam:fail "did not signal"))
+      (progn (assemble "ldx.z #5" :cpu 'instr-test-machine) (fiveam:fail "did not signal"))
     (assembly-error (c)
       (let ((msg (lasm-syntax-error-message c)))
         (fiveam:is (search "immediate" msg))
@@ -209,7 +209,7 @@ bad" :machine 'instr-test-machine)
 
 (fiveam:test one-of-mode-mismatch-renders-alternatives-joined-by-pipe
   (handler-case
-      (progn (assemble "moo $10,X" :machine 'diag-test-machine) (fiveam:fail "did not signal"))
+      (progn (assemble "moo $10,X" :cpu 'diag-test-machine) (fiveam:fail "did not signal"))
     (assembly-error (c)
       (let ((msg (lasm-syntax-error-message c)))
         (fiveam:is (search "expr|[expr]" msg))))))
@@ -218,14 +218,14 @@ bad" :machine 'instr-test-machine)
 
 (fiveam:test tied-width-candidates-signal-ambiguous-mode
   (fiveam:signals ambiguous-mode
-    (assemble "ambi $10" :machine 'diag-test-machine)))
+    (assemble "ambi $10" :cpu 'diag-test-machine)))
 
 (fiveam:test ambiguous-mode-warning-is-a-warning-not-an-error
   ;; Muffled (not unwound past), the assembly still completes -- WARN, not
   ;; ERROR.
   (let (warned)
     (handler-bind ((ambiguous-mode (lambda (c) (setf warned c) (muffle-warning c))))
-      (let ((a (assemble "ambi $10" :machine 'diag-test-machine)))
+      (let ((a (assemble "ambi $10" :cpu 'diag-test-machine)))
         (fiveam:is (assembly-p a))))
     (fiveam:is (not (null warned)))
     (fiveam:is (string-equal "ambi" (ambiguous-mode-mnemonic warned)))
@@ -239,7 +239,7 @@ bad" :machine 'instr-test-machine)
     (handler-bind ((ambiguous-mode (lambda (c) (incf count) (muffle-warning c))))
       (assemble "ambi $10
 ambi $20
-ambi $30" :machine 'diag-test-machine))
+ambi $30" :cpu 'diag-test-machine))
     (fiveam:is (= 3 count))))
 
 (fiveam:test zero-page-and-absolute-tie-does-not-warn
@@ -247,7 +247,7 @@ ambi $30" :machine 'diag-test-machine))
   ;; resolves this on its own; it is not the ambiguity the warning targets.
   (let (warned)
     (handler-bind ((ambiguous-mode (lambda (c) (setf warned c) (muffle-warning c))))
-      (assemble "lda $10" :machine 'instr-test-machine))
+      (assemble "lda $10" :cpu 'instr-test-machine))
     (fiveam:is (null warned))))
 
 ;;; ONE-OF ambiguity warning
@@ -373,14 +373,14 @@ ambi $30" :machine 'diag-test-machine))
   "The cells and every AMBIGUOUS-MODE assembling SOURCE signals, muffled."
   (let (warnings)
     (handler-bind ((ambiguous-mode (lambda (c) (cl:push c warnings) (muffle-warning c))))
-      (values (assembly-cells (assemble source :machine machine))
+      (values (assembly-cells (assemble source :cpu machine))
               (nreverse warnings)))))
 
 (defun %alternative-warnings (source machine)
   "Every AMBIGUOUS-ALTERNATIVE assembling SOURCE signals, muffled."
   (let (warnings)
     (handler-bind ((ambiguous-alternative (lambda (c) (cl:push c warnings) (muffle-warning c))))
-      (assemble source :machine machine))
+      (assemble source :cpu machine))
     (nreverse warnings)))
 
 (fiveam:test tied-one-of-alternatives-signal-ambiguous-alternative
@@ -482,31 +482,31 @@ lpa 5" 'diag-reg-machine))))
 
 (fiveam:test strict-mode-out-of-range-value-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "sti #300" :machine 'diag-test-machine)))
+    (assemble "sti #300" :cpu 'diag-test-machine)))
 
 (fiveam:test strict-mode-in-range-value-does-not-signal
-  (fiveam:finishes (assemble "sti #10" :machine 'diag-test-machine)))
+  (fiveam:finishes (assemble "sti #10" :cpu 'diag-test-machine)))
 
 (fiveam:test strict-operand-range-defaults-off
   ;; #28's original example, reproduced directly: a plain (non-strict, no
   ;; global switch) single-mode instruction still wraps rather than erroring.
-  (fiveam:finishes (assemble "ldx #300" :machine 'instr-test-machine)))
+  (fiveam:finishes (assemble "ldx #300" :cpu 'instr-test-machine)))
 
 (fiveam:test strict-operand-range-global-switch-catches-modeless-overflow
   (let ((*strict-operand-range* t))
     (fiveam:signals assembly-error
-      (assemble "ldx #300" :machine 'instr-test-machine))))
+      (assemble "ldx #300" :cpu 'instr-test-machine))))
 
 (fiveam:test strict-mode-not-chosen-as-widest-fallback-does-not-error-alone
   ;; #100000 fits neither STIW candidate's width (1 or 2 cells) -- the
   ;; widest-candidate fallback picks STIW-WIDE (not :STRICT), so the
   ;; per-mode check never even runs against DIAG-STRICT-IMM.
-  (fiveam:finishes (assemble "stiw #100000" :machine 'diag-test-machine)))
+  (fiveam:finishes (assemble "stiw #100000" :cpu 'diag-test-machine)))
 
 (fiveam:test strict-operand-range-global-switch-still-catches-that-fallback
   (let ((*strict-operand-range* t))
     (fiveam:signals assembly-error
-      (assemble "stiw #100000" :machine 'diag-test-machine))))
+      (assemble "stiw #100000" :cpu 'diag-test-machine))))
 
 ;;; Per-hole :STRICT on a ONE-OF alternative (#115) -- unlike :WIDTH/:SIGNED/
 ;;; :RELATIVE/:SUFFIX, :STRICT is a pure encode-time range check with no
@@ -525,14 +525,14 @@ lpa 5" 'diag-reg-machine))))
 
 (fiveam:test one-of-per-hole-strict-alternative-signals-on-out-of-range-value
   (fiveam:signals assembly-error
-    (assemble "oph 300" :machine 'diag-test-machine)))
+    (assemble "oph 300" :cpu 'diag-test-machine)))
 
 (fiveam:test one-of-per-hole-strict-sibling-without-strict-still-wraps
   ;; Same instruction, same operand width -- but matched via DIAG-OO-LOOSE
   ;; (bracketed), which declares no :STRICT of its own, so the same
   ;; out-of-range value wraps instead of erroring: strictness is a property
   ;; of the matched hole's own alternative, not the whole ONE-OF.
-  (fiveam:finishes (assemble "oph [300]" :machine 'diag-test-machine)))
+  (fiveam:finishes (assemble "oph [300]" :cpu 'diag-test-machine)))
 
 ;;; Per-hole :SIGNED on a ONE-OF alternative (#124), interacting with
 ;;; per-hole :STRICT (#115) -- %CHECK-STRICT-OPERAND-RANGE! (assembler.lisp)
@@ -554,18 +554,18 @@ lpa 5" 'diag-reg-machine))))
   (semantics (set! a operand)))
 
 (fiveam:test one-of-per-hole-signed-strict-range-quotes-signed-bound
-  (handler-case (progn (assemble "ophs #-200" :machine 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
+  (handler-case (progn (assemble "ophs #-200" :cpu 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
     (assembly-error (c) (fiveam:is (search "-128 and 127" (lasm-syntax-error-message c))))))
 
 (fiveam:test one-of-per-hole-signed-strict-in-signed-range-does-not-signal
-  (fiveam:finishes (assemble "ophs #-100" :machine 'diag-test-machine)))
+  (fiveam:finishes (assemble "ophs #-100" :cpu 'diag-test-machine)))
 
 (fiveam:test one-of-per-hole-signed-strict-sibling-quotes-unsigned-bound
   ;; %OPERAND-RANGE's own unsigned branch accepts the union of the signed
   ;; and unsigned ranges (-128..255 for a 1-cell operand), matching
   ;; %FITS-WIDTH-P -- unrelated to this ticket, just the pre-existing bound
   ;; an unsigned hole's strict check quotes.
-  (handler-case (progn (assemble "ophs 300" :machine 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
+  (handler-case (progn (assemble "ophs 300" :cpu 'diag-test-machine) (fiveam:fail "expected ASSEMBLY-ERROR"))
     (assembly-error (c) (fiveam:is (search "-128 and 255" (lasm-syntax-error-message c))))))
 
 ;;; Strict operand range on a word-encoded machine
@@ -621,33 +621,33 @@ lpa 5" 'diag-reg-machine))))
   (semantics (set! pc (+ pc v))))
 
 (defun %word-strict-error-text (source)
-  (handler-case (progn (assemble source :machine 'diag-word-machine) nil)
+  (handler-case (progn (assemble source :cpu 'diag-word-machine) nil)
     (assembly-error (e) (princ-to-string e))))
 
 (fiveam:test word-strict-defaults-off-and-wraps
-  (fiveam:finishes (assemble "wloose #300" :machine 'diag-word-machine)))
+  (fiveam:finishes (assemble "wloose #300" :cpu 'diag-word-machine)))
 
 (fiveam:test word-strict-mode-signals-on-extra-word-overflow
-  (fiveam:signals assembly-error (assemble "wstrict %300" :machine 'diag-word-machine))
+  (fiveam:signals assembly-error (assemble "wstrict %300" :cpu 'diag-word-machine))
   (fiveam:is (search "-128 and 255" (%word-strict-error-text "wstrict %300"))))
 
 (fiveam:test word-strict-mode-accepts-in-range-values
-  (fiveam:finishes (assemble "wstrict %5" :machine 'diag-word-machine))
-  (fiveam:finishes (assemble "wstrict %200" :machine 'diag-word-machine)))
+  (fiveam:finishes (assemble "wstrict %5" :cpu 'diag-word-machine))
+  (fiveam:finishes (assemble "wstrict %200" :cpu 'diag-word-machine)))
 
 (fiveam:test word-strict-global-switch-covers-non-strict-mode
   (let ((*strict-operand-range* t))
-    (fiveam:signals assembly-error (assemble "wloose #300" :machine 'diag-word-machine))
-    (fiveam:finishes (assemble "wloose #200" :machine 'diag-word-machine))))
+    (fiveam:signals assembly-error (assemble "wloose #300" :cpu 'diag-word-machine))
+    (fiveam:finishes (assemble "wloose #200" :cpu 'diag-word-machine))))
 
 (fiveam:test word-strict-inline-only-field-signals
-  (fiveam:signals assembly-error (assemble "winline %9" :machine 'diag-word-machine))
+  (fiveam:signals assembly-error (assemble "winline %9" :cpu 'diag-word-machine))
   (fiveam:is (search "0 and 7" (%word-strict-error-text "winline %9")))
-  (fiveam:finishes (assemble "winline %7" :machine 'diag-word-machine)))
+  (fiveam:finishes (assemble "winline %7" :cpu 'diag-word-machine)))
 
 (fiveam:test word-strict-signed-field-quotes-signed-bound
   (fiveam:is (search "-128 and 127" (%word-strict-error-text "wstrictsigned <200")))
-  (fiveam:finishes (assemble "wstrictsigned <-100" :machine 'diag-word-machine)))
+  (fiveam:finishes (assemble "wstrictsigned <-100" :cpu 'diag-word-machine)))
 
 (fiveam:test word-relative-hole-keeps-its-own-error
   (let ((text (%word-strict-error-text "wrel ^100")))

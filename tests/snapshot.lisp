@@ -197,7 +197,7 @@
                        snapshot-version-mismatch))
 
 (fiveam:test snapshot-rejects-other-machine
-  (%rejected-untouched (%with-field (machine-snapshot (%fresh)) :machine 'test-machine)
+  (%rejected-untouched (%with-field (machine-snapshot (%fresh)) :cpu 'test-machine)
                        snapshot-machine-mismatch))
 
 (fiveam:test snapshot-rejects-changed-layout
@@ -455,10 +455,10 @@ twice
      *program-files*
      (lambda (main dir)
        (declare (ignore dir))
-       (let* ((assembly (assemble-file main :machine 'instr-test-machine))
+       (let* ((assembly (assemble-file main :cpu 'instr-test-machine))
               (program (getf (cdr (machine-snapshot m :assembly assembly)) :program)))
          (fiveam:is (null (getf (cdr (machine-snapshot m)) :program)))
-         (fiveam:is (null (getf (cdr (machine-snapshot m :assembly (assemble "nop" :machine 'instr-test-machine)))
+         (fiveam:is (null (getf (cdr (machine-snapshot m :assembly (assemble "nop" :cpu 'instr-test-machine)))
                                 :program)))
          (fiveam:is (= 3 (length (getf program :files))))
          (fiveam:is (string= (getf program :path) (car (first (getf program :files)))))
@@ -471,11 +471,11 @@ twice
        *program-files*
        (lambda (main dir)
          (declare (ignore dir))
-         (setf original (assemble-file main :machine 'instr-test-machine)
+         (setf original (assemble-file main :cpu 'instr-test-machine)
                snapshot (machine-snapshot m :assembly original))))
       (dolist (format '(:sexp :binary))
         (write-snapshot snapshot snap :format format)
-        (let ((rebuilt (snapshot-assembly (read-snapshot snap) :machine 'instr-test-machine)))
+        (let ((rebuilt (snapshot-assembly (read-snapshot snap) :cpu 'instr-test-machine)))
           (fiveam:is (equalp (assembly-cells original) (assembly-cells rebuilt)))
           (fiveam:is (string= (assembly-source original) (assembly-source rebuilt)))
           (fiveam:is (equal (%listing-files original) (%listing-files rebuilt)))
@@ -488,7 +488,7 @@ twice
      *program-files*
      (lambda (main dir)
        (declare (ignore dir))
-       (setf snapshot (machine-snapshot m :assembly (assemble-file main :machine 'instr-test-machine)))))
+       (setf snapshot (machine-snapshot m :assembly (assemble-file main :cpu 'instr-test-machine)))))
     (let ((again (machine-snapshot m :assembly (snapshot-assembly snapshot))))
       (fiveam:is (equal (getf (cdr snapshot) :program) (getf (cdr again) :program))))))
 
@@ -503,8 +503,8 @@ twice
 
 (fiveam:test snapshot-assembly-checks-the-machine-and-version
   (let ((snapshot (%program-snapshot)))
-    (fiveam:is (typep (snapshot-assembly snapshot :machine 'instr-test-machine) 'assembly))
-    (fiveam:signals snapshot-machine-mismatch (snapshot-assembly snapshot :machine 'snapshot-test-machine))
+    (fiveam:is (typep (snapshot-assembly snapshot :cpu 'instr-test-machine) 'assembly))
+    (fiveam:signals snapshot-machine-mismatch (snapshot-assembly snapshot :cpu 'snapshot-test-machine))
     (fiveam:signals snapshot-version-mismatch (snapshot-assembly (%with-field snapshot :version 99)))))
 
 (fiveam:test snapshot-assembly-rejects-a-damaged-program

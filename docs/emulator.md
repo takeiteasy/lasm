@@ -4,7 +4,7 @@ The emulator loads encoded cells into a machine and executes instructions.
 
 ```lisp
 (let ((m (make-machine 'sixtyfoo))
-      (a (assemble source :lexer 'sixtyfoo-syntax :machine 'sixtyfoo)))
+      (a (assemble source :lexer 'sixtyfoo-syntax :cpu 'sixtyfoo)))
   (load-program m a)
   (run m))
 ```

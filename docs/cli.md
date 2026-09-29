@@ -18,7 +18,7 @@ See [`tests/fixtures/cli/`](../tests/fixtures/cli/sixtyfoo.lisp) for a runnable 
 swaps register arguments through a scratch register. [`framed.lasm`](../tests/fixtures/cli/framed.lasm)
 uses a [frame pointer](conventions.md#frame-pointer) on
 [`callfoo-fp.lisp`](../tests/fixtures/cli/callfoo-fp.lisp), which defines two machines
-and is run with `--machine-name callfoo-fp`.
+and is run with `--cpu callfoo-fp`.
 
 ## Machine files
 
@@ -27,7 +27,7 @@ A `.lisp` machine file holds the DSL forms — `deflexer`, `defmachine`, `defmod
 `in-package` line is needed. Definitions live only for one command.
 
 The file's sole machine and sole lexer are used. A file defining several
-machines needs `--machine-name`; several lexers need `--lexer`. With no lexer
+machines needs `--cpu`; several lexers need `--lexer`. With no lexer
 defined, the default lexer is used.
 
 ## Items programs
@@ -42,7 +42,7 @@ lasm run double.lasm -m callfoo.lisp
 
 The program names its backend, or `--backend NAME` does. `--origin` and
 `--memory` override the program's own options. A file that defines several
-machines needs `--machine-name`.
+machines needs `--cpu`.
 
 ## Source programs
 
@@ -69,7 +69,7 @@ lasm compile fact.lsp -m callfoo.lisp -o fact.lasm
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
-Every command takes `-m FILE` (required), `--machine-name`, `--lexer`,
+Every command takes `-m FILE` (required), `--cpu`, `--lexer`,
 `--memory` (the memory element to target), `--quiet` (drop assembly
 warnings), and `--origin N` (decimal, `$hex`
 or `0xhex`; `assemble`, `run`, `listing` and `disassemble`). `-h` prints the

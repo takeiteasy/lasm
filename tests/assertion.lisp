@@ -4,7 +4,7 @@
 (fiveam:in-suite assertion)
 
 (defun %assert-assemble (source)
-  (assemble source :machine 'instr-test-machine))
+  (assemble source :cpu 'instr-test-machine))
 
 (fiveam:test passing-assert-emits-nothing
   (let ((a (%assert-assemble "nop

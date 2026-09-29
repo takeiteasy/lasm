@@ -10,24 +10,24 @@
 
 (fiveam:test label-binds-to-its-address
   (let ((a (assemble "start: ldx #10
-sta: nop" :machine 'instr-test-machine)))
+sta: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "start" (assembly-symbols a))))
     (fiveam:is (= 2 (gethash "sta" (assembly-symbols a))))))
 
 (fiveam:test forward-label-reference-resolves
   ;; bne .loop appears before .loop: is bound -- only a layout pass gets this.
   (let ((a (assemble "bne target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xD0 3 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test backward-label-reference-resolves
   (let ((a (assemble "target: nop
-bne target" :machine 'instr-test-machine)))
+bne target" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #xD0 0 0) (assembly-cells a)))))
 
 (fiveam:test origin-offsets-bytes-and-symbols
   (let ((a (assemble "start: nop
-bne start" :machine 'instr-test-machine :origin #x200)))
+bne start" :cpu 'instr-test-machine :origin #x200)))
     (fiveam:is (= #x200 (assembly-origin a)))
     (fiveam:is (= #x200 (gethash "start" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA #xD0 0 2) (assembly-cells a)))))
@@ -35,42 +35,42 @@ bne start" :machine 'instr-test-machine :origin #x200)))
 (fiveam:test duplicate-label-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble "a: nop
-a: nop" :machine 'instr-test-machine)))
+a: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test undefined-label-signals-unresolved-label
   (fiveam:signals unresolved-label
-    (assemble "bne nowhere" :machine 'instr-test-machine)))
+    (assemble "bne nowhere" :cpu 'instr-test-machine)))
 
 (fiveam:test missing-operand-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "ldx" :machine 'instr-test-machine)))
+    (assemble "ldx" :cpu 'instr-test-machine)))
 
 (fiveam:test unexpected-operand-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "nop #10" :machine 'instr-test-machine)))
+    (assemble "nop #10" :cpu 'instr-test-machine)))
 
 (fiveam:test too-many-operands-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "ldx #10, #20" :machine 'instr-test-machine)))
+    (assemble "ldx #10, #20" :cpu 'instr-test-machine)))
 
 (fiveam:test bare-label-line-emits-no-bytes
   (let ((a (assemble "start:
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "start" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 (fiveam:test unknown-mnemonic-signals-unknown-instruction
   (fiveam:signals unknown-instruction
-    (assemble "frobnicate" :machine 'instr-test-machine)))
+    (assemble "frobnicate" :cpu 'instr-test-machine)))
 
 (fiveam:test no-operand-instruction-encodes-alone
-  (let ((a (assemble "nop" :machine 'instr-test-machine)))
+  (let ((a (assemble "nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 (fiveam:test immediate-and-absolute-mix
   (let ((a (assemble "ldx #10
 adc target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xA2 10 #x6D 5 0 #xEA) (assembly-cells a)))))
 
 ;;; M2 multi-mode selection (mode.lisp, #18) -- LDA declares
@@ -78,12 +78,12 @@ target: nop" :machine 'instr-test-machine)))
 ;;; absolute sharing identical operand syntax and differing only by width.
 
 (fiveam:test constant-operand-picks-narrowest-fitting-mode
-  (let ((a (assemble "lda $10" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda $10" :cpu 'instr-test-machine)))
     ;; zero-page (opcode #x11), not absolute (#x12) -- 2 bytes total
     (fiveam:is (equalp #(#x11 #x10) (assembly-cells a)))))
 
 (fiveam:test constant-operand-too-wide-for-zero-page-picks-absolute
-  (let ((a (assemble "lda $1000" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda $1000" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 #x00 #x10) (assembly-cells a)))))
 
 (fiveam:test label-operand-narrows-to-zero-page-after-layout-converges
@@ -92,7 +92,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; provisional address is available, rather than always taking the widest
   ;; matching mode.
   (let ((a (assemble "lda target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 2 #xEA) (assembly-cells a)))
     (fiveam:is (= 2 (gethash "target" (assembly-symbols a))))))
 
@@ -100,7 +100,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; "target" resolves past zero page, so relaxation widens LDA to absolute.
   (let ((a (assemble "lda target
 .res $300
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= #x12 (aref (assembly-cells a) 0)))
     (fiveam:is (= #x303 (gethash "target" (assembly-symbols a))))))
 
@@ -111,7 +111,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; converge.
   (let ((a (assemble "lda a
 .res 254
-a: nop" :machine 'instr-test-machine)))
+a: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= #x101 (gethash "a" (assembly-symbols a))))
     (fiveam:is (equalp #(#x12 #x01 #x01) (subseq (assembly-cells a) 0 3)))))
 
@@ -124,7 +124,7 @@ a: nop" :machine 'instr-test-machine)))
                       (format out "start~D: load target~D, start~D, ~D~%"
                               i i i (if (= i 9) 254 251)))
              (format out "target8:~%target9: nop~%")))
-         (a (assemble source :machine 'instr-test-machine))
+         (a (assemble source :cpu 'instr-test-machine))
          (cells (assembly-cells a)))
     (fiveam:is (= 28 (length cells)))
     (loop for address from 0 below 27 by 3
@@ -132,12 +132,12 @@ a: nop" :machine 'instr-test-machine)))
     (fiveam:is (= #xEA (aref cells 27)))))
 
 (fiveam:test label-operand-self-reference-narrows-to-zero-page
-  (let ((a (assemble "here: lda here" :machine 'instr-test-machine)))
+  (let ((a (assemble "here: lda here" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 0) (assembly-cells a)))))
 
 (fiveam:test backward-label-operand-narrows-to-zero-page
   (let ((a (assemble "target: nop
-lda target" :machine 'instr-test-machine)))
+lda target" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #x11 0) (assembly-cells a)))))
 
 (fiveam:test org-decouples-relaxation-of-code-before-it
@@ -146,7 +146,7 @@ lda target" :machine 'instr-test-machine)))
   (let ((a (assemble "lda a
 a: nop
 .org $8000
-after: nop" :machine 'instr-test-machine)))
+after: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= #x8000 (gethash "after" (assembly-symbols a))))))
 
 (fiveam:test leading-org-with-non-zero-assembly-origin
@@ -154,7 +154,7 @@ after: nop" :machine 'instr-test-machine)))
   ;; ASSEMBLE -- exercises %APPLY-ORIGIN-DIRECTIVE's EMITTED-P NIL branch,
   ;; which the relaxation loop's .org backward-move clamp must not touch.
   (let ((a (assemble ".org $100
-start: nop" :machine 'instr-test-machine :origin #x200)))
+start: nop" :cpu 'instr-test-machine :origin #x200)))
     (fiveam:is (= #x100 (assembly-origin a)))
     (fiveam:is (= #x100 (gethash "start" (assembly-symbols a))))))
 
@@ -164,22 +164,22 @@ start: nop" :machine 'instr-test-machine :origin #x200)))
   ;; between calls to ASSEMBLE.
   (let ((a0 (assemble "lda a
 .res 254
-a: nop" :machine 'instr-test-machine))
+a: nop" :cpu 'instr-test-machine))
         (a1 (assemble "lda a
 .res 254
-a: nop" :machine 'instr-test-machine)))
+a: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp (assembly-cells a0) (assembly-cells a1)))
     (fiveam:is (= (gethash "a" (assembly-symbols a0)) (gethash "a" (assembly-symbols a1))))))
 
 (fiveam:test immediate-operand-still-selects-immediate-mode-among-variants
-  (let ((a (assemble "lda #7" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda #7" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x10 7) (assembly-cells a)))))
 
 (fiveam:test no-matching-mode-signals-assembly-error
   ;; ADC only declares ABSOLUTE -- an immediate-syntax operand matches none
   ;; of its variants.
   (fiveam:signals assembly-error
-    (assemble "adc #10" :machine 'instr-test-machine)))
+    (assemble "adc #10" :cpu 'instr-test-machine)))
 
 ;;; RELATIVE mode (#23) -- BRA (tests/instruction.lisp), kept separate from
 ;;; the existing ABSOLUTE-mode BNE tests above.
@@ -189,29 +189,29 @@ a: nop" :machine 'instr-test-machine)))
   ;; BRA is 2, target is 3, offset is +1.
   (let ((a (assemble "bra end
 nop
-end: nop" :machine 'instr-test-machine)))
+end: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x90 1 #xEA #xEA) (assembly-cells a)))))
 
 (fiveam:test relative-branch-backward-offset
   ;; 0: loop: nop (1 byte) / 1: bra loop (2 bytes) -- next-pc after BRA is 3,
   ;; target is 0, offset is -3 (#xFD).
   (let ((a (assemble "loop: nop
-bra loop" :machine 'instr-test-machine)))
+bra loop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #x90 #xFD) (assembly-cells a)))))
 
 (fiveam:test relative-branch-to-itself-is-minus-two
   ;; next-pc is this instruction's own address + 2; branching to its own
   ;; address is therefore offset -2.
-  (let ((a (assemble "here: bra here" :machine 'instr-test-machine)))
+  (let ((a (assemble "here: bra here" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x90 #xFE) (assembly-cells a)))))
 
 (fiveam:test relative-branch-offset-is-independent-of-origin
   ;; The offset is relative to the branch's own address, so it must not
   ;; change when the whole program is shifted by an origin.
   (let ((a0 (assemble "loop: nop
-bra loop" :machine 'instr-test-machine))
+bra loop" :cpu 'instr-test-machine))
         (a1 (assemble "loop: nop
-bra loop" :machine 'instr-test-machine :origin #x200)))
+bra loop" :cpu 'instr-test-machine :origin #x200)))
     (fiveam:is (equalp (assembly-cells a0) (assembly-cells a1)))))
 
 (fiveam:test relative-branch-forward-out-of-range-signals-assembly-error
@@ -220,13 +220,13 @@ bra loop" :machine 'instr-test-machine :origin #x200)))
   (fiveam:signals assembly-error
     (assemble (format nil "bra end~%~{~A~%~}end: nop"
                        (make-list 200 :initial-element "nop"))
-              :machine 'instr-test-machine)))
+              :cpu 'instr-test-machine)))
 
 (fiveam:test relative-branch-backward-out-of-range-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble (format nil "loop: nop~%~{~A~%~}bra loop"
                        (make-list 200 :initial-element "nop"))
-              :machine 'instr-test-machine)))
+              :cpu 'instr-test-machine)))
 
 ;;; RELATIVE alongside another mode sharing the same syntax (#31) -- BRX
 ;;; (tests/instruction.lisp) declares RELATIVE before ABSOLUTE, so relaxation
@@ -237,7 +237,7 @@ bra loop" :machine 'instr-test-machine :origin #x200)))
   ;; next-pc after a 2-byte BRX is address+2; a target one byte forward
   ;; fits the signed 1-byte relative offset, so relaxation picks RELATIVE.
   (let ((a (assemble "brx target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x91 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test relative-candidate-widens-when-target-is-out-of-range
@@ -247,7 +247,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; instruction (BRA) would.
   (let ((a (assemble (format nil "brx end~%~{~A~%~}end: nop"
                               (make-list 200 :initial-element "nop"))
-                      :machine 'instr-test-machine)))
+                      :cpu 'instr-test-machine)))
     (fiveam:is (= #x92 (aref (assembly-cells a) 0)))))
 
 ;;; Per-hole :RELATIVE (#130) alongside a plain sibling hole -- RELD2's
@@ -279,7 +279,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; after it, so the offset from RELD2's own next-instruction address (5)
   ;; back to NEAR (also 5) is 0.
   (let ((a (assemble "reld2 #near, 5
-near: nop" :machine 'instr-test-machine)))
+near: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x69 1 0 5 0 #xEA) (assembly-cells a))))
   ;; 200 filler NOPs put "end" far out of RF-REL's 1-cell signed range
   ;; (-128..127), but comfortably inside a 3-cell one (TOTAL-OPERAND-WIDTH,
@@ -288,7 +288,7 @@ near: nop" :machine 'instr-test-machine)))
   (fiveam:signals assembly-error
     (assemble (format nil "reld2 #end, 5~%~{~A~%~}end: nop"
                        (make-list 200 :initial-element "nop"))
-              :machine 'instr-test-machine)))
+              :cpu 'instr-test-machine)))
 
 (fiveam:test relative-sibling-hole-round-trips-through-a-forward-reference
   ;; A forward-referenced label through RELD2's relative hole, alongside its
@@ -298,7 +298,7 @@ near: nop" :machine 'instr-test-machine)))
   ;; whole-mode RELATIVE mode's single hole.
   (let ((a (assemble "reld2 #target, 5
 nop
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x69 1 1 5 0 #xEA #xEA) (assembly-cells a)))))
 
 ;;; SIGNED, non-RELATIVE (#30) mode selection -- LDSI (tests/instruction.lisp)
@@ -307,14 +307,14 @@ target: nop" :machine 'instr-test-machine)))
 ;;; fit test (%FITS-SIGNED-WIDTH-P) instead of the RELATIVE one.
 
 (fiveam:test signed-candidate-selected-when-value-fits-signed-range
-  (let ((a (assemble "ldsi #-5" :machine 'instr-test-machine)))
+  (let ((a (assemble "ldsi #-5" :cpu 'instr-test-machine)))
     (fiveam:is (equalp (vector #x93 (wrap-value -5 8)) (assembly-cells a)))))
 
 (fiveam:test signed-candidate-rejected-when-value-is-unsigned-only
   ;; 200 fits one byte unsigned but not signed -- before #30, this would
   ;; still have selected the narrower (then RELATIVE-blind) candidate via
   ;; %FITS-WIDTH-P; now it must widen to the 2-byte unsigned mode instead.
-  (let ((a (assemble "ldsi #200" :machine 'instr-test-machine)))
+  (let ((a (assemble "ldsi #200" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x94 200 0) (assembly-cells a)))))
 
 ;;; Multi-operand instructions -- MOVI/FLEX (tests/instruction.lisp).
@@ -322,18 +322,18 @@ target: nop" :machine 'instr-test-machine)))
 (fiveam:test multi-operand-statement-sizes-as-sum-of-field-widths
   ;; MOVI: opcode + 1-byte dst + 2-byte src = 4 bytes total.
   (let ((a (assemble "movi $10, $2200
-next: nop" :machine 'instr-test-machine)))
+next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(#xF8 #x10 #x00 #x22 #xEA) (assembly-cells a)))))
 
 (fiveam:test multi-operand-label-in-second-hole-resolves
   (let ((a (assemble "movi $1, target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xF8 1 4 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test multi-operand-variant-selected-by-syntax-among-differing-arities
-  (let ((imm (assemble "flex #5" :machine 'instr-test-machine))
-        (two (assemble "flex $1, $2" :machine 'instr-test-machine)))
+  (let ((imm (assemble "flex #5" :cpu 'instr-test-machine))
+        (two (assemble "flex $1, $2" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x20 5) (assembly-cells imm)))
     (fiveam:is (equalp #(#x21 1 2) (assembly-cells two)))))
 
@@ -341,11 +341,11 @@ target: nop" :machine 'instr-test-machine)))
 ;;; in %LAYOUT/%ENCODE, reusing INSTR-TEST-MACHINE.
 
 (fiveam:test byte-directive-emits-one-byte-per-value
-  (let ((a (assemble ".byte 1, 2, 3" :machine 'instr-test-machine)))
+  (let ((a (assemble ".byte 1, 2, 3" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
 (fiveam:test byte-directive-accepts-modulo-and-binary-literals
-  (let ((a (assemble ".byte 13 % 5, %101" :machine 'instr-test-machine)))
+  (let ((a (assemble ".byte 13 % 5, %101" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(3 5) (assembly-cells a)))))
 
 ;; #65 -- .CELL/.DAT are plain .BYTE aliases: same cells out, on both a
@@ -353,23 +353,23 @@ target: nop" :machine 'instr-test-machine)))
 ;; below, mirrors BYTE-DIRECTIVE-LAYS-ONE-CELL-PER-VALUE-ON-WORD-ADDRESSED-
 ;; MACHINE).
 (fiveam:test cell-directive-is-an-alias-for-byte
-  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :machine 'instr-test-machine))
-                      (assembly-cells (assemble ".cell 1, 2, 3" :machine 'instr-test-machine)))))
+  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :cpu 'instr-test-machine))
+                      (assembly-cells (assemble ".cell 1, 2, 3" :cpu 'instr-test-machine)))))
 
 (fiveam:test dat-directive-is-an-alias-for-byte
-  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :machine 'instr-test-machine))
-                      (assembly-cells (assemble ".dat 1, 2, 3" :machine 'instr-test-machine)))))
+  (fiveam:is (equalp (assembly-cells (assemble ".byte 1, 2, 3" :cpu 'instr-test-machine))
+                      (assembly-cells (assemble ".dat 1, 2, 3" :cpu 'instr-test-machine)))))
 
 (fiveam:test cell-directive-with-label-argument-resolves-in-pass-2
   ;; Mirrors BYTE-DIRECTIVE-WITH-LABEL-ARGUMENT-RESOLVES-IN-PASS-2 below --
   ;; .CELL's values fold at encode time exactly like .BYTE's.
   (let ((a (assemble "nop
 target: nop
-.cell target" :machine 'instr-test-machine)))
+.cell target" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #xEA 1) (assembly-cells a)))))
 
 (fiveam:test word-directive-emits-little-endian-words
-  (let ((a (assemble ".word $1234" :machine 'instr-test-machine)))
+  (let ((a (assemble ".word $1234" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x34 #x12) (assembly-cells a)))))
 
 (fiveam:test word-directive-emits-big-endian-words-on-a-big-endian-machine
@@ -377,7 +377,7 @@ target: nop
   ;; :ENDIAN :BIG -- .WORD's data must lay cells down the same way
   ;; instruction operands do (%ENCODE-VALUE-CELLS, shared by both), the
   ;; mirror image of WORD-DIRECTIVE-EMITS-LITTLE-ENDIAN-WORDS above.
-  (let ((a (assemble ".word $1234" :machine 'bigendian-test-machine)))
+  (let ((a (assemble ".word $1234" :cpu 'bigendian-test-machine)))
     (fiveam:is (equalp #(#x12 #x34) (assembly-cells a)))))
 
 (fiveam:test byte-directive-with-label-argument-resolves-in-pass-2
@@ -386,24 +386,24 @@ target: nop
   ;; .byte's own size is just its argument count) never evaluates it.
   (let ((a (assemble "nop
 target: nop
-.byte target" :machine 'instr-test-machine)))
+.byte target" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #xEA 1) (assembly-cells a)))))
 
 (fiveam:test leading-org-sets-assembly-origin
   (let ((a (assemble ".org $8000
-start: nop" :machine 'instr-test-machine)))
+start: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= #x8000 (assembly-origin a)))
     (fiveam:is (= #x8000 (gethash "start" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 (fiveam:test label-on-org-line-binds-to-new-address
-  (let ((a (assemble "here: .org $8000" :machine 'instr-test-machine)))
+  (let ((a (assemble "here: .org $8000" :cpu 'instr-test-machine)))
     (fiveam:is (= #x8000 (gethash "here" (assembly-symbols a))))))
 
 (fiveam:test mid-program-forward-org-zero-fills-the-gap
   (let ((a (assemble "nop
 .org 4
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 0 0 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test mid-program-backward-org-signals-assembly-error
@@ -412,64 +412,64 @@ nop" :machine 'instr-test-machine)))
 nop
 nop
 .org 1
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
 
 (fiveam:test org-with-label-operand-signals-assembly-error
   ;; TARGET's address depends on the move to TARGET itself.
   (fiveam:signals assembly-error
     (assemble ".org target
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test org-with-backward-label-operand
   (let ((a (assemble (format nil "base: nop~%.org base + 4~%next: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA 0 0 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test org-with-forward-label-after-independent-anchor
   (let ((a (assemble (format nil ".org target~%.org 4~%target: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 4 (assembly-origin a)))
     (fiveam:is (= 4 (gethash "target" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA) (assembly-cells a)))))
 
 (fiveam:test res-with-forward-label-cycle-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble (format nil ".res target~%target: nop") :machine 'instr-test-machine)))
+    (assemble (format nil ".res target~%target: nop") :cpu 'instr-test-machine)))
 
 (fiveam:test org-with-own-label-cycle-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "target: .org target" :machine 'instr-test-machine)))
+    (assemble "target: .org target" :cpu 'instr-test-machine)))
 
 (fiveam:test indirect-layout-cycle-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble (format nil ".org later~%.res 1~%later: .org 4")
-              :machine 'instr-test-machine)))
+              :cpu 'instr-test-machine)))
 
 (fiveam:test undefined-directive-label-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".res missing" :machine 'instr-test-machine)))
+    (assemble ".res missing" :cpu 'instr-test-machine)))
 
 (fiveam:test res-directive-reserves-zero-filled-bytes
   (let ((a (assemble "nop
 .res 4
-next: nop" :machine 'instr-test-machine)))
+next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 5 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA 0 0 0 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test res-directive-with-negative-count-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".res -1" :machine 'instr-test-machine)))
+    (assemble ".res -1" :cpu 'instr-test-machine)))
 
 (fiveam:test org-directive-with-wrong-arity-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".org $10, $20" :machine 'instr-test-machine)))
+    (assemble ".org $10, $20" :cpu 'instr-test-machine)))
 
 (fiveam:test directive-mnemonic-is-not-confused-with-an-instruction
   ;; ".byte" is not a registered mnemonic on INSTR-TEST-MACHINE -- confirms
   ;; directive dispatch in %LAYOUT doesn't fall through to
   ;; FIND-INSTRUCTION-VARIANTS (which would signal UNKNOWN-INSTRUCTION).
-  (let ((a (assemble ".byte 1" :machine 'instr-test-machine)))
+  (let ((a (assemble ".byte 1" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(1) (assembly-cells a)))))
 
 ;;; Location-counter symbol ("*", #15)
@@ -478,15 +478,15 @@ next: nop" :machine 'instr-test-machine)))
   ;; nop occupies address 0, so the .word entry starts at address 1 -- "*"
   ;; there must fold to 1, not 0 (the statement's address, not the program's).
   (let ((a (assemble "nop
-.word *" :machine 'instr-test-machine)))
+.word *" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 1 0) (assembly-cells a)))))
 
 (fiveam:test configured-location-counters-assemble-with-existing-tokens
-  (let ((dollar (assemble ".byte $, $FF, *" :machine 'instr-test-machine
+  (let ((dollar (assemble ".byte $, $FF, *" :cpu 'instr-test-machine
                           :lexer 'dollar-counter-syntax))
         (dot (assemble "loop: nop
 .loop: nop
-.byte ., .loop" :machine 'instr-test-machine
+.byte ., .loop" :cpu 'instr-test-machine
                        :lexer 'dot-counter-syntax)))
     (fiveam:is (equalp #(0 255 2) (assembly-cells dollar)))
     (fiveam:is (equalp #(234 234 2 1) (assembly-cells dot)))))
@@ -494,29 +494,29 @@ next: nop" :machine 'instr-test-machine)))
 (fiveam:test byte-directive-with-two-location-counters-emits-two-different-values
   ;; Each "*" resolves to its own element's address, not the directive
   ;; statement's -- ".byte *, *" at address 0 emits 0 then 1.
-  (let ((a (assemble ".byte *, *" :machine 'instr-test-machine)))
+  (let ((a (assemble ".byte *, *" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(0 1) (assembly-cells a)))))
 
 (fiveam:test location-counter-operand-picks-narrowest-fitting-mode
   ;; "*" at address 0 is 0, a zero-page-fitting value -- same variant
   ;; selection as an equivalent literal constant.
-  (let ((a (assemble "lda *" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda *" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 0) (assembly-cells a)))))
 
 (fiveam:test location-counter-with-offset-in-operand
-  (let ((a (assemble "lda *+3" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda *+3" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 3) (assembly-cells a)))))
 
 (fiveam:test relative-branch-to-location-counter-is-minus-two
   ;; "bra *" should behave exactly like the equivalent self-referencing
   ;; label ("here: bra here", see RELATIVE-BRANCH-TO-ITSELF-IS-MINUS-TWO).
-  (let ((a (assemble "bra *" :machine 'instr-test-machine)))
+  (let ((a (assemble "bra *" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x90 #xFE) (assembly-cells a)))))
 
 (fiveam:test org-with-location-counter-pads-forward-from-current-address
   (let ((a (assemble "nop
 .org *+4
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 0 0 0 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test location-counter-with-no-address-known-signals-unresolved-location
@@ -537,7 +537,7 @@ nop" :machine 'instr-test-machine)))
 bra .loop
 b: nop
 .loop: nop
-bra .loop" :machine 'instr-test-machine)))
+bra .loop" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "a" (assembly-symbols a))))
     (fiveam:is (= 1 (gethash (%qualify-local "a" ".loop" 0) (assembly-symbols a))))
     (fiveam:is (= 4 (gethash "b" (assembly-symbols a))))
@@ -548,7 +548,7 @@ bra .loop" :machine 'instr-test-machine)))
   (fiveam:signals assembly-error
     (assemble "a: nop
 .loop: nop
-.loop: nop" :machine 'instr-test-machine)))
+.loop: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test local-label-reference-does-not-see-a-different-scope
   ;; ".loop" is only ever bound under "a" -- a reference under "b" looks for
@@ -557,15 +557,15 @@ bra .loop" :machine 'instr-test-machine)))
     (assemble "a: nop
 .loop: nop
 b: nop
-bra .loop" :machine 'instr-test-machine)))
+bra .loop" :cpu 'instr-test-machine)))
 
 (fiveam:test local-label-definition-with-no-enclosing-global-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".loop: nop" :machine 'instr-test-machine)))
+    (assemble ".loop: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test local-label-reference-with-no-enclosing-global-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "bra .loop" :machine 'instr-test-machine)))
+    (assemble "bra .loop" :cpu 'instr-test-machine)))
 
 ;;; .EQU / symbol assignment (#35) -- both spellings (".equ name, value" and
 ;;; "name = value"), layout-time backward-only folding, the same
@@ -576,21 +576,21 @@ bra .loop" :machine 'instr-test-machine)))
 
 (fiveam:test equ-binds-a-constant-value-not-an-address
   (let ((a (assemble ".equ x, 5
-.byte x" :machine 'instr-test-machine)))
+.byte x" :cpu 'instr-test-machine)))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5) (assembly-cells a)))))
 
 (fiveam:test equ-contributes-no-bytes-and-does-not-move-the-address-counter
   (let ((a (assemble "nop
 .equ x, 5
-next: nop" :machine 'instr-test-machine)))
+next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 1 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA #xEA) (assembly-cells a)))))
 
 (fiveam:test equ-value-may-reference-an-earlier-equ
   (let ((a (assemble ".equ a, 1
 .equ b, a + 1
-.byte b" :machine 'instr-test-machine)))
+.byte b" :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (gethash "b" (assembly-symbols a))))
     (fiveam:is (equalp #(2) (assembly-cells a)))))
 
@@ -600,85 +600,85 @@ next: nop" :machine 'instr-test-machine)))
   (let ((a (assemble "start: nop
 nop
 .equ size, * - start
-.byte size" :machine 'instr-test-machine)))
+.byte size" :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (gethash "size" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA #xEA 2) (assembly-cells a)))))
 
 (fiveam:test equ-forward-reference-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble ".equ x, y
-.equ y, 1" :machine 'instr-test-machine)))
+.equ y, 1" :cpu 'instr-test-machine)))
 
 (fiveam:test equ-duplicate-against-a-label-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble "foo: nop
-.equ foo, 5" :machine 'instr-test-machine)))
+.equ foo, 5" :cpu 'instr-test-machine)))
 
 (fiveam:test label-duplicate-against-an-earlier-equ-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble ".equ foo, 5
-foo: nop" :machine 'instr-test-machine)))
+foo: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test equ-duplicate-against-an-earlier-equ-signals-assembly-error
   (fiveam:signals assembly-error
     (assemble ".equ foo, 1
-.equ foo, 2" :machine 'instr-test-machine)))
+.equ foo, 2" :cpu 'instr-test-machine)))
 
 (fiveam:test equ-first-operand-must-be-a-bare-identifier
   (fiveam:signals assembly-error
-    (assemble ".equ 1 + 2, 5" :machine 'instr-test-machine)))
+    (assemble ".equ 1 + 2, 5" :cpu 'instr-test-machine)))
 
 (fiveam:test local-equ-name-is-scoped-like-a-local-label
   (let ((a (assemble "loop: nop
 .equ .n, 3
-.byte .n" :machine 'instr-test-machine)))
+.byte .n" :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (gethash (%qualify-local "loop" ".n" 0) (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA 3) (assembly-cells a)))))
 
 (fiveam:test equ-used-as-instruction-operand-narrows-to-zero-page
   (let ((a (assemble ".equ addr, $10
-lda addr" :machine 'instr-test-machine)))
+lda addr" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 #x10) (assembly-cells a)))))
 
 (fiveam:test equ-used-as-instruction-operand-widens-to-absolute-when-it-must
   (let ((a (assemble ".equ addr, $1000
-lda addr" :machine 'instr-test-machine)))
+lda addr" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 #x00 #x10) (assembly-cells a)))))
 
 (fiveam:test pure-equ-may-be-referenced-by-res
   (let ((a (assemble ".equ n, 4
 .res n
-next: nop" :machine 'instr-test-machine)))
+next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 4 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(0 0 0 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test pure-equ-may-be-referenced-by-org
   (let ((a (assemble ".equ base, $8000
 .org base
-start: nop" :machine 'instr-test-machine)))
+start: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= #x8000 (assembly-origin a)))
     (fiveam:is (= #x8000 (gethash "start" (assembly-symbols a))))))
 
 (fiveam:test address-dependent-equ-may-feed-res
   (let ((a (assemble (format nil "start: nop~%.equ n, * - start~%.res n~%next: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (gethash "next" (assembly-symbols a))))
     (fiveam:is (equalp #(#xEA 0 #xEA) (assembly-cells a)))))
 
 (fiveam:test address-dependent-equ-may-feed-org
   (let ((a (assemble (format nil "start: nop~%.equ base, * + $100~%.org base~%next: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 257 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test equals-sugar-is-equivalent-to-equ
   (let ((a (assemble "x = 5
-.byte x" :machine 'instr-test-machine)))
+.byte x" :cpu 'instr-test-machine)))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5) (assembly-cells a)))))
 
 (fiveam:test equals-sugar-keeps-a-label-on-the-same-line
   (let ((a (assemble "here: x = 5
-.byte x, here" :machine 'instr-test-machine)))
+.byte x, here" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "here" (assembly-symbols a))))
     (fiveam:is (= 5 (gethash "x" (assembly-symbols a))))
     (fiveam:is (equalp #(5 0) (assembly-cells a)))))
@@ -689,7 +689,7 @@ start: nop" :machine 'instr-test-machine)))
 lda n
 .set n, n + 1
 .byte n
-lda n" :machine 'instr-test-machine)))
+lda n" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(3 #x11 3 4 #x11 4) (assembly-cells a)))
     (fiveam:is (= 4 (gethash "n" (assembly-symbols a))))))
 
@@ -699,35 +699,35 @@ lda n" :machine 'instr-test-machine)))
 .set n, 5
 .equ saved, n
 .set n, 7
-.byte old, saved, n" :machine 'instr-test-machine)))
+.byte old, saved, n" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(2 5 7) (assembly-cells a)))))
 
 (fiveam:test set-rejects-label-rebinding-and-later-equ-or-label-rebinding
   (fiveam:signals assembly-error
     (assemble "n: nop
-.set n, 2" :machine 'instr-test-machine))
+.set n, 2" :cpu 'instr-test-machine))
   (fiveam:signals assembly-error
     (assemble ".set n, 2
-.equ n, 3" :machine 'instr-test-machine))
+.equ n, 3" :cpu 'instr-test-machine))
   (fiveam:signals assembly-error
     (assemble ".set n, 2
-n: nop" :machine 'instr-test-machine)))
+n: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test set-rejects-a-forward-reference-and-an-unassigned-use
   (fiveam:signals assembly-error
     (assemble ".set n, later
-later: nop" :machine 'instr-test-machine))
+later: nop" :cpu 'instr-test-machine))
   (fiveam:signals assembly-error
     (assemble ".byte n
-.set n, 2" :machine 'instr-test-machine))
+.set n, 2" :cpu 'instr-test-machine))
   (fiveam:signals assembly-error
     (assemble "lda n
-.set n, 2" :machine 'instr-test-machine)))
+.set n, 2" :cpu 'instr-test-machine)))
 
 (fiveam:test set-preserves-ordinary-forward-label-references
   (let ((a (assemble ".set n, 2
 .byte n, later
-later: nop" :machine 'instr-test-machine)))
+later: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(2 2 #xEA) (assembly-cells a)))))
 
 (fiveam:test set-local-name-keeps-its-enclosing-label-scope
@@ -738,7 +738,7 @@ later: nop" :machine 'instr-test-machine)))
 .byte .n
 second: nop
 .set .n, 4
-.byte .n" :machine 'instr-test-machine)))
+.byte .n" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA 2 3 #xEA 4) (assembly-cells a)))
     (fiveam:is (= 3 (gethash (%qualify-local "first" ".n" 0) (assembly-symbols a))))
     (fiveam:is (= 4 (gethash (%qualify-local "second" ".n" 0) (assembly-symbols a))))))
@@ -747,13 +747,13 @@ second: nop
   (let ((a (assemble ".set addr, $10
 lda addr
 .set addr, $1000
-lda addr" :machine 'instr-test-machine)))
+lda addr" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 #x10 #x12 #x00 #x10) (assembly-cells a)))))
 
 (fiveam:test local-set-value-selects-an-instruction-mode
   (let ((a (assemble "start: nop
 .set .addr, $1000
-lda .addr" :machine 'instr-test-machine)))
+lda .addr" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xEA #x12 #x00 #x10) (assembly-cells a)))))
 
 (fiveam:test set-captures-final-layout-address-after-mode-widening
@@ -761,7 +761,7 @@ lda .addr" :machine 'instr-test-machine)))
 .set here, *
 .byte here
 .res 300
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "here" (assembly-symbols a))))
     (fiveam:is (= 3 (aref (assembly-cells a) 3)))))
 
@@ -771,40 +771,40 @@ target: nop" :machine 'instr-test-machine)))
 .res n
 .set base, $8000
 .org base
-last: nop" :machine 'instr-test-machine)))
+last: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "n" (assembly-symbols a))))
     (fiveam:is (= #x8000 (gethash "last" (assembly-symbols a))))))
 
 (fiveam:test address-dependent-set-may-feed-res
   (let ((a (assemble (format nil ".set n, 2~%start: nop~%.set n, * - start~%.res n~%next: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test res-label-value-updates-after-mode-widens
   (let ((a (assemble (format nil "lda far~%base: nop~%.res base~%next: nop~%.res 300~%far: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "base" (assembly-symbols a))))
     (fiveam:is (= 7 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test local-label-may-feed-res
   (let ((a (assemble (format nil "start: nop~%.loop: nop~%.res .loop~%next: nop")
-                     :machine 'instr-test-machine)))
+                     :cpu 'instr-test-machine)))
     (fiveam:is (= 1 (gethash (%qualify-local "start" ".loop" 0) (assembly-symbols a))))
     (fiveam:is (= 3 (gethash "next" (assembly-symbols a))))))
 
 (fiveam:test pure-equ-chain-feeds-a-layout-directive
   (let ((a (assemble ".equ a, 2
 .equ b, a + 1
-.res b" :machine 'instr-test-machine)))
+.res b" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(0 0 0) (assembly-cells a)))))
 
 (fiveam:test set-rejects-register-alias-collision
   (fiveam:signals assembly-error
-    (assemble ".set i, 5" :machine 'dcpu16-test-machine)))
+    (assemble ".set i, 5" :cpu 'dcpu16-test-machine)))
 
 (fiveam:test set-final-binding-appears-in-symbol-info
   (let* ((a (assemble ".set n, 1
-.set n, 2" :machine 'instr-test-machine))
+.set n, 2" :cpu 'instr-test-machine))
          (info (gethash "n" (assembly-symbol-info a))))
     (fiveam:is (= 1 (hash-table-count (assembly-symbols a))))
     (fiveam:is (eq :set (symbol-info-kind info)))
@@ -817,7 +817,7 @@ last: nop" :machine 'instr-test-machine)))
 ;;; by splitting the qualified name (#36).
 
 (fiveam:test symbol-info-tags-a-global-label
-  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+  (let* ((a (assemble "start: nop" :cpu 'instr-test-machine))
          (info (gethash "start" (assembly-symbol-info a))))
     (fiveam:is (string= "start" (symbol-info-name info)))
     (fiveam:is (string= "start" (symbol-info-qualified-name info)))
@@ -828,7 +828,7 @@ last: nop" :machine 'instr-test-machine)))
 
 (fiveam:test symbol-info-tags-a-local-label-with-its-enclosing-scope
   (let* ((a (assemble "loop: nop
-.next: nop" :machine 'instr-test-machine))
+.next: nop" :cpu 'instr-test-machine))
          (info (gethash (%qualify-local "loop" ".next" 0) (assembly-symbol-info a))))
     (fiveam:is (string= ".next" (symbol-info-name info)))
     (fiveam:is (string= "loop.next" (symbol-info-qualified-name info)))
@@ -838,7 +838,7 @@ last: nop" :machine 'instr-test-machine)))
     (fiveam:is (= 1 (symbol-info-value info)))))
 
 (fiveam:test symbol-info-tags-a-top-level-equ
-  (let* ((a (assemble ".equ bufsize, 16" :machine 'instr-test-machine))
+  (let* ((a (assemble ".equ bufsize, 16" :cpu 'instr-test-machine))
          (info (gethash "bufsize" (assembly-symbol-info a))))
     (fiveam:is (string= "bufsize" (symbol-info-name info)))
     (fiveam:is (null (symbol-info-scope info)))
@@ -848,7 +848,7 @@ last: nop" :machine 'instr-test-machine)))
 
 (fiveam:test symbol-info-tags-a-local-equ-with-its-enclosing-scope
   (let* ((a (assemble "loop: nop
-.equ .n, 3" :machine 'instr-test-machine))
+.equ .n, 3" :cpu 'instr-test-machine))
          (info (gethash (%qualify-local "loop" ".n" 0) (assembly-symbol-info a))))
     (fiveam:is (string= ".n" (symbol-info-name info)))
     (fiveam:is (string= "loop" (symbol-info-scope info)))
@@ -861,13 +861,13 @@ last: nop" :machine 'instr-test-machine)))
   ;; label after a top-level .EQU still has no enclosing global.
   (fiveam:signals assembly-error
     (assemble ".equ x, 1
-.loop: nop" :machine 'instr-test-machine)))
+.loop: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test symbol-info-distinguishes-a-same-spelled-global-from-a-qualified-local
   (let* ((a (assemble "loop: nop
 .next: nop
 .byte .next, loop.next
-loop.next: nop" :machine 'instr-test-machine))
+loop.next: nop" :cpu 'instr-test-machine))
          (global (gethash "loop.next" (assembly-symbol-info a)))
          (local (gethash (%qualify-local "loop" ".next" 0)
                          (assembly-symbol-info a))))
@@ -885,7 +885,7 @@ loop.next: nop" :machine 'instr-test-machine))
 .set .count, .count + 1
 .byte .size, .count, loop.size
 loop.size: .byte 0
-loop.count: .byte 0" :machine 'instr-test-machine)))
+loop.count: .byte 0" :cpu 'instr-test-machine)))
     (fiveam:is (= 4 (symbol-info-value (assembly-symbol a ".count" :scope "loop"))))
     (fiveam:is (= 3 (symbol-info-value (assembly-symbol a "loop.size"))))
     (fiveam:is (= 4 (symbol-info-value (assembly-symbol a "loop.count"))))
@@ -895,7 +895,7 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
   (handler-case
       (assemble "loop:
 .next: nop
-.next: nop" :machine 'instr-test-machine)
+.next: nop" :cpu 'instr-test-machine)
     (assembly-error (condition)
       (fiveam:is (search "loop.next" (princ-to-string condition)))
       (fiveam:is (not (find #\Null (princ-to-string condition)))))))
@@ -905,7 +905,7 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
   ;; ASSEMBLY-SYMBOL-INFO must not change its shape or values.
   (let ((a (assemble "loop: nop
 .next: nop
-.equ .n, 3" :machine 'instr-test-machine)))
+.equ .n, 3" :cpu 'instr-test-machine)))
     (maphash (lambda (k v)
                (declare (ignore k))
                (fiveam:is (integerp v)))
@@ -919,30 +919,30 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
 ;;; actually overrides.
 
 (fiveam:test mode-suffix-z-forces-zero-page
-  (let ((a (assemble "lda.z $10" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda.z $10" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 #x10) (assembly-cells a)))))
 
 (fiveam:test mode-suffix-w-forces-absolute-even-when-zero-page-would-fit
-  (let ((a (assemble "lda.w $05" :machine 'instr-test-machine)))
+  (let ((a (assemble "lda.w $05" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 5 0) (assembly-cells a)))))
 
 (fiveam:test mode-suffix-z-range-checks-its-operand
   ;; $1000 doesn't fit a zero-page byte; a forced mode skips the value filter,
   ;; so the encoder rejects it as a strict mode does instead of wrapping.
   (fiveam:signals assembly-error
-    (assemble "lda.z $1000" :machine 'instr-test-machine))
-  (fiveam:is (equalp #(#x11 #xff) (assembly-cells (assemble "lda.z $ff" :machine 'instr-test-machine)))))
+    (assemble "lda.z $1000" :cpu 'instr-test-machine))
+  (fiveam:is (equalp #(#x11 #xff) (assembly-cells (assemble "lda.z $ff" :cpu 'instr-test-machine)))))
 
 (fiveam:test unknown-mode-suffix-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "lda.q $05" :machine 'instr-test-machine)))
+    (assemble "lda.q $05" :cpu 'instr-test-machine)))
 
 (fiveam:test mode-suffix-naming-a-mode-the-mnemonic-has-no-variant-for-signals-assembly-error
   ;; LDX only declares an IMMEDIATE variant -- ZERO-PAGE is a real,
   ;; registered mode (so the suffix itself resolves), but LDX has no variant
   ;; using it.
   (fiveam:signals assembly-error
-    (assemble "ldx.z $05" :machine 'instr-test-machine)))
+    (assemble "ldx.z $05" :cpu 'instr-test-machine)))
 
 (fiveam:test mode-suffix-not-matching-forced-modes-syntax-signals-assembly-error
   ;; ".z" forces ZERO-PAGE, whose pattern is a bare expr -- "$10,X" doesn't
@@ -950,11 +950,11 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
   ;; regardless), so this is a syntax mismatch against the forced mode
   ;; itself, not "no addressing mode matches this operand" generically.
   (fiveam:signals assembly-error
-    (assemble "lda.z $10,X" :machine 'instr-test-machine)))
+    (assemble "lda.z $10,X" :cpu 'instr-test-machine)))
 
 (fiveam:test mode-suffix-on-a-directive-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".byte.w 1" :machine 'instr-test-machine)))
+    (assemble ".byte.w 1" :cpu 'instr-test-machine)))
 
 (fiveam:test mode-suffix-forced-statement-does-not-disrupt-relaxation-convergence
   ;; A forced .w statement ahead of a label-bearing LDA that itself needs
@@ -966,7 +966,7 @@ loop.count: .byte 0" :machine 'instr-test-machine)))
   (let ((a (assemble "lda.w $05
 lda a
 .res 254
-a: nop" :machine 'instr-test-machine)))
+a: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 5 0) (subseq (assembly-cells a) 0 3)))
     (fiveam:is (= (+ 3 #x101) (gethash "a" (assembly-symbols a))))
     (fiveam:is (equalp #(#x12 4 1) (subseq (assembly-cells a) 3 6)))))
@@ -991,7 +991,7 @@ a: nop" :machine 'instr-test-machine)))
   ;; test for the forward-reference case proper.
   (let ((a (assemble "widthd 5
 widthd #300
-next: nop" :machine 'instr-test-machine)))
+next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x60 0 5 #x60 1 44 1 #xEA) (assembly-cells a)))
     (fiveam:is (= 7 (gethash "next" (assembly-symbols a))))))
 
@@ -1005,7 +1005,7 @@ next: nop" :machine 'instr-test-machine)))
   ;; is no width to cascade here at all.
   (let ((a (assemble "widthd target
 .res 250
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x60 0) (subseq (assembly-cells a) 0 2)))
     (fiveam:is (= 253 (gethash "target" (assembly-symbols a))))))
 
@@ -1028,7 +1028,7 @@ target: nop" :machine 'instr-test-machine)))
   (fiveam:signals assembly-error
     (assemble "brxs.r target
 .res 200
-target: nop" :machine 'instr-test-machine)))
+target: nop" :cpu 'instr-test-machine)))
 
 ;;; Word-encoded relaxation (#20) -- reuses WORD-TEST-MACHINE and its SET/HLT
 ;;; instructions from tests/instruction.lisp. SET's operand packs into a
@@ -1038,17 +1038,17 @@ target: nop" :machine 'instr-test-machine)))
 ;;; widths, generalized via INSTRUCTION-DESCRIPTOR-SIZE.
 
 (fiveam:test word-instruction-picks-inline-variant-for-small-value
-  (let ((a (assemble "set #5" :machine 'word-test-machine)))
+  (let ((a (assemble "set #5" :cpu 'word-test-machine)))
     (fiveam:is (= 2 (length (assembly-cells a))))
     (fiveam:is (equalp #(#x06 #x10) (assembly-cells a)))))
 
 (fiveam:test word-instruction-picks-extra-word-variant-for-large-value
-  (let ((a (assemble "set #1000" :machine 'word-test-machine)))
+  (let ((a (assemble "set #1000" :cpu 'word-test-machine)))
     (fiveam:is (= 4 (length (assembly-cells a))))
     (fiveam:is (equalp #(#xff #x13 #xe8 #x03) (assembly-cells a)))))
 
 (fiveam:test word-instruction-picks-extra-word-variant-for-negative-out-of-range-value
-  (let ((a (assemble "set #-5" :machine 'word-test-machine)))
+  (let ((a (assemble "set #-5" :cpu 'word-test-machine)))
     (fiveam:is (= 4 (length (assembly-cells a))))))
 
 (fiveam:test word-instruction-with-small-forward-label-stays-inline
@@ -1057,7 +1057,7 @@ target: nop" :machine 'instr-test-machine)))
   ;; (SET always starts inline when the operand doesn't resolve yet) turns
   ;; out to already be correct -- no widening pass needed.
   (let ((a (assemble "set #target
-target: hlt" :machine 'word-test-machine)))
+target: hlt" :cpu 'word-test-machine)))
     (fiveam:is (= 4 (length (assembly-cells a))))
     (fiveam:is (= 2 (gethash "target" (assembly-symbols a))))
     (fiveam:is (equalp #(#x03 #x10 #x00 #x20) (assembly-cells a)))))
@@ -1071,12 +1071,12 @@ target: hlt" :machine 'word-test-machine)))
   ;; addressing-mode case, generalized to extra-word count.
   (let ((a (assemble "set #target
 .res 40
-target: hlt" :machine 'word-test-machine)))
+target: hlt" :cpu 'word-test-machine)))
     (fiveam:is (= (+ 4 40 2) (length (assembly-cells a))))
     (fiveam:is (= 44 (gethash "target" (assembly-symbols a))))))
 
 (fiveam:test word-instruction-no-operand-hlt-encodes-as-single-word
-  (let ((a (assemble "hlt" :machine 'word-test-machine)))
+  (let ((a (assemble "hlt" :cpu 'word-test-machine)))
     (fiveam:is (equalp #(#x00 #x20) (assembly-cells a)))))
 
 ;;; Per-field extra-word width (#135) -- reuses SETN/SETW (WORD-TEST-MACHINE)
@@ -1086,11 +1086,11 @@ target: hlt" :machine 'word-test-machine)))
   ;; SETN's fallback is 1 cell, not WORD-TEST-MACHINE's default 2 -- a
   ;; value that needs the fallback at all (out of -1..30) but fits one
   ;; unsigned byte encodes 3 cells total, not 4.
-  (let ((a (assemble "setn #100" :machine 'word-test-machine)))
+  (let ((a (assemble "setn #100" :cpu 'word-test-machine)))
     (fiveam:is (= 3 (length (assembly-cells a))))))
 
 (fiveam:test word-extra-word-wider-than-default-encodes-more-cells
-  (let ((a (assemble "setw #100000" :machine 'word-test-machine)))
+  (let ((a (assemble "setw #100000" :cpu 'word-test-machine)))
     (fiveam:is (= 6 (length (assembly-cells a))))))
 
 (fiveam:test word-relative-offset-fitting-neither-inline-nor-narrow-extra-word-errors
@@ -1104,7 +1104,7 @@ target: hlt" :machine 'word-test-machine)))
   (fiveam:signals assembly-error
     (assemble "wbrn target
 .res 40000
-target: whlt" :machine 'word-relative-test-machine)))
+target: whlt" :cpu 'word-relative-test-machine)))
 
 ;;; #135 regression: once an :EXTRA-WORD field can fail to fit
 ;;; (%WORD-VARIANT-FITS-P), a CHOICE-narrowed candidate that overflows on
@@ -1117,7 +1117,7 @@ target: whlt" :machine 'word-relative-test-machine)))
 
 (fiveam:test choice-selected-extra-word-overflow-signals-error-not-crash
   (fiveam:signals assembly-error
-    (assemble "wcxmix [300]" :machine 'word-cells-mix-test-machine)))
+    (assemble "wcxmix [300]" :cpu 'word-cells-mix-test-machine)))
 
 ;;; Per-instruction word layouts (#64) -- reuses WORD-LAYOUTS-TEST-MACHINE
 ;;; and its SETX/SETWIDE/SETNARROW instructions from tests/instruction.lisp.
@@ -1129,21 +1129,21 @@ target: whlt" :machine 'word-relative-test-machine)))
 
 (fiveam:test word-layout-default-encodes-at-its-own-shifts
   ;; SETX 5, 200 (default 4/4/8) -> opcode 1 << 12 | 5 << 8 | 200 = #x15C8
-  (let ((a (assemble "setx 5, 200" :machine 'word-layouts-test-machine)))
+  (let ((a (assemble "setx 5, 200" :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp #(#xc8 #x15) (assembly-cells a)))))
 
 (fiveam:test word-layout-alternate-wide-encodes-at-its-own-shifts
   ;; SETWIDE 4000 (WIDE, 4/12) -> opcode 2 << 12 | 4000 = #x2FA0
-  (let ((a (assemble "setwide 4000" :machine 'word-layouts-test-machine)))
+  (let ((a (assemble "setwide 4000" :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp #(#xa0 #x2f) (assembly-cells a)))))
 
 (fiveam:test word-layout-alternate-narrow-encodes-at-its-own-shifts
   ;; SETNARROW 3, 2, 100 (NARROW, 4/2/2/8) -> opcode 3 << 12 | 3 << 10 | 2 << 8 | 100 = #x3E64
-  (let ((a (assemble "setnarrow 3, 2, 100" :machine 'word-layouts-test-machine)))
+  (let ((a (assemble "setnarrow 3, 2, 100" :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp #(#x64 #x3e) (assembly-cells a)))))
 
 (fiveam:test word-layout-hlt-no-operand-unaffected-by-alternates
-  (let ((a (assemble "hlt" :machine 'word-layouts-test-machine)))
+  (let ((a (assemble "hlt" :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp #(#x00 #x40) (assembly-cells a)))))
 
 ;;; CHOICE-selected word fields (#104) -- the payoff: WCX's operand encodes
@@ -1153,7 +1153,7 @@ target: whlt" :machine 'word-relative-test-machine)))
 
 (fiveam:test choice-selected-field-encodes-by-matched-syntax-bare
   ;; WC-REG (bias #x00): raw field = 0 + 5 = 5 -> word #x4005.
-  (let ((a (assemble "wcx 5" :machine 'word-test-machine)))
+  (let ((a (assemble "wcx 5" :cpu 'word-test-machine)))
     (fiveam:is (equalp #(#x05 #x40) (assembly-cells a)))))
 
 (fiveam:test choice-selected-field-encodes-by-matched-syntax-indirect
@@ -1161,7 +1161,7 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; different cells than the bare form above for the identical value 5,
   ;; which is exactly what a plain (non-CHOICE) field could never do (a byte-encoded
   ;; machine cannot).
-  (let ((a (assemble "wcx [5]" :machine 'word-test-machine)))
+  (let ((a (assemble "wcx [5]" :cpu 'word-test-machine)))
     (fiveam:is (equalp #(#x0d #x40) (assembly-cells a)))))
 
 (fiveam:test choice-selected-field-overflow-signals-assembly-error
@@ -1171,7 +1171,7 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; syntax, so it never matched WC-IND's "[" expr "]" pattern in the first
   ;; place), so this is an ASSEMBLY-ERROR, not a silent WRAP-VALUE.
   (fiveam:signals assembly-error
-    (assemble "wcx 9" :machine 'word-test-machine)))
+    (assemble "wcx 9" :cpu 'word-test-machine)))
 
 (fiveam:test choice-selected-field-with-forced-suffix-picks-matched-alternative
   ;; #104: WCXS's one mode (WC-TWO-FORCED) contains a ONE-OF, so
@@ -1179,14 +1179,14 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; that one mode name -- %CHOOSE-VARIANT must pick the sibling
   ;; whose CHOICE-selected field agrees with the operand's own matched
   ;; alternative, not an arbitrary one. Same bias values as WCX above.
-  (let ((bare (assembly-cells (assemble "wcxs.c 5" :machine 'word-test-machine)))
-        (indirect (assembly-cells (assemble "wcxs.c [5]" :machine 'word-test-machine))))
+  (let ((bare (assembly-cells (assemble "wcxs.c 5" :cpu 'word-test-machine)))
+        (indirect (assembly-cells (assemble "wcxs.c [5]" :cpu 'word-test-machine))))
     (fiveam:is (equalp #(#x05 #x70) bare))       ; WC-REG: raw = 0 + 5
     (fiveam:is (equalp #(#x0d #x70) indirect))    ; WC-IND: raw = 8 + 5
     (fiveam:is (not (equalp bare indirect)))))
 
 (fiveam:test choice-selected-field-overflow-error-has-a-column
-  (handler-case (assemble "wcx 9" :machine 'word-test-machine)
+  (handler-case (assemble "wcx 9" :cpu 'word-test-machine)
     (assembly-error (c)
       (fiveam:is (integerp (lasm-syntax-error-column c))))
     (:no-error (&rest _) (declare (ignore _)) (fiveam:fail "expected ASSEMBLY-ERROR"))))
@@ -1201,14 +1201,14 @@ target: whlt" :machine 'word-relative-test-machine)))
 (fiveam:test mixed-field-choice-selected-row-encodes-by-syntax
   ;; WC-REG (bare syntax): raw field = value, no bias -- opcode 1, dst 0,
   ;; src 5 -> word #x1005.
-  (let ((a (assemble "wcm 5" :machine 'mixed-field-test-machine)))
+  (let ((a (assemble "wcm 5" :cpu 'mixed-field-test-machine)))
     (fiveam:is (equalp #(#x05 #x10) (assembly-cells a)))))
 
 (fiveam:test mixed-field-value-selected-row-encodes-by-value-within-its-own-syntax
   ;; WC-IND ("[" expr "]" syntax): raw field = the value itself, packed by
   ;; the stamped value-selected variant's own (unbiased) range -- opcode 1,
   ;; dst 0, src 50 -> word #x1032.
-  (let ((a (assemble "wcm [50]" :machine 'mixed-field-test-machine)))
+  (let ((a (assemble "wcm [50]" :cpu 'mixed-field-test-machine)))
     (fiveam:is (equalp #(#x32 #x10) (assembly-cells a)))))
 
 (fiveam:test mixed-field-choice-selected-row-overflow-signals-assembly-error
@@ -1217,7 +1217,7 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; bracketed syntax) -- same ASSEMBLY-ERROR, not silent WRAP-VALUE, as the
   ;; wholly CHOICE-selected WCX above.
   (fiveam:signals assembly-error
-    (assemble "wcm 9" :machine 'mixed-field-test-machine)))
+    (assemble "wcm 9" :cpu 'mixed-field-test-machine)))
 
 (fiveam:test mixed-field-value-selected-row-overflow-signals-assembly-error
   ;; 200 doesn't fit the stamped WC-IND variant's (8 100) range either, and
@@ -1226,7 +1226,7 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; this must also be an ASSEMBLY-ERROR, not a WRAP-VALUE into bits that
   ;; would decode as a WC-REG register value instead.
   (fiveam:signals assembly-error
-    (assemble "wcm [200]" :machine 'mixed-field-test-machine)))
+    (assemble "wcm [200]" :cpu 'mixed-field-test-machine)))
 
 ;;; Cell-width-typed assembler output (#53) -- WORDADDR-TEST-MACHINE
 ;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory with an ordinary
@@ -1236,7 +1236,7 @@ target: whlt" :machine 'word-relative-test-machine)))
 ;;; after a 2-cell instruction would bind to address 2 instead of 1.
 
 (fiveam:test assembly-cells-element-type-matches-machine-cell-width
-  (let ((a (assemble "nop" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble "nop" :cpu 'wordaddr-test-machine)))
     (fiveam:is (= 16 (assembly-cell-width a)))
     (fiveam:is (= 16 (%array-element-width (assembly-cells a))))))
 
@@ -1245,7 +1245,7 @@ target: whlt" :machine 'word-relative-test-machine)))
   ;; rounding up to 1 cell of 16 bits) -- START must bind to 0 and the
   ;; second statement to 1, not 0/1 vs. a byte-counted 0/2.
   (let ((a (assemble "start: nop
-jmp start" :machine 'wordaddr-test-machine)))
+jmp start" :cpu 'wordaddr-test-machine)))
     (fiveam:is (= 0 (gethash "start" (assembly-symbols a))))
     (fiveam:is (equalp #(0 2 0) (assembly-cells a)))))
 
@@ -1259,41 +1259,41 @@ jmp start" :machine 'wordaddr-test-machine)))
   ;; that doesn't fit 8 bits -- see ENCODE-INSTRUCTION-RETURNS-CELLS-NOT-
   ;; BYTE-PAIRS (tests/instruction.lisp) for that direct check.
   (let ((a (assemble "jmp second
-second: nop" :machine 'wordaddr-test-machine)))
+second: nop" :cpu 'wordaddr-test-machine)))
     (fiveam:is (= 2 (gethash "second" (assembly-symbols a))))
     (fiveam:is (equalp #(2 2 0) (assembly-cells a)))))
 
 (fiveam:test byte-directive-lays-one-cell-per-value-on-word-addressed-machine
-  (let ((a (assemble ".byte 1, 2, 3" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble ".byte 1, 2, 3" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
 ;; #65 -- .CELL/.DAT lay down the same one-cell-per-value data as .BYTE on a
 ;; word-addressed machine -- the case the alias exists for, since ".byte" is
 ;; a misnomer once a cell is wider than 8 bits.
 (fiveam:test cell-directive-lays-one-cell-per-value-on-word-addressed-machine
-  (let ((a (assemble ".cell 1, 2, 3" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble ".cell 1, 2, 3" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
 (fiveam:test dat-directive-lays-one-cell-per-value-on-word-addressed-machine
-  (let ((a (assemble ".dat 1, 2, 3" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble ".dat 1, 2, 3" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 2 3) (assembly-cells a)))))
 
 (fiveam:test word-directive-lays-two-cells-per-value-on-word-addressed-machine
   ;; #x12340001 split into two 16-bit cells, little-endian: low #x0001, high
   ;; #x1234 -- ".word" means two of THIS machine's cells, not two 8-bit bytes.
-  (let ((a (assemble ".word $12340001" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble ".word $12340001" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(#x0001 #x1234) (assembly-cells a)))))
 
 (fiveam:test res-directive-reserves-cells-not-bytes-on-word-addressed-machine
   (let ((a (assemble "nop
 .res 4
-jmp *" :machine 'wordaddr-test-machine)))
+jmp *" :cpu 'wordaddr-test-machine)))
     (fiveam:is (= (+ 1 4 2) (length (assembly-cells a))))))
 
 (fiveam:test org-gap-is-zero-filled-in-cells-on-word-addressed-machine
   (let ((a (assemble "nop
 .org 5
-nop" :machine 'wordaddr-test-machine)))
+nop" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(0 0 0 0 0 0) (assembly-cells a)))))
 
 ;; #67: `<`/`>` stay a fixed 8-bit low/high-byte split regardless of the
@@ -1303,18 +1303,18 @@ nop" :machine 'wordaddr-test-machine)))
 ;; path (see EVAL-EXPR-CONSTANT-LO-HI, tests/instruction.lisp), so a machine
 ;; in scope can't change the split.
 (fiveam:test lo-hi-operators-stay-8-bit-on-word-addressed-machine
-  (let ((a (assemble "lda #<$1234" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble "lda #<$1234" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 #x34) (assembly-cells a))))
-  (let ((a (assemble "lda #>$1234" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble "lda #>$1234" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 #x12) (assembly-cells a)))))
 
 (fiveam:test lo-hi-operators-mask-values-wider-than-16-bits
   ;; The split is always the low/next 8 bits, however wide the value --
   ;; unambiguous even against a machine whose own cells are wider than a
   ;; byte.
-  (let ((a (assemble "lda #<$123456" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble "lda #<$123456" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 #x56) (assembly-cells a))))
-  (let ((a (assemble "lda #>$123456" :machine 'wordaddr-test-machine)))
+  (let ((a (assemble "lda #>$123456" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 #x34) (assembly-cells a)))))
 
 ;;; ONE-OF (#103): end-to-end assembly through MOO (tests/instruction.lisp,
@@ -1326,17 +1326,17 @@ nop" :machine 'wordaddr-test-machine)))
 ;;; today's documented behavior, not an oversight.
 
 (fiveam:test one-of-mode-assembles-first-alternative-on-both-holes
-  (let ((a (assemble "moo $10, $20" :machine 'instr-test-machine)))
+  (let ((a (assemble "moo $10, $20" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
 
 (fiveam:test one-of-mode-assembles-mixed-alternatives-per-hole
   ;; dst via "[" expr "]", src via a bare expr -- each hole's choice is
   ;; independent of the other's.
-  (let ((a (assemble "moo [$10], $20" :machine 'instr-test-machine)))
+  (let ((a (assemble "moo [$10], $20" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
 
 (fiveam:test one-of-mode-assembles-both-holes-bracketed
-  (let ((a (assemble "moo [$10], [$20]" :machine 'instr-test-machine)))
+  (let ((a (assemble "moo [$10], [$20]" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xF7 #x10 #x20) (assembly-cells a)))))
 
 ;;; #62 (M4): PC-relative offsets on a word-encoded machine -- WBRA
@@ -1347,14 +1347,14 @@ nop" :machine 'wordaddr-test-machine)))
 (fiveam:test word-relative-branch-to-itself-packs-minus-two-inline
   ;; WBRA is 2 cells wide; branching to itself is -2, same as the byte
   ;; path's RELATIVE-BRANCH-TO-ITSELF-IS-MINUS-TWO.
-  (let ((a (assemble "loop: wbra loop" :machine 'word-relative-test-machine)))
+  (let ((a (assemble "loop: wbra loop" :cpu 'word-relative-test-machine)))
     ;; opcode 1 << 12 | (wrap-value -2 10) = 0x1000 | 0x3FE = 0x13FE,
     ;; little-endian.
     (fiveam:is (equalp #(#xFE #x13) (assembly-cells a)))))
 
 (fiveam:test word-relative-branch-forward-offset-packs-inline
   (let ((a (assemble "wbra next
-next: wnop" :machine 'word-relative-test-machine)))
+next: wnop" :cpu 'word-relative-test-machine)))
     ;; WBRA at address 0, size 2 -> next-address 2 -> target (NEXT) 2 ->
     ;; offset 0. Word = 0x1000 -> bytes 00 10, followed by WNOP's 0x7000 ->
     ;; bytes 00 70.
@@ -1362,7 +1362,7 @@ next: wnop" :machine 'word-relative-test-machine)))
 
 (fiveam:test word-relative-branch-backward-offset-packs-inline
   (let ((a (assemble "start: wnop
-                      wbra start" :machine 'word-relative-test-machine)))
+                      wbra start" :cpu 'word-relative-test-machine)))
     ;; WNOP at 0 (2 bytes) -> WBRA at address 2, size 2 -> next-address 4 ->
     ;; target (START) 0 -> offset -4 -> wrap-value(-4, 10) = 1020 = 0x3FC ->
     ;; word 0x1000 | 0x3FC = 0x13FC.
@@ -1378,7 +1378,7 @@ next: wnop" :machine 'word-relative-test-machine)))
                 (format s "start: wbrs target~%")
                 (dotimes (i 10) (format s "wnop~%"))
                 (format s "target: wnop~%"))
-              :machine 'word-relative-test-machine)))
+              :cpu 'word-relative-test-machine)))
 
 (fiveam:test word-relative-branch-inline-to-extra-word-relaxation
   ;; WBRA's inline range is -256..255 cells; a target far enough away must
@@ -1390,7 +1390,7 @@ next: wnop" :machine 'word-relative-test-machine)))
                    (format s "start: wbra target~%")
                    (dotimes (i 300) (format s "wnop~%"))
                    (format s "target: wnop~%")))
-         (a (assemble source :machine 'word-relative-test-machine))
+         (a (assemble source :cpu 'word-relative-test-machine))
          (cells (assembly-cells a)))
     ;; WBRA widened to 4 cells (2-word extra-word form) + 300 WNOPs (2 cells
     ;; each) + the target's own WNOP (2 cells) = 606 cells total.
@@ -1407,7 +1407,7 @@ next: wnop" :machine 'word-relative-test-machine)))
                    (format s "start: wbra target~%")
                    (dotimes (i 300) (format s "wnop~%"))
                    (format s "target: wnop~%")))
-         (a (assemble source :machine 'word-relative-test-machine))
+         (a (assemble source :cpu 'word-relative-test-machine))
          (reader (vector-cell-reader (assembly-cells a))))
     (multiple-value-bind (descriptor values size)
         (decode-instruction-at reader 0 'word-relative-test-machine)
@@ -1419,35 +1419,35 @@ next: wnop" :machine 'word-relative-test-machine)))
 ;;; DCPU16-TEST-MACHINE's REG element carries :names (a b c x y z i j).
 
 (fiveam:test register-alias-resolves-in-an-operand
-  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine))
-        (b (assemble "set 0, 5" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set a, 5" :cpu 'dcpu16-test-machine))
+        (b (assemble "set 0, 5" :cpu 'dcpu16-test-machine)))
     (fiveam:is (equalp (assembly-cells a) (assembly-cells b)))))
 
 (fiveam:test register-alias-resolves-case-insensitively
-  (let ((lower (assemble "set a, 5" :machine 'dcpu16-test-machine))
-        (upper (assemble "set A, 5" :machine 'dcpu16-test-machine)))
+  (let ((lower (assemble "set a, 5" :cpu 'dcpu16-test-machine))
+        (upper (assemble "set A, 5" :cpu 'dcpu16-test-machine)))
     (fiveam:is (equalp (assembly-cells lower) (assembly-cells upper)))))
 
 (fiveam:test register-alias-resolves-inside-an-expression
-  (let ((alias (assemble "set (a+1), 5" :machine 'dcpu16-test-machine))
-        (literal (assemble "set 1, 5" :machine 'dcpu16-test-machine)))
+  (let ((alias (assemble "set (a+1), 5" :cpu 'dcpu16-test-machine))
+        (literal (assemble "set 1, 5" :cpu 'dcpu16-test-machine)))
     (fiveam:is (equalp (assembly-cells alias) (assembly-cells literal)))))
 
 (fiveam:test register-alias-is-not-listed-as-a-symbol
-  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set a, 5" :cpu 'dcpu16-test-machine)))
     (fiveam:is (not (nth-value 1 (gethash "a" (assembly-symbols a)))))))
 
 (fiveam:test label-colliding-with-register-alias-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "i: hlt" :machine 'dcpu16-test-machine)))
+    (assemble "i: hlt" :cpu 'dcpu16-test-machine)))
 
 (fiveam:test label-colliding-with-register-alias-case-insensitively-signals
   (fiveam:signals assembly-error
-    (assemble "I: hlt" :machine 'dcpu16-test-machine)))
+    (assemble "I: hlt" :cpu 'dcpu16-test-machine)))
 
 (fiveam:test equ-colliding-with-register-alias-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble ".equ i, 5" :machine 'dcpu16-test-machine)))
+    (assemble ".equ i, 5" :cpu 'dcpu16-test-machine)))
 
 ;;; assemble-file
 
@@ -1456,21 +1456,21 @@ next: wnop" :machine 'word-relative-test-machine)))
 
 (fiveam:test assemble-file-matches-assemble-on-the-same-text
   (let ((from-file (assemble-file (merge-pathnames "simple.asm" *fixture-directory*)
-                                  :machine 'instr-test-machine))
+                                  :cpu 'instr-test-machine))
         (from-text (assemble "start: ldx #10
-       nop" :machine 'instr-test-machine)))
+       nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp (assembly-cells from-text) (assembly-cells from-file)))
     (fiveam:is (= 0 (gethash "start" (assembly-symbols from-file))))))
 
 (fiveam:test assemble-file-passes-origin-through
   (let ((a (assemble-file (merge-pathnames "simple.asm" *fixture-directory*)
-                          :machine 'instr-test-machine :origin #x200)))
+                          :cpu 'instr-test-machine :origin #x200)))
     (fiveam:is (= #x200 (assembly-origin a)))))
 
 (fiveam:test assemble-file-missing-path-signals-file-error
   (fiveam:signals file-error
     (assemble-file (merge-pathnames "no-such-file.asm" *fixture-directory*)
-                   :machine 'instr-test-machine)))
+                   :cpu 'instr-test-machine)))
 
 ;;; Mixed endian and per-directive :endian (#145)
 
@@ -1483,16 +1483,16 @@ next: wnop" :machine 'word-relative-test-machine)))
 
 (fiveam:test pdp-endian-machine-lays-out-directives
   (fiveam:is (equalp #(#x0B #x0A #x0D #x0C)
-                     (assembly-cells (assemble ".long $0A0B0C0D" :machine 'pdp-endian-test-machine))))
-  (fiveam:is (equalp #(#x0B #x0A) (assembly-cells (assemble ".word $0A0B" :machine 'pdp-endian-test-machine)))))
+                     (assembly-cells (assemble ".long $0A0B0C0D" :cpu 'pdp-endian-test-machine))))
+  (fiveam:is (equalp #(#x0B #x0A) (assembly-cells (assemble ".word $0A0B" :cpu 'pdp-endian-test-machine)))))
 
 (fiveam:test directive-endian-overrides-machine-order
   (fiveam:is (equalp #(#x12 #x34)
-                     (assembly-cells (assemble ".beword $1234" :machine 'instr-test-machine))))
+                     (assembly-cells (assemble ".beword $1234" :cpu 'instr-test-machine))))
   (fiveam:is (equalp #(#x12 #x34)
-                     (assembly-cells (assemble ".beword $1234" :machine 'pdp-endian-test-machine))))
+                     (assembly-cells (assemble ".beword $1234" :cpu 'pdp-endian-test-machine))))
   (fiveam:is (equalp #(#x0B #x0A #x0D #x0C)
-                     (assembly-cells (assemble ".pdpword $0A0B0C0D" :machine 'instr-test-machine)))))
+                     (assembly-cells (assemble ".pdpword $0A0B0C0D" :cpu 'instr-test-machine)))))
 
 (fiveam:test directive-endian-rejects-bad-specs
   (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :endian :middle)))
@@ -1500,12 +1500,12 @@ next: wnop" :machine 'word-relative-test-machine)))
   (fiveam:signals error (build-directive-descriptor ".x" '(&rest v) '(emit 2 v :order :big))))
 
 (fiveam:test assembler-rejects-mem
-  (fiveam:signals assembly-error (assemble ".byte mem(1)" :machine 'emu-test-machine)))
+  (fiveam:signals assembly-error (assemble ".byte mem(1)" :cpu 'emu-test-machine)))
 
 ;;; String operands, .ascii/.asciz (#34)
 
 (defun %string-cells (source &optional (machine 'instr-test-machine))
-  (coerce (assembly-cells (assemble source :machine machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu machine)) 'list))
 
 (fiveam:test ascii-emits-one-cell-per-character
   (fiveam:is (equal '(#x68 #x69) (%string-cells ".ascii \"hi\""))))
@@ -1533,7 +1533,7 @@ next: wnop" :machine 'word-relative-test-machine)))
 
 (fiveam:test label-after-string-follows-its-terminator
   (let ((a (assemble "msg: .asciz \"hi\"
-end: nop" :machine 'instr-test-machine)))
+end: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (gethash "msg" (assembly-symbols a))))
     (fiveam:is (= 3 (gethash "end" (assembly-symbols a))))
     (fiveam:is (= 3 (listing-line-size (first (assembly-listing a)))))))
@@ -1562,11 +1562,11 @@ end: nop" :machine 'instr-test-machine)))
 
 (fiveam:test pack-rejects-a-character-wider-than-8-bits
   (fiveam:signals assembly-error
-    (assemble (format nil ".packz \"~C\"" (code-char 300)) :machine 'callfoo)))
+    (assemble (format nil ".packz \"~C\"" (code-char 300)) :cpu 'callfoo)))
 
 (fiveam:test a-packed-string-sizes-its-label
   (let ((a (assemble "s: .packz \"abc\"
-end: .cell 0" :machine 'callfoo)))
+end: .cell 0" :cpu 'callfoo)))
     (fiveam:is (= 2 (gethash "end" (assembly-symbols a))))))
 
 (fiveam:test string-characters-are-one-cell-on-word-addressed-machine
@@ -1576,14 +1576,14 @@ end: .cell 0" :machine 'callfoo)))
 
 (fiveam:test string-character-too-wide-for-element-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble (format nil ".ascii \"~C\"" (code-char #x263A)) :machine 'instr-test-machine)))
+    (assemble (format nil ".ascii \"~C\"" (code-char #x263A)) :cpu 'instr-test-machine)))
 
 (fiveam:test string-outside-a-data-directive-signals-assembly-error
   (dolist (source '(".org \"a\"" ".equ x, \"a\"" ".byte \"a\" + 1" "ldx #\"a\"" ".res \"a\""
                     ".if \"a\"
 nop
 .endif"))
-    (fiveam:signals assembly-error (assemble source :machine 'instr-test-machine))))
+    (fiveam:signals assembly-error (assemble source :cpu 'instr-test-machine))))
 
 (fiveam:test macro-argument-can-be-a-string
   (fiveam:is (equal '(#x68 #x69 0)
@@ -1596,7 +1596,7 @@ nop
 ;;; passes (#39) -- qualification and .set capture must not corrupt them.
 
 (fiveam:test forced-mode-suffix-accepts-a-local-label-operand
-  (let ((a (assemble (format nil "start:~%.x: nop~%lda.w .x") :machine 'instr-test-machine)))
+  (let ((a (assemble (format nil "start:~%.x: nop~%lda.w .x") :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x12 0 0) (subseq (assembly-cells a) 1)))))
 
 (fiveam:test set-capture-survives-relaxation-passes
@@ -1605,11 +1605,11 @@ lda later
 .byte n
 .set n, n + 1
 .byte n
-later: nop" :machine 'instr-test-machine)))
+later: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x11 4 3 4) (subseq (assembly-cells a) 0 4)))))
 
 (fiveam:test org-operand-on-a-labelled-line-uses-the-scope-before-the-label
-  (let ((a (assemble (format nil "start: nop~%.equ .n, 5~%later: .org .n + 10") :machine 'instr-test-machine)))
+  (let ((a (assemble (format nil "start: nop~%.equ .n, 5~%later: .org .n + 10") :cpu 'instr-test-machine)))
     (fiveam:is (= 15 (gethash "later" (assembly-symbols a))))))
 
 (fiveam:test qualify-locals-twice-is-a-no-op

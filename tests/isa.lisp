@@ -78,8 +78,8 @@
   (fiveam:signals unknown-isa (find-isa-descriptor 'isa-full)))
 
 (fiveam:test the-assembler-and-decoder-see-the-cpus-instructions
-  (fiveam:is (equalp #(2) (assembly-cells (assemble "dec" :machine 'isa-full))))
-  (fiveam:signals lasm-error (assemble "dec" :machine 'isa-small))
+  (fiveam:is (equalp #(2) (assembly-cells (assemble "dec" :cpu 'isa-full))))
+  (fiveam:signals lasm-error (assemble "dec" :cpu 'isa-small))
   (multiple-value-bind (size opcode removedp)
       (%undefined-opcode-extent (lambda (address) (if (zerop address) 2 0)) 0 'isa-small nil)
     (fiveam:is (= 1 size))
@@ -160,7 +160,7 @@
 (defcpu (isa-moded-cpu (:isa isa-moded)))
 
 (fiveam:test isa-local-modes-apply-to-the-cpus-of-the-isa
-  (fiveam:is (equalp #(4 7) (assembly-cells (assemble "ld (7)" :machine 'isa-moded-cpu))))
+  (fiveam:is (equalp #(4 7) (assembly-cells (assemble "ld (7)" :cpu 'isa-moded-cpu))))
   (fiveam:signals unknown-mode (find-mode-descriptor 'isa-paren))
   (fiveam:signals mode-definition-error (eval '(defmode (isa-bad (:isa isa-moded-cpu)) "[" expr "]"))))
 

@@ -28,7 +28,7 @@
         bne .loop
         sta $10
         hlt"
-            :machine 'emu-test-machine :origin #x100))
+            :cpu 'emu-test-machine :origin #x100))
 
 (defun %dbg-session ()
   (let* ((a (%dbg-assembly))
@@ -54,7 +54,7 @@
 (fiveam:test debug-break-distinguishes-global-from-scoped-local
   (let* ((a (assemble "loop: hlt
 .next: hlt
-loop.next: hlt" :machine 'emu-test-machine))
+loop.next: hlt" :cpu 'emu-test-machine))
          (m (make-machine 'emu-test-machine)))
     (load-program m a)
     (let ((session (make-debug-session m :assembly a)))
@@ -66,7 +66,7 @@ loop.next: hlt" :machine 'emu-test-machine))
 (fiveam:test debug-break-by-label-rejects-equ
   (let* ((a (assemble ".equ limit, 10
         ldx #1
-        hlt" :machine 'emu-test-machine :origin #x100))
+        hlt" :cpu 'emu-test-machine :origin #x100))
          (m (make-machine 'emu-test-machine)))
     (load-program m a)
     (let ((session (make-debug-session m :assembly a)))
@@ -308,7 +308,7 @@ loop.next: hlt" :machine 'emu-test-machine))
       (fiveam:is (= 8 steps))
       (fiveam:is (= 0 (watch-hit-new hit)))))
   (let* ((a (assemble "start: ldx #1
-data:  hlt" :machine 'emu-test-machine :origin #x100))
+data:  hlt" :cpu 'emu-test-machine :origin #x100))
          (m (make-machine 'emu-test-machine)))
     (load-program m a)
     (let ((wp (debug-watch (make-debug-session m :assembly a) "data" :access :read)))
@@ -423,7 +423,7 @@ data:  hlt" :machine 'emu-test-machine :origin #x100))
 count: ldx #3
 .loop: dex
        bne .loop
-       hlt" :machine 'emu-test-machine :origin #x100))
+       hlt" :cpu 'emu-test-machine :origin #x100))
          (m (make-machine 'emu-test-machine)))
     (load-program m a)
     (let ((session (make-debug-session m :assembly a)))
@@ -826,7 +826,7 @@ count: ldx #3
 ;;; Cycle budgets
 
 (defun %dbg-program-session (source)
-  (let* ((a (assemble source :machine 'emu-test-machine :origin #x100))
+  (let* ((a (assemble source :cpu 'emu-test-machine :origin #x100))
          (m (make-machine 'emu-test-machine)))
     (load-program m a)
     (make-debug-session m :assembly a)))
@@ -1305,7 +1305,7 @@ count: ldx #3
 (fiveam:test where-shows-the-line-from-the-included-file
   (let* ((a (assemble-file (asdf:system-relative-pathname
                             :lasm "tests/fixtures/include/where.asm")
-                           :machine 'instr-test-machine))
+                           :cpu 'instr-test-machine))
          (m (make-machine 'instr-test-machine)))
     (load-program m a)
     (let ((session (make-debug-session m :assembly a)))
@@ -1435,7 +1435,7 @@ loop:   sta $10
 
 (defun %dbg-loop-machine ()
   (let ((m (make-machine 'emu-test-machine)))
-    (load-program m (assemble +dbg-loop-source+ :machine 'emu-test-machine :origin #x100))
+    (load-program m (assemble +dbg-loop-source+ :cpu 'emu-test-machine :origin #x100))
     m))
 
 (defun %dbg-loop-session (&key (history 1000) machine)
@@ -1652,7 +1652,7 @@ loop:   sta $10
 
 (defun %dbg-phase-session ()
   (let ((m (make-machine 'emu-test-machine)))
-    (load-program m (assemble +dbg-phase-source+ :machine 'emu-test-machine :origin #x100))
+    (load-program m (assemble +dbg-phase-source+ :cpu 'emu-test-machine :origin #x100))
     (make-debug-session m :assembly (machine-program m) :history 1000)))
 
 (fiveam:test debug-reverse-continue-skips-segments-that-never-wrote-a-watched-page
@@ -1709,7 +1709,7 @@ loop:   sta $10
         (m (make-machine 'emu-test-machine)))
     (load-program m (assemble "        ldx #1
 loop:   sta $10
-        bne loop" :machine 'emu-test-machine :origin #x100))
+        bne loop" :cpu 'emu-test-machine :origin #x100))
     (let ((session (make-debug-session m :assembly (machine-program m) :history 1000)))
       (debug-step session 100)
       (debug-watch session "x" :access :write)

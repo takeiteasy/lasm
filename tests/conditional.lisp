@@ -8,7 +8,7 @@
 (fiveam:in-suite conditional)
 
 (defun %cells (source)
-  (coerce (assembly-cells (assemble source :machine 'instr-test-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'instr-test-machine)) 'list))
 
 (fiveam:test true-branch-is-kept-and-false-branch-dropped
   (fiveam:is (equal '(#xEA) (%cells ".if 1
@@ -122,7 +122,7 @@
 here: .if 1
     nop
 .endif
-there:" :machine 'instr-test-machine)))
+there:" :cpu 'instr-test-machine)))
     (fiveam:is (= 1 (gethash "here" (assembly-symbols a))))
     (fiveam:is (= 2 (gethash "there" (assembly-symbols a))))))
 
@@ -160,7 +160,7 @@ tag: nop
     ldx #1
 .else
     nop
-.endif" :machine 'instr-test-machine)))
+.endif" :cpu 'instr-test-machine)))
     (fiveam:is (= 1 (length (assembly-listing a))))))
 
 ;;; Conditions that are not constants
@@ -170,23 +170,23 @@ tag: nop
     (assemble "start: nop
 .if start
     nop
-.endif" :machine 'instr-test-machine))
+.endif" :cpu 'instr-test-machine))
   (fiveam:signals conditional-error
     (assemble ".if later
     nop
 .endif
-later: nop" :machine 'instr-test-machine)))
+later: nop" :cpu 'instr-test-machine)))
 
 (fiveam:test location-counter-and-bank-in-condition-signal
   (fiveam:signals conditional-error
     (assemble ".if * == 0
     nop
-.endif" :machine 'instr-test-machine))
+.endif" :cpu 'instr-test-machine))
   (fiveam:signals conditional-error
     (assemble "start: nop
 .if bank(start)
     nop
-.endif" :machine 'instr-test-machine)))
+.endif" :cpu 'instr-test-machine)))
 
 (fiveam:test layout-dependent-equ-in-condition-signals
   (fiveam:signals conditional-error
@@ -194,13 +194,13 @@ later: nop" :machine 'instr-test-machine)))
 .equ size, * - start
 .if size
     nop
-.endif" :machine 'instr-test-machine)))
+.endif" :cpu 'instr-test-machine)))
 
 (fiveam:test undefined-name-in-condition-signals
   (fiveam:signals conditional-error
     (assemble ".if nope
     nop
-.endif" :machine 'instr-test-machine)))
+.endif" :cpu 'instr-test-machine)))
 
 ;;; Malformed and unbalanced blocks
 
@@ -216,12 +216,12 @@ later: nop" :machine 'instr-test-machine)))
 .else
 .elseif 1
 .endif"))
-    (fiveam:signals conditional-error (assemble source :machine 'instr-test-machine))))
+    (fiveam:signals conditional-error (assemble source :cpu 'instr-test-machine))))
 
 (fiveam:test unterminated-if-reports-its-own-line
   (handler-case (assemble "nop
 .if 1
-    nop" :machine 'instr-test-machine)
+    nop" :cpu 'instr-test-machine)
     (conditional-error (c) (fiveam:is (= 2 (lasm-syntax-error-line c))))))
 
 (fiveam:test malformed-conditional-lines-signal
@@ -232,7 +232,7 @@ later: nop" :machine 'instr-test-machine)))
 .else 1
 .endif" ".if 1
 .endif 1"))
-    (fiveam:signals lasm-syntax-error (assemble source :machine 'instr-test-machine))))
+    (fiveam:signals lasm-syntax-error (assemble source :cpu 'instr-test-machine))))
 
 ;;; Interaction with macros and includes
 
@@ -243,7 +243,7 @@ later: nop" :machine 'instr-test-machine)))
     nop
 .endm
 .endif
-    m" :machine 'instr-test-machine)))))
+    m" :cpu 'instr-test-machine)))))
 
 (fiveam:test macro-defined-in-a-skipped-branch-is-not-defined
   (fiveam:signals unknown-instruction
@@ -252,7 +252,7 @@ later: nop" :machine 'instr-test-machine)))
     nop
 .endm
 .endif
-    m" :machine 'instr-test-machine)))
+    m" :cpu 'instr-test-machine)))
 
 (fiveam:test skipped-macro-body-is-not-interpreted
   (fiveam:is (equalp #(#xEA)
@@ -261,7 +261,7 @@ later: nop" :machine 'instr-test-machine)))
 .if
 .endm
 .endif
-    nop" :machine 'instr-test-machine)))))
+    nop" :cpu 'instr-test-machine)))))
 
 (fiveam:test same-macro-name-can-be-defined-in-each-branch
   (flet ((run (flag)
@@ -275,7 +275,7 @@ later: nop" :machine 'instr-test-machine)))
     ldx #1
 .endm
 .endif
-    m" flag) :machine 'instr-test-machine))))
+    m" flag) :cpu 'instr-test-machine))))
     (fiveam:is (equalp #(#xEA) (run 1)))
     (fiveam:is (equalp #(#xA2 1) (run 0)))))
 
@@ -287,7 +287,7 @@ later: nop" :machine 'instr-test-machine)))
 .if 0
     m 1, 2, 3
 .endif
-    nop" :machine 'instr-test-machine)))))
+    nop" :cpu 'instr-test-machine)))))
 
 (fiveam:test recursive-macro-terminates-on-an-if-base-case
   (fiveam:is (equalp #(#xEA #xEA #xEA)
@@ -297,14 +297,14 @@ later: nop" :machine 'instr-test-machine)))
     rep n-1
 .endif
 .endm
-    rep 3" :machine 'instr-test-machine)))))
+    rep 3" :cpu 'instr-test-machine)))))
 
 (fiveam:test unbounded-macro-recursion-signals-macro-error
   (fiveam:signals macro-error
     (assemble ".macro r
     r
 .endm
-    r" :machine 'instr-test-machine)))
+    r" :cpu 'instr-test-machine)))
 
 (fiveam:test macro-body-must-balance-its-conditionals
   (fiveam:signals macro-error
@@ -312,17 +312,17 @@ later: nop" :machine 'instr-test-machine)))
 .if 1
 .endm
     open
-.endif" :machine 'instr-test-machine))
+.endif" :cpu 'instr-test-machine))
   (fiveam:signals macro-error
     (assemble ".macro close
 .endif
-.endm" :machine 'instr-test-machine)))
+.endm" :cpu 'instr-test-machine)))
 
 (fiveam:test macro-cannot-take-a-conditional-name
   (fiveam:signals macro-error
     (assemble ".macro .if
     nop
-.endm" :machine 'instr-test-machine)))
+.endm" :cpu 'instr-test-machine)))
 
 (fiveam:test include-inside-false-if-contributes-nothing
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
@@ -337,37 +337,37 @@ later: nop" :machine 'instr-test-machine)))
                        (assembly-cells (assemble ".if 1
 .include \"macro-def.asm\"
 .endif
-    nop" :machine 'instr-test-machine))))))
+    nop" :cpu 'instr-test-machine))))))
 
 (fiveam:test include-in-a-skipped-branch-is-not-read
   (fiveam:is (equalp #(#xEA)
                      (assembly-cells (assemble ".if 0
 .include \"does-not-exist.asm\"
 .endif
-    nop" :machine 'instr-test-machine)))))
+    nop" :cpu 'instr-test-machine)))))
 
 (fiveam:test include-in-a-taken-branch-is-read
   (fiveam:signals include-error
     (assemble ".if 1
 .include \"does-not-exist.asm\"
-.endif" :machine 'instr-test-machine)))
+.endif" :cpu 'instr-test-machine)))
 
 (fiveam:test include-in-a-macro-body-resolves-against-the-macro-file
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
     (fiveam:is (equalp #(#xEA)
                        (assembly-cells (assemble ".include \"sub/lib.asm\"
-    nopc" :machine 'instr-test-machine))))))
+    nopc" :cpu 'instr-test-machine))))))
 
 (fiveam:test included-file-cannot-leave-an-if-open
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
     (fiveam:signals conditional-error
       (assemble ".include \"open-if.asm\"
-.endif" :machine 'instr-test-machine))))
+.endif" :cpu 'instr-test-machine))))
 
 ;;; .ifdef, .ifndef and defined()
 
 (defun %ifdef-cells (source)
-  (assembly-cells (assemble source :machine 'instr-test-machine)))
+  (assembly-cells (assemble source :cpu 'instr-test-machine)))
 
 (fiveam:test ifdef-tests-a-constant-defined-above
   (fiveam:is (equalp #(#xEA) (%ifdef-cells ".equ x, 1
@@ -463,4 +463,4 @@ b = 2
   (let ((*include-directory* (asdf:system-relative-pathname :lasm "tests/fixtures/include/")))
     (fiveam:is (equalp #(#xEA)
                        (assembly-cells (assemble ".include \"guarded.asm\"
-.include \"guarded.asm\"" :machine 'instr-test-machine))))))
+.include \"guarded.asm\"" :cpu 'instr-test-machine))))))

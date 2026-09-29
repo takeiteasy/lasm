@@ -531,15 +531,15 @@
   (fiveam:is (equal '(t t) (instruction-descriptor-relative-holes
                            (find-instruction 'instr-test-machine 'relpair))))
   (fiveam:is (equalp #(#xFF #xFD #xFD)
-                     (assembly-cells (assemble "relpair *, *" :machine 'instr-test-machine)))))
+                     (assembly-cells (assemble "relpair *, *" :cpu 'instr-test-machine)))))
 
 (fiveam:test relative-holes-use-independent-targets
   (fiveam:is (equalp #(#xFF 0 1 #xEA #xEA)
                      (assembly-cells (assemble "relpair first, second
 first: nop
-second: nop" :machine 'instr-test-machine))))
+second: nop" :cpu 'instr-test-machine))))
   (fiveam:signals assembly-error
-    (assemble "relpair *, $1000" :machine 'instr-test-machine)))
+    (assemble "relpair *, $1000" :cpu 'instr-test-machine)))
 
 (defmode hole-attribute-mix (expr :relative t) "," (expr :signed t) "," expr :width 1)
 (definstruction instr-test-machine attrmix
@@ -555,7 +555,7 @@ second: nop" :machine 'instr-test-machine))))
   (semantics nil))
 
 (fiveam:test direct-hole-attributes-encode-independently
-  (let ((a (assemble "attrmix *, -5, 200" :machine 'instr-test-machine)))
+  (let ((a (assemble "attrmix *, -5, 200" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xFA #xFC #xFB 200) (assembly-cells a)))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'instr-test-machine)
@@ -564,7 +564,7 @@ second: nop" :machine 'instr-test-machine))))
       (fiveam:is (equal '(-4 -5 200) values)))))
 
 (fiveam:test hole-attributes-override-mode-defaults
-  (let ((a (assemble "attrover 200, *" :machine 'instr-test-machine)))
+  (let ((a (assemble "attrover 200, *" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#xFB 200 #xFD) (assembly-cells a)))
     (let ((descriptor (find-instruction 'instr-test-machine 'attrover)))
       (fiveam:is (equal '(nil t) (instruction-descriptor-relative-holes descriptor)))
@@ -572,14 +572,14 @@ second: nop" :machine 'instr-test-machine))))
 
 (fiveam:test direct-relative-hole-overflow-signals-error
   (fiveam:signals assembly-error
-    (assemble "attrmix $1000, 0, 0" :machine 'instr-test-machine)))
+    (assemble "attrmix $1000, 0, 0" :cpu 'instr-test-machine)))
 
 (fiveam:test direct-hole-attributes-disassemble-and-reassemble
-  (let* ((a (assemble "attrmix *, -5, 200" :machine 'instr-test-machine))
-         (line (first (disassemble-assembly a :machine 'instr-test-machine :labels nil))))
+  (let* ((a (assemble "attrmix *, -5, 200" :cpu 'instr-test-machine))
+         (line (first (disassemble-assembly a :cpu 'instr-test-machine :labels nil))))
     (fiveam:is (equalp (assembly-cells a)
                        (assembly-cells (assemble (disassembly-line-text line)
-                                                 :machine 'instr-test-machine))))))
+                                                 :cpu 'instr-test-machine))))))
 
 (defmode hole-attribute-alt-plain "[" expr "," expr "]" :width 1)
 (defmode hole-attribute-alt-relative "#" expr "," (expr :relative t) :width 1)
@@ -598,12 +598,12 @@ second: nop" :machine 'instr-test-machine))))
   (semantics nil))
 
 (fiveam:test multi-hole-one-of-alternative-keeps-its-own-hole-attributes
-  (let* ((a (assemble "attrchoice #5, *" :machine 'instr-test-machine))
-         (line (first (disassemble-assembly a :machine 'instr-test-machine :labels nil))))
+  (let* ((a (assemble "attrchoice #5, *" :cpu 'instr-test-machine))
+         (line (first (disassemble-assembly a :cpu 'instr-test-machine :labels nil))))
     (fiveam:is (equalp #(#xFC 3 5 #xFC) (assembly-cells a)))
     (fiveam:is (equalp (assembly-cells a)
                        (assembly-cells (assemble (disassembly-line-text line)
-                                                 :machine 'instr-test-machine))))))
+                                                 :cpu 'instr-test-machine))))))
 
 ;; ONE-OF alternatives supply their own attributes, so the enclosing mode
 ;; cannot also assign a relative default to those holes.
@@ -968,7 +968,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; (tests/emulator.lisp). ASSEMBLE (not a direct FIND-INSTRUCTION +
   ;; ENCODE-INSTRUCTION call), since %CHOOSE-VARIANT is what picks the
   ;; inline sibling descriptor over the extra-word one for this value.
-  (let ((a (assemble "set #5" :machine 'bigendian-word-test-machine)))
+  (let ((a (assemble "set #5" :cpu 'bigendian-word-test-machine)))
     (fiveam:is (equalp #(#x10 #x06) (assembly-cells a)))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'bigendian-word-test-machine :memory 'ram)
@@ -981,7 +981,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; %ENCODE-VALUE-CELLS call (the extra word) and %TRY-DECODE-WORD-
   ;; CANDIDATE's %FETCH-CELLS call both honour LAYOUT's own ENDIAN, not
   ;; just the instruction word's own first %ENCODE-VALUE-CELLS call.
-  (let ((a (assemble "set #1000" :machine 'bigendian-word-test-machine)))
+  (let ((a (assemble "set #1000" :cpu 'bigendian-word-test-machine)))
     (fiveam:is (equalp #(#x13 #xFF #x03 #xE8) (assembly-cells a)))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'bigendian-word-test-machine :memory 'ram)
@@ -1300,7 +1300,7 @@ second: nop" :machine 'instr-test-machine))))
   decn 0
   zeroall
   incn 1
-  hlt" :machine 'field-value-test-machine)))
+  hlt" :cpu 'field-value-test-machine)))
     (let ((m (make-machine 'field-value-test-machine)))
       (load-program m a)
       (multiple-value-bind (reason steps) (run m)
@@ -1315,8 +1315,8 @@ second: nop" :machine 'instr-test-machine))))
   (let ((a (assemble "  incn 0
   decn 0
   zeroall
-  hlt" :machine 'field-value-test-machine)))
-    (let ((lines (disassemble-cells (assembly-cells a) :machine 'field-value-test-machine)))
+  hlt" :cpu 'field-value-test-machine)))
+    (let ((lines (disassemble-cells (assembly-cells a) :cpu 'field-value-test-machine)))
       (fiveam:is (equal '("INCN" "DECN" "ZEROALL" "HLT")
                          (mapcar (lambda (l) (instruction-descriptor-name (disassembly-line-descriptor l)))
                                  lines))))))
@@ -1405,8 +1405,8 @@ second: nop" :machine 'instr-test-machine))))
   ;; DISJY1 and DISJY2 are genuinely distinguishable (field Y, disjoint
   ;; ranges) -- each must round-trip to its own mnemonic at decode time, not
   ;; merely have registered without error.
-  (let ((v1 (assembly-cells (assemble "disjy1 50" :machine 'word-layouts-test-machine)))
-        (v2 (assembly-cells (assemble "disjy2 210" :machine 'word-layouts-test-machine))))
+  (let ((v1 (assembly-cells (assemble "disjy1 50" :cpu 'word-layouts-test-machine)))
+        (v2 (assembly-cells (assemble "disjy2 210" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "DISJY1" (instruction-descriptor-name
                                    (decode-instruction-at (vector-cell-reader v1) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "DISJY2" (instruction-descriptor-name
@@ -1420,8 +1420,8 @@ second: nop" :machine 'instr-test-machine))))
   ;; falsely reject an actually-distinguishable pair (field Y: {0,1,2} vs.
   ;; {3..255}, genuinely disjoint). Pairing by bits must still find it, and
   ;; each must round-trip to its own mnemonic.
-  (let ((ab (assembly-cells (assemble "orderab 9, 1" :machine 'word-layouts-test-machine)))
-        (ba (assembly-cells (assemble "orderba 200, 9" :machine 'word-layouts-test-machine))))
+  (let ((ab (assembly-cells (assemble "orderab 9, 1" :cpu 'word-layouts-test-machine)))
+        (ba (assembly-cells (assemble "orderba 200, 9" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "ORDERAB" (instruction-descriptor-name
                                     (decode-instruction-at (vector-cell-reader ab) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "ORDERBA" (instruction-descriptor-name
@@ -1436,8 +1436,8 @@ second: nop" :machine 'instr-test-machine))))
   ;; WIDEVALLO (default layout, field Y, 8@0) and NARROWVALHI (NARROW
   ;; layout, field Z, also 8@0) -- exact same bits, different layout and
   ;; different field name, disjoint ranges (0-10 vs. 11-255).
-  (let ((lo (assembly-cells (assemble "widevallo 5" :machine 'word-layouts-test-machine)))
-        (hi (assembly-cells (assemble "narrowvalhi 200" :machine 'word-layouts-test-machine))))
+  (let ((lo (assembly-cells (assemble "widevallo 5" :cpu 'word-layouts-test-machine)))
+        (hi (assembly-cells (assemble "narrowvalhi 200" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "WIDEVALLO" (instruction-descriptor-name
                                        (decode-instruction-at (vector-cell-reader lo) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "NARROWVALHI" (instruction-descriptor-name
@@ -1448,8 +1448,8 @@ second: nop" :machine 'instr-test-machine))))
   ;; field-value Z=1) -- both pins land on the same 8@0 bits. Each also
   ;; carries an X hole (4@8 default, 2@10 narrow) that overlaps the other's
   ;; fully and never distinguishes them on its own -- only the pin does.
-  (let ((a (assembly-cells (assemble "pinya 5" :machine 'word-layouts-test-machine)))
-        (b (assembly-cells (assemble "pinzb 2" :machine 'word-layouts-test-machine))))
+  (let ((a (assembly-cells (assemble "pinya 5" :cpu 'word-layouts-test-machine)))
+        (b (assembly-cells (assemble "pinzb 2" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "PINYA" (instruction-descriptor-name
                                   (decode-instruction-at (vector-cell-reader a) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "PINZB" (instruction-descriptor-name
@@ -1477,8 +1477,8 @@ second: nop" :machine 'instr-test-machine))))
   ;; 0-15), but PARTIALLO's range always projects to 0 on those two bits
   ;; while PARTIALHI's projects to 1-3, so the fields disagree once narrowed
   ;; to the bits they actually share (#140's generalization of #137).
-  (let ((lo (assembly-cells (assemble "partiallo 2" :machine 'word-layouts-test-machine)))
-        (hi (assembly-cells (assemble "partialhi 2" :machine 'word-layouts-test-machine))))
+  (let ((lo (assembly-cells (assemble "partiallo 2" :cpu 'word-layouts-test-machine)))
+        (hi (assembly-cells (assemble "partialhi 2" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "PARTIALLO" (instruction-descriptor-name
                                       (decode-instruction-at (vector-cell-reader lo) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "PARTIALHI" (instruction-descriptor-name
@@ -1500,8 +1500,8 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test definstruction-co-tenants-distinguished-only-jointly-are-accepted
   ;; JOINTA's narrow x=1 and y=0 pins together fix default X to 4. Each pin
   ;; alone overlaps JOINTB's X range 5-8, but no word satisfies both.
-  (let ((a (assembly-cells (assemble "jointa 9" :machine 'word-layouts-test-machine)))
-        (b (assembly-cells (assemble "jointb 6, 9" :machine 'word-layouts-test-machine))))
+  (let ((a (assembly-cells (assemble "jointa 9" :cpu 'word-layouts-test-machine)))
+        (b (assembly-cells (assemble "jointb 6, 9" :cpu 'word-layouts-test-machine))))
     (fiveam:is (string= "JOINTA" (instruction-descriptor-name
                                    (decode-instruction-at (vector-cell-reader a) 0 'word-layouts-test-machine))))
     (fiveam:is (string= "JOINTB" (instruction-descriptor-name
@@ -1584,7 +1584,7 @@ second: nop" :machine 'instr-test-machine))))
   (dolist (case '(("widelow #42" "WIDELOW")
                   ("widehigh #16777215" "WIDEHIGH")))
     (destructuring-bind (source expected-name) case
-      (let ((cells (assembly-cells (assemble source :machine 'wide-constraint-test-machine))))
+      (let ((cells (assembly-cells (assemble source :cpu 'wide-constraint-test-machine))))
         (fiveam:is (string= expected-name
                             (instruction-descriptor-name
                              (decode-instruction-at (vector-cell-reader cells) 0
@@ -1637,11 +1637,11 @@ second: nop" :machine 'instr-test-machine))))
   (flet ((decoded (source)
            (instruction-descriptor-name
             (decode-instruction-at
-             (vector-cell-reader (assembly-cells (assemble source :machine 'wide-fallback-test-machine)))
+             (vector-cell-reader (assembly-cells (assemble source :cpu 'wide-fallback-test-machine)))
              0 'wide-fallback-test-machine))))
     (fiveam:is (string= "WIDEFBGEN" (decoded "widefbgen #5")))
     (fiveam:signals assembly-error
-      (assemble "widefbgen #1193046" :machine 'wide-fallback-test-machine))))
+      (assemble "widefbgen #1193046" :cpu 'wide-fallback-test-machine))))
 
 (fiveam:test wide-field-co-tenants-are-checked-exactly
   ;; A pin just outside a 24-bit range is accepted; inside it, rejected.
@@ -1684,7 +1684,7 @@ second: nop" :machine 'instr-test-machine))))
   (flet ((decoded (source)
            (instruction-descriptor-name
             (decode-instruction-at
-             (vector-cell-reader (assembly-cells (assemble source :machine 'wide-joint-test-machine)))
+             (vector-cell-reader (assembly-cells (assemble source :cpu 'wide-joint-test-machine)))
              0 'wide-joint-test-machine))))
     (fiveam:is (string= "WIDEJOINTA" (decoded "widejointa")))
     (fiveam:is (string= "WIDEJOINTB" (decoded "widejointb #5")))))
@@ -1834,7 +1834,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (equal '(-16 . 15) (word-field-choice-range (first (instruction-descriptor-word-fields d)))))))
 
 (fiveam:test signed-word-field-inline-encode-decode-round-trips-a-negative-value
-  (let* ((cells (assembly-cells (assemble "signset #-5" :machine 'signed-word-test-machine))))
+  (let* ((cells (assembly-cells (assemble "signset #-5" :cpu 'signed-word-test-machine))))
     (fiveam:is (= 2 (length cells))) ; fits inline, no extra word
     (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'signed-word-test-machine)
       (fiveam:is (string= "SIGNSET" (instruction-descriptor-name descriptor)))
@@ -1846,7 +1846,7 @@ second: nop" :machine 'instr-test-machine))))
   ;; existing :ELSE escape -- and the escaped extra word itself must decode
   ;; back signed (decoder.lisp's %TRY-DECODE-WORD-CANDIDATE), not just the
   ;; inline path.
-  (let* ((cells (assembly-cells (assemble "signset #-5000" :machine 'signed-word-test-machine))))
+  (let* ((cells (assembly-cells (assemble "signset #-5000" :cpu 'signed-word-test-machine))))
     (fiveam:is (= 4 (length cells))) ; instruction word + one extra word
     (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'signed-word-test-machine)
       (fiveam:is (string= "SIGNSET" (instruction-descriptor-name descriptor)))
@@ -1856,7 +1856,7 @@ second: nop" :machine 'instr-test-machine))))
   (dolist (case '(("signset #-5" . -5) ("signset #-5000" . -5000)))
     (destructuring-bind (source . expected) case
       (let ((m (make-machine 'signed-word-test-machine)))
-        (load-program m (assemble source :machine 'signed-word-test-machine))
+        (load-program m (assemble source :cpu 'signed-word-test-machine))
         (multiple-value-bind (reason steps) (run m :max-steps 1)
           (declare (ignore steps))
           (fiveam:is (eq :max-steps reason))
@@ -1896,8 +1896,8 @@ second: nop" :machine 'instr-test-machine))))
 
 (fiveam:test signed-word-field-two-chunk-raw-footprint-disjoint-from-sibling-mnemonic
   (fiveam:is (= 2 (length (find-instruction-descriptors-by-opcode 'signed-disjoint-test-machine 1))))
-  (let ((pos (assembly-cells (assemble "sdpos #20" :machine 'signed-disjoint-test-machine)))
-        (neg (assembly-cells (assemble "sdneg #-3" :machine 'signed-disjoint-test-machine))))
+  (let ((pos (assembly-cells (assemble "sdpos #20" :cpu 'signed-disjoint-test-machine)))
+        (neg (assembly-cells (assemble "sdneg #-3" :cpu 'signed-disjoint-test-machine))))
     (fiveam:is (string= "SDPOS" (instruction-descriptor-name
                                   (decode-instruction-at (vector-cell-reader pos) 0 'signed-disjoint-test-machine))))
     (fiveam:is (string= "SDNEG" (instruction-descriptor-name
@@ -2154,12 +2154,12 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (= 1 (count t flags)))))
 
 (fiveam:test alias-spellings-assemble-identically
-  (fiveam:is (equalp (assembly-cells (assemble "wcal [5]" :machine 'alias-test-machine))
-                     (assembly-cells (assemble "wcal pick 5" :machine 'alias-test-machine)))))
+  (fiveam:is (equalp (assembly-cells (assemble "wcal [5]" :cpu 'alias-test-machine))
+                     (assembly-cells (assemble "wcal pick 5" :cpu 'alias-test-machine)))))
 
 (fiveam:test alias-word-decodes-to-canonical-spelling
-  (let ((lines (disassemble-assembly (assemble "wcal pick 5" :machine 'alias-test-machine)
-                                     :machine 'alias-test-machine :labels nil)))
+  (let ((lines (disassemble-assembly (assemble "wcal pick 5" :cpu 'alias-test-machine)
+                                     :cpu 'alias-test-machine :labels nil)))
     (fiveam:is (string= "wcal [$5]" (disassembly-line-text (first lines))))))
 
 (fiveam:test alias-without-canonical-signals-error
@@ -2281,8 +2281,8 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (equal '(vh-reg) (mapcar #'word-field-choice-choice src-alternatives)))))
 
 (fiveam:test varying-hole-counts-assemble-and-decode-round-trip
-  (let ((one (assembly-cells (assemble "ldv 1, 5" :machine 'varying-hole-test-machine)))
-        (two (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine))))
+  (let ((one (assembly-cells (assemble "ldv 1, 5" :cpu 'varying-hole-test-machine)))
+        (two (assembly-cells (assemble "ldv 2, [3, 100]" :cpu 'varying-hole-test-machine))))
     (fiveam:is (= 1 (length one)))
     (fiveam:is (= 2 (length two)))
     (multiple-value-bind (descriptor values size choices)
@@ -2311,8 +2311,8 @@ second: nop" :machine 'instr-test-machine))))
       (vh-plus-idx (set! (a dst) (mref machine 'ram (+ (a src) off)))))))
 
 (fiveam:test indexed-syntax-spends-trailing-offset-when-indirect-is-first
-  (let ((indirect (assembly-cells (assemble "ldo 1, [0]" :machine 'varying-hole-test-machine)))
-        (indexed (assembly-cells (assemble "ldo 1, [0 + 4]" :machine 'varying-hole-test-machine))))
+  (let ((indirect (assembly-cells (assemble "ldo 1, [0]" :cpu 'varying-hole-test-machine)))
+        (indexed (assembly-cells (assemble "ldo 1, [0 + 4]" :cpu 'varying-hole-test-machine))))
     (fiveam:is (equalp (vector (logior 2 (ash 1 5) (ash #x08 10))) indirect))
     (fiveam:is (equalp (vector (logior 2 (ash 1 5) (ash #x10 10)) 4) indexed))
     (multiple-value-bind (descriptor values size choices)
@@ -2332,13 +2332,13 @@ second: nop" :machine 'instr-test-machine))))
   (let ((m (make-machine 'varying-hole-test-machine)))
     (setf (regref m 'a 3) 3)
     (setf (mref m 'ram 103) 999)
-    (load-program m (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine)))
+    (load-program m (assembly-cells (assemble "ldv 2, [3, 100]" :cpu 'varying-hole-test-machine)))
     (step-machine m)
     (fiveam:is (= 999 (regref m 'a 2)))))
 
 (fiveam:test varying-hole-counts-disassemble-renders-matched-alternative
-  (let* ((cells (assembly-cells (assemble "ldv 2, [3, 100]" :machine 'varying-hole-test-machine)))
-         (lines (disassemble-cells cells :machine 'varying-hole-test-machine)))
+  (let* ((cells (assembly-cells (assemble "ldv 2, [3, 100]" :cpu 'varying-hole-test-machine)))
+         (lines (disassemble-cells cells :cpu 'varying-hole-test-machine)))
     (fiveam:is (search "[$3,$64]" (disassembly-line-text (first lines))))))
 
 (fiveam:test for-choice-missing-signals-error
@@ -2449,8 +2449,8 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (equal '(dst src off) (instruction-descriptor-operand-names long)))))
 
 (fiveam:test byte-varying-hole-counts-assemble-and-decode-round-trip
-  (let ((short (assembly-cells (assemble "ldv 2, 5" :machine 'varying-hole-byte-test-machine)))
-        (long (assembly-cells (assemble "ldv 2, [3, 4]" :machine 'varying-hole-byte-test-machine))))
+  (let ((short (assembly-cells (assemble "ldv 2, 5" :cpu 'varying-hole-byte-test-machine)))
+        (long (assembly-cells (assemble "ldv 2, [3, 4]" :cpu 'varying-hole-byte-test-machine))))
     (fiveam:is (equalp #(1 0 2 5) short))
     (fiveam:is (equalp #(1 1 2 3 4) long))
     (multiple-value-bind (descriptor values size choices)
@@ -2468,7 +2468,7 @@ second: nop" :machine 'instr-test-machine))))
 
 (fiveam:test byte-varying-hole-counts-semantics-dispatch-reads-extra-hole
   (let ((m (make-machine 'varying-hole-byte-test-machine)))
-    (load-program m (assembly-cells (assemble "ldv 2, [3, 4]" :machine 'varying-hole-byte-test-machine)))
+    (load-program m (assembly-cells (assemble "ldv 2, [3, 4]" :cpu 'varying-hole-byte-test-machine)))
     (step-machine m)
     (fiveam:is (= 9 (sref m 'a)))))
 
@@ -2495,7 +2495,7 @@ second: nop" :machine 'instr-test-machine))))
                   ("ldp [1, 2], 3" #(2 2 1 2 3))
                   ("ldp [1, 2], [3, 4]" #(2 3 1 2 3 4))))
     (destructuring-bind (source cells) case
-      (let ((assembled (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine))))
+      (let ((assembled (assembly-cells (assemble source :cpu 'varying-hole-byte-test-machine))))
         (fiveam:is (equalp cells assembled))
         (multiple-value-bind (descriptor values size)
             (decode-instruction-at (vector-cell-reader assembled) 0 'varying-hole-byte-test-machine)
@@ -2528,8 +2528,8 @@ second: nop" :machine 'instr-test-machine))))
   (semantics (set! a 0)))
 
 (fiveam:test byte-varying-hole-counts-multi-hole-element
-  (let ((two (assembly-cells (assemble "ldm [1, 2]" :machine 'varying-hole-byte-test-machine)))
-        (three (assembly-cells (assemble "ldm [1, 2, 3]" :machine 'varying-hole-byte-test-machine))))
+  (let ((two (assembly-cells (assemble "ldm [1, 2]" :cpu 'varying-hole-byte-test-machine)))
+        (three (assembly-cells (assemble "ldm [1, 2, 3]" :cpu 'varying-hole-byte-test-machine))))
     (fiveam:is (equalp #(4 0 1 2) two))
     (fiveam:is (equalp #(4 1 1 2 3) three))
     (fiveam:is (equal '(vh-p2 vh-p2) (instruction-descriptor-sub-choices (%byte-vh-variant 'ldm 2))))
@@ -2556,7 +2556,7 @@ second: nop" :machine 'instr-test-machine))))
   (fiveam:is (equal '(1) (instruction-descriptor-operand-widths (%byte-vh-variant 'ldw 1))))
   (fiveam:is (equal '(2 2) (instruction-descriptor-operand-widths (%byte-vh-variant 'ldw 2))))
   (fiveam:is (equalp #(5 1 1 0 2 0) (assembly-cells (assemble "ldw [1, 2]"
-                                                              :machine 'varying-hole-byte-test-machine)))))
+                                                              :cpu 'varying-hole-byte-test-machine)))))
 
 (defmacro %signals-byte-varying-error (&body form)
   `(fiveam:signals error (eval '(progn ,@form))))
@@ -2663,7 +2663,7 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test word-extra-word-cells-1-encode-and-round-trip
   ;; 100 is out of SETN's -1..30 inline range but fits comfortably in one
   ;; 8-bit extra cell -- a 3-cell instruction, not a 4-cell one.
-  (let ((cells (assembly-cells (assemble "setn #100" :machine 'word-test-machine))))
+  (let ((cells (assembly-cells (assemble "setn #100" :cpu 'word-test-machine))))
     (fiveam:is (= 3 (length cells)))
     (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
       (fiveam:is (string= "SETN" (instruction-descriptor-name descriptor)))
@@ -2672,7 +2672,7 @@ second: nop" :machine 'instr-test-machine))))
 (fiveam:test word-extra-word-cells-4-encode-and-round-trip
   ;; 100000 needs more than one 16-bit instruction word could hold as its
   ;; own trailing word -- SETW's 4-cell (32-bit) extra word covers it.
-  (let ((cells (assembly-cells (assemble "setw #100000" :machine 'word-test-machine))))
+  (let ((cells (assembly-cells (assemble "setw #100000" :cpu 'word-test-machine))))
     (fiveam:is (= 6 (length cells)))
     (multiple-value-bind (descriptor values) (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
       (fiveam:is (string= "SETW" (instruction-descriptor-name descriptor)))
@@ -2745,8 +2745,8 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (= 4 (funcall extra-cells-for 'wcm-far)))))
 
 (fiveam:test choice-selected-mixed-extra-word-widths-round-trip
-  (let ((narrow (assembly-cells (assemble "wcxmix [200]" :machine 'word-cells-mix-test-machine)))
-        (wide (assembly-cells (assemble "wcxmix #70000" :machine 'word-cells-mix-test-machine))))
+  (let ((narrow (assembly-cells (assemble "wcxmix [200]" :cpu 'word-cells-mix-test-machine)))
+        (wide (assembly-cells (assemble "wcxmix #70000" :cpu 'word-cells-mix-test-machine))))
     (fiveam:is (= 3 (length narrow)))
     (fiveam:is (= 6 (length wide)))
     (multiple-value-bind (d1 v1) (decode-instruction-at (vector-cell-reader narrow) 0 'word-cells-mix-test-machine)
@@ -2970,7 +2970,7 @@ second: nop" :machine 'instr-test-machine))))
     (fiveam:is (eq t (word-field-choice-signedp (first (instruction-descriptor-word-fields neg)))))))
 
 (fiveam:test one-of-signed-word-encode-decode-round-trips-the-negative-alternative
-  (let* ((assembly (assemble "wsi #-100" :machine 'mixed-field-test-machine))
+  (let* ((assembly (assemble "wsi #-100" :cpu 'mixed-field-test-machine))
          (reader (vector-cell-reader (assembly-cells assembly))))
     (multiple-value-bind (descriptor values size choices) (decode-instruction-at reader 0 'mixed-field-test-machine)
       (declare (ignore size))
@@ -2979,7 +2979,7 @@ second: nop" :machine 'instr-test-machine))))
       (fiveam:is (eq 'wsi-neg (%matched-choice-name choices 0))))))
 
 (fiveam:test one-of-signed-word-encode-decode-round-trips-the-unsigned-alternative
-  (let* ((assembly (assemble "wsi 200" :machine 'mixed-field-test-machine))
+  (let* ((assembly (assemble "wsi 200" :cpu 'mixed-field-test-machine))
          (reader (vector-cell-reader (assembly-cells assembly))))
     (multiple-value-bind (descriptor values size choices) (decode-instruction-at reader 0 'mixed-field-test-machine)
       (declare (ignore size))
@@ -2989,8 +2989,8 @@ second: nop" :machine 'instr-test-machine))))
 
 (fiveam:test one-of-signed-word-disassembles-both-alternatives
   (let ((lines (disassemble-assembly (assemble "wsi 200
-wsi #-100" :machine 'mixed-field-test-machine)
-                                      :machine 'mixed-field-test-machine :labels nil)))
+wsi #-100" :cpu 'mixed-field-test-machine)
+                                      :cpu 'mixed-field-test-machine :labels nil)))
     (fiveam:is (string= "wsi $C8" (disassembly-line-text (first lines))))
     (fiveam:is (string= "wsi #-100" (disassembly-line-text (second lines))))))
 
@@ -3066,7 +3066,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
   ;; DST's hole (a plain value-selected field, no CHOICE of its own) decodes
   ;; a NIL choice; SRC's hole (CHOICE-selected) names the real alternative,
   ;; in the same hole order as VALUES.
-  (let* ((a (assemble "wccm 2, [5]" :machine 'word-test-machine))
+  (let* ((a (assemble "wccm 2, [5]" :cpu 'word-test-machine))
          (reader (vector-cell-reader (assembly-cells a))))
     (multiple-value-bind (descriptor values size choices)
         (decode-instruction-at reader 0 'word-test-machine)
@@ -3210,7 +3210,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
   (semantics nil))
 
 (fiveam:test word-two-relative-holes-in-one-combo
-  (let* ((a (assemble "wrelboth #*, #*" :machine 'word-relative-test-machine))
+  (let* ((a (assemble "wrelboth #*, #*" :cpu 'word-relative-test-machine))
          (cells (assembly-cells a)))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader cells) 0 'word-relative-test-machine)
@@ -3226,7 +3226,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
   (semantics nil))
 
 (fiveam:test word-direct-hole-attributes
-  (let ((a (assemble "wattr *, -3" :machine 'word-relative-test-machine)))
+  (let ((a (assemble "wattr *, -3" :cpu 'word-relative-test-machine)))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'word-relative-test-machine)
       (fiveam:is (equal '(t nil) (instruction-descriptor-relative-holes descriptor)))
@@ -3234,7 +3234,7 @@ wsi #-100" :machine 'mixed-field-test-machine)
 
 (fiveam:test word-direct-relative-hole-overflow-signals-error
   (fiveam:signals assembly-error
-    (assemble "wattr $1000, 0" :machine 'word-relative-test-machine)))
+    (assemble "wattr $1000, 0" :cpu 'word-relative-test-machine)))
 
 (defmode word-attribute-alt-plain "[" expr "," expr "]")
 (defmode word-attribute-alt-relative "#" expr "," (expr :relative t))
@@ -3252,22 +3252,22 @@ wsi #-100" :machine 'mixed-field-test-machine)
   (semantics nil))
 
 (fiveam:test word-multi-hole-alternative-keeps-its-own-relative-hole
-  (let* ((a (assemble "walt #2, *" :machine 'word-relative-test-machine))
-         (line (first (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))))
+  (let* ((a (assemble "walt #2, *" :cpu 'word-relative-test-machine))
+         (line (first (disassemble-assembly a :cpu 'word-relative-test-machine :labels nil))))
     (multiple-value-bind (descriptor values)
         (decode-instruction-at (vector-cell-reader (assembly-cells a)) 0 'word-relative-test-machine)
       (fiveam:is (equal '(nil t) (instruction-descriptor-relative-holes descriptor)))
       (fiveam:is (equal '(2 -2) values)))
     (fiveam:is (equalp (assembly-cells a)
                        (assembly-cells (assemble (disassembly-line-text line)
-                                                 :machine 'word-relative-test-machine))))))
+                                                 :cpu 'word-relative-test-machine))))))
 
 (fiveam:test word-two-relative-holes-disassemble-and-reassemble
-  (let* ((a (assemble "wrelboth #*, #*" :machine 'word-relative-test-machine))
-         (line (first (disassemble-assembly a :machine 'word-relative-test-machine :labels nil))))
+  (let* ((a (assemble "wrelboth #*, #*" :cpu 'word-relative-test-machine))
+         (line (first (disassemble-assembly a :cpu 'word-relative-test-machine :labels nil))))
     (fiveam:is (equalp (assembly-cells a)
                        (assembly-cells (assemble (disassembly-line-text line)
-                                                 :machine 'word-relative-test-machine))))))
+                                                 :cpu 'word-relative-test-machine))))))
 
 ;; #105/#62: %CHECK-OPCODE-DECODABLE!'s co-tenant ambiguity analysis
 ;; must include a RELATIVE-stamped signed field's wrapped negative chunk as it
@@ -3455,7 +3455,7 @@ ldi #$ffe
 addi v1
 jp skip
 ldv v2, #99
-skip: hlt" :machine 'chip8-test-machine)))
+skip: hlt" :cpu 'chip8-test-machine)))
     (fiveam:is (= 21 (length (assembly-cells a))))
     (let ((m (make-machine 'chip8-test-machine)))
       (load-program m a)
@@ -3567,7 +3567,7 @@ double:
   add   V 0, #21
   ret
 done:
-  hlt" :machine 'chip8wordfoo-test-machine)))
+  hlt" :cpu 'chip8wordfoo-test-machine)))
     (fiveam:is (= 20 (length (assembly-cells a))))
     (let ((m (make-machine 'chip8wordfoo-test-machine)))
       (load-program m a)
@@ -3639,16 +3639,16 @@ done:
   (semantics (trap :halt)))
 
 (fiveam:test dcpu16-set-small-value-packs-inline-one-cell
-  (let ((a (assemble "set a, 5" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set a, 5" :cpu 'dcpu16-test-machine)))
     (fiveam:is (= 1 (length (assembly-cells a))))))
 
 (fiveam:test dcpu16-set-large-value-escapes-to-extra-cell
-  (let ((a (assemble "set b, 1000" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "set b, 1000" :cpu 'dcpu16-test-machine)))
     (fiveam:is (= 2 (length (assembly-cells a))))
     (fiveam:is (= 1000 (aref (assembly-cells a) 1)))))
 
 (fiveam:test dcpu16-addr-registers-both-plain-inline-one-cell
-  (let ((a (assemble "addr a, b" :machine 'dcpu16-test-machine)))
+  (let ((a (assemble "addr a, b" :cpu 'dcpu16-test-machine)))
     (fiveam:is (= 1 (length (assembly-cells a))))))
 
 (fiveam:test dcpu16-machine-end-to-end
@@ -3657,7 +3657,7 @@ set b, 1000
 addr a, b
 sto result, a
 hlt
-result: .byte 0" :machine 'dcpu16-test-machine)))
+result: .byte 0" :cpu 'dcpu16-test-machine)))
     (fiveam:is (= 16 (assembly-cell-width a)))
     (fiveam:is (= 7 (length (assembly-cells a))))
     (fiveam:is (= 16 (%array-element-width (assembly-cells a))))
@@ -3703,7 +3703,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
   ;; fourth CHOICES return value the same way the disassembler does.
   (dolist (case '(("wcy 5" wc-two wc-reg) ("wcy [5]" wc-two wc-ind) ("wcy #5" word-imm nil)))
     (destructuring-bind (source expected-mode expected-choice) case
-      (let* ((cells (assembly-cells (assemble source :machine 'word-test-machine))))
+      (let* ((cells (assembly-cells (assemble source :cpu 'word-test-machine))))
         (multiple-value-bind (descriptor values size choices)
             (decode-instruction-at (vector-cell-reader cells) 0 'word-test-machine)
           (declare (ignore size))
@@ -3731,8 +3731,8 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
   ;; WCZ1's WC-TWO field is CHOICE-selected (2 variants -> 2 sibling combos);
   ;; WCZ2's WORD-IMM field is a single plain variant -> 1 combo. 3 total.
   (fiveam:is (= 3 (length (find-instruction-descriptors-by-opcode 'word-test-machine 14))))
-  (let ((ld (assembly-cells (assemble "wcz1 5" :machine 'word-test-machine)))
-        (st (assembly-cells (assemble "wcz2 #5" :machine 'word-test-machine))))
+  (let ((ld (assembly-cells (assemble "wcz1 5" :cpu 'word-test-machine)))
+        (st (assembly-cells (assemble "wcz2 #5" :cpu 'word-test-machine))))
     (fiveam:is (string= "WCZ1" (instruction-descriptor-name
                                  (decode-instruction-at (vector-cell-reader ld) 0 'word-test-machine))))
     (fiveam:is (string= "WCZ2" (instruction-descriptor-name
@@ -4016,8 +4016,8 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
   ;; both siblings share one mode and one INSTRUCTION-DESCRIPTOR-SIZE, so
   ;; without it declaration order alone would win regardless of which
   ;; alternative the operand's own syntax actually matched.
-  (fiveam:is (equalp #(#xC0 0 5) (assembly-cells (assemble "scld 5" :machine 'instr-test-machine))))
-  (fiveam:is (equalp #(#xC0 1 5) (assembly-cells (assemble "scld [5]" :machine 'instr-test-machine)))))
+  (fiveam:is (equalp #(#xC0 0 5) (assembly-cells (assemble "scld 5" :cpu 'instr-test-machine))))
+  (fiveam:is (equalp #(#xC0 1 5) (assembly-cells (assemble "scld [5]" :cpu 'instr-test-machine)))))
 
 (fiveam:test hole-selected-sub-opcode-decode-reports-matched-choices
   ;; #126: DECODE-INSTRUCTION-AT's fourth CHOICES value is no longer
@@ -4049,11 +4049,11 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (= 77 (sref m 'a)))))
 
 (fiveam:test hole-selected-sub-opcode-round-trip-disassembles-matched-alternative
-  (let ((assembly (assemble "scld 5" :machine 'instr-test-machine)))
-    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+  (let ((assembly (assemble "scld 5" :cpu 'instr-test-machine)))
+    (let ((lines (disassemble-assembly assembly :cpu 'instr-test-machine :labels nil :suffixes nil)))
       (fiveam:is (string= "scld $5" (disassembly-line-text (first lines))))))
-  (let ((assembly (assemble "scld [5]" :machine 'instr-test-machine)))
-    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+  (let ((assembly (assemble "scld [5]" :cpu 'instr-test-machine)))
+    (let ((lines (disassemble-assembly assembly :cpu 'instr-test-machine :labels nil :suffixes nil)))
       (fiveam:is (string= "scld [$5]" (disassembly-line-text (first lines)))))))
 
 ;; More than one operand hole carrying a sub selector -- the sub-opcode cell
@@ -4164,7 +4164,7 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
   ;; "[5]" only matches SC-INSTR-ONE's OO-INSTR-IND alternative -- ABSOLUTE's
   ;; bare-EXPR syntax doesn't match "[...]" at all, so there is exactly one
   ;; candidate and no ambiguity.
-  (fiveam:is (equalp #(#xCA 1 5) (assembly-cells (assemble "scld2 [5]" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xCA 1 5) (assembly-cells (assemble "scld2 [5]" :cpu 'instr-test-machine))))
   ;; "5" matches both SC-INSTR-ONE's OO-INSTR-REG alternative (size 3: opcode
   ;; + sub + 1-cell operand) and ABSOLUTE's own bare-EXPR pattern (size 3:
   ;; opcode + ABSOLUTE's 2-cell default width, from INSTR-TEST-MACHINE's
@@ -4173,9 +4173,9 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
   ;; an AMBIGUOUS-MODE warning exactly as it would without any sub selector
   ;; in the mix.
   (fiveam:signals ambiguous-mode
-    (assemble "scld2 5" :machine 'instr-test-machine))
+    (assemble "scld2 5" :cpu 'instr-test-machine))
   (handler-bind ((ambiguous-mode #'muffle-warning))
-    (fiveam:is (equalp #(#xCA 0 5) (assembly-cells (assemble "scld2 5" :machine 'instr-test-machine))))))
+    (fiveam:is (equalp #(#xCA 0 5) (assembly-cells (assemble "scld2 5" :cpu 'instr-test-machine))))))
 
 ;;; Per-hole :SIGNED on a ONE-OF alternative, byte half (#124, split from
 ;;; #126's hole-selected sub-opcode cell) -- SI-INSTR-POS/SI-INSTR-NEG
@@ -4203,9 +4203,9 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness neg)))))
 
 (fiveam:test one-of-signed-encode-decode-round-trips-the-negative-alternative
-  (fiveam:is (equalp #(#xC7 1 156) (assembly-cells (assemble "signd #-100" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xC7 1 156) (assembly-cells (assemble "signd #-100" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd #-100" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd #-100" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore size))
     (fiveam:is (string= "SIGND" (instruction-descriptor-name descriptor)))
@@ -4213,9 +4213,9 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
     (fiveam:is (eq 'si-instr-neg (%matched-choice-name choices 0)))))
 
 (fiveam:test one-of-signed-encode-decode-round-trips-the-unsigned-alternative
-  (fiveam:is (equalp #(#xC7 0 200) (assembly-cells (assemble "signd 200" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xC7 0 200) (assembly-cells (assemble "signd 200" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd 200" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "signd 200" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore size))
     (fiveam:is (string= "SIGND" (instruction-descriptor-name descriptor)))
@@ -4224,8 +4224,8 @@ result: .byte 0" :machine 'dcpu16-test-machine)))
 
 (fiveam:test one-of-signed-disassembles-both-alternatives
   (let ((lines (disassemble-assembly (assemble "signd 200
-signd #-100" :machine 'instr-test-machine)
-                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+signd #-100" :cpu 'instr-test-machine)
+                                      :cpu 'instr-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "signd $C8" (disassembly-line-text (first lines))))
     (fiveam:is (string= "signd #-100" (disassembly-line-text (second lines))))))
 
@@ -4289,9 +4289,9 @@ signd #-100" :machine 'instr-test-machine)
     (fiveam:is (equal '(2) (instruction-descriptor-operand-widths wide)))))
 
 (fiveam:test one-of-width-encode-decode-round-trips-the-narrow-alternative
-  (fiveam:is (equalp #(#x60 0 200) (assembly-cells (assemble "widthd 200" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x60 0 200) (assembly-cells (assemble "widthd 200" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd 200" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd 200" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (fiveam:is (string= "WIDTHD" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(200) values))
@@ -4299,9 +4299,9 @@ signd #-100" :machine 'instr-test-machine)
     (fiveam:is (eq 'wi-instr-narrow (%matched-choice-name choices 0)))))
 
 (fiveam:test one-of-width-encode-decode-round-trips-the-wide-alternative
-  (fiveam:is (equalp #(#x60 1 44 1) (assembly-cells (assemble "widthd #300" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x60 1 44 1) (assembly-cells (assemble "widthd #300" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd #300" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthd #300" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (fiveam:is (string= "WIDTHD" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(300) values))
@@ -4310,8 +4310,8 @@ signd #-100" :machine 'instr-test-machine)
 
 (fiveam:test one-of-width-disassembles-both-alternatives
   (let ((lines (disassemble-assembly (assemble "widthd 200
-widthd #300" :machine 'instr-test-machine)
-                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+widthd #300" :cpu 'instr-test-machine)
+                                      :cpu 'instr-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "widthd $C8" (disassembly-line-text (first lines))))
     (fiveam:is (string= "widthd #$12C" (disassembly-line-text (second lines))))))
 
@@ -4342,8 +4342,8 @@ widthd #300" :machine 'instr-test-machine)
   (let ((descs (find-instruction-descriptors-by-opcode 'instr-test-machine #x62)))
     (fiveam:is (= 1 (length descs)))
     (fiveam:is (equal '(1) (instruction-descriptor-operand-widths (first descs))))
-    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit 200" :machine 'instr-test-machine))))
-    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit #200" :machine 'instr-test-machine))))))
+    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit 200" :cpu 'instr-test-machine))))
+    (fiveam:is (equalp #(#x62 200) (assembly-cells (assemble "widthdexplicit #200" :cpu 'instr-test-machine))))))
 
 ;; A hole whose ONE-OF alternatives *agree* on width needs no selector at
 ;; all -- the hole's width is static regardless of which one matched.
@@ -4405,9 +4405,9 @@ widthd #300" :machine 'instr-test-machine)
     (fiveam:is (equal '(t) (instruction-descriptor-relative-holes rel)))))
 
 (fiveam:test one-of-relative-encode-decode-round-trips-the-absolute-alternative
-  (fiveam:is (equalp #(#x65 0 200) (assembly-cells (assemble "reld 200" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x65 0 200) (assembly-cells (assemble "reld 200" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld 200" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld 200" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore size))
     (fiveam:is (string= "RELD" (instruction-descriptor-name descriptor)))
@@ -4418,9 +4418,9 @@ widthd #300" :machine 'instr-test-machine)
   ;; "reld #*" behaves like a self-referencing RELD: RELD is 3 bytes
   ;; (opcode, sub, 1-cell operand), so the offset from its own next
   ;; instruction (address 3) back to itself (address 0) is -3.
-  (fiveam:is (equalp #(#x65 1 #xFD) (assembly-cells (assemble "reld #*" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x65 1 #xFD) (assembly-cells (assemble "reld #*" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld #*" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "reld #*" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore size))
     (fiveam:is (string= "RELD" (instruction-descriptor-name descriptor)))
@@ -4432,8 +4432,8 @@ widthd #300" :machine 'instr-test-machine)
   ;; renders the resolved absolute target (address 3 + size 3 + offset -3
   ;; = 3, RELD's own address -- "reld #*" is self-referencing).
   (let ((lines (disassemble-assembly (assemble "reld 200
-reld #*" :machine 'instr-test-machine)
-                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+reld #*" :cpu 'instr-test-machine)
+                                      :cpu 'instr-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "reld $C8" (disassembly-line-text (first lines))))
     (fiveam:is (string= "reld #$3" (disassembly-line-text (second lines))))))
 
@@ -4487,7 +4487,7 @@ reld #*" :machine 'instr-test-machine)
 
 (fiveam:test one-of-two-relative-holes-in-one-sibling
   (fiveam:is (equalp #(#x68 3 #xFC #xFC)
-                     (assembly-cells (assemble "reldboth #*, #*" :machine 'instr-test-machine)))))
+                     (assembly-cells (assemble "reldboth #*, #*" :cpu 'instr-test-machine)))))
 
 ;; Identical field ranges cannot distinguish the selected alternative.
 (fiveam:test overlapping-word-relative-alternatives-signal-error
@@ -4557,7 +4557,7 @@ reld #*" :machine 'instr-test-machine)
 (fiveam:test one-of-signed-and-relative-round-trips-the-plain-signed-alternative
   ;; The offset arithmetic actually differs, not just the descriptor slots:
   ;; a plain signed immediate encodes/decodes its literal value untouched.
-  (let ((cells (assembly-cells (assemble "rsig #-5" :machine 'instr-test-machine))))
+  (let ((cells (assembly-cells (assemble "rsig #-5" :cpu 'instr-test-machine))))
     (fiveam:is (equalp #(#x0F 0 #xFB) cells))
     (multiple-value-bind (descriptor values size choices)
         (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
@@ -4574,7 +4574,7 @@ reld #*" :machine 'instr-test-machine)
   (let* ((source "rsig &target
 nop
 target: nop")
-         (assembly (assemble source :machine 'instr-test-machine))
+         (assembly (assemble source :cpu 'instr-test-machine))
          (cells (assembly-cells assembly)))
     (fiveam:is (equalp #(#x0F 1 1 #xEA #xEA) cells))
     (multiple-value-bind (descriptor values size choices)
@@ -4583,7 +4583,7 @@ target: nop")
       (fiveam:is (string= "RSIG" (instruction-descriptor-name descriptor)))
       (fiveam:is (equal '(1) values))
       (fiveam:is (eq 'rs-rel (%matched-choice-name choices 0))))
-    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (let ((lines (disassemble-assembly assembly :cpu 'instr-test-machine :labels nil :suffixes nil)))
       (fiveam:is (string= "rsig &$4" (disassembly-line-text (first lines)))))))
 
 (fiveam:test one-of-relative-and-width-disagreeing-at-the-same-hole-is-legal
@@ -4596,9 +4596,9 @@ target: nop")
     (fiveam:is (equal '(t) (instruction-descriptor-relative-holes wide)))))
 
 (fiveam:test one-of-relative-and-width-round-trips-the-narrow-non-relative-alternative
-  (fiveam:is (equalp #(#x6A 0 200) (assembly-cells (assemble "relwd 200" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x6A 0 200) (assembly-cells (assemble "relwd 200" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd 200" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd 200" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (fiveam:is (string= "RELWD" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(200) values))
@@ -4611,9 +4611,9 @@ target: nop")
   ;; to itself (0) is -4, encoded 2's-complement over 2 cells (little-endian
   ;; #xFC #xFF) -- RW-WIDE-REL's own 2-cell width, not the 1-cell width its
   ;; RW-NARROW-ABS sibling declares.
-  (fiveam:is (equalp #(#x6A 1 #xFC #xFF) (assembly-cells (assemble "relwd #*" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#x6A 1 #xFC #xFF) (assembly-cells (assemble "relwd #*" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd #*" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "relwd #*" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (fiveam:is (string= "RELWD" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(-4) values))
@@ -4671,7 +4671,7 @@ target: nop")
     (fiveam:is (equal '(t nil) (instruction-descriptor-relative-holes wide)))))
 
 (fiveam:test one-of-three-way-disagreement-round-trips-the-narrow-alternative
-  (let ((cells (assembly-cells (assemble "trisig 5, 7" :machine 'instr-test-machine))))
+  (let ((cells (assembly-cells (assemble "trisig 5, 7" :cpu 'instr-test-machine))))
     (fiveam:is (equalp #(#x01 0 5 7) cells))
     (multiple-value-bind (descriptor values size choices)
         (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)
@@ -4687,7 +4687,7 @@ target: nop")
   (let* ((source "trisig &target, [7]
 nop
 target: nop")
-         (assembly (assemble source :machine 'instr-test-machine))
+         (assembly (assemble source :cpu 'instr-test-machine))
          (cells (assembly-cells assembly)))
     ;; TRISIG is 5 bytes here (opcode, sub, 2-cell val, 1-cell mid); TARGET
     ;; sits after it and one NOP, at address 6 -- offset from TRISIG's own
@@ -4706,7 +4706,7 @@ target: nop")
     ;; -- both encode the identical value, exactly [Modes, "What one-of
     ;; does and does not do"] describes for a hole with no decode-time
     ;; record.
-    (let ((lines (disassemble-assembly assembly :machine 'instr-test-machine :labels nil :suffixes nil)))
+    (let ((lines (disassemble-assembly assembly :cpu 'instr-test-machine :labels nil :suffixes nil)))
       (fiveam:is (string= "trisig &$6,$7" (disassembly-line-text (first lines)))))))
 
 ;;; Multi-hole sub-opcode selection, a (sub-opcode ...) table (#128, the
@@ -4760,10 +4760,10 @@ target: nop")
     (fiveam:is (equal (list #xD3 3 5 10) (encode-instruction ii '(5 10))))))
 
 (fiveam:test sub-opcode-table-assembler-picks-matching-combination
-  (fiveam:is (equalp #(#xD3 0 5 10) (assembly-cells (assemble "sctab 5, 10" :machine 'instr-test-machine))))
-  (fiveam:is (equalp #(#xD3 1 5 10) (assembly-cells (assemble "sctab 5, [10]" :machine 'instr-test-machine))))
-  (fiveam:is (equalp #(#xD3 2 5 10) (assembly-cells (assemble "sctab [5], 10" :machine 'instr-test-machine))))
-  (fiveam:is (equalp #(#xD3 3 5 10) (assembly-cells (assemble "sctab [5], [10]" :machine 'instr-test-machine)))))
+  (fiveam:is (equalp #(#xD3 0 5 10) (assembly-cells (assemble "sctab 5, 10" :cpu 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 1 5 10) (assembly-cells (assemble "sctab 5, [10]" :cpu 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 2 5 10) (assembly-cells (assemble "sctab [5], 10" :cpu 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD3 3 5 10) (assembly-cells (assemble "sctab [5], [10]" :cpu 'instr-test-machine)))))
 
 (fiveam:test sub-opcode-table-decode-reports-both-holes-choices
   (multiple-value-bind (descriptor values size choices)
@@ -4782,8 +4782,8 @@ target: nop")
     (fiveam:is (= 77 (mref m 'ram 5)))))
 
 (fiveam:test sub-opcode-table-round-trip-disassembles-matched-alternative-at-both-holes
-  (let ((lines (disassemble-assembly (assemble "sctab 5, [10]" :machine 'instr-test-machine)
-                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+  (let ((lines (disassemble-assembly (assemble "sctab 5, [10]" :cpu 'instr-test-machine)
+                                      :cpu 'instr-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "sctab $5,[$A]" (disassembly-line-text (first lines))))))
 
 ;; Mixed plain/ONE-OF holes: arity is the mode's ONE-OF hole count, not its
@@ -4850,9 +4850,9 @@ target: nop")
     (fiveam:is (equal '(t t) (instruction-descriptor-operand-signedness nn)))))
 
 (fiveam:test sub-opcode-table-signed-round-trips-negative-values-at-both-holes
-  (fiveam:is (equalp #(#xD5 3 156 200) (assembly-cells (assemble "sigtab #-100, [-56]" :machine 'instr-test-machine))))
+  (fiveam:is (equalp #(#xD5 3 156 200) (assembly-cells (assemble "sigtab #-100, [-56]" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "sigtab #-100, [-56]" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "sigtab #-100, [-56]" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore size choices))
     (fiveam:is (string= "SIGTAB" (instruction-descriptor-name descriptor)))
@@ -4894,9 +4894,9 @@ target: nop")
 
 (fiveam:test sub-opcode-table-width-round-trips-wide-values-at-both-holes
   (fiveam:is (equalp #(#x64 3 44 1 144 1)
-                      (assembly-cells (assemble "widthtab #300, [400]" :machine 'instr-test-machine))))
+                      (assembly-cells (assemble "widthtab #300, [400]" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
-      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthtab #300, [400]" :machine 'instr-test-machine)))
+      (decode-instruction-at (vector-cell-reader (assembly-cells (assemble "widthtab #300, [400]" :cpu 'instr-test-machine)))
                               0 'instr-test-machine)
     (declare (ignore choices))
     (fiveam:is (string= "WIDTHTAB" (instruction-descriptor-name descriptor)))
@@ -5106,7 +5106,7 @@ target: nop")
 
 (fiveam:test sub-opcode-table-holes-clause-round-trips-through-assembler-and-decoder
   (fiveam:is (equalp #(#xE8 2 5 20 7)
-                      (assembly-cells (assemble "holtab [5], 20, 7" :machine 'instr-test-machine))))
+                      (assembly-cells (assemble "holtab [5], 20, 7" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
       (decode-instruction-at (vector-cell-reader (vector #xE8 2 5 20 7)) 0 'instr-test-machine)
     (declare (ignore size))
@@ -5115,8 +5115,8 @@ target: nop")
     (fiveam:is (eq 'holes-a2 (%matched-choice-name choices 0)))
     (fiveam:is (null (%matched-choice-name choices 1)))
     (fiveam:is (eq 'holes-c1 (%matched-choice-name choices 2))))
-  (let ((lines (disassemble-assembly (assemble "holtab [5], 20, 7" :machine 'instr-test-machine)
-                                      :machine 'instr-test-machine :labels nil :suffixes nil)))
+  (let ((lines (disassemble-assembly (assemble "holtab [5], 20, 7" :cpu 'instr-test-machine)
+                                      :cpu 'instr-test-machine :labels nil :suffixes nil)))
     (fiveam:is (string= "holtab [$5],$14,$7" (disassembly-line-text (first lines))))))
 
 ;; A CHOICE-CASE naming the uncovered hole's own alternatives still parses
@@ -5176,7 +5176,7 @@ target: nop")
 
 (fiveam:test sub-opcode-table-holes-clause-out-of-order-is-still-positional
   (fiveam:is (equalp #(#xF2 2 5 20 7)
-                      (assembly-cells (assemble "holtabrev [5], 20, 7" :machine 'instr-test-machine))))
+                      (assembly-cells (assemble "holtabrev [5], 20, 7" :cpu 'instr-test-machine))))
   (multiple-value-bind (descriptor values size choices)
       (decode-instruction-at (vector-cell-reader (vector #xF2 2 5 20 7)) 0 'instr-test-machine)
     (declare (ignore size))
@@ -5354,7 +5354,7 @@ target: nop")
     (fiveam:signals error (encode-instruction instruction '(#x1234)))
     (dolist (case '((rom #(1 #x12 #x34) 8) (ram #(1 #x1234 0) 16)))
       (destructuring-bind (memory expected width) case
-        (let* ((assembly (assemble "load2 4660" :machine 'encoding-memory-test-machine
+        (let* ((assembly (assemble "load2 4660" :cpu 'encoding-memory-test-machine
                                    :memory memory))
                (machine (make-machine 'encoding-memory-test-machine)))
           (fiveam:is (equalp expected (assembly-cells assembly)))
@@ -5390,7 +5390,7 @@ target: nop")
            (fiveam:is (equalp #(1 #x12 #x34 1 #x56 #x78)
                               (assembly-cells
                                (assemble "load2 4660
-load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
+load2 22136" :cpu 'encoding-memory-test-machine :memory 'rom))))
            (fiveam:is (= 1 width-calls))
            (fiveam:is (= 1 endian-calls)))
       (setf (symbol-function '%machine-cell-width) old-width
@@ -5423,7 +5423,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (semantics nil))
 
 (defun order-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'order-test-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'order-test-machine)) 'list))
 
 (fiveam:test extra-word-order-emits-src-word-before-dst-word
   (fiveam:is (equal (list (logior (ash 1 12) (ash 63 6) 63) 200 100)
@@ -5434,12 +5434,12 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (fiveam:is (equal (list (logior (ash 1 12) (ash 3 6) 63) 200) (order-cells "mv 3, 200"))))
 
 (fiveam:test extra-word-order-round-trips-through-the-disassembler
-  (let* ((asm (assemble "mv 100, 200" :machine 'order-test-machine))
-         (lines (disassemble-assembly asm :machine 'order-test-machine :labels nil)))
+  (let* ((asm (assemble "mv 100, 200" :cpu 'order-test-machine))
+         (lines (disassemble-assembly asm :cpu 'order-test-machine :labels nil)))
     (fiveam:is (= 1 (length lines)))
     (fiveam:is (equalp (assembly-cells asm)
                        (assembly-cells (assemble (disassembly-text lines :origin 0)
-                                                 :machine 'order-test-machine))))))
+                                                 :cpu 'order-test-machine))))))
 
 (fiveam:test extra-word-order-decodes-values-in-hole-order
   (let ((cells (coerce (order-cells "mv 100, 200") 'vector)))
@@ -5513,7 +5513,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (semantics nil))
 
 (defun fallback-decoded-name (source)
-  (let ((cells (assembly-cells (assemble source :machine 'fallback-test-machine))))
+  (let ((cells (assembly-cells (assemble source :cpu 'fallback-test-machine))))
     (instruction-descriptor-name
      (decode-instruction-at (vector-cell-reader cells) 0 'fallback-test-machine))))
 
@@ -5544,8 +5544,8 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
 
 (fiveam:test fallback-rejects-assembling-a-shadowed-encoding
   (dolist (source '("fbsys $e0" "fbsys $ee" "fbjp 7"))
-    (fiveam:signals assembly-error (assemble source :machine 'fallback-test-machine)))
-  (fiveam:finishes (assemble "fbsys $e1" :machine 'fallback-test-machine)))
+    (fiveam:signals assembly-error (assemble source :cpu 'fallback-test-machine)))
+  (fiveam:finishes (assemble "fbsys $e1" :cpu 'fallback-test-machine)))
 
 (fiveam:test fallback-requires-strictly-more-specific-co-tenant
   ;; Each bogus fallback overlaps a plain co-tenant without containing it
@@ -5603,7 +5603,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (flet ((decoded (source)
            (instruction-descriptor-name
             (decode-instruction-at
-             (vector-cell-reader (assembly-cells (assemble source :machine 'fallback-wide-test-machine)))
+             (vector-cell-reader (assembly-cells (assemble source :cpu 'fallback-wide-test-machine)))
              0 'fallback-wide-test-machine))))
     (fiveam:is (string= "WPIN" (decoded "wpin")))
     (fiveam:is (string= "WGEN" (decoded "wgen 5")))))
@@ -5673,7 +5673,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
 (fiveam:test nested-varying-word-assemble-decode-round-trip
   (dolist (case '(("nwl 1, 5" 1) ("nwl 1, [3, 100]" 2) ("nwl 1, #4" 1)))
     (destructuring-bind (source length) case
-      (let ((cells (assembly-cells (assemble source :machine 'varying-hole-test-machine))))
+      (let ((cells (assembly-cells (assemble source :cpu 'varying-hole-test-machine))))
         (fiveam:is (= length (length cells)))
         (multiple-value-bind (descriptor values size)
             (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
@@ -5682,7 +5682,7 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
           (fiveam:is (= (if (= length 2) 3 2) (length values))))))))
 
 (fiveam:test nested-varying-word-decoded-choices-carry-the-path
-  (let ((cells (assembly-cells (assemble "nwl 1, [3, 100]" :machine 'varying-hole-test-machine))))
+  (let ((cells (assembly-cells (assemble "nwl 1, [3, 100]" :cpu 'varying-hole-test-machine))))
     (multiple-value-bind (descriptor values size choices)
         (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
       (declare (ignore descriptor size))
@@ -5694,23 +5694,23 @@ load2 22136" :machine 'encoding-memory-test-machine :memory 'rom))))
   (let ((m (make-machine 'varying-hole-test-machine)))
     (setf (regref m 'a 3) 3
           (mref m 'ram 103) 999)
-    (load-program m (assembly-cells (assemble "nwl 2, [3, 100]" :machine 'varying-hole-test-machine)))
+    (load-program m (assembly-cells (assemble "nwl 2, [3, 100]" :cpu 'varying-hole-test-machine)))
     (step-machine m)
     (fiveam:is (= 999 (regref m 'a 2))))
   (let ((m (make-machine 'varying-hole-test-machine)))
     (setf (regref m 'a 3) 77)
-    (load-program m (assembly-cells (assemble "nwl 2, 3" :machine 'varying-hole-test-machine)))
+    (load-program m (assembly-cells (assemble "nwl 2, 3" :cpu 'varying-hole-test-machine)))
     (step-machine m)
     (fiveam:is (= 77 (regref m 'a 2))))
   (let ((m (make-machine 'varying-hole-test-machine)))
-    (load-program m (assembly-cells (assemble "nwl 2, #5" :machine 'varying-hole-test-machine)))
+    (load-program m (assembly-cells (assemble "nwl 2, #5" :cpu 'varying-hole-test-machine)))
     (step-machine m)
     (fiveam:is (= 5 (regref m 'a 2)))))
 
 (fiveam:test nested-varying-word-disassembles-each-shape
   (dolist (case '(("nwl 1, 5" "$5") ("nwl 1, [3, 100]" "[$3,$64]") ("nwl 1, #4" "#$4")))
-    (let* ((cells (assembly-cells (assemble (first case) :machine 'varying-hole-test-machine)))
-           (lines (disassemble-cells cells :machine 'varying-hole-test-machine)))
+    (let* ((cells (assembly-cells (assemble (first case) :cpu 'varying-hole-test-machine)))
+           (lines (disassemble-cells cells :cpu 'varying-hole-test-machine)))
       (fiveam:is (search (second case) (disassembly-line-text (first lines)))))))
 
 (defmacro %nested-word-instruction (&rest encoding)
@@ -5840,7 +5840,7 @@ present, so an error comes from the ENCODING under test."
                   ("nbd <1, [2, 3]>" #(11 2 1 2 3) (nb-deep (nb-far nb-idx)))
                   ("nbd #4" #(11 3 4) nb-lit)))
     (destructuring-bind (source cells key) case
-      (let ((assembled (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine))))
+      (let ((assembled (assembly-cells (assemble source :cpu 'varying-hole-byte-test-machine))))
         (fiveam:is (equalp cells assembled))
         (multiple-value-bind (descriptor values size choices)
             (decode-instruction-at (vector-cell-reader assembled) 0 'varying-hole-byte-test-machine)
@@ -5852,15 +5852,15 @@ present, so an error comes from the ENCODING under test."
 (fiveam:test nested-varying-byte-three-levels-semantics-dispatch
   (dolist (case '(("nbd 7" 7) ("nbd <1, 2>" 3) ("nbd <1, [2, 3]>" 6) ("nbd #4" 4)))
     (let ((m (make-machine 'varying-hole-byte-test-machine)))
-      (load-program m (assembly-cells (assemble (first case) :machine 'varying-hole-byte-test-machine)))
+      (load-program m (assembly-cells (assemble (first case) :cpu 'varying-hole-byte-test-machine)))
       (step-machine m)
       (fiveam:is (= (second case) (sref m 'a))))))
 
 (fiveam:test nested-varying-byte-disassembles-each-path
   (dolist (case '(("nbd 7" "$7") ("nbd <1, 2>" "<$1,$2>") ("nbd <1, [2, 3]>" "<$1,[$2,$3]>")
                   ("nbd #4" "#$4")))
-    (let* ((cells (assembly-cells (assemble (first case) :machine 'varying-hole-byte-test-machine)))
-           (lines (disassemble-cells cells :machine 'varying-hole-byte-test-machine)))
+    (let* ((cells (assembly-cells (assemble (first case) :cpu 'varying-hole-byte-test-machine)))
+           (lines (disassemble-cells cells :cpu 'varying-hole-byte-test-machine)))
       (fiveam:is (search (second case) (disassembly-line-text (first lines)))))))
 
 (fiveam:test nested-varying-byte-rejects-a-bare-varying-choice
@@ -5883,10 +5883,10 @@ present, so an error comes from the ENCODING under test."
 (fiveam:test lowcell-and-highcell-split-by-the-machine-cell-width
   (fiveam:is (equalp #(#x5678 #x1234)
                      (assembly-cells (assemble ".cell lowcell($12345678), highcell($12345678)"
-                                               :machine 'wordaddr-test-machine))))
+                                               :cpu 'wordaddr-test-machine))))
   (fiveam:is (equalp #(#x34 #x12)
                      (assembly-cells (assemble ".byte lowcell($1234), highcell($1234)"
-                                               :machine 'varying-hole-byte-test-machine)))))
+                                               :cpu 'varying-hole-byte-test-machine)))))
 
 (fiveam:test defined-tests-the-symbol-table
   (let ((symbols (make-hash-table :test 'equal)))
@@ -5907,7 +5907,7 @@ present, so an error comes from the ENCODING under test."
   (fiveam:is (equalp #(1 0 1 0 1 1 0 1 1 0)
                      (assembly-cells
                       (assemble ".byte 2 > 1, 1 > 2, 1 < 2, 2 < 1, 2 >= 2, 2 <= 2, 1 == 2, 1 != 2, 1 | 2 == 3, $F & 1 == 0"
-                                :machine 'varying-hole-byte-test-machine)))))
+                                :cpu 'varying-hole-byte-test-machine)))))
 
 (fiveam:test angle-bracket-delimiters-survive-comparison-operators
   (dolist (case '(("nbd <1, 2>" #(11 1 1 2))
@@ -5915,7 +5915,7 @@ present, so an error comes from the ENCODING under test."
                   ("nbd <1 < 2, 3>" #(11 1 1 3))
                   ("nbd <3 - 1, [2, 3]>" #(11 2 2 2 3))))
     (destructuring-bind (source cells) case
-      (fiveam:is (equalp cells (assembly-cells (assemble source :machine 'varying-hole-byte-test-machine)))
+      (fiveam:is (equalp cells (assembly-cells (assemble source :cpu 'varying-hole-byte-test-machine)))
                  "~A" source))))
 
 ;;; Sub-opcode tables that select a ONE-OF element by slot (#218), including
@@ -5997,7 +5997,7 @@ present, so an error comes from the ENCODING under test."
 
 (defun %slot-sub-run (source)
   (let ((machine (make-machine 'slot-sub-machine))
-        (assembly (assemble (format nil "~A~%hlt" source) :machine 'slot-sub-machine)))
+        (assembly (assemble (format nil "~A~%hlt" source) :cpu 'slot-sub-machine)))
     (load-program machine assembly)
     (run machine)
     (values (sref machine 'a) (assembly-cells assembly))))
@@ -6023,8 +6023,8 @@ present, so an error comes from the ENCODING under test."
              (fiveam:is (= result a))
              (fiveam:is (string= text (disassembly-line-text
                                        (first (disassemble-assembly
-                                               (assemble source :machine 'slot-sub-machine)
-                                               :machine 'slot-sub-machine :labels nil :suffixes nil))))))))
+                                               (assemble source :cpu 'slot-sub-machine)
+                                               :cpu 'slot-sub-machine :labels nil :suffixes nil))))))))
 
 (fiveam:test decode-reports-hole-less-slot-selections
   (loop for (cells selections) in
@@ -6126,7 +6126,7 @@ present, so an error comes from the ENCODING under test."
                 (na-far (set! a (+ src off))))))))
 
 (defun %na-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'nested-attr-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'nested-attr-machine)) 'list))
 
 (defun %na-decode (cells)
   (decode-instruction-at (vector-cell-reader (coerce cells 'vector)) 0 'nested-attr-machine))
@@ -6148,13 +6148,13 @@ present, so an error comes from the ENCODING under test."
 
 (fiveam:test nested-inner-signed-and-width-run
   (let ((m (make-machine 'nested-attr-machine)))
-    (load-program m (assembly-cells (assemble "nat [1000, 2]" :machine 'nested-attr-machine)))
+    (load-program m (assembly-cells (assemble "nat [1000, 2]" :cpu 'nested-attr-machine)))
     (step-machine m)
     (fiveam:is (= 1002 (sref m 'a)))))
 
 (fiveam:test nested-inner-strict-applies-to-the-chosen-alternative-only
-  (fiveam:signals assembly-error (assemble "nat [70000, 1]" :machine 'nested-attr-machine))
-  (fiveam:signals assembly-error (assemble "nat [1, 70000]" :machine 'nested-attr-machine))
+  (fiveam:signals assembly-error (assemble "nat [70000, 1]" :cpu 'nested-attr-machine))
+  (fiveam:signals assembly-error (assemble "nat [1, 70000]" :cpu 'nested-attr-machine))
   (fiveam:is (equal '(1 0 44) (%na-cells "nat 300")))
   (fiveam:is (equal '(1 2 44) (%na-cells "nat #300"))))
 
@@ -6249,7 +6249,7 @@ present, so an error comes from the ENCODING under test."
                            (nm-idx (set! a (+ src (* 10 loff) (* 100 dst) (* 1000 roff)))))))))))
 
 (defun %nm-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'nested-multi-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'nested-multi-machine)) 'list))
 
 (fiveam:test nested-multi-options-are-trees
   (let ((element (first (mode-descriptor-pattern (find-mode-descriptor 'nm-mode)))))
@@ -6278,7 +6278,7 @@ present, so an error comes from the ENCODING under test."
   (dolist (case '(("nml 1, 3" 301) ("nml [1, 2], 3" 321) ("nml 1, [3, 4]" 4301)
                   ("nml [1, 2], [3, 4]" 4321) ("nml #1, 3" 301)))
     (let ((m (make-machine 'nested-multi-machine)))
-      (load-program m (assembly-cells (assemble (first case) :machine 'nested-multi-machine)))
+      (load-program m (assembly-cells (assemble (first case) :cpu 'nested-multi-machine)))
       (step-machine m)
       (fiveam:is (= (second case) (sref m 'a))))))
 
@@ -6286,8 +6286,8 @@ present, so an error comes from the ENCODING under test."
   (dolist (case '(("nml 1, 3" "nml $1,$3") ("nml [1, 2], 3" "nml [$1,$2],$3")
                   ("nml 1, [3, 4]" "nml $1,[$3,$4]") ("nml [1, 2], [3, 4]" "nml [$1,$2],[$3,$4]")
                   ("nml #1, 3" "nml #$1,$3")))
-    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'nested-multi-machine))
-                                    :machine 'nested-multi-machine)))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :cpu 'nested-multi-machine))
+                                    :cpu 'nested-multi-machine)))
       (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
 
 (defun %nm-error (form)
@@ -6380,7 +6380,7 @@ present, so an error comes from the ENCODING under test."
 
 (fiveam:test trailing-hole-after-a-nested-varying-one-of-binds-in-semantics
   (let ((m (make-machine 'nested-multi-machine)))
-    (load-program m (assembly-cells (assemble "ntl [1, 2], 3" :machine 'nested-multi-machine)))
+    (load-program m (assembly-cells (assemble "ntl [1, 2], 3" :cpu 'nested-multi-machine)))
     (step-machine m)
     (fiveam:is (= 302 (sref m 'a)))))
 
@@ -6432,14 +6432,14 @@ present, so an error comes from the ENCODING under test."
                   ("nmwl [1, 2], [3, 4]" 4321 (13795 2 4) "nmwl [$1,$2],[$3,$4]")
                   ("nmwl #1, 3" 301 (18019) "nmwl #$1,$3")))
     (destructuring-bind (source result cells text) case
-      (let ((assembled (assembly-cells (assemble source :machine 'nested-multi-word-machine)))
+      (let ((assembled (assembly-cells (assemble source :cpu 'nested-multi-word-machine)))
             (m (make-machine 'nested-multi-word-machine)))
         (fiveam:is (equal cells (coerce assembled 'list)))
         (load-program m assembled)
         (step-machine m)
         (fiveam:is (= result (regref m 'a 0)))
         (fiveam:is (string= text (disassembly-line-text
-                                   (first (disassemble-cells assembled :machine 'nested-multi-word-machine)))))))))
+                                   (first (disassemble-cells assembled :cpu 'nested-multi-word-machine)))))))))
 
 (fiveam:test choice-case-steps-resolve-slots-at-expansion-time
   (fiveam:is (equal '((nm-pair . 0)) (%prefix-steps '(nm-pair lhs))))
@@ -6504,7 +6504,7 @@ present, so an error comes from the ENCODING under test."
   (semantics (set! a value)))
 
 (defun word-endian-cells (source machine)
-  (coerce (assembly-cells (assemble source :machine machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu machine)) 'list))
 
 (defun word-endian-decode (cells machine &optional (address 0))
   (multiple-value-list
@@ -6666,7 +6666,7 @@ wgl #5" 'word-group-machine)))
                            (oe-idx (set! a (+ src rv (* 10 loff) (* 100 roff)))))))))))
 
 (defun %oe-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'own-excess-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'own-excess-machine)) 'list))
 
 (fiveam:test own-excess-extras-land-at-their-pattern-position
   (fiveam:is (equal '(1 0 1 3) (%oe-cells "oex 1, 3")))
@@ -6686,15 +6686,15 @@ wgl #5" 'word-group-machine)))
   (dolist (case '(("oex 1, 3" 4) ("oex [1, 2], 3" 24) ("oex 1, [3, 4]" 404)
                   ("oex [1, 2], [3, 4]" 424) ("oex #1" 1)))
     (let ((m (make-machine 'own-excess-machine)))
-      (load-program m (assembly-cells (assemble (first case) :machine 'own-excess-machine)))
+      (load-program m (assembly-cells (assemble (first case) :cpu 'own-excess-machine)))
       (step-machine m)
       (fiveam:is (= (second case) (sref m 'a))))))
 
 (fiveam:test own-excess-disassembles-each-shape
   (dolist (case '(("oex 1, 3" "oex $1,$3") ("oex [1, 2], [3, 4]" "oex [$1,$2],[$3,$4]")
                   ("oex #1" "oex #$1")))
-    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'own-excess-machine))
-                                    :machine 'own-excess-machine)))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :cpu 'own-excess-machine))
+                                    :cpu 'own-excess-machine)))
       (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
 
 (defmacro %oe-instruction (opcode name &rest clauses)
@@ -6784,7 +6784,7 @@ wgl #5" 'word-group-machine)))
                   ("oew 1, [3, 4]" (1 3 4) (src rv roff))
                   ("oew [1, 2], [3, 4]" (1 2 3 4) (src loff rv roff)) ("oew #1" (1) (src))))
     (destructuring-bind (source values names) case
-      (let ((cells (assembly-cells (assemble source :machine 'varying-hole-test-machine))))
+      (let ((cells (assembly-cells (assemble source :cpu 'varying-hole-test-machine))))
         (fiveam:is (equal (rest values) (coerce (subseq cells 1) 'list)))
         (multiple-value-bind (descriptor decoded size)
             (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'varying-hole-test-machine)
@@ -6824,7 +6824,7 @@ wgl #5" 'word-group-machine)))
                 (ky-abs (set! a (+ src 1))))))))
 
 (defun %ky-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'keyed-attr-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'keyed-attr-machine)) 'list))
 
 (fiveam:test keyed-nested-attributes-size-each-hole
   (fiveam:is (equal '(1 0 5) (%ky-cells "kld (5)")))
@@ -6846,14 +6846,14 @@ wgl #5" 'word-group-machine)))
 (fiveam:test keyed-nested-semantics-dispatch-on-the-inner-pick
   (dolist (case '(("kld (7)" 7) ("kld (abs 1000)" 1001) ("kld #4" 4)))
     (let ((m (make-machine 'keyed-attr-machine)))
-      (load-program m (assembly-cells (assemble (first case) :machine 'keyed-attr-machine)))
+      (load-program m (assembly-cells (assemble (first case) :cpu 'keyed-attr-machine)))
       (step-machine m)
       (fiveam:is (= (second case) (sref m 'a))))))
 
 (fiveam:test keyed-nested-disassembles-each-pick
   (dolist (case '(("kld (5)" "kld ($5)") ("kld (abs 7)" "kld (abs$7)") ("kld #3" "kld #$3")))
-    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :machine 'keyed-attr-machine))
-                                    :machine 'keyed-attr-machine)))
+    (let ((lines (disassemble-cells (assembly-cells (assemble (first case) :cpu 'keyed-attr-machine))
+                                    :cpu 'keyed-attr-machine)))
       (fiveam:is (string= (second case) (disassembly-line-text (first lines)))))))
 
 (fiveam:test keyed-nested-attribute-needs-a-selector
@@ -6890,12 +6890,12 @@ wgl #5" 'word-group-machine)))
 (fiveam:test keyed-nested-strict-applies-to-the-picked-alternative
   (fiveam:is (equal '(3 44) (%ky-cells "kstrict (300)")))
   (fiveam:is (equal '(3 44) (%ky-cells "kstrict #300")))
-  (fiveam:signals assembly-error (assemble "kstrict (t 300)" :machine 'keyed-attr-machine)))
+  (fiveam:signals assembly-error (assemble "kstrict (t 300)" :cpu 'keyed-attr-machine)))
 
 (fiveam:test nested-alternatives-that-all-agree-on-strict-are-not-keyed
   (fiveam:is-false (mode-descriptor-keyedp (find-mode-descriptor 'kb-ind)))
-  (fiveam:signals assembly-error (assemble "kboth (a 300)" :machine 'keyed-attr-machine))
-  (fiveam:signals assembly-error (assemble "kboth (b 300)" :machine 'keyed-attr-machine))
+  (fiveam:signals assembly-error (assemble "kboth (a 300)" :cpu 'keyed-attr-machine))
+  (fiveam:signals assembly-error (assemble "kboth (b 300)" :cpu 'keyed-attr-machine))
   (fiveam:is (equal '(4 3) (%ky-cells "kboth (b 3)")))
   (fiveam:is (equal '(4 44) (%ky-cells "kboth #300"))))
 
@@ -6998,7 +6998,7 @@ wgl #5" 'word-group-machine)))
   (dolist (case '(("ktwo 1, 2" 1) ("ktwo 1, t 2" 2) ("ktwo abs 1, 2" 3) ("ktwo abs 1, t 2" 4)
                   ("ktwo #1, 2" 0)))
     (let ((m (make-machine 'keyed-attr-machine)))
-      (load-program m (assembly-cells (assemble (first case) :machine 'keyed-attr-machine)))
+      (load-program m (assembly-cells (assemble (first case) :cpu 'keyed-attr-machine)))
       (step-machine m)
       (fiveam:is (= (second case) (sref m 'a))))))
 
@@ -7052,7 +7052,7 @@ wgl #5" 'word-group-machine)))
                   ("kwl 1, (abs 2)" (kw-ind kw-abs) "kwl $1,(abs$2)")
                   ("kwl 1, #2" kw-lit "kwl $1,#$2")))
     (destructuring-bind (source key text) case
-      (let ((cells (assembly-cells (assemble source :machine 'keyed-word-machine))))
+      (let ((cells (assembly-cells (assemble source :cpu 'keyed-word-machine))))
         (multiple-value-bind (descriptor values size choices)
             (decode-instruction-at (lambda (addr) (aref cells addr)) 0 'keyed-word-machine)
           (declare (ignore descriptor))
@@ -7060,4 +7060,4 @@ wgl #5" 'word-group-machine)))
           (fiveam:is (= 1 size))
           (fiveam:is (equal key (word-field-choice-choice (second choices)))))
         (fiveam:is (string= text (disassembly-line-text
-                                  (first (disassemble-cells cells :machine 'keyed-word-machine)))))))))
+                                  (first (disassemble-cells cells :cpu 'keyed-word-machine)))))))))

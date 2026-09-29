@@ -1364,7 +1364,7 @@ The test system's proclaimed style-warning muffling is lifted for the run."
                (interrupts :vector ia :message a :save (pc) :cycles 0)))
       (eval `(definstruction ,name probe (encoding (opcode 1)) (semantics ,semantics)))
       (let ((machine (make-machine name)))
-        (load-program machine (assemble "probe" :machine name))
+        (load-program machine (assemble "probe" :cpu name))
         (ignore-errors (step-machine machine))))
     #+sbcl (proclaim '(sb-ext:muffle-conditions style-warning))
     warnings))

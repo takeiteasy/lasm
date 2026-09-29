@@ -30,7 +30,7 @@
 (fiveam:test listing-lines-record-the-alternatives-their-operands-matched
   (let ((entries (assembly-listing (assemble "ld a, [b]
 ld a, [100]
-ld a, #1" :machine 'lc-machine))))
+ld a, #1" :cpu 'lc-machine))))
     (fiveam:is (equal '(((lc-ind 2 5)) ((lc-abs 2 5)) ((lc-imm 2 4)))
                       (mapcar #'listing-line-choices entries)))))
 
@@ -39,7 +39,7 @@ ld a, #1" :machine 'lc-machine))))
 (fiveam:test listing-entries-match-statements
   (let* ((a (assemble "start: ldx #10
 adc $10
-end: nop" :machine 'instr-test-machine))
+end: nop" :cpu 'instr-test-machine))
          (entries (assembly-listing a)))
     (fiveam:is (= 3 (length entries)))
     (destructuring-bind (e1 e2 e3) entries
@@ -57,7 +57,7 @@ end: nop" :machine 'instr-test-machine))
 
 (fiveam:test included-listing-renders-source-inline
   (let* ((path (asdf:system-relative-pathname :lasm "tests/fixtures/include/nested.asm"))
-         (assembly (assemble-file path :machine 'instr-test-machine))
+         (assembly (assemble-file path :cpu 'instr-test-machine))
          (text (listing-text assembly))
          (first-include (search ".include \"sub/b.asm\"" text))
          (nested-line (search "sub/b.asm:1 | nop" text))
@@ -73,7 +73,7 @@ end: nop" :machine 'instr-test-machine))
 (fiveam:test repeated-include-creates-two-listing-entries
   (let* ((assembly (assemble-file (asdf:system-relative-pathname
                                    :lasm "tests/fixtures/include/twice.asm")
-                                  :machine 'instr-test-machine))
+                                  :cpu 'instr-test-machine))
          (file (listing-line-file (second (assembly-listing assembly)))))
     (fiveam:is (= 2 (length (listing-lines-for-source-line assembly 1 :file file))))))
 
@@ -81,7 +81,7 @@ end: nop" :machine 'instr-test-machine))
   (let* ((a (assemble "ldx #1
 adc $10
 nop
-ldx #2" :machine 'instr-test-machine))
+ldx #2" :cpu 'instr-test-machine))
          (entries (assembly-listing a)))
     (loop for (this next) on entries
           while next
@@ -92,7 +92,7 @@ ldx #2" :machine 'instr-test-machine))
 
 (fiveam:test emit-entry-size-is-width-times-count
   (let* ((a (assemble ".byte 1, 2, 3
-.word 100, 200" :machine 'instr-test-machine))
+.word 100, 200" :cpu 'instr-test-machine))
          (entries (assembly-listing a)))
     (fiveam:is (= 2 (length entries)))
     (destructuring-bind (byte-entry word-entry) entries
@@ -102,7 +102,7 @@ ldx #2" :machine 'instr-test-machine))
       (fiveam:is (= 4 (listing-line-size word-entry))))))
 
 (fiveam:test reserve-entry-size-is-count
-  (let* ((a (assemble ".res 5" :machine 'instr-test-machine))
+  (let* ((a (assemble ".res 5" :cpu 'instr-test-machine))
          (entries (assembly-listing a)))
     (fiveam:is (= 1 (length entries)))
     (fiveam:is (eq :reserve (listing-line-kind (first entries))))
@@ -111,7 +111,7 @@ ldx #2" :machine 'instr-test-machine))
 (fiveam:test org-and-equ-contribute-no-entry-but-source-line-still-renders
   (let* ((a (assemble "size = 4
 .org $10
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 1 (length (assembly-listing a))))
     (let ((text (listing-text a)))
       (fiveam:is (search "size = 4" text))
@@ -124,13 +124,13 @@ nop" :machine 'instr-test-machine)))
 (fiveam:test listing-cells-slices-reproduce-assembly-cells
   (let* ((a (assemble "ldx #10
 adc $20
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp (coerce (assembly-cells a) 'list)
                         (mapcan (lambda (l) (%listing-cells a l)) (assembly-listing a))))))
 
 (fiveam:test listing-cells-slices-account-for-non-zero-origin
   (let* ((a (assemble "ldx #10
-adc $20" :machine 'instr-test-machine :origin #x200)))
+adc $20" :cpu 'instr-test-machine :origin #x200)))
     (fiveam:is (equalp (coerce (assembly-cells a) 'list)
                         (mapcan (lambda (l) (%listing-cells a l)) (assembly-listing a))))))
 
@@ -138,7 +138,7 @@ adc $20" :machine 'instr-test-machine :origin #x200)))
 
 (fiveam:test listing-line-at-finds-interior-address
   (let ((a (assemble "ldx #10
-adc $20" :machine 'instr-test-machine)))
+adc $20" :cpu 'instr-test-machine)))
     (fiveam:is (= 0 (listing-line-address (listing-line-at a 0))))
     (fiveam:is (= 0 (listing-line-address (listing-line-at a 1))))
     (fiveam:is (= 2 (listing-line-address (listing-line-at a 2))))
@@ -147,7 +147,7 @@ adc $20" :machine 'instr-test-machine)))
 (fiveam:test listing-line-at-nil-in-org-gap-and-past-end
   (let ((a (assemble "nop
 .org $10
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (null (listing-line-at a 5)))
     (fiveam:is (null (listing-line-at a 100)))))
 
@@ -158,7 +158,7 @@ nop" :machine 'instr-test-machine)))
 nop
 .endm
 two
-two" :machine 'instr-test-machine)))
+two" :cpu 'instr-test-machine)))
     (fiveam:is (null (listing-lines-for-source-line a 2)))
     (fiveam:is (equal '(0 1) (mapcar #'listing-line-address (assembly-listing a))))
     (fiveam:is (= 4 (listing-line-line (first (assembly-listing a)))))
@@ -177,7 +177,7 @@ nop
 .macro outer
 inner
 .endm
-outer" :machine 'instr-test-machine))
+outer" :cpu 'instr-test-machine))
          (entry (first (assembly-listing a))))
     (fiveam:is (= 7 (listing-line-line entry)))
     (fiveam:is (= 2 (listing-line-definition-line entry)))))
@@ -187,7 +187,7 @@ outer" :machine 'instr-test-machine))
 tag: nop
 .endm
 tagged
-tagged" :machine 'instr-test-machine))
+tagged" :cpu 'instr-test-machine))
          (symbols (assembly-symbols-list a :kind :label)))
     (fiveam:is (equal '(4 5) (mapcar #'symbol-info-line symbols)))
     (fiveam:is (equal '(2 2) (mapcar #'symbol-info-definition-line symbols)))
@@ -198,7 +198,7 @@ tagged" :machine 'instr-test-machine))
 first: nop
 second: nop
 .endm
-pair" :machine 'instr-test-machine))
+pair" :cpu 'instr-test-machine))
          (symbols (assembly-symbols-list a :kind :label)))
     (fiveam:is (equal '(5 5) (mapcar #'symbol-info-line symbols)))
     (fiveam:is (equal '(2 3) (mapcar #'symbol-info-definition-line symbols)))
@@ -211,7 +211,7 @@ nop
 .macro outer
 here: inner
 .endm
-outer" :machine 'instr-test-machine))
+outer" :cpu 'instr-test-machine))
          (symbol (first (assembly-symbols-list a :kind :label))))
     (fiveam:is (= 7 (symbol-info-line symbol)))
     (fiveam:is (= 5 (symbol-info-definition-line symbol)))))
@@ -220,7 +220,7 @@ outer" :machine 'instr-test-machine))
 
 (fiveam:test listing-text-with-source-includes-every-line-once
   (let* ((a (assemble "start: ldx #10
-adc $20" :machine 'instr-test-machine))
+adc $20" :cpu 'instr-test-machine))
          (text (listing-text a)))
     (fiveam:is (= 1 (count #\Newline text :start (or (search "ldx" text) 0)
                                           :end (search "adc" text))))
@@ -230,7 +230,7 @@ adc $20" :machine 'instr-test-machine))
 
 (fiveam:test listing-text-without-source-omits-source-column
   (let* ((stmts (parse "ldx #10"))
-         (a (assemble-statements stmts :machine 'instr-test-machine))
+         (a (assemble-statements stmts :cpu 'instr-test-machine))
          (text (listing-text a)))
     (fiveam:is (null (assembly-source a)))
     (fiveam:is (search "A2 0A" text))
@@ -240,15 +240,15 @@ adc $20" :machine 'instr-test-machine))
   ;; A source ending in a newline (the common case for a real file) must not
   ;; render one spurious blank row past the last statement, matching
   ;; PARSE's own %SPLIT-LINES treatment of a trailing newline.
-  (let* ((a (assemble (format nil "ldx #10~%") :machine 'instr-test-machine))
+  (let* ((a (assemble (format nil "ldx #10~%") :cpu 'instr-test-machine))
          (text (listing-text a)))
     (fiveam:is (= 1 (count #\Newline text)))))
 
 ;;; Cell hex width follows ASSEMBLY-CELL-WIDTH
 
 (fiveam:test listing-hex-width-follows-cell-width
-  (let* ((a8 (assemble "ldx #10" :machine 'instr-test-machine))
-         (a16 (assemble "hlt" :machine 'disasm-word-machine)))
+  (let* ((a8 (assemble "ldx #10" :cpu 'instr-test-machine))
+         (a16 (assemble "hlt" :cpu 'disasm-word-machine)))
     (fiveam:is (search "A2 0A" (listing-text a8)))
     (fiveam:is (not (search "A2 0A0A" (listing-text a8))))
     ;; DISASM-WORD-MACHINE's HLT is a single 16-bit-cell opcode; its 4-digit
@@ -265,9 +265,9 @@ adc $20" :machine 'instr-test-machine))
   (let* ((a (assemble "start: ldx #10
 adc $20
 bra start
-nop" :machine 'instr-test-machine))
+nop" :cpu 'instr-test-machine))
          (listing (assembly-listing a))
-         (disasm (disassemble-assembly a :machine 'instr-test-machine :labels nil)))
+         (disasm (disassemble-assembly a :cpu 'instr-test-machine :labels nil)))
     (fiveam:is (= (length listing) (length disasm)))
     (loop for l in listing
           for d in disasm
@@ -279,7 +279,7 @@ nop" :machine 'instr-test-machine))
 
 (fiveam:test assembly-symbol-looks-up-a-global-and-a-scoped-local
   (let ((a (assemble "loop: nop
-.next: nop" :machine 'instr-test-machine)))
+.next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (string= "loop" (symbol-info-name (assembly-symbol a "loop"))))
     (fiveam:is (null (assembly-symbol a ".next")))  ; unscoped, not found
     (fiveam:is (string= ".next" (symbol-info-name (assembly-symbol a ".next" :scope "loop"))))
@@ -289,7 +289,7 @@ nop" :machine 'instr-test-machine))
 (fiveam:test assembly-symbol-distinguishes-readable-name-collision
   (let* ((a (assemble "loop: nop
 .next: nop
-loop.next: nop" :machine 'instr-test-machine))
+loop.next: nop" :cpu 'instr-test-machine))
          (global (assembly-symbol a "loop.next"))
          (local (assembly-symbol a ".next" :scope "loop")))
     (fiveam:is (= 2 (symbol-info-value global)))
@@ -301,7 +301,7 @@ loop.next: nop" :machine 'instr-test-machine))
   (let* ((a (assemble ".equ top, 1
 loop: nop
 .equ .n, 2
-.next: nop" :machine 'instr-test-machine))
+.next: nop" :cpu 'instr-test-machine))
          (labels (assembly-symbols-list a :kind :label))
          (equs (assembly-symbols-list a :kind :equ))
          (top-level (assembly-symbols-list a :scope nil))
@@ -318,12 +318,12 @@ loop: nop
 (fiveam:test assembly-symbols-list-with-no-filter-returns-every-symbol
   (let ((a (assemble ".equ top, 1
 loop: nop
-.next: nop" :machine 'instr-test-machine)))
+.next: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (length (assembly-symbols-list a))))))
 
 (fiveam:test set-symbol-list-and-text-show-the-final-binding
   (let* ((a (assemble ".set n, 1
-.set n, 2" :machine 'instr-test-machine))
+.set n, 2" :cpu 'instr-test-machine))
          (sets (assembly-symbols-list a :kind :set))
          (rendered (symbols-text a)))
     (fiveam:is (= 1 (length sets)))
@@ -336,7 +336,7 @@ loop: nop
 start: nop
 .loop: nop
 delay: nop
-.loop: nop" :machine 'instr-test-machine))
+.loop: nop" :cpu 'instr-test-machine))
          (groups (assembly-symbol-groups a))
          (top (cdr (assoc nil groups)))
          (start-group (cdr (assoc "start" groups :test #'equal)))
@@ -363,7 +363,7 @@ delay: nop
 (fiveam:test symbols-text-renders-every-symbol-grouped
   (let* ((a (assemble ".equ bufsize, 16
 start: nop
-.loop: nop" :machine 'instr-test-machine))
+.loop: nop" :cpu 'instr-test-machine))
          (text (symbols-text a)))
     (fiveam:is (search "bufsize" text))
     (fiveam:is (search "start" text))
@@ -372,7 +372,7 @@ start: nop
     (fiveam:is (search "label" text))))
 
 (fiveam:test print-symbols-writes-to-stream-and-returns-the-assembly
-  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+  (let* ((a (assemble "start: nop" :cpu 'instr-test-machine))
          (out (with-output-to-string (s)
                 (fiveam:is (eq a (print-symbols a :stream s))))))
     (fiveam:is (search "start" out))))
@@ -384,17 +384,17 @@ start: nop
 .byte 1, 2
 .res 3
 nop
-.byte 9" :machine 'instr-test-machine)))
+.byte 9" :cpu 'instr-test-machine)))
     (fiveam:is (equal '((2 . 7) (8 . 9)) (assembly-data-regions a)))))
 
 (fiveam:test assembly-data-regions-empty-without-data-or-listing
-  (fiveam:is (null (assembly-data-regions (assemble "nop" :machine 'instr-test-machine))))
+  (fiveam:is (null (assembly-data-regions (assemble "nop" :cpu 'instr-test-machine))))
   (fiveam:is (null (assembly-data-regions (make-assembly)))))
 
 (fiveam:test listing-line-source-text-reads-the-included-file
   (let* ((assembly (assemble-file (asdf:system-relative-pathname
                                    :lasm "tests/fixtures/include/twice.asm")
-                                  :machine 'instr-test-machine))
+                                  :cpu 'instr-test-machine))
          (entry (second (assembly-listing assembly))))
     (fiveam:is (string= "nop" (listing-line-source-text entry assembly)))
     (fiveam:is (string= "nop" (listing-line-source-text (first (assembly-listing assembly))
@@ -403,7 +403,7 @@ nop
 (fiveam:test machine-listing-line-uses-the-retained-program
   (let ((m (make-machine 'instr-test-machine))
         (a (assemble "nop
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (fiveam:is (null (machine-listing-line m 1)))
     (load-program m a)
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
@@ -426,7 +426,7 @@ nop" :machine 'instr-test-machine)))
 (defparameter *cycles-source* (format nil "nop~%slow~%jmpx~%wait~%.byte 1,2"))
 
 (defun %cycles-rows (machine &key (source *cycles-source*))
-  (let ((text (listing-text (assemble source :machine machine) :cycles t)))
+  (let ((text (listing-text (assemble source :cpu machine) :cycles t)))
     (mapcar (lambda (line) (string-trim " " (subseq line 10 15)))
             (%split-source-lines text))))
 
@@ -437,19 +437,19 @@ nop" :machine 'instr-test-machine)))
   (fiveam:is (equal '("1" "3" "2+" "4+" "") (%cycles-rows 'cyc-list-child))))
 
 (fiveam:test cycles-column-is-off-by-default
-  (let ((a (assemble *cycles-source* :machine 'cyc-list-machine)))
+  (let ((a (assemble *cycles-source* :cpu 'cyc-list-machine)))
     (fiveam:is (not (search "2+" (listing-text a))))
     (fiveam:is (string= (listing-text a) (listing-text a :cycles nil)))))
 
 (fiveam:test cycles-column-keeps-the-source-column-aligned
-  (let* ((a (assemble *cycles-source* :machine 'cyc-list-machine))
+  (let* ((a (assemble *cycles-source* :cpu 'cyc-list-machine))
          (columns (mapcar (lambda (line) (position #\s line))
                           (remove-if-not (lambda (line) (search "slow" line))
                                          (%split-source-lines (listing-text a :cycles t))))))
     (fiveam:is (equal (list 29) columns))))
 
 (fiveam:test cycles-column-works-on-a-word-encoded-machine
-  (let ((text (listing-text (assemble "set 1,1000" :machine 'disasm-word-machine) :cycles t)))
+  (let ((text (listing-text (assemble "set 1,1000" :cpu 'disasm-word-machine) :cycles t)))
     (fiveam:is (search "1  " text))))
 
 ;;; Per-mode, macro-aware cycles marker (#270)
@@ -497,7 +497,7 @@ nop
 nop
 delay: nop
 .loop: nop
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (flet ((at (address)
              (multiple-value-bind (info offset) (assembly-label-at a address)
                (and info (cons (symbol-info-qualified-name info) offset)))))
@@ -510,12 +510,12 @@ nop" :machine 'instr-test-machine)))
 (fiveam:test assembly-label-at-is-nil-before-the-first-label-and-ignores-equ
   (let ((a (assemble ".equ five, 5
 nop
-late: nop" :machine 'instr-test-machine)))
+late: nop" :cpu 'instr-test-machine)))
     (fiveam:is (null (assembly-label-at a 0)))
     (fiveam:is (string= "late" (symbol-info-name (assembly-label-at a 1))))))
 
 (fiveam:test label-offset-text-omits-a-zero-offset
-  (let* ((a (assemble "start: nop" :machine 'instr-test-machine))
+  (let* ((a (assemble "start: nop" :cpu 'instr-test-machine))
          (info (assembly-symbol a "start")))
     (fiveam:is (string= "start" (label-offset-text info 0)))
     (fiveam:is (string= "start+3" (label-offset-text info 3)))))
@@ -523,7 +523,7 @@ late: nop" :machine 'instr-test-machine)))
 (fiveam:test machine-label-at-follows-a-relocated-program
   (let ((m (make-machine 'instr-test-machine))
         (a (assemble "start: nop
-nop" :machine 'instr-test-machine)))
+nop" :cpu 'instr-test-machine)))
     (load-program m a :origin #x40)
     (multiple-value-bind (info offset) (machine-label-at m #x41)
       (fiveam:is (string= "start" (symbol-info-name info)))

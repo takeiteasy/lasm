@@ -153,7 +153,7 @@
 (fiveam:test step-machine-sub-opcode-width-runs-each-alternative-own-width
   (let* ((m (make-machine 'emu-test-machine))
          (a (assemble "subwid 200
-subwid #300" :machine 'emu-test-machine))
+subwid #300" :cpu 'emu-test-machine))
          (descs (find-instruction-descriptors-by-opcode 'emu-test-machine #xB2))
          (narrow (find 0 descs :key #'instruction-descriptor-sub-opcode))
          (wide (find 1 descs :key #'instruction-descriptor-sub-opcode)))
@@ -215,7 +215,7 @@ subwid #300" :machine 'emu-test-machine))
 
 (fiveam:test load-program-places-bytes-and-sets-pc
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "ldx #10" :machine 'emu-test-machine :origin #x100)))
+        (a (assemble "ldx #10" :cpu 'emu-test-machine :origin #x100)))
     (load-program m a)
     (fiveam:is (= #xA2 (mref m 'ram #x100)))
     (fiveam:is (= 10 (mref m 'ram #x101)))
@@ -232,7 +232,7 @@ subwid #300" :machine 'emu-test-machine))
 
 (fiveam:test load-program-places-cells-on-word-addressed-machine
   (let ((m (make-machine 'wordaddr-test-machine))
-        (a (assemble "lda #$1234" :machine 'wordaddr-test-machine :origin 4)))
+        (a (assemble "lda #$1234" :cpu 'wordaddr-test-machine :origin 4)))
     (load-program m a)
     (fiveam:is (= 1 (mref m 'ram 4)))
     (fiveam:is (= #x1234 (mref m 'ram 5)))
@@ -244,13 +244,13 @@ subwid #300" :machine 'emu-test-machine))
   ;; address too far apart, with no other symptom -- LOAD-PROGRAM must catch
   ;; the mismatch instead.
   (let ((m (make-machine 'wordaddr-test-machine))
-        (a (assemble "ldx #10" :machine 'emu-test-machine)))
+        (a (assemble "ldx #10" :cpu 'emu-test-machine)))
     (fiveam:signals error (load-program m a))))
 
 (fiveam:test run-word-addressed-machine-round-trip-end-to-end
   (let ((m (make-machine 'wordaddr-test-machine))
         (a (assemble "lda #$2A
-hlt" :machine 'wordaddr-test-machine)))
+hlt" :cpu 'wordaddr-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -261,7 +261,7 @@ hlt" :machine 'wordaddr-test-machine)))
 
 (fiveam:test step-machine-advances-pc-and-executes
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "ldx #10" :machine 'emu-test-machine)))
+        (a (assemble "ldx #10" :cpu 'emu-test-machine)))
     (load-program m a)
     (let ((descriptor (step-machine m)))
       (fiveam:is (eq (find-instruction 'emu-test-machine 'ldx) descriptor))
@@ -275,7 +275,7 @@ hlt" :machine 'wordaddr-test-machine)))
         ;; instead of before, this would observe pc=3, not 6.
         (a (assemble "bne target
 sta $2000
-target: hlt" :machine 'emu-test-machine)))
+target: hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     ;; z starts at 0 (fresh machine), so bne's (zerop z) condition holds and
     ;; the branch to "target" is taken -- its semantics' (set! pc operand)
@@ -286,7 +286,7 @@ target: hlt" :machine 'emu-test-machine)))
 (fiveam:test step-machine-sub-opcode-runs-each-mode-own-semantics
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "subop #10
-subop $2000" :machine 'emu-test-machine)))
+subop $2000" :cpu 'emu-test-machine)))
     (load-program m a)
     (setf (mref m 'ram #x2000) 99)
     (let ((descriptor (step-machine m)))                       ; subop #10 -- IMMEDIATE
@@ -302,7 +302,7 @@ subop $2000" :machine 'emu-test-machine)))
   ;; above avoids the same trap by using a far ABSOLUTE address ($2000).
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "subtab 100, 10
-subtab 110, [120]" :machine 'emu-test-machine)))
+subtab 110, [120]" :cpu 'emu-test-machine)))
     (load-program m a)
     (setf (mref m 'ram 120) 42)
     (step-machine m)                                           ; subtab 100, 10 -- reg,reg
@@ -313,7 +313,7 @@ subtab 110, [120]" :machine 'emu-test-machine)))
 (fiveam:test step-machine-byte-varying-hole-counts-run-each-shapes-own-semantics
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "varld 7
-varld [100, 5]" :machine 'emu-test-machine)))
+varld [100, 5]" :cpu 'emu-test-machine)))
     (load-program m a)
     (setf (mref m 'ram 105) 42)
     (step-machine m)                                           ; varld 7 -- one hole
@@ -326,7 +326,7 @@ varld [100, 5]" :machine 'emu-test-machine)))
         (a (assemble "sta $2000
 bne skip
 hlt
-skip: hlt" :machine 'emu-test-machine)))
+skip: hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (setf (flag m 'z) t)  ; z set -> bne's branch condition (zerop z) is false
     (step-machine m)      ; sta, address 0 -> 3
@@ -343,7 +343,7 @@ skip: hlt" :machine 'emu-test-machine)))
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "bra target
 sta $2000
-target: hlt" :machine 'emu-test-machine)))
+target: hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (step-machine m)
     (fiveam:is (= 5 (sref m 'pc)))))
@@ -356,7 +356,7 @@ target: hlt" :machine 'emu-test-machine)))
   ;; (No NOP on this fixture -- DEX stands in as the no-operand filler.)
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "target: dex
-bra target" :machine 'emu-test-machine)))
+bra target" :cpu 'emu-test-machine)))
     (load-program m a)
     (step-machine m)  ; dex, address 0 -> 1, x wraps to 255 so z clears
     (step-machine m)  ; bra, taken (z=0) -> back to 0
@@ -371,7 +371,7 @@ bra target" :machine 'emu-test-machine)))
         (a (assemble "sta $2000
 bra skip
 hlt
-skip: hlt" :machine 'emu-test-machine)))
+skip: hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (setf (flag m 'z) t)  ; z set -> bra's branch condition (zerop z) is false
     (step-machine m)      ; sta, address 0 -> 3
@@ -384,7 +384,7 @@ skip: hlt" :machine 'emu-test-machine)))
 loop:   dex
         bra loop
         sta $1000
-        hlt" :machine 'emu-test-machine)))
+        hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -423,7 +423,7 @@ loop:   dex
   ;; whole-mode RELATIVE mode's single hole already does.
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "target: dex
-brr #target" :machine 'emu-test-machine)))
+brr #target" :cpu 'emu-test-machine)))
     (load-program m a)
     (step-machine m)  ; dex, address 0 -> 1
     (step-machine m)  ; brr, unconditional -> back to 0
@@ -432,7 +432,7 @@ brr #target" :machine 'emu-test-machine)))
 (fiveam:test step-machine-per-hole-relative-absolute-alternative-jumps-plainly
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "brr 5
-hlt" :machine 'emu-test-machine)))
+hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (step-machine m)  ; brr, absolute alternative -> jumps to 5
     (fiveam:is (= 5 (sref m 'pc)))))
@@ -441,21 +441,21 @@ hlt" :machine 'emu-test-machine)))
 
 (fiveam:test step-machine-signed-non-relative-operand-sign-extends
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "ldsi #-1" :machine 'emu-test-machine)))
+        (a (assemble "ldsi #-1" :cpu 'emu-test-machine)))
     (load-program m a)
     (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
       (lasm-trap (c) (fiveam:is (= -1 (lasm-trap-data c)))))))
 
 (fiveam:test step-machine-signed-non-relative-operand-positive-value-unaffected
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "ldsi #10" :machine 'emu-test-machine)))
+        (a (assemble "ldsi #10" :cpu 'emu-test-machine)))
     (load-program m a)
     (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
       (lasm-trap (c) (fiveam:is (= 10 (lasm-trap-data c)))))))
 
 (fiveam:test step-machine-multi-hole-signed-mode-sign-extends-each-hole
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "movsi -1, -2" :machine 'emu-test-machine)))
+        (a (assemble "movsi -1, -2" :cpu 'emu-test-machine)))
     (load-program m a)
     (handler-case (progn (step-machine m) (fiveam:fail "expected LASM-TRAP"))
       (lasm-trap (c) (fiveam:is (equal '(-1 -2) (lasm-trap-data c)))))))
@@ -470,7 +470,7 @@ hlt" :machine 'emu-test-machine)))
 (fiveam:test run-stops-on-trap
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "ldx #5
-hlt" :machine 'emu-test-machine)))
+hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :trap reason))
@@ -488,7 +488,7 @@ hlt" :machine 'emu-test-machine)))
 (fiveam:test run-stops-on-max-steps
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "loop: dex
-bne loop" :machine 'emu-test-machine)))
+bne loop" :cpu 'emu-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m :max-steps 4)
       (fiveam:is (eq :max-steps reason))
@@ -497,7 +497,7 @@ bne loop" :machine 'emu-test-machine)))
 (fiveam:test run-resolves-cell-properties-once
   (let* ((machine (make-machine 'emu-test-machine))
          (program (assemble "loop: dex
-bne loop" :machine 'emu-test-machine))
+bne loop" :cpu 'emu-test-machine))
          (old-width (symbol-function '%machine-cell-width))
          (old-endian (symbol-function '%machine-endian))
          (width-calls 0)
@@ -581,7 +581,7 @@ bne loop" :machine 'emu-test-machine))
 (fiveam:test step-machine-decodes-each-mode-variant-independently
   (let ((m (make-machine 'emu-test-machine))
         (a (assemble "lda #5
-lda $10" :machine 'emu-test-machine)))
+lda $10" :cpu 'emu-test-machine)))
     (setf (mref m 'ram #x10) 99)
     (load-program m a)
     (let ((first-descriptor (step-machine m)))
@@ -596,7 +596,7 @@ lda $10" :machine 'emu-test-machine)))
 (fiveam:test multi-operand-instruction-round-trip-through-run
   (let* ((m (make-machine 'emu-test-machine))
          (a (assemble "movi $20, $99
-hlt" :machine 'emu-test-machine)))
+hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -611,7 +611,7 @@ hlt" :machine 'emu-test-machine)))
 loop:   dex
         bne loop
         sta $1000
-        hlt" :machine 'emu-test-machine)))
+        hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -715,7 +715,7 @@ psh #2
 psh #5
 add
 sto $2001
-hlt" :machine 'stack-test-machine)))
+hlt" :cpu 'stack-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -744,7 +744,7 @@ loop:   ldm $0000
         sub
         sto $0000
         jmp loop
-end:    hlt" :machine 'stack-test-machine)))
+end:    hlt" :cpu 'stack-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -763,7 +763,7 @@ end:    hlt" :machine 'stack-test-machine)))
 psh #5
 adx
 sto $2000
-hlt" :machine 'stack-test-machine)))
+hlt" :cpu 'stack-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -774,7 +774,7 @@ hlt" :machine 'stack-test-machine)))
 (fiveam:test stack-underflow-stops-run
   (let* ((m (make-machine 'stack-test-machine))
          (a (assemble "add
-hlt" :machine 'stack-test-machine)))
+hlt" :cpu 'stack-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :fault reason))
@@ -787,7 +787,7 @@ hlt" :machine 'stack-test-machine)))
   (let* ((m (make-machine 'shallow-stack-test-machine))
          (a (assemble "psh #1
 psh #2
-hlt" :machine 'shallow-stack-test-machine)))
+hlt" :cpu 'shallow-stack-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :fault reason))
@@ -905,7 +905,7 @@ hlt" :machine 'shallow-stack-test-machine)))
         jsr double
         sta $1000
         hlt
-double: rts" :machine 'hybrid-test-machine)))
+double: rts" :cpu 'hybrid-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -915,7 +915,7 @@ double: rts" :machine 'hybrid-test-machine)))
 
 (fiveam:test stack-index-fault-stops-run
   (let* ((m (make-machine 'hybrid-test-machine))
-         (a (assemble "lda 0,S" :machine 'hybrid-test-machine)))
+         (a (assemble "lda 0,S" :cpu 'hybrid-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :fault reason))
@@ -936,7 +936,7 @@ double: rts" :machine 'hybrid-test-machine)))
 double: lda 1,S
         asl
         sta 1,S
-        rts" :machine 'hybrid-test-machine)))
+        rts" :cpu 'hybrid-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (declare (ignore steps))
@@ -967,7 +967,7 @@ double: iny
         lda 1,S
         asl
         sta 1,S
-        rts" :machine 'hybrid-test-machine)))
+        rts" :cpu 'hybrid-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -991,7 +991,7 @@ double: iny
   ;; and the actually-executed effect, not descriptor identity.
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "set #5
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SET" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'a)))
@@ -1000,7 +1000,7 @@ hlt" :machine 'word-test-machine)))
 (fiveam:test step-machine-word-encoded-extra-word-round-trip
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "set #1000
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SET" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 1000 (sref m 'a)))
@@ -1012,7 +1012,7 @@ hlt" :machine 'word-test-machine)))
 (fiveam:test step-machine-word-encoded-narrow-extra-word-round-trip
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "setn #100
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SETN" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 100 (sref m 'a)))
@@ -1029,7 +1029,7 @@ hlt" :machine 'word-test-machine)))
   ;; sign-extension on decode instead.
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "set #-1
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (step-machine m)
     ;; A's own :SET! stores the decoded value through WRAP-VALUE like any
@@ -1043,7 +1043,7 @@ hlt" :machine 'word-test-machine)))
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "set #5
 set #1000
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -1058,7 +1058,7 @@ hlt" :machine 'word-test-machine)))
 (fiveam:test step-machine-word-layout-default-round-trip
   (let ((m (make-machine 'word-layouts-test-machine))
         (a (assemble "setx 5, 200
-hlt" :machine 'word-layouts-test-machine)))
+hlt" :cpu 'word-layouts-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SETX" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'a)))
@@ -1068,7 +1068,7 @@ hlt" :machine 'word-layouts-test-machine)))
 (fiveam:test step-machine-word-layout-alternate-wide-round-trip
   (let ((m (make-machine 'word-layouts-test-machine))
         (a (assemble "setwide 4000
-hlt" :machine 'word-layouts-test-machine)))
+hlt" :cpu 'word-layouts-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SETWIDE" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 4000 (sref m 'a)))
@@ -1077,7 +1077,7 @@ hlt" :machine 'word-layouts-test-machine)))
 (fiveam:test step-machine-word-layout-alternate-narrow-round-trip
   (let ((m (make-machine 'word-layouts-test-machine))
         (a (assemble "setnarrow 3, 2, 100
-hlt" :machine 'word-layouts-test-machine)))
+hlt" :cpu 'word-layouts-test-machine)))
     (load-program m a)
     (fiveam:is (string= "SETNARROW" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 3 (sref m 'a)))
@@ -1089,7 +1089,7 @@ hlt" :machine 'word-layouts-test-machine)))
         (a (assemble "setx 5, 200
 setwide 4000
 setnarrow 3, 2, 100
-hlt" :machine 'word-layouts-test-machine)))
+hlt" :cpu 'word-layouts-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -1109,7 +1109,7 @@ hlt" :machine 'word-layouts-test-machine)))
         (a (assemble "incn 0
 decn 0
 zeroall
-hlt" :machine 'field-value-test-machine)))
+hlt" :cpu 'field-value-test-machine)))
     (load-program m a)
     (fiveam:is (string= "INCN" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 1 (regref m 'a 0)))
@@ -1128,7 +1128,7 @@ hlt" :machine 'field-value-test-machine)))
   ;; loop: wbra loop -- WBRA is 2 cells wide, so the next-instruction address
   ;; is 2; the encoded offset is -2, landing back on PC 0.
   (let ((m (make-machine 'word-relative-test-machine))
-        (a (assemble "loop: wbra loop" :machine 'word-relative-test-machine)))
+        (a (assemble "loop: wbra loop" :cpu 'word-relative-test-machine)))
     (load-program m a)
     (step-machine m)
     (fiveam:is (= 0 (sref m 'pc)))))
@@ -1139,7 +1139,7 @@ hlt" :machine 'field-value-test-machine)))
   ;; branches, not just a single self-branch.
   (let ((m (make-machine 'word-relative-test-machine))
         (a (assemble "loop:  wbra other
-other: wbra loop" :machine 'word-relative-test-machine)))
+other: wbra loop" :cpu 'word-relative-test-machine)))
     (load-program m a)
     (step-machine m)
     (fiveam:is (= 2 (sref m 'pc)))
@@ -1153,7 +1153,7 @@ other: wbra loop" :machine 'word-relative-test-machine)))
   ;; halting instruction, run to completion rather than stepped by hand.
   (let ((m (make-machine 'word-relative-test-machine))
         (a (assemble "loop: wbra next
-next: whlt" :machine 'word-relative-test-machine)))
+next: whlt" :cpu 'word-relative-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run m)
       (fiveam:is (eq :trap reason))
@@ -1167,7 +1167,7 @@ next: whlt" :machine 'word-relative-test-machine)))
   ;; syntax packs inline biased #x00.
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "wcx 5
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "WCX" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'a)))
@@ -1180,7 +1180,7 @@ hlt" :machine 'word-test-machine)))
   ;; field easily, but the CHOICE (syntax), not the value, decides here.
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "wcxw [5]
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "WCXW" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'b)))
@@ -1196,7 +1196,7 @@ hlt" :machine 'word-test-machine)))
   (let ((m (make-machine 'word-test-machine))
         (a (assemble "wcc 5
 wcc [5]
-hlt" :machine 'word-test-machine)))
+hlt" :cpu 'word-test-machine)))
     (load-program m a)
     (fiveam:is (string= "WCC" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'a)))
@@ -1214,7 +1214,7 @@ hlt" :machine 'word-test-machine)))
   (let ((m (make-machine 'mixed-field-test-machine))
         (a (assemble "wcm 5
 wcm [50]
-hlt" :machine 'mixed-field-test-machine)))
+hlt" :cpu 'mixed-field-test-machine)))
     (load-program m a)
     (fiveam:is (string= "WCM" (instruction-descriptor-name (step-machine m))))
     (fiveam:is (= 5 (sref m 'a)))
@@ -1308,7 +1308,7 @@ hlt" :machine 'mixed-field-test-machine)))
 (fiveam:test step-machine-per-mode-cycles-override-shared-default
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "lda #5
-lda $10" :machine 'cycle-test-machine)))
+lda $10" :cpu 'cycle-test-machine)))
     (load-program m a)
     (multiple-value-bind (descriptor cost) (step-machine m)
       (fiveam:is (eq (find-instruction 'cycle-test-machine 'lda :mode 'immediate) descriptor))
@@ -1322,7 +1322,7 @@ lda $10" :machine 'cycle-test-machine)))
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "slow
 slow
-hlt" :machine 'cycle-test-machine)))
+hlt" :cpu 'cycle-test-machine)))
     (load-program m a)
     (run m)
     (fiveam:is (= 11 (machine-cycles m))) ; 5 + 5 + 1 (hlt's own default cost)
@@ -1333,7 +1333,7 @@ hlt" :machine 'cycle-test-machine)))
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "slow
 nop
-nop" :machine 'cycle-test-machine)))
+nop" :cpu 'cycle-test-machine)))
     (load-program m a)
     ;; slow (5) then nop (1) lands exactly on 6 -- the budget check trips
     ;; with no overshoot on this schedule.
@@ -1345,7 +1345,7 @@ nop" :machine 'cycle-test-machine)))
 (fiveam:test run-for-cycles-overshoots-by-at-most-one-instructions-cost
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "slow
-nop" :machine 'cycle-test-machine)))
+nop" :cpu 'cycle-test-machine)))
     (load-program m a)
     ;; Budget of 3 lands mid-instruction: SLOW alone (its own cost of 5) is
     ;; already the first step, so the budget is checked only after SLOW has
@@ -1358,7 +1358,7 @@ nop" :machine 'cycle-test-machine)))
 
 (fiveam:test run-for-cycles-trap-counts-its-cycles-decode-failure-counts-none
   (let ((m (make-machine 'cycle-test-machine))
-        (a (assemble "hlt" :machine 'cycle-test-machine)))
+        (a (assemble "hlt" :cpu 'cycle-test-machine)))
     (load-program m a)
     (multiple-value-bind (reason steps) (run-for-cycles m 100)
       (fiveam:is (eq :trap reason))
@@ -1374,7 +1374,7 @@ nop" :machine 'cycle-test-machine)))
 (fiveam:test machine-elapsed-seconds-is-pure-arithmetic-no-clock-needed
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "slow
-hlt" :machine 'cycle-test-machine)))
+hlt" :cpu 'cycle-test-machine)))
     (load-program m a)
     (run m)
     ;; 6 cycles at 1 MHz (1 cycle = 1 microsecond) = 6e-6 seconds.
@@ -1387,7 +1387,7 @@ hlt" :machine 'cycle-test-machine)))
 
 (fiveam:test run-for-duration-signals-without-clock-speed
   (let ((m (make-machine 'no-clock-test-machine))
-        (a (assemble "hlt" :machine 'no-clock-test-machine)))
+        (a (assemble "hlt" :cpu 'no-clock-test-machine)))
     (load-program m a)
     (fiveam:signals error (run-for-duration m 1.0d0))))
 
@@ -1395,7 +1395,7 @@ hlt" :machine 'cycle-test-machine)))
   (let ((m (make-machine 'cycle-test-machine))
         (a (assemble "loop: slow
 nop
-nop" :machine 'cycle-test-machine)))
+nop" :cpu 'cycle-test-machine)))
     (load-program m a)
     ;; 6 microseconds of simulated time at 1 MHz = 6 cycles' worth.
     (multiple-value-bind (reason steps) (run-for-duration m 6.0d-6)
@@ -1533,14 +1533,14 @@ nop" :machine 'cycle-test-machine)))
 (fiveam:test bank-switch-instruction-runs
   (let ((m (make-machine 'bank-emu-test-machine)))
     (load-program m (assemble "bnk #1
-hlt" :machine 'bank-emu-test-machine))
+hlt" :cpu 'bank-emu-test-machine))
     (run m)
     (fiveam:is (= 1 (current-bank m 'window)))))
 
 (fiveam:test bank-switch-to-bad-bank-faults
   (let ((m (make-machine 'bank-emu-test-machine)))
     (load-program m (assemble "bnk #5
-hlt" :machine 'bank-emu-test-machine))
+hlt" :cpu 'bank-emu-test-machine))
     (multiple-value-bind (reason steps condition) (run m)
       (declare (ignore steps))
       (fiveam:is (eq :fault reason))
@@ -1551,7 +1551,7 @@ hlt" :machine 'bank-emu-test-machine))
 (fiveam:test trap-names-its-source-line
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (assemble "ldx #5
-  hlt" :machine 'emu-test-machine))
+  hlt" :cpu 'emu-test-machine))
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :trap reason))
       (fiveam:is (= 2 steps))
@@ -1563,7 +1563,7 @@ hlt" :machine 'bank-emu-test-machine))
 (fiveam:test trap-names-its-nearest-label-and-offset
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (assemble "start: ldx #5
-.next: hlt" :machine 'emu-test-machine))
+.next: hlt" :cpu 'emu-test-machine))
     (multiple-value-bind (reason steps condition) (run m)
       (declare (ignore steps))
       (fiveam:is (eq :trap reason))
@@ -1574,7 +1574,7 @@ hlt" :machine 'bank-emu-test-machine))
   (let ((m (make-machine 'emu-test-machine)))
     (load-program m (assemble "start: ldx #5
   ldx #6
-  hlt" :machine 'emu-test-machine) :origin #x40)
+  hlt" :cpu 'emu-test-machine) :origin #x40)
     (multiple-value-bind (reason steps condition) (run m)
       (declare (ignore steps))
       (fiveam:is (eq :trap reason))
@@ -1584,7 +1584,7 @@ hlt" :machine 'bank-emu-test-machine))
 (fiveam:test fault-names-the-faulting-instruction-not-the-advanced-pc
   (let ((m (make-machine 'stack-test-machine)))
     (load-program m (assemble "add
-hlt" :machine 'stack-test-machine))
+hlt" :cpu 'stack-test-machine))
     (multiple-value-bind (reason steps condition) (run m)
       (fiveam:is (eq :fault reason))
       (fiveam:is (= 1 steps))
@@ -1594,7 +1594,7 @@ hlt" :machine 'stack-test-machine))
 
 (fiveam:test direct-step-fault-carries-location
   (let ((m (make-machine 'stack-test-machine)))
-    (load-program m (assemble "add" :machine 'stack-test-machine))
+    (load-program m (assemble "add" :cpu 'stack-test-machine))
     (let ((condition (handler-case (progn (step-machine m) nil)
                        (storage-error (c) c))))
       (fiveam:is (typep condition 'stack-underflow))
@@ -1602,7 +1602,7 @@ hlt" :machine 'stack-test-machine))
 
 (fiveam:test raw-cells-locate-the-pc-but-name-no-line
   (let ((m (make-machine 'stack-test-machine))
-        (a (assemble "add" :machine 'stack-test-machine)))
+        (a (assemble "add" :cpu 'stack-test-machine)))
     (load-program m (assembly-cells a))
     (fiveam:is (null (machine-program m)))
     (multiple-value-bind (reason steps condition) (run m)
@@ -1623,7 +1623,7 @@ hlt" :machine 'stack-test-machine))
 
 (fiveam:test load-program-retains-the-program-with-its-memory-and-offset
   (let ((m (make-machine 'emu-test-machine))
-        (a (assemble "hlt" :machine 'emu-test-machine)))
+        (a (assemble "hlt" :cpu 'emu-test-machine)))
     (load-program m a)
     (fiveam:is (eq a (machine-program m)))
     (fiveam:is (= 0 (loaded-program-origin (first (machine-programs m)))))
@@ -1642,9 +1642,9 @@ hlt" :machine 'stack-test-machine))
   "A stack machine with a BIOS at 0 and a program at #x40, each with source of its own."
   (let ((m (make-machine 'stack-test-machine))
         (bios (assemble "boot: add
-nop2: hlt" :machine 'stack-test-machine))
+nop2: hlt" :cpu 'stack-test-machine))
         (program (assemble "psh #1
-hlt" :machine 'stack-test-machine :origin #x40)))
+hlt" :cpu 'stack-test-machine :origin #x40)))
     (load-program m bios)
     (load-program m program)
     (values m bios program)))
@@ -1685,8 +1685,8 @@ hlt" :machine 'stack-test-machine :origin #x40)))
   (let ((m (make-machine 'stack-test-machine))
         (old (assemble "psh #1
 psh #2
-psh #3" :machine 'stack-test-machine))
-        (new (assemble "add" :machine 'stack-test-machine :origin 2)))
+psh #3" :cpu 'stack-test-machine))
+        (new (assemble "add" :cpu 'stack-test-machine :origin 2)))
     (load-program m old)
     (load-program m new)
     (fiveam:is (eq new (machine-program-at m 2)))
@@ -1697,7 +1697,7 @@ psh #3" :machine 'stack-test-machine))
   (let ((m (make-machine 'stack-test-machine))
         (a (assemble "psh #1
 add
-hlt" :machine 'stack-test-machine)))
+hlt" :cpu 'stack-test-machine)))
     (load-program m a :origin #x40)
     (fiveam:is (= 1 (listing-line-line (machine-listing-line m #x40))))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m #x42))))
@@ -1711,7 +1711,7 @@ hlt" :machine 'stack-test-machine)))
 (fiveam:test explicit-memory-load-is-matched-only-for-that-memory
   (let ((m (make-machine 'two-memory-test-machine))
         (a (assemble ".byte 1
-.byte 2" :machine 'two-memory-test-machine :memory 'rom)))
+.byte 2" :cpu 'two-memory-test-machine :memory 'rom)))
     (load-program m a :memory 'rom)
     (fiveam:is (eq 'rom (loaded-program-memory (first (machine-programs m)))))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))

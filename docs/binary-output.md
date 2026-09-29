@@ -5,7 +5,7 @@ standalone file for tools outside the Lisp image: an external emulator, a ROM
 flasher, a hex viewer.
 
 ```lisp
-(let ((a (assemble-file "prog.asm" :machine 'sixtyfoo)))
+(let ((a (assemble-file "prog.asm" :cpu 'sixtyfoo)))
   (write-binary a "prog.bin")
   (write-intel-hex a "prog.hex"))
 ```

@@ -101,8 +101,8 @@ mapped at load time, which the machine remembers for disassembly. A bank image r
 ## Disassembly
 
 ```lisp
-(disassemble-assembly assembly :machine m :bank n [:region r])
-(disassemble-assembly assembly :machine m :bank :all)
+(disassemble-assembly assembly :cpu m :bank n [:region r])
+(disassemble-assembly assembly :cpu m :bank :all)
 ```
 
 `:bank n` decodes that bank's image at the region's addresses, over the
@@ -113,7 +113,7 @@ starts each bank image with `.bank N` and `.org ADDR`, so the whole program
 round-trips as one source. A main-image line may not follow bank lines.
 
 ```lisp
-(disassembly-text (disassemble-assembly a :machine m :bank :all)
+(disassembly-text (disassemble-assembly a :cpu m :bank :all)
                   :origin (assembly-origin a))
 ```
 

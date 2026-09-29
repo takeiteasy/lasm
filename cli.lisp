@@ -37,7 +37,7 @@ from the source it holds.
 
 options:
   -m, --machine FILE     machine definition (.lisp), required
-  --machine-name NAME    machine to use when FILE defines several
+  --cpu NAME             CPU to use when FILE defines several
   --quiet                suppress assembly warnings
   --lexer NAME           lexer to use when FILE defines several
   --backend NAME         backend for a .lasm or .lsp program that names none
@@ -64,7 +64,7 @@ options:
   '(("-m" . :machine-file) ("--machine" . :machine-file)
     ("-o" . :output) ("--output" . :output)
     ("--format" . :format) ("--origin" . :origin)
-    ("--machine-name" . :machine-name) ("--lexer" . :lexer) ("--memory" . :memory)
+    ("--cpu" . :cpu) ("--lexer" . :lexer) ("--memory" . :memory)
     ("--backend" . :backend) ("--optimize" . :optimize) ("--frames" . :frames)
     ("--bank" . :bank) ("--region" . :region) ("--packing" . :packing) ("--cells" . :cells)
     ("--max-steps" . :max-steps) ("--cycles" . :cycles)
@@ -141,14 +141,14 @@ options:
   (or (%table-key-named table text)
       (%signal-usage-error 'usage-error "~A defines no ~A named ~A" file what text)))
 
-(defun %cli-pick-machine (file explicit)
+(defun %cli-pick-cpu (file explicit)
   (if explicit
-      (%cli-named explicit *machines* "machine" file)
+      (%cli-named explicit *machines* "CPU" file)
       (let ((names (%table-keys *machines*)))
         (case (length names)
-          (0 (%signal-usage-error 'usage-error "~A defines no machine" file))
+          (0 (%signal-usage-error 'usage-error "~A defines no CPU" file))
           (1 (first names))
-          (t (%signal-usage-error 'usage-error "~A defines several machines (~{~(~A~)~^, ~}): pass --machine-name"
+          (t (%signal-usage-error 'usage-error "~A defines several CPUs (~{~(~A~)~^, ~}): pass --cpu"
                     file names))))))
 
 (defun %cli-pick-lexer (file explicit before)
@@ -161,11 +161,12 @@ options:
           (t (%signal-usage-error 'usage-error "~A defines several lexers (~{~(~A~)~^, ~}): pass --lexer" file names))))))
 
 (defun %cli-call-with-definitions (options function)
-  "Load OPTIONS' machine file into a private machine table and call FUNCTION
-with the chosen machine and lexer names. Loaded definitions never leak into
+  "Load OPTIONS' machine file into private machine tables and call FUNCTION
+with the chosen CPU and lexer names. Loaded definitions never leak into
 the calling image."
   (let ((file (or (getf options :machine-file) (%usage-error "-m MACHINE.lisp is required"))))
     (let* ((*machines* (make-hash-table :test 'eq))
+           (*isas* (make-hash-table :test 'eq))
            (*backends* (make-hash-table :test 'equal))
            (*lexers* (%copy-table *lexers*))
            (*modes* (%copy-table *modes*))
@@ -176,7 +177,7 @@ the calling image."
             (*error-output* (make-broadcast-stream)))
         (load file))
       (funcall function
-               (%cli-pick-machine file (getf options :machine-name))
+               (%cli-pick-cpu file (getf options :cpu))
                (and (not (getf options :snapshot-only))
                     (%cli-pick-lexer file (getf options :lexer) before))))))
 
@@ -197,14 +198,14 @@ the calling image."
 (defun %cli-assemble (file machine lexer options)
   (let ((origin (%cli-option-integer options :origin "--origin")))
     (cond ((string-equal "lsp" (pathname-type file))
-           (assemble-source-file file :machine machine :lexer lexer :memory (%cli-memory options)
+           (assemble-source-file file :cpu machine :lexer lexer :memory (%cli-memory options)
                                       :origin origin :backend (getf options :backend)
                                       :optimize (%cli-optimize options)
                                       :frames (%cli-frames options)))
           ((string-equal "lasm" (pathname-type file))
-           (assemble-items-file file :machine machine :lexer lexer :memory (%cli-memory options)
+           (assemble-items-file file :cpu machine :lexer lexer :memory (%cli-memory options)
                                      :origin origin :backend (getf options :backend)))
-          (t (assemble-file file :machine machine :lexer lexer :memory (%cli-memory options)
+          (t (assemble-file file :cpu machine :lexer lexer :memory (%cli-memory options)
                                  :origin (or origin 0))))))
 
 (defun %cli-command-compile (file machine lexer options out)
@@ -249,10 +250,10 @@ the calling image."
                       (intern (string-upcase (getf options :region)) '#:lasm)))
          (packing (%cli-packing options)))
     (funcall (if (string= format "hex") #'write-intel-hex #'write-binary)
-             assembly path :machine machine :memory memory :bank bank :region region
+             assembly path :cpu machine :memory memory :bank bank :region region
                            :packing packing)
     (format out "wrote ~A (~D bytes)~%" path
-            (length (assembly-bytes assembly :machine machine :memory memory
+            (length (assembly-bytes assembly :cpu machine :memory memory
                                              :bank bank :region region :packing packing)))
     0))
 
@@ -270,7 +271,7 @@ that snapshot, or NIL."
     (if file
         (values (%cli-assemble file machine lexer options) (and path (read-snapshot path)))
         (let ((snapshot (read-snapshot path)))
-          (values (or (snapshot-assembly snapshot :machine machine)
+          (values (or (snapshot-assembly snapshot :cpu machine)
                       (%snapshot-fail 'snapshot-malformed "~A has no embedded program; pass FILE" path))
                   snapshot)))))
 
@@ -336,7 +337,7 @@ there is one."
          (lines (disassemble-cells (bytes-to-cells (%cli-read-bytes file) cell-width :endian endian
                                                                   :packing packing
                                                                   :count (%cli-option-integer options :cells "--cells"))
-                                   :machine machine :origin origin :lexer lexer :memory memory
+                                   :cpu machine :origin origin :lexer lexer :memory memory
                                    :data-regions (%cli-data-regions options))))
     (if (getf options :annotate)
         (print-disassembly lines :stream out)

@@ -283,7 +283,7 @@
    #:items-program-p
    #:items-program-items
    #:items-program-backend
-   #:items-program-machine
+   #:items-program-cpu
    #:items-program-origin
    #:items-program-memory
    #:items-program-lexer

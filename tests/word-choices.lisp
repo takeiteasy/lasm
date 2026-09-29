@@ -40,7 +40,7 @@
       (word-imm (set! a value)))))
 
 (fiveam:test literal-only-one-of-assembles-decodes-and-disassembles
-  (let ((assembly (assemble "fixedchoice SP" :machine 'fixed-choice-machine)))
+  (let ((assembly (assemble "fixedchoice SP" :cpu 'fixed-choice-machine)))
     (fiveam:is (equalp #(0 #x13) (assembly-cells assembly)))
     (multiple-value-bind (descriptor values size choices selections)
         (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'fixed-choice-machine)
@@ -51,10 +51,10 @@
       (fiveam:is (equal '((fixed-slot . test-fixed-sp)) selections)))
     (fiveam:is (equal '("fixedchoice SP")
                        (mapcar #'disassembly-line-text
-                               (disassemble-assembly assembly :machine 'fixed-choice-machine))))))
+                               (disassemble-assembly assembly :cpu 'fixed-choice-machine))))))
 
 (fiveam:test literal-only-one-of-selects-the-other-tuple
-  (let ((assembly (assemble "fixedchoice #2" :machine 'fixed-choice-machine)))
+  (let ((assembly (assemble "fixedchoice #2" :cpu 'fixed-choice-machine)))
     (fiveam:is (equalp #(0 #x12) (assembly-cells assembly)))
     (multiple-value-bind (descriptor values size choices selections)
         (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'fixed-choice-machine)
@@ -97,7 +97,7 @@
                   (fixed-role-value src))))))
 
 (fiveam:test independent-zero-hole-selections-encode-and-share-semantics
-  (let* ((cells (assembly-cells (assemble "fixedpair A, B" :machine 'fixed-choice-machine)))
+  (let* ((cells (assembly-cells (assemble "fixedpair A, B" :cpu 'fixed-choice-machine)))
          (variants (find-instruction-variants 'fixed-choice-machine 'fixedpair))
          (fixed (remove-if #'instruction-descriptor-operand-names variants)))
     (fiveam:is (equalp #(#x04 #x21) cells))
@@ -124,7 +124,7 @@
                   ("fixedpair A, 9" 19)
                   ("fixedpair 7, 9" 16)))
     (destructuring-bind (source expected) case
-      (let* ((cells (assembly-cells (assemble source :machine 'fixed-choice-machine)))
+      (let* ((cells (assembly-cells (assemble source :cpu 'fixed-choice-machine)))
              (machine (make-machine 'fixed-choice-machine)))
         (multiple-value-bind (descriptor values size choices)
             (decode-instruction-at (vector-cell-reader cells) 0 'fixed-choice-machine)
@@ -187,7 +187,7 @@
 
 (fiveam:test unnamed-operands-use-positional-semantics-mappings
   (dolist (source '("unnamedtail 6, F" "unnamedtail 6, 99"))
-    (let* ((cells (assembly-cells (assemble source :machine 'fixed-choice-machine)))
+    (let* ((cells (assembly-cells (assemble source :cpu 'fixed-choice-machine)))
            (machine (make-machine 'fixed-choice-machine)))
       (multiple-value-bind (descriptor values size choices)
           (decode-instruction-at (vector-cell-reader cells) 0 'fixed-choice-machine)
@@ -268,7 +268,7 @@
                   ("move #100, [1, 55]" 31 17 (55 100) (100 1 55) (dst src src-off))
                   ("move [0, 5], #1000" 16 31 (1000 5) (0 5 1000) (dst dst-off src))))
     (destructuring-bind (source dst src extras values names) case
-      (let* ((cells (assembly-cells (assemble source :machine 'independent-choice-machine)))
+      (let* ((cells (assembly-cells (assemble source :cpu 'independent-choice-machine)))
              (expected (coerce (cons (logior 1 (ash dst 5) (ash src 10)) extras) 'vector)))
         (fiveam:is (equalp expected cells))
         (multiple-value-bind (descriptor decoded size choices)
@@ -284,9 +284,9 @@
         (fiveam:is (equalp cells
                           (assembly-cells
                            (assemble (disassembly-text
-                                      (disassemble-cells cells :machine 'independent-choice-machine)
+                                      (disassemble-cells cells :cpu 'independent-choice-machine)
                                       :origin 0)
-                                     :machine 'independent-choice-machine))))))))
+                                     :cpu 'independent-choice-machine))))))))
 
 (fiveam:test independent-operands-execute-with-own-offsets
   (dolist (case '(("move 0, 1" 0 0 777)
@@ -298,7 +298,7 @@
         (setf (regref machine 'r 0) 100
               (regref machine 'r 1) 777
               (mref machine 'ram 783) 999)
-        (load-program machine (assembly-cells (assemble source :machine 'independent-choice-machine)))
+        (load-program machine (assembly-cells (assemble source :cpu 'independent-choice-machine)))
         (step-machine machine)
         (fiveam:is (= observed (sref machine 'observed)))
         (fiveam:is (= value (if (zerop address) (regref machine 'r 0)
@@ -361,13 +361,13 @@
 
 (fiveam:test inline-aliases-use-canonical-decoding-and-semantics
   (dolist (source '("aliases canonical 5" "aliases alias 5" "aliases another 5"))
-    (let* ((cells (assembly-cells (assemble source :machine 'independent-choice-machine)))
+    (let* ((cells (assembly-cells (assemble source :cpu 'independent-choice-machine)))
            (machine (make-machine 'independent-choice-machine))
-           (lines (disassemble-cells cells :machine 'independent-choice-machine)))
+           (lines (disassemble-cells cells :cpu 'independent-choice-machine)))
       (fiveam:is (equalp (vector (logior 2 (ash 13 10))) cells))
       (fiveam:is (search "canonical$5" (disassembly-line-text (first lines))))
       (fiveam:is (equalp cells (assembly-cells (assemble (disassembly-text lines :origin 0)
-                                                       :machine 'independent-choice-machine))))
+                                                       :cpu 'independent-choice-machine))))
       (load-program machine cells)
       (step-machine machine)
       (fiveam:is (= 5 (sref machine 'observed))))))
@@ -387,9 +387,9 @@
 (fiveam:test signed-inline-aliases-round-trip-across-zero
   (dolist (value '(-3 -1 0 3))
     (let ((cells (assembly-cells (assemble (format nil "salias alias ~D" value)
-                                         :machine 'independent-choice-machine))))
+                                         :cpu 'independent-choice-machine))))
       (fiveam:is (equalp cells (assembly-cells (assemble (format nil "salias canonical ~D" value)
-                                                       :machine 'independent-choice-machine))))
+                                                       :cpu 'independent-choice-machine))))
       (multiple-value-bind (descriptor values size choices)
           (decode-instruction-at (lambda (address) (aref cells address)) 0 'independent-choice-machine)
         (declare (ignore descriptor size))
@@ -436,13 +436,13 @@
       (indexed-alias (set! observed alternate-offset)))))
 
 (fiveam:test inline-alias-of-a-longer-alternative-decodes-canonical-shape
-  (let* ((cells (assembly-cells (assemble "ialias indexed 2, 123" :machine 'independent-choice-machine)))
+  (let* ((cells (assembly-cells (assemble "ialias indexed 2, 123" :cpu 'independent-choice-machine)))
          (machine (make-machine 'independent-choice-machine)))
-    (fiveam:is (equalp cells (assembly-cells (assemble "ialias [2, 123]" :machine 'independent-choice-machine))))
-    (let ((lines (disassemble-cells cells :machine 'independent-choice-machine)))
+    (fiveam:is (equalp cells (assembly-cells (assemble "ialias [2, 123]" :cpu 'independent-choice-machine))))
+    (let ((lines (disassemble-cells cells :cpu 'independent-choice-machine)))
       (fiveam:is (search "[$2,$7B]" (disassembly-line-text (first lines))))
       (fiveam:is (equalp cells (assembly-cells (assemble (disassembly-text lines :origin 0)
-                                                       :machine 'independent-choice-machine)))))
+                                                       :cpu 'independent-choice-machine)))))
     (load-program machine cells)
     (step-machine machine)
     (fiveam:is (= 123 (sref machine 'observed)))))
@@ -489,11 +489,11 @@
   (semantics nil))
 
 (fiveam:test extra-field-and-trailing-hole-retain-their-own-choices
-  (let* ((cells (assembly-cells (assemble "move [0, 5], [1, 6]" :machine 'extra-field-machine)))
-         (lines (disassemble-cells cells :machine 'extra-field-machine)))
+  (let* ((cells (assembly-cells (assemble "move [0, 5], [1, 6]" :cpu 'extra-field-machine)))
+         (lines (disassemble-cells cells :cpu 'extra-field-machine)))
     (fiveam:is (equalp (vector (logior 1 (ash 5 2) (ash 16 5) (ash 17 10)) 6) cells))
     (fiveam:is (equalp cells (assembly-cells (assemble (disassembly-text lines :origin 0)
-                                                     :machine 'extra-field-machine))))))
+                                                     :cpu 'extra-field-machine))))))
 
 (fiveam:test registration-checks-each-shape-pair-once
   (let ((original (symbol-function '%check-opcode-decodable!))
@@ -546,7 +546,7 @@
 
 (fiveam:test named-varying-slot-allows-each-minimum-arity-alternative
   (let* ((cells (assembly-cells
-                 (assemble "nvar #3" :machine 'independent-choice-machine)))
+                 (assemble "nvar #3" :cpu 'independent-choice-machine)))
          (machine (make-machine 'independent-choice-machine)))
     (fiveam:is (equalp (vector (logior 6 (ash 31 5) (ash 11 10))) cells))
     (load-program machine cells)
@@ -573,7 +573,7 @@
                   ("shoff (3, 20)" 23)))
     (let ((machine (make-machine 'independent-choice-machine)))
       (load-program machine (assembly-cells (assemble (first case)
-                                                       :machine 'independent-choice-machine)))
+                                                       :cpu 'independent-choice-machine)))
       (step-machine machine)
       (fiveam:is (= (second case) (sref machine 'observed))))))
 
@@ -640,13 +640,13 @@
   (semantics (set! a v)))
 
 (defun %prefix-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'prefix-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'prefix-machine)) 'list))
 
 (defun %prefix-round-trip (source)
   "Disassembled text of SOURCE, checked to re-assemble to identical cells."
-  (let* ((assembly (assemble source :machine 'prefix-machine))
+  (let* ((assembly (assemble source :cpu 'prefix-machine))
          (text (disassembly-line-text
-                (first (disassemble-assembly assembly :machine 'prefix-machine :labels nil)))))
+                (first (disassemble-assembly assembly :cpu 'prefix-machine :labels nil)))))
     (fiveam:is (equal (coerce (assembly-cells assembly) 'list) (%prefix-cells text)))
     text))
 
@@ -662,11 +662,11 @@
   (fiveam:is (not (equal (%prefix-cells "two w:1, 2") (%prefix-cells "two 1, w:2")))))
 
 (fiveam:test hole-prefix-unknown-name-signals
-  (fiveam:signals assembly-error (assemble "one #z:5" :machine 'prefix-machine)))
+  (fiveam:signals assembly-error (assemble "one #z:5" :cpu 'prefix-machine)))
 
 (fiveam:test hole-prefix-forced-inline-overflow-signals
   (fiveam:is (= 2 (length (%prefix-cells "oneinline #s:5"))))
-  (fiveam:signals assembly-error (assemble "oneinline #s:100" :machine 'prefix-machine)))
+  (fiveam:signals assembly-error (assemble "oneinline #s:100" :cpu 'prefix-machine)))
 
 (fiveam:test hole-prefix-selects-one-of-alternative
   (let ((count 0) unprefixed)
@@ -718,7 +718,7 @@
 
 (fiveam:test choice-overflow-after-a-trailing-word-hole-signals-assembly-error
   (fiveam:signals assembly-error
-    (assemble "move [0, 5], 99" :machine 'independent-choice-machine)))
+    (assemble "move [0, 5], 99" :cpu 'independent-choice-machine)))
 
 ;;; Nested varying alternative with a hole-less inner option (#219)
 
@@ -758,7 +758,7 @@
                   ("get POP" 99 "get POP")
                   ("get [3, 4]" 7 "get [$3,$4]")))
     (destructuring-bind (source expected text) case
-      (let* ((assembly (assemble source :machine 'nested-zero-machine))
+      (let* ((assembly (assemble source :cpu 'nested-zero-machine))
              (machine (make-machine 'nested-zero-machine)))
         (multiple-value-bind (descriptor values size choices selections)
             (decode-instruction-at (vector-cell-reader (assembly-cells assembly)) 0 'nested-zero-machine)
@@ -767,19 +767,19 @@
           (fiveam:is (= expected (sref machine 'a))))
         (fiveam:is (equal (list text)
                           (mapcar #'disassembly-line-text
-                                  (disassemble-assembly assembly :machine 'nested-zero-machine
+                                  (disassemble-assembly assembly :cpu 'nested-zero-machine
                                                                   :labels nil :suffixes nil))))))))
 
 (fiveam:test nested-hole-less-option-selection-is-a-path
   (multiple-value-bind (descriptor values size choices selections)
       (decode-instruction-at
-       (vector-cell-reader (assembly-cells (assemble "get POP" :machine 'nested-zero-machine)))
+       (vector-cell-reader (assembly-cells (assemble "get POP" :cpu 'nested-zero-machine)))
        0 'nested-zero-machine)
     (declare (ignore descriptor size choices))
     (fiveam:is (null values))
     (fiveam:is (equal '((src-slot nz-stk nz-pop)) selections)))
-  (fiveam:is (not (equalp (assembly-cells (assemble "get POP" :machine 'nested-zero-machine))
-                          (assembly-cells (assemble "get 0" :machine 'nested-zero-machine))))))
+  (fiveam:is (not (equalp (assembly-cells (assemble "get POP" :cpu 'nested-zero-machine))
+                          (assembly-cells (assemble "get 0" :cpu 'nested-zero-machine))))))
 
 ;;; #439: (instruction-size) is the decoded length in cells
 
@@ -818,7 +818,7 @@
 
 (defun size-after-step (source machine)
   (let ((m (make-machine machine)))
-    (load-program m (assemble source :machine machine))
+    (load-program m (assemble source :cpu machine))
     (step-machine m)
     (sref m 'a)))
 
@@ -863,7 +863,7 @@
   (semantics (set! observed value)))
 
 (defun wrap-cells (source)
-  (coerce (assembly-cells (assemble source :machine 'independent-choice-machine)) 'list))
+  (coerce (assembly-cells (assemble source :cpu 'independent-choice-machine)) 'list))
 
 (fiveam:test wrap-packs-a-value-congruent-to-the-inline-range
   (dolist (mnemonic '("wrapv #" "wrapc #"))

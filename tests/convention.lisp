@@ -98,7 +98,7 @@
 
 (defparameter +cv-sp+ #x800)
 
-(defun %cv-run (items backend &key (machine 'callfoo) setup)
+(defun %cv-run (items backend &key ((:cpu machine) 'callfoo) setup)
   "Assemble and run ITEMS with the stack at +CV-SP+; returns the machine."
   (let ((m (make-machine machine)))
     (load-program m (assemble-items items :backend backend))
@@ -201,7 +201,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
                       (:function f (:args 1 :locals 1 :save (c))
                         (lds (reg a) (:arg 0))
                         (:return)))
-                    'cv-up-abi :machine 'cv-up)))
+                    'cv-up-abi :cpu 'cv-up)))
     (fiveam:is (= 21 (%cv-a m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
 
@@ -463,7 +463,7 @@ popfp
 popr c
 ret
 " (render-items items :backend 'callfoo-fp-abi)))
-    (let ((m (%cv-run items 'callfoo-fp-abi :machine 'callfoo-fp :setup '((2 77)))))
+    (let ((m (%cv-run items 'callfoo-fp-abi :cpu 'callfoo-fp :setup '((2 77)))))
       (fiveam:is (= 42 (%cv-a m)))
       (fiveam:is (= 77 (regref m 'r 2)))
       (fiveam:is (= +cv-sp+ (sref m 'sp))))))
@@ -476,7 +476,7 @@ ret
                         (stf (:local 0) (reg a))
                         (ldf (reg b) (:local 0))
                         (:return)))
-                    'callfoo-fp-abi :machine 'callfoo-fp)))
+                    'callfoo-fp-abi :cpu 'callfoo-fp)))
     (fiveam:is (= 21 (%cv-a m)))
     (fiveam:is (= 21 (regref m 'r 1)))
     (fiveam:is (= +cv-sp+ (sref m 'sp))))
@@ -489,7 +489,7 @@ ret
                       (:function f (:locals 2 :save (d))
                         (:push (imm 1))
                         (:return)))
-                    'callfoo-fp-abi :machine 'callfoo-fp :setup '((3 5)))))
+                    'callfoo-fp-abi :cpu 'callfoo-fp :setup '((3 5)))))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))
     (fiveam:is (= 5 (regref m 'r 3)))))
 
@@ -503,7 +503,7 @@ ret
                       (:function inner (:args 1 :locals 2)
                         (ldf (reg a) (:arg 0))
                         (:return)))
-                    'callfoo-fp-abi :machine 'callfoo-fp)))
+                    'callfoo-fp-abi :cpu 'callfoo-fp)))
     (fiveam:is (= 10 (%cv-a m)))
     (fiveam:is (= 0 (%cv-fp m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
@@ -517,7 +517,7 @@ ret
                       (:function f (:args 1 :locals 1 :save (c))
                         (ldf (reg a) (:arg 0))
                         (:return)))
-                    'cv-fp-aligned-abi :machine 'callfoo-fp)))
+                    'cv-fp-aligned-abi :cpu 'callfoo-fp)))
     (fiveam:is (= 7 (%cv-a m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
 
@@ -526,7 +526,7 @@ ret
                       (:function f (:args 2 :locals 1)
                         (ldf (reg a) (:arg 1))
                         (:return)))
-                    'cv-fp-callee-abi :machine 'callfoo-fp)))
+                    'cv-fp-callee-abi :cpu 'callfoo-fp)))
     (fiveam:is (= 4 (%cv-a m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
 
@@ -537,7 +537,7 @@ ret
                    (stf (:local 0) (reg a))
                    (ldf (reg b) (:local 0))
                    (:return)))))
-    (let ((m (%cv-run items 'cv-up-fp-abi :machine 'cv-up-fp :setup '((2 77)))))
+    (let ((m (%cv-run items 'cv-up-fp-abi :cpu 'cv-up-fp :setup '((2 77)))))
       (fiveam:is (= 21 (%cv-a m)))
       (fiveam:is (= 21 (regref m 'r 1)))
       (fiveam:is (= 77 (regref m 'r 2)))
@@ -578,7 +578,7 @@ ret
 lds a, [ sp + 1 ]
 ret
 " (render-items items :backend 'callfoo-fp-abi)))
-    (let ((m (%cv-run items 'callfoo-fp-abi :machine 'callfoo-fp)))
+    (let ((m (%cv-run items 'callfoo-fp-abi :cpu 'callfoo-fp)))
       (fiveam:is (= 21 (%cv-a m)))
       (fiveam:is (= +cv-sp+ (sref m 'sp))))))
 

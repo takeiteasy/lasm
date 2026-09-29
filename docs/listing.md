@@ -3,7 +3,7 @@
 An `assembly` keeps its address-to-source mapping and symbol details.
 
 ```lisp
-(let ((a (assemble source :machine 'sixtyfoo)))
+(let ((a (assemble source :cpu 'sixtyfoo)))
   (print-listing a)
   (print-symbols a))
 ```
@@ -25,7 +25,7 @@ alternative the instruction's operands matched, nested ones included. `START`
 and `END` index the tokens after the mnemonic, commas included.
 
 ```lisp
-(assemble "ld a, [b]" :machine 'm)   ; one-of picks the register-indirect form
+(assemble "ld a, [b]" :cpu 'm)   ; one-of picks the register-indirect form
 ;; (listing-line-choices (first (assembly-listing a))) => ((ind 2 5))
 ```
 

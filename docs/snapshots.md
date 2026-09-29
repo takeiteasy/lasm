@@ -81,7 +81,7 @@ snapshot alone. An `.include` there reads only the embedded files, never the
 disk.
 
 ```lisp
-(write-snapshot (machine-snapshot m :assembly (assemble-file "prog.asm" :machine 'sixtyfoo))
+(write-snapshot (machine-snapshot m :assembly (assemble-file "prog.asm" :cpu 'sixtyfoo))
                 "prog.snap")
 (snapshot-assembly (read-snapshot "prog.snap"))   ; prog.asm need not exist
 ```

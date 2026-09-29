@@ -149,8 +149,8 @@
     (multiple-value-bind (status out err) (%run-cli args)
       (fiveam:is (= 1 status))
       (fiveam:is (string= "" out))
-      (fiveam:is (search "--machine-name" err)))
-    (fiveam:is (search "no machine named" (nth-value 2 (%run-cli (append args '("--machine-name" "nope"))))))))
+      (fiveam:is (search "--cpu" err)))
+    (fiveam:is (search "no CPU named" (nth-value 2 (%run-cli (append args '("--cpu" "nope"))))))))
 
 (fiveam:test cli-machine-flag-is-required
   (multiple-value-bind (status out err) (%run-cli (list "listing" (%cli-path "tests/fixtures/cli/counter.asm")))
@@ -543,7 +543,7 @@
 (fiveam:test cli-runs-an-items-program-with-a-frame-pointer-backend
   (multiple-value-bind (status out)
       (%run-cli (list "run" (%cli-path "tests/fixtures/cli/framed.lasm") "-m" (%cli-path "tests/fixtures/cli/callfoo-fp.lisp")
-                      "--machine-name" "callfoo-fp"))
+                      "--cpu" "callfoo-fp"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 15 steps" out))))
 
@@ -561,7 +561,7 @@
         (fiveam:is (equalp #(8 0) (%cli-read-bytes out)))))))
 
 (fiveam:test cli-items-origin-option-overrides-the-program
-  (%with-items-program "(:program (:machine callfoo :origin 4) (hlt))"
+  (%with-items-program "(:program (:cpu callfoo :origin 4) (hlt))"
     (lambda (path)
       (multiple-value-bind (status out)
           (%run-cli (list "listing" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp")))
@@ -573,7 +573,7 @@
         (fiveam:is (search "0009" out))))))
 
 (fiveam:test cli-reports-a-malformed-items-program
-  (%with-items-program "(:program (:machine callfoo) (:frobnicate))"
+  (%with-items-program "(:program (:cpu callfoo) (:frobnicate))"
     (lambda (path)
       (multiple-value-bind (status out err)
           (%run-cli (list "assemble" path "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") "-o" "/dev/null"))

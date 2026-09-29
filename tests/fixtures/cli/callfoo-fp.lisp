@@ -2,7 +2,7 @@
 ;;;; callfoo with a frame pointer, and the backend extending callfoo-abi for it
 ;;;; (#321, #323). The CLI file defines callfoo too, so name the machine:
 ;;;;
-;;;;   lasm run framed.lasm -m callfoo-fp.lisp --machine-name callfoo-fp
+;;;;   lasm run framed.lasm -m callfoo-fp.lisp --cpu callfoo-fp
 
 (load (merge-pathnames "callfoo.lisp" *load-pathname*))
 

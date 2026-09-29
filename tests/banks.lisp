@@ -53,7 +53,7 @@ far:    hlt
 late:   nop")
 
 (defun %bank-assembly (&optional (source *bank-source*))
-  (assemble source :machine 'bank-asm-machine))
+  (assemble source :cpu 'bank-asm-machine))
 
 (defun %image-head (assembly bank n)
   (subseq (bank-image-cells (assembly-bank-image assembly 'romx bank)) 0 n))
@@ -125,7 +125,7 @@ nop")))
 (fiveam:test bank-needs-a-banked-region
   (fiveam:signals assembly-error
     (assemble ".bank 1
-nop" :machine 'bank-plain-machine)))
+nop" :cpu 'bank-plain-machine)))
 
 (fiveam:test bank-operand-must-be-a-constant
   (fiveam:signals assembly-error
@@ -189,7 +189,7 @@ nop")))
 .org $4000
 nop
 .org $5000
-nop" :machine 'bank-two-region-machine)))
+nop" :cpu 'bank-two-region-machine)))
     (fiveam:is (equal '(one two) (mapcar #'bank-image-region (assembly-banks a))))
     (fiveam:signals error (assembly-bytes a :bank 0))
     (fiveam:is (= 256 (length (assembly-bytes a :bank 0 :region 'two))))))
@@ -214,7 +214,7 @@ nop" :machine 'bank-two-region-machine)))
 (fiveam:test bank-disassembles-one-image
   (let* ((a (%bank-assembly))
          (text (disassembly-text
-                (disassemble-assembly a :machine 'bank-asm-machine :bank 2)
+                (disassemble-assembly a :cpu 'bank-asm-machine :bank 2)
                 :origin #x4000)))
     (fiveam:is (search ".org 16384" text))
     (fiveam:is (search "hlt" text))
@@ -321,7 +321,7 @@ nop" :machine 'bank-two-region-machine)))
   (semantics (set-bank! romx operand)))
 
 (defun %bank-op-assembly (source)
-  (assemble source :machine 'bank-op-machine))
+  (assemble source :cpu 'bank-op-machine))
 
 (fiveam:test bank-operator-folds-to-a-label-bank
   (let ((a (%bank-op-assembly "        bnk #bank(far)
@@ -398,7 +398,7 @@ here    = bank(*)
 near:   nop
         .bank 2
         .org $4000
-far:    nop" :machine 'bank-asm-machine))
+far:    nop" :cpu 'bank-asm-machine))
          (m (make-machine 'bank-asm-machine)))
     (load-program m a)
     (setf (current-bank m 'romx) mapped)
@@ -481,7 +481,7 @@ near:   nop
 (defun %round-trip (source labels)
   (let* ((a (%bank-assembly source))
          (text (disassembly-text
-                (disassemble-assembly a :machine 'bank-asm-machine :bank :all :labels labels)
+                (disassemble-assembly a :cpu 'bank-asm-machine :bank :all :labels labels)
                 :origin (assembly-origin a))))
     (values a (%bank-assembly text) text)))
 
@@ -508,12 +508,12 @@ near:   nop
 (fiveam:test bank-disassembly-only-labels-its-own-image
   (let* ((a (%bank-assembly))
          (text (disassembly-text
-                (disassemble-assembly a :machine 'bank-asm-machine :bank 1)
+                (disassemble-assembly a :cpu 'bank-asm-machine :bank 1)
                 :origin #x4000)))
     (fiveam:is (not (search "far:" text)))))
 
 (fiveam:test bank-disassembly-covers-the-listing-extent-only
-  (let ((lines (disassemble-assembly (%bank-assembly) :machine 'bank-asm-machine :bank 2)))
+  (let ((lines (disassemble-assembly (%bank-assembly) :cpu 'bank-asm-machine :bank 2)))
     (fiveam:is (= 3 (length lines)))
     (fiveam:is (equal '(romx . 2) (cons (disassembly-line-region (first lines))
                                         (disassembly-line-bank (first lines)))))))
@@ -521,8 +521,8 @@ near:   nop
 (fiveam:test disassembly-text-rejects-main-lines-after-a-bank
   (let ((a (%bank-assembly)))
     (fiveam:signals error
-      (disassembly-text (append (disassemble-assembly a :machine 'bank-asm-machine :bank 2)
-                                (disassemble-assembly a :machine 'bank-asm-machine))))))
+      (disassembly-text (append (disassemble-assembly a :cpu 'bank-asm-machine :bank 2)
+                                (disassemble-assembly a :cpu 'bank-asm-machine))))))
 
 ;;; Live memory disassembly follows the mapped bank
 

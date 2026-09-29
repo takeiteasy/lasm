@@ -76,7 +76,7 @@ Such a partial snapshot only restores through %RESTORE-SNAPSHOT with CELLS NIL."
   (let ((descriptor (machine-descriptor machine)))
     (list :lasm-snapshot
           :version +snapshot-version+
-          :machine (machine-descriptor-name descriptor)
+          :cpu (machine-descriptor-name descriptor)
           :shape (mapcar #'%element-shape (machine-descriptor-elements descriptor))
           :bank-shape (%bank-shape descriptor)
           :cycles (machine-cycles machine)
@@ -250,9 +250,9 @@ runtime-attached device already on the bus."
 DEVICE-PLAN BANK-VALUES) ready to apply."
   (let ((descriptor (machine-descriptor machine)))
     (%check-snapshot-version snapshot)
-    (unless (eq (%snapshot-field snapshot :machine) (machine-descriptor-name descriptor))
+    (unless (eq (%snapshot-field snapshot :cpu) (machine-descriptor-name descriptor))
       (%snapshot-fail 'snapshot-machine-mismatch "snapshot is for machine ~S, not ~S"
-                      (%snapshot-field snapshot :machine) (machine-descriptor-name descriptor)))
+                      (%snapshot-field snapshot :cpu) (machine-descriptor-name descriptor)))
     (unless (equal (%snapshot-field snapshot :shape)
                    (mapcar #'%element-shape (machine-descriptor-elements descriptor)))
       (%snapshot-fail 'snapshot-machine-mismatch
@@ -398,7 +398,7 @@ MACHINE-INTERRUPT-HOOK is left as installed."
         (unless (ignore-errors (pathname name) t)
           (bad "bad path ~S" name))))))
 
-(defun snapshot-assembly (snapshot &key machine)
+(defun snapshot-assembly (snapshot &key ((:cpu machine)))
   "The ASSEMBLY rebuilt from SNAPSHOT's embedded program (see MACHINE-SNAPSHOT),
 or NIL when it has none. MACHINE is the machine name to assemble for, checked
 against the snapshot's, and defaults to the snapshot's. .include reads only
@@ -407,7 +407,7 @@ SNAPSHOT-MACHINE-MISMATCH or SNAPSHOT-MALFORMED for a snapshot that does not
 fit, and whatever assembling signals for a program that no longer assembles."
   (%check-snapshot-version snapshot)
   (let ((program (%snapshot-field snapshot :program))
-        (name (%snapshot-field snapshot :machine)))
+        (name (%snapshot-field snapshot :cpu)))
     (when program
       (when (and machine (not (eq machine name)))
         (%snapshot-fail 'snapshot-machine-mismatch "snapshot is for machine ~S, not ~S" name machine))
@@ -423,7 +423,7 @@ fit, and whatever assembling signals for a program that no longer assembles."
         (let ((*include-sources* sources))
           (%assemble-source (cdr (gethash (getf program :file) sources))
                             (getf program :file) (pathname (getf program :path))
-                            :machine name :lexer (getf program :lexer)
+                            :cpu name :lexer (getf program :lexer)
                             :origin (getf program :origin) :memory (getf program :memory)))))))
 
 ;;; Data check and restricted reader

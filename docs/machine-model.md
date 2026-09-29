@@ -265,7 +265,7 @@ functions. `pc`, `opcode`, `machine` and `choice-case` are exported from
 symbol, and semantics bodies use `machine` and `choice-case`.
 
 The [debugger](debugger.md) and the [command line](cli.md) match a typed name
-(`watch sp`, `--machine-name`) against the machine's own names, so a machine
+(`watch sp`, `--cpu`) against the machine's own names, so a machine
 in any package is found.
 
 ## Limitations
