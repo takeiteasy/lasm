@@ -500,7 +500,7 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 | --- | --- |
 | `funcall` through a function's return value is checked only against every function value's arity. | [#403](https://todo.sr.ht/~takeiteasy/lasm/403) |
 | `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#404](https://todo.sr.ht/~takeiteasy/lasm/404) |
-| A repeated computed address reloads the pointer register. | [#433](https://todo.sr.ht/~takeiteasy/lasm/433) |
+| `(aset a i (+ (aref a i) 1))` reloads the pointer register for the store. | [#436](https://todo.sr.ht/~takeiteasy/lasm/436) |
 
 With several arities taken, a wrong one that another function has is not caught in these cases.
 

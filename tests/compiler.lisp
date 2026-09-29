@@ -1879,6 +1879,49 @@ two |#
   (fiveam:is (plusp (%cl-count-op "PEEK-BYTE-POINTER" "(defstring s \"ab\" :packed) (defun main () (aref-byte s 1))" 'cl-pointer-byte-abi)))
   (fiveam:is (plusp (%cl-count-op "POKE-BYTE-POINTER" "(defstring s \"ab\" :packed) (defun main () (aset-byte s 1 65))" 'cl-pointer-byte-abi))))
 
+;;; #433: a repeated computed address
+
+(eval `(defbackend cl-pointer-stack-abi (:extends callfoo-lang-abi)
+         (registers :address d)
+         (without-ops :peek :poke :peek-byte :poke-byte)
+         (ops (:point (r) (movv (reg d) (reg r)))
+              (:peek-pointer (dst) (ldx (reg dst) (ind d)))
+              (:poke-pointer (src) (stx (ind d) (reg src)))
+              (:peek-byte-pointer (dst) (ldb (reg dst) (ind d)))
+              (:poke-byte-pointer (src) (stb (ind d) (reg src))))))
+
+(eval `(defbackend cl-pointer-poke-label-abi (:extends cl-pointer-byte-abi)
+         (ops (:peek-label (d label) (ldm d label))
+              (:poke-label (label s) (stm s label)))))
+
+(defparameter +cl-address-programs+
+  '(("(defarray a (1 2 3 4)) (defun f (i) (+ (aref a i) (aref a i))) (defun main () (f 2))" 1 6)
+    ("(defstring s \"abcd\" :packed) (defun f (i) (+ (aref-byte s i) (aref-byte s i))) (defun main () (f 1))" 1 196)
+    ("(defarray a 4) (defun f (i) (aset a i 5) (aref a i)) (defun main () (f 2))" 1 5)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ (aref a i) (aref a (+ i 0)))) (defun main () (f 2))" 2 6)
+    ("(defarray a (1 2 3 4)) (defun f (i) (let ((x (aref a i))) (set i 3) (+ x (aref a i)))) (defun main () (f 1))" 2 6)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ (aref a i) (progn (if 0 0 0) (aref a i)))) (defun main () (f 2))" 2 6)
+    ("(defarray a (1 2 3 4)) (defun f (i) (+ (aref a i) (aref a (progn (set i 3) i)))) (defun main () (f 1))" 2 6)
+    ("(defarray a (1 2 3 4)) (defun f (i) (aset a i (progn (set i 3) 9)) (aref a i)) (defun main () (f 1))" 2 4)
+    ("(defarray a (1 2 3 4)) (defun f (i) (let ((i 1)) (+ (aref a i) (let ((i 2)) (aref a i))))) (defun main () (f 0))" 2 5)
+    ("(defarray a (1 2 3 4)) (defarray b (5 6 7 8)) (defun f (i) (+ (aref a i) (aref b i))) (defun main () (f 1))" 2 8)
+    ("(defarray a (1 2 3 4)) (defun g () 0) (defun f (i) (+ (aref a i) (progn (g) (aref a i)))) (defun main () (f 2))" 2 6)))
+
+(fiveam:test a-repeated-computed-address-points-the-register-once
+  (dolist (backend '(cl-pointer-poke-label-abi cl-pointer-stack-abi))
+    (loop for (source points nil) in +cl-address-programs+
+          do (fiveam:is (= points (%cl-count-op "POINT" source backend)) "~A ~A" backend source)))
+  (dolist (backend '(cl-pointer-byte-abi cl-pointer-poke-label-abi cl-pointer-stack-abi))
+    (loop for (source nil expected) in +cl-address-programs+
+          do (fiveam:is (= expected (%cv-a (%cl-run source backend))) "~A ~A" backend source))))
+
+(fiveam:test an-asm-that-writes-a-variable-of-the-address-forgets-it
+  (let ((source "(defarray a (1 2 3 4))
+                 (defun f (i) (+ (aref a i) (progn (asm (:clobbers a) (:op :const (reg a) 3) (:op :set (:var i) (reg a))) (aref a i))))
+                 (defun main () (f 1))"))
+    (fiveam:is (= 2 (%cl-count-op "POINT" source 'cl-pointer-stack-abi)))
+    (fiveam:is (= 6 (%cv-a (%cl-run source 'cl-pointer-stack-abi))))))
+
 ;;; #430: -label variants
 
 (eval `(defbackend cl-label-variant-abi (:extends cl-label-abi)

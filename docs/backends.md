@@ -216,8 +216,11 @@ that load and use it. The compiler keeps `REG` out of its register pools.
 A global, a static slot and a constant-index `aref`/`aset` load and store through it, and a computed address
 does when the backend has no `:peek`/`:poke`. `:peek-label`/`:poke-label` win
 when both exist. The compiler skips `:point-label` while `REG` still holds the
-label: it forgets it at a label, a call, a `:point` and an `(asm ...)` that may
-write `REG`.
+label, and skips `:point` and the address computation for a repeated computed
+address made of locals, arguments, constants, array labels and operators over
+them, such as `(aref a i)` twice. It forgets the address at a label, a call, a
+`:point` and an `(asm ...)` that may write `REG`, and the computed address when
+a variable in it is set. A [static frame](static-frames.md) that spills a temporary through the register points it at the slot, so the address loads again.
 
 ```lisp
 (registers :return (a) :scratch (a b) :address i :operand reg)
@@ -228,7 +231,7 @@ write `REG`.
 ;; (set g (+ g 1))  ->  :point-label gvg, :peek-pointer a, :add-imm a 1, :poke-pointer a
 ```
 
-A repeated computed address still reloads it ([Limitations](language.md#limitations)).
+`(aset a i (+ (aref a i) 1))` still reloads it ([Limitations](language.md#limitations)).
 
 ## Branches
 

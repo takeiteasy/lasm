@@ -142,7 +142,7 @@
 (defvar *cc-function* nil "The source name of the function being compiled.")
 (defvar *cc-form* nil "The innermost expression being compiled.")
 (defvar *cc-out* nil "The items of the current function or stub, reversed.")
-(defvar *cc-pointer* nil "The printed label or item expression the backend's :address register is known to hold, or NIL.")
+(defvar *cc-pointer* nil "What the backend's :address register is known to hold, or NIL: a printed label or item expression, or the %CC-ADDRESS-KEY of a computed address.")
 (defvar *cc-env* nil "(KEY . LOCATION) for each parameter and let variable in scope.")
 (defvar *cc-next* 0 "The next free local slot.")
 (defvar *cc-max* 0 "Local slots the function needs.")
@@ -220,8 +220,20 @@ cannot be a register alias or a generated label."
 
 ;;; Emission
 
+(defun %cc-tree-has-p (tree target)
+  (or (equal tree target)
+      (and (consp tree) (some (lambda (element) (%cc-tree-has-p element target)) tree))))
+
+(defun %cc-store-item-p (item)
+  "T when ITEM writes a slot the computed address in *CC-POINTER* was made from."
+  (and (consp *cc-pointer*)
+       (eq (first item) :op)
+       (case (second item)
+         (:set (%cc-tree-has-p *cc-pointer* (third item)))
+         (:poke-label (%cc-tree-has-p *cc-pointer* (list :static (third item)))))))
+
 (defun %cc-emit (item)
-  (when (or (atom item) (member (first item) '(:label :call)))
+  (when (or (atom item) (member (first item) '(:label :call)) (%cc-store-item-p item))
     (setf *cc-pointer* nil))
   (cl:push item *cc-out*))
 
@@ -1029,23 +1041,61 @@ comparison, to a landing that loads the result."
   "T when a computed address goes through the :address register, the backend having no :peek and :poke."
   (and (%cc-address-register) (not (%cc-op-p :peek)) (not (%cc-op-p :poke))))
 
+(defun %cc-address-key (form)
+  "A value EQUAL for two forms that address the same word while no variable in them is written, or NIL when FORM is not made only of integers, constants, array labels, (function F), locals, arguments, static slots and operators over them."
+  (cond ((integerp form) form)
+        ((%cc-name-p form)
+         (let ((location (%cc-lookup form)))
+           (case (first location)
+             ((:local :arg :static) location)
+             (:constant (second location))
+             (:address (princ-to-string (second location))))))
+        ((%cc-function-form-p form)
+         (and (= (length form) 2) (princ-to-string (%cc-function-label form))))
+        ((and (consp form) (%cc-name-p (first form)) (%cc-proper-list-p form))
+         (let ((name (%designator-name (first form))))
+           (when (or (assoc name *cc-operators* :test #'string=) (string= name "BYTE ADDRESS"))
+             (let ((keys (mapcar #'%cc-address-key (rest form))))
+               (and (notany #'null keys) (cons name keys))))))))
+
+(defun %cc-may-set-p (form)
+  "T when FORM may write a variable: it holds a (set ...), an (asm ...) or a macro call."
+  (and (consp form)
+       (or (and (%cc-name-p (first form))
+                (let ((name (%designator-name (first form))))
+                  (or (string= name "SET") (string= name "ASM") (gethash name *cc-macros*))))
+           (some #'%cc-may-set-p form))))
+
+(defun %cc-read-through-pointer (address operation)
+  "The word or byte at ADDRESS into the accumulator through the :address register, which is left alone when it holds ADDRESS."
+  (let ((key (%cc-address-key address)))
+    (unless (and key (equal key *cc-pointer*))
+      (%cc-expr address)
+      (%cc-op :point *cc-acc-name*)
+      (setf *cc-pointer* key))
+    (%cc-op operation *cc-acc-name*)))
+
+(defun %cc-write-through-pointer (address value operation)
+  "VALUE to the word or byte at ADDRESS through the :address register."
+  (let ((key (%cc-address-key address)))
+    (%cc-operands address value)
+    (%cc-op :point *cc-acc-name*)
+    (setf *cc-pointer* (and (not (%cc-may-set-p value)) key))
+    (%cc-op operation *cc-temp-name*)))
+
 (defun %cc-peek (form)
   (%cc-check-length form 2 2)
-  (%cc-expr (second form))
   (cond ((%cc-through-pointer-p)
-         (%cc-op :point *cc-acc-name*)
-         (setf *cc-pointer* nil)
-         (%cc-op :peek-pointer *cc-acc-name*))
-        (t (%cc-op :peek *cc-acc-name* *cc-acc-name*))))
+         (%cc-read-through-pointer (second form) :peek-pointer))
+        (t (%cc-expr (second form))
+           (%cc-op :peek *cc-acc-name* *cc-acc-name*))))
 
 (defun %cc-poke (form)
   (%cc-check-length form 3 3)
-  (%cc-operands (second form) (third form))
   (cond ((%cc-through-pointer-p)
-         (%cc-op :point *cc-acc-name*)
-         (setf *cc-pointer* nil)
-         (%cc-op :poke-pointer *cc-temp-name*))
-        (t (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
+         (%cc-write-through-pointer (second form) (third form) :poke-pointer))
+        (t (%cc-operands (second form) (third form))
+           (%cc-op :poke *cc-acc-name* *cc-temp-name*)))
   (%cc-op :move *cc-acc* *cc-temp*))
 
 ;; (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
@@ -1057,21 +1107,17 @@ comparison, to a landing that loads the result."
 
 (defun %cc-peek-byte (form)
   (%cc-check-length form 2 2)
-  (%cc-expr (second form))
   (cond ((%cc-through-byte-pointer-p)
-         (%cc-op :point *cc-acc-name*)
-         (setf *cc-pointer* nil)
-         (%cc-op :peek-byte-pointer *cc-acc-name*))
-        (t (%cc-op :peek-byte *cc-acc-name* *cc-acc-name*))))
+         (%cc-read-through-pointer (second form) :peek-byte-pointer))
+        (t (%cc-expr (second form))
+           (%cc-op :peek-byte *cc-acc-name* *cc-acc-name*))))
 
 (defun %cc-poke-byte (form)
   (%cc-check-length form 3 3)
-  (%cc-operands (second form) (third form))
   (cond ((%cc-through-byte-pointer-p)
-         (%cc-op :point *cc-acc-name*)
-         (setf *cc-pointer* nil)
-         (%cc-op :poke-byte-pointer *cc-temp-name*))
-        (t (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)))
+         (%cc-write-through-pointer (second form) (third form) :poke-byte-pointer))
+        (t (%cc-operands (second form) (third form))
+           (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)))
   (%cc-op :move *cc-acc* *cc-temp*))
 
 ;; (aref A I)/(aset A I V) index by word, sugar for
@@ -1173,6 +1219,10 @@ comparison, to a landing that loads the result."
          (mapcar (lambda (element) (%cc-substitute-variables element form)) tree))
         (t tree)))
 
+(defun %cc-var-item-p (tree)
+  (and (consp tree)
+       (or (%keyword-named-p (first tree) "VAR") (some #'%cc-var-item-p tree))))
+
 (defun %cc-asm (form)
   (%cc-check-length form 1 nil)
   (let ((clobbers (%cc-asm-clobbers form)))
@@ -1183,7 +1233,8 @@ comparison, to a landing that loads the result."
   (dolist (item (if (%cc-clobber-declaration-p (second form)) (cddr form) (rest form)))
     (%cc-emit (%cc-substitute-variables item form)))
   (let ((clobbers (%cc-asm-clobbers form)))
-    (when (or (eq clobbers :all) (member (%cc-address-register) clobbers :test #'equal))
+    (when (or (eq clobbers :all) (member (%cc-address-register) clobbers :test #'equal)
+              (and (consp *cc-pointer*) (%cc-var-item-p (rest form))))
       (setf *cc-pointer* nil))))
 
 (defun %cc-args-to-slots (args)
