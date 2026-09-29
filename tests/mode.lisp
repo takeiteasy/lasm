@@ -1207,3 +1207,26 @@ looks like."
   (fiveam:signals mode-definition-error
     (eval '(progn (defmode test-spell-peek-clash "peek" :spelling ("[" "sp" "]"))
                   (defmode bad-spell-clash (one-of test-spell-peek test-spell-peek-clash))))))
+
+;;; A register alias in a plain hole
+
+(defmode test-alias-paren "(" expr ")")
+(defmode test-alias-with-register (one-of test-register test-bracket test-paren))
+(defmode test-alias-without-register (one-of test-bracket test-paren))
+
+(fiveam:test register-alias-in-a-plain-hole-fails-beside-a-register-alternative
+  (let ((*register-alias-elements*
+          (machine-descriptor-register-alias-elements (find-machine-descriptor 'test-machine))))
+    (flet ((matches (text mode) (nth-value 1 (try-match-operand-mode (%tokens-for text) mode))))
+      (fiveam:is-true (matches "[bank1]" 'test-alias-with-register))
+      (fiveam:is-true (matches "[label + 1]" 'test-alias-with-register))
+      (fiveam:is-false (matches "[bank1 + 1]" 'test-alias-with-register))
+      (fiveam:is-false (matches "(2 * bank1)" 'test-alias-with-register))
+      (fiveam:is-true (matches "[bank1 + 1]" 'test-alias-without-register)))))
+
+(fiveam:test register-alias-failure-reports-the-alias
+  (let ((*register-alias-elements*
+          (machine-descriptor-register-alias-elements (find-machine-descriptor 'test-machine))))
+    (handler-case (match-operand-mode (%tokens-for "[bank1 + 1]") 'test-alias-with-register)
+      (parse-failure (c)
+        (fiveam:is (search "Register alias bank1" (lasm-syntax-error-message c)))))))

@@ -160,7 +160,9 @@ counter.
 ### Register aliases
 
 If a name is absent from `symbols`, `eval-expr` tries the machine's register
-aliases. A label or assignment cannot reuse an alias name. See
+aliases. A label or assignment cannot reuse an alias name. A plain `expr` hole
+beside a [register-qualified](operand-modes.md#register-qualified-holes)
+alternative for the same bank rejects an alias in its expression. See
 [Machine model](machine-model.md#defmachine).
 
 ## Location counter

@@ -56,6 +56,19 @@ A plain `expr` still accepts numbers, labels, and compound expressions.
 With the same surrounding literals, a register-qualified match outranks a
 plain expression match. See [Machine model](machine-model.md#defmachine).
 
+A plain `expr` hole in a `one-of` with a register-qualified alternative for
+the same bank fails to match when its expression reads an alias of that bank.
+`[b + 5]` is a register index and `[5 + b]` matches through a
+[spelling](modes.md#alternate-spellings); `[2*b]` is an error rather than the
+address `[2]`.
+
+```lisp
+(defmode idx "[" (expr :register reg) "+" expr "]"
+  :spelling ("[" (hole 1) "+" (hole 0) "]"))
+(defmode mem "[" expr "]")
+(defmode operand (one-of idx mem))   ; [5 + b] indexes; [2*b] is an error
+```
+
 ## Encoding a selection
 
 A `one-of` changes accepted syntax, but an instruction must encode which

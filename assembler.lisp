@@ -681,9 +681,14 @@ alternative's :STRICT once a value exists to check it against."
                             (%mode-syntax-text forced-mode)))
       (%assembly-error-at anchor
                            "~A: operand ~S matches no addressing mode -- this instruction ~
-accepts ~A"
+accepts ~A~@[ (~A)~]"
                            (statement-mnemonic statement) (%operand-text tokens)
-                           (%accepted-modes-text variants)))
+                           (%accepted-modes-text variants)
+                           (loop for v in variants
+                                 for mode = (instruction-descriptor-mode v)
+                                 for message = (and mode (nth-value 3 (%match-mode-pattern tokens mode)))
+                                 when (%register-alias-message-p message)
+                                   return message)))
     (setf candidates (%best-scored candidates))
     (let* ((width-key (lambda (c) (instruction-descriptor-size (first c))))
            ;; STABLE-SORT twice, not once-and-REVERSE: reversing a stable

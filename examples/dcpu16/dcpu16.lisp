@@ -129,8 +129,8 @@ Hardware
 ;;; See docs/modes.md and docs/operand-modes.md.
 (defmode d-reg (expr :register reg))
 (defmode d-regind "[" (expr :register reg) "]")
-;; TODO: `[5 + b]` is not an index; see docs/examples.md#limitations.
-(defmode d-idx "[" (expr :register reg) "+" expr "]")
+(defmode d-idx "[" (expr :register reg) "+" expr "]"
+  :spelling ("[" (hole 1) "+" (hole 0) "]"))
 (defmode d-mem "[" expr "]")
 (defmode d-lit expr)
 (defmode d-sp "sp")

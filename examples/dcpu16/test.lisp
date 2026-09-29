@@ -44,6 +44,7 @@
         '(("set a, b" #x0401)
           ("set a, [b]" #x2401)
           ("set a, [b + 5]" #x4401 5)
+          ("set a, [5 + b]" #x4401 5)
           ("set a, pop" #x6001)
           ("set push, a" #x0301)
           ("set a, peek" #x6401)
@@ -102,6 +103,10 @@ hwi 1")
     (fiveam:is (= 7 (length lines)))
     (fiveam:is (equalp (assembly-cells assembly)
                        (assembly-cells (assemble (format nil "~{~A~%~}" lines) :machine 'dcpu16))))))
+
+(fiveam:test a-register-in-an-expression-is-an-error
+  (dolist (source '("set a, [2*b]" "set a, [b - 5]" "set a, [a + b]" "set a, b + 1"))
+    (fiveam:signals assembly-error (cells source) "~A" source)))
 
 (fiveam:test stack-pointer-spellings-disassemble-canonically
   (let ((lines (mapcar #'disassembly-line-text

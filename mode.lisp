@@ -975,7 +975,8 @@ alternative's own pattern; the markers are never part of a DEFMODE pattern."
                                             (%one-of-alternatives element))
                                    (token-value tok)))
                   (start (if alt-prefix (1+ i) i))
-                  last-failure-token last-message best (best-score nil) tied)
+                  (banks (and *register-alias-elements* (%one-of-register-banks element)))
+                  last-failure-token last-message alias-failure best (best-score nil) tied)
              (dolist (alt-name (%one-of-alternatives element))
                (let ((alt (find-mode-descriptor alt-name)))
                  (when (or (null alt-prefix)
@@ -990,7 +991,17 @@ alternative's own pattern; the markers are never part of a DEFMODE pattern."
                                               (cons (list :end-of alt-name start) rest-elements)
                                               start end require-end))
                     (cond
-                      ((not okp) (setf last-failure-token failure-token last-message message))
+                      ((not okp)
+                       (if (%register-alias-message-p message)
+                           (setf alias-failure (cons failure-token message))
+                           (setf last-failure-token failure-token last-message message)))
+                      ((let ((alias (and banks (%plain-hole-register-alias alt asts banks))))
+                         (when alias
+                           (setf alias-failure
+                                 (cons (%tok tokens start end)
+                                       (format nil "Register alias ~A is read as a number here -- ~
+write it as a register operand" alias)))))
+                       nil)
                       ((equal score best-score) (cl:push alt tied))
                       ((%score> score best-score)
                        (let* ((slot (%one-of-slot element))
@@ -1029,9 +1040,47 @@ alternative's own pattern; the markers are never part of a DEFMODE pattern."
                        (if (and (null alt-prefix) (rest tied))
                            (cons (list* holes-from-end (%one-of-slot element) (reverse tied)) ties)
                            ties))))
-             (if best
-                 (values-list best)
-                 (values nil nil nil nil last-failure-token last-message))))))))
+             (cond (best (values-list best))
+                   (alias-failure (values nil nil nil nil (car alias-failure) (cdr alias-failure)))
+                   (t (values nil nil nil nil last-failure-token last-message)))))))))
+
+(defun %register-alias-message-p (message)
+  "True for the failure message of a register alias read as a number."
+  (and message (eql 0 (search "Register alias " message))))
+
+(defun %one-of-register-banks (element)
+  "The register banks that ELEMENT's alternatives take as (EXPR :REGISTER bank) holes."
+  (let (banks)
+    (dolist (name (%one-of-alternatives element) banks)
+      (dolist (el (mode-descriptor-pattern (find-mode-descriptor name)))
+        (case (first el)
+          (:expr (when (second el) (pushnew (second el) banks)))
+          (:one-of (dolist (bank (%one-of-register-banks el)) (pushnew bank banks))))))))
+
+(defun %numeric-register-alias (ast banks)
+  "The name of a register alias of one of BANKS that AST reads as a number, or NIL."
+  (typecase ast
+    (expr-label
+     (let ((owner (and *register-alias-elements*
+                       (gethash (expr-label-name ast) *register-alias-elements*))))
+       (and owner (member (storage-element-name owner) banks :test #'string-equal)
+            (expr-label-name ast))))
+    (expr-binary (or (%numeric-register-alias (expr-binary-left ast) banks)
+                     (%numeric-register-alias (expr-binary-right ast) banks)))
+    (expr-unary (and (not (member (expr-unary-op ast) '(:defined :bank)))
+                     (%numeric-register-alias (expr-unary-operand ast) banks)))
+    (expr-index (%numeric-register-alias (expr-index-operand ast) banks))))
+
+(defun %plain-hole-register-alias (alt asts banks)
+  "The register alias, of a bank in BANKS, that one of ALT's plain EXPR holes reads
+as a number, or NIL. ASTS lists ALT's hole values in pattern order."
+  (let ((pattern (mode-descriptor-pattern alt)))
+    (unless (find :one-of pattern :key #'first)
+      (loop for element in (remove :expr pattern :key #'first :test-not #'eq)
+            for ast in asts
+            do (unless (second element)
+                 (let ((alias (%numeric-register-alias ast banks)))
+                   (when alias (return alias))))))))
 
 (defun %match-mode-syntaxes (tokens mode tail start end require-end)
   "%MATCH-MODE-ELEMENTS of MODE's pattern, then each spelling, each followed by
@@ -1044,7 +1093,9 @@ holes, and their forcing prefixes, come back in the pattern's hole order."
               do (multiple-value-bind (asts choices next-i okp failure-token message selections score suffixes ties picks)
                      (%match-mode-elements tokens (append elements tail) start end require-end)
                    (cond ((not okp)
-                          (unless first-message
+                          (when (or (null first-message)
+                                    (and (%register-alias-message-p message)
+                                         (not (%register-alias-message-p first-message))))
                             (setf first-failure-token failure-token first-message message)))
                          ((%score> score best-score)
                           (flet ((in-pattern-order (holes)
