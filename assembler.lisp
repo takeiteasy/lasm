@@ -334,6 +334,17 @@ its extra word's own width (signed when the field is SIGNEDP)."
      (%operand-range (word-field-choice-extra-cells choice) cell-width
                      (word-field-choice-signedp choice)))))
 
+(defun %word-field-holds-p (choice cell-width value)
+  "T if the word field CHOICE encodes VALUE: within its bounds, or, for an
+inline field with :WRAP N, an N-bit value congruent modulo 2^N to one within
+them."
+  (multiple-value-bind (lo hi) (%word-field-bounds choice cell-width)
+    (or (<= lo value hi)
+        (let ((wrap (word-field-choice-wrap choice)))
+          (and wrap
+               (<= (- (ash 1 (1- wrap))) value (1- (ash 1 wrap)))
+               (<= (+ lo (mod (- value lo) (ash 1 wrap))) hi))))))
+
 (defun %word-variant-fits-p (values descriptor cell-width)
   "T if VALUES -- one already-evaluated operand value per DESCRIPTOR's
 WORD-FIELDS entry, in order -- fits this word-field combo: each value must
@@ -341,9 +352,7 @@ fall within its field's %WORD-FIELD-BOUNDS. Parallel to %FITS-WIDTH-P/
 %FITS-SIGNED-WIDTH-P for the byte-encoded case, used by %CHOOSE-VARIANT's
 value filter to pick the narrowest (fewest extra cells) combo a value
 actually fits."
-  (every (lambda (value choice)
-           (multiple-value-bind (lo hi) (%word-field-bounds choice cell-width)
-             (<= lo value hi)))
+  (every (lambda (value choice) (%word-field-holds-p choice cell-width value))
          values (instruction-descriptor-word-fields descriptor)))
 
 (defun %choices-eligible-p (descriptor choices &optional selections)
@@ -748,8 +757,8 @@ tried to encode, not the absolute branch target."
     (loop for value in vals
           for field-choice in (instruction-descriptor-word-fields descriptor)
           for i from 0
-          do (multiple-value-bind (lo hi) (%word-field-bounds field-choice cell-width)
-               (unless (<= lo value hi)
+          do (unless (%word-field-holds-p field-choice cell-width value)
+               (multiple-value-bind (lo hi) (%word-field-bounds field-choice cell-width)
                  (return (values i value lo hi (word-field-choice-choice field-choice))))))))
 
 (defun %signal-word-choice-overflow (statement candidate symbols address anchor cell-width)
@@ -1633,6 +1642,14 @@ entries splits into whole alternatives of %OPTION-HOLE-COUNT holes each."
         (%operand-range (nth i (instruction-descriptor-operand-widths descriptor)) cell-width
                         (nth i (instruction-descriptor-operand-signedness descriptor))))))
 
+(defun %operand-hole-holds-p (descriptor i value cell-width)
+  "T if operand I of DESCRIPTOR encodes VALUE without truncation."
+  (let ((word-fields (instruction-descriptor-word-fields descriptor)))
+    (if word-fields
+        (%word-field-holds-p (nth i word-fields) cell-width value)
+        (multiple-value-bind (lo hi) (%operand-hole-bounds descriptor i cell-width)
+          (<= lo value hi)))))
+
 (defun %check-strict-operand-range! (descriptor mode values line cell-width choices forcedp)
   "Check ordinary strict fields against the bounds of the field each is
 encoded into. Relative fields are checked by %RELATIVE-OFFSET. FORCEDP is true
@@ -1647,7 +1664,7 @@ for an operand its mnemonic suffix forced into MODE."
                         (and mode (mode-descriptor-strictp mode))
                         (%hole-choice-strict-p choices i)))
             do (multiple-value-bind (lo hi) (%operand-hole-bounds descriptor i cell-width)
-                 (unless (<= lo value hi)
+                 (unless (%operand-hole-holds-p descriptor i value cell-width)
                    (if word-fields
                        (%assembly-error line
                                         "~A: operand value ~D out of range for its instruction-word ~

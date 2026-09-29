@@ -64,7 +64,7 @@ case-insensitive; a program halts by jumping to itself.
 | `[register]`, `[register + next word]` | `[b]`, `[b + 5]` or `[5 + b]` |
 | `PUSH`, `POP`, `PEEK`, `PICK n` | `push`, `pop`, `peek` or `[sp]`, `pick 3` or `[sp + 3]` |
 | `SP`, `PC`, `EX` | `sp`, `pc`, `ex` |
-| `[next word]`, literal | `[0x1000]`, `5`, `-1` |
+| `[next word]`, literal | `[0x1000]`, `5`, `-1` or `0xffff` |
 
 `run-dcpu16` steps a machine until an instruction leaves PC unchanged.
 `key-down` and `key-up` feed the keyboard.
@@ -107,5 +107,4 @@ stays `:running`; press a key with `key-down` and call it again to resume.
 
 | Limitation | Ticket |
 | --- | --- |
-| `0xffff` takes a next word; `-1` packs into the instruction. | [#412](https://todo.sr.ht/~takeiteasy/lasm/412) |
 | IF skipping decodes the skipped instruction by hand. | [#413](https://todo.sr.ht/~takeiteasy/lasm/413) |

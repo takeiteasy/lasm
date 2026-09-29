@@ -153,8 +153,9 @@ Hardware
 
 ;;; Operand encoding. Each alternative fills the 6-bit `a` field or 5-bit `b`
 ;;; field with its own value range; those without a hole pin a constant with
-;;; `field-value`. `a` also packs -1..30 into the field itself, and any other
-;;; literal spends the next word. See docs/word-instructions.md.
+;;; `field-value`. `a` also packs -1..30 into the field itself (`:wrap 16` makes
+;;; 0xffff pack as -1), and any other literal spends the next word. See
+;;; docs/word-instructions.md.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun operand-clauses (slot field reg regind idx off mem lit pick)
     `((for-choice (,slot d-common d-reg)
@@ -175,9 +176,8 @@ Hardware
           (variant (choice (d-common d-pick)) (extra-word :escape #x1a))))
       (for-choice (,slot d-common d-lit)
         (operand ,lit :field ,field
-          ;; TODO: 0xffff takes the next word; see docs/examples.md#limitations.
           ,@(when (eq slot 'a-slot)
-              '((variant (choice (d-common d-lit)) inline :range (-1 30) :bias 33)))
+              '((variant (choice (d-common d-lit)) inline :range (-1 30) :bias 33 :wrap 16)))
           (variant (choice (d-common d-lit)) (extra-word :escape #x1f))))
       (for-choice (,slot d-common d-peek) (field-value ,field #x19))
       (for-choice (,slot d-common d-sp) (field-value ,field #x1b))

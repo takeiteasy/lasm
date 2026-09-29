@@ -830,3 +830,77 @@
 (fiveam:test instruction-size-on-a-byte-machine
   (fiveam:is (= 1 (size-after-step "sizeof" 'byte-size-machine)))
   (fiveam:is (= 2 (size-after-step "sizeimm #7" 'byte-size-machine))))
+
+;;; :WRAP
+
+(defmode wrap-choice-a "#" expr)
+(defmode wrap-choice-b "%" expr)
+(defmode wrap-choice-mode (one-of wrap-choice-a wrap-choice-b))
+
+(definstruction independent-choice-machine wrapv
+  (modes independent-literal)
+  (encoding (opcode 27)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 33 :wrap 16)
+      (variant :else (extra-word :escape #x1f))))
+  (semantics (set! observed value)))
+
+(definstruction independent-choice-machine wrapc
+  (modes wrap-choice-mode)
+  (encoding (opcode 28)
+    (operand value :field src
+      (variant (choice wrap-choice-a) inline :range (-1 30) :bias 33 :wrap 16)
+      (variant (choice wrap-choice-a) (extra-word :escape #x1f))
+      (variant (choice wrap-choice-b) (extra-word :escape #x1e))))
+  (semantics (set! observed value)))
+
+(definstruction independent-choice-machine nowrap
+  (modes independent-literal)
+  (encoding (opcode 29)
+    (operand value :field src
+      (variant (range -1 30) inline :bias 33)
+      (variant :else (extra-word :escape #x1f))))
+  (semantics (set! observed value)))
+
+(defun wrap-cells (source)
+  (coerce (assembly-cells (assemble source :machine 'independent-choice-machine)) 'list))
+
+(fiveam:test wrap-packs-a-value-congruent-to-the-inline-range
+  (dolist (mnemonic '("wrapv #" "wrapc #"))
+    (let ((minus-one (wrap-cells (format nil "~A-1" mnemonic))))
+      (fiveam:is (= 1 (length minus-one)) "~A" mnemonic)
+      (dolist (value '("0xffff" "65535"))
+        (fiveam:is (equal minus-one (wrap-cells (format nil "~A~A" mnemonic value)))
+                   "~A~A" mnemonic value))
+      (fiveam:is (= 2 (length (wrap-cells (format nil "~A31" mnemonic)))))
+      (fiveam:is (= 2 (length (wrap-cells (format nil "~A0xffe0" mnemonic))))))))
+
+(fiveam:test wrap-does-not-accept-values-outside-its-width
+  (dolist (source '("wrapc #65536" "wrapc #-32769"))
+    (fiveam:signals assembly-error (wrap-cells source) "~A" source))
+  (fiveam:is (= 2 (length (wrap-cells "wrapv #65536")))))
+
+(fiveam:test wrap-decodes-to-the-inline-value
+  (let ((cells (coerce (wrap-cells "wrapv #0xffff") 'vector)))
+    (multiple-value-bind (descriptor values)
+        (decode-instruction-at (lambda (address) (aref cells address)) 0 'independent-choice-machine)
+      (declare (ignore descriptor))
+      (fiveam:is (equal '(-1) values)))))
+
+(fiveam:test wrap-is-opt-in
+  (fiveam:is (= 1 (length (wrap-cells "nowrap #-1"))))
+  (fiveam:is (= 2 (length (wrap-cells "nowrap #0xffff")))))
+
+(fiveam:test wrap-rejects-malformed-definitions
+  (flet ((check (field-width hole-signedp &rest forms)
+           (%check-word-variants (mapcar (lambda (form) (%parse-word-variant-form form 'src)) forms)
+                                 field-width 'src hole-signedp)))
+    (fiveam:finishes (check 6 nil '(variant (range -1 30) inline :bias 33 :wrap 16)))
+    (fiveam:signals error (check 6 t '(variant (range -1 30) inline :bias 33 :wrap 16)))
+    (fiveam:signals error (check 6 nil '(variant (range -1 30) inline :bias 33 :wrap 4)))
+    (fiveam:signals error (%parse-word-variant-form '(variant (range 0 3) inline :wrap 0) 'src))
+    (fiveam:signals error (%parse-word-variant-form '(variant (range 0 3) inline :wrap "x") 'src))
+    (fiveam:signals error
+      (check 6 nil
+             '(variant (choice inline-primary) inline :range (0 7) :wrap 16)
+             '(variant (choice inline-alternate) inline :range (0 7) :alias t)))))

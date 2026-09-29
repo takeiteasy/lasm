@@ -1092,7 +1092,7 @@ A value that depends on a label is checked when the assembler encodes it."
             for value = (handler-case (eval-expr-constant ast) (error () nil))
             do (when (and value (not (nth i (instruction-descriptor-relative-holes variant))))
                  (multiple-value-bind (low high) (%operand-hole-bounds variant i cell-width)
-                   (unless (<= low value high)
+                   (unless (%operand-hole-holds-p variant i value cell-width)
                      (%items-fail 'items-operand-mismatch item
                                   "~D does not fit the forced mode ~A, which takes ~D to ~D"
                                   value (mode-descriptor-name mode) low high))))))))

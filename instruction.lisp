@@ -2136,7 +2136,10 @@ alternatives disagree on hole count" machine name mode-name))
   (suffix nil :type (or null string))
   ;; :EXTRA-WORD/:TRAILING-WORD only -- cell order of this trailing
   ;; value, or NIL for the layout's own.
-  (endian nil :type (or null keyword cons)))
+  (endian nil :type (or null keyword cons))
+  ;; :INLINE only -- N of (:wrap N): an operand N bits wide takes this
+  ;; variant when it is congruent modulo 2^N to a value in RANGE.
+  (wrap nil :type (or null (integer 1))))
 
 (defstruct word-operand-spec
   (name nil)                  ; operand field name, or NIL for unnamed
@@ -2217,7 +2220,9 @@ alternatives disagree on hole count" machine name mode-name))
   ;; Mirrors WORD-VARIANT-SUFFIX.
   (suffix nil :type (or null string))
   ;; Mirrors WORD-VARIANT-ENDIAN.
-  (endian nil :type (or null keyword cons)))
+  (endian nil :type (or null keyword cons))
+  ;; Mirrors WORD-VARIANT-WRAP.
+  (wrap nil :type (or null (integer 1))))
 
 (defun %word-choice-matches-p (raw-value choice)
   "T if RAW-VALUE matches CHOICE's field bits. Signed inline values are
@@ -2600,16 +2605,23 @@ off the variant's own tail."
                            context endian))
   endian)
 
+(defun %word-variant-wrap (wrap field-name)
+  "WRAP, the :WRAP of an inline variant on FIELD-NAME, after validating it."
+  (when (and wrap (not (typep wrap '(integer 1))))
+    (%definstruction-error "DEFINSTRUCTION: field ~S: :wrap must be a positive number of bits, got ~S"
+                           field-name wrap))
+  wrap)
+
 (defun %parse-word-variant-form-1 (form field-name)
   "Parse one (variant selector kind...) form (DEFINSTRUCTION's docstring)
 into a WORD-VARIANT. SELECTOR is (range LO HI) for a value-selected :INLINE
-variant (optionally :BIAS N, default 0), :ELSE for the value-selected
+variant (optionally :BIAS N, default 0, and :WRAP BITS), :ELSE for the value-selected
 :EXTRA-WORD fallback (kind form (extra-word :escape n [:cells k])), or
 (choice M) for a variant selected by hole M matching mode.lisp's
 hole-aligned CHOICES instead of by the operand's folded value -- kind form
 INLINE (requiring its own :RANGE (lo hi), since unlike (range lo hi) a
 CHOICE selector carries no range to double as one; optionally :BIAS N,
-default 0) or (extra-word :escape n [:cells k]), the latter an
+default 0, and :WRAP BITS) or (extra-word :escape n [:cells k]), the latter an
 *unconditional* trailing word once M is the matched alternative, not a
 value-triggered fallback.
 
@@ -2628,9 +2640,10 @@ WIDTH-CELLS once it has a LAYOUT to default against."
          (unless (eq (first tail) 'inline)
            (%definstruction-error "DEFINSTRUCTION: field ~S: a (range ...) variant must be ~
 INLINE, got ~S" field-name tail))
-         (%definition-bind (inline-sym &key (bias 0)) tail
+         (%definition-bind (inline-sym &key (bias 0) wrap) tail
            (declare (ignore inline-sym))
-           (make-word-variant :kind :inline :bias bias :range (cons lo hi)))))
+           (make-word-variant :kind :inline :bias bias :range (cons lo hi)
+                              :wrap (%word-variant-wrap wrap field-name)))))
       ((eq selector :else)
        (unless (and (consp (first tail)) (eq (first (first tail)) 'extra-word))
          (%definstruction-error "DEFINSTRUCTION: field ~S: an :ELSE variant must be ~
@@ -2658,14 +2671,15 @@ INLINE, got ~S" field-name tail))
                                  :extra-cells cells :alias (and alias t)
                                  :endian (%word-variant-endian endian (format nil "field ~S" field-name)))))
            ((eq (first tail) 'inline)
-            (%definition-bind (inline-sym &key range (bias 0) alias) tail
+            (%definition-bind (inline-sym &key range (bias 0) alias wrap) tail
               (declare (ignore inline-sym))
               (unless range
                 (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) INLINE variant requires its ~
 own :range (lo hi) -- unlike (range lo hi), a CHOICE selector carries no range of its own"
                        field-name choice-name))
               (%definition-bind (lo hi) range
-                (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name :alias (and alias t)))))
+                (make-word-variant :kind :inline :bias bias :range (cons lo hi) :choice choice-name
+                                   :alias (and alias t) :wrap (%word-variant-wrap wrap field-name)))))
            (t (%definstruction-error "DEFINSTRUCTION: field ~S: a (choice ~S) variant must be INLINE (with ~
 :range) or (extra-word :escape n), got ~S" field-name choice-name tail)))))
       (t (%definstruction-error "DEFINSTRUCTION: field ~S: variant selector must be (range lo hi), :else, ~
@@ -2793,10 +2807,11 @@ variant is treated as signed here too."
                           (and (not (word-variant-alias v))
                                (eq (word-variant-kind v) :inline)
                                (equal (word-variant-range v) (word-variant-range alias))
-                               (= (word-variant-bias v) (word-variant-bias alias))))
+                               (= (word-variant-bias v) (word-variant-bias alias))
+                               (eql (word-variant-wrap v) (word-variant-wrap alias))))
                         variants)))
         (unless (= (length canonical) 1)
-          (%definstruction-error "DEFINSTRUCTION: field ~S: inline alias requires exactly one canonical variant with identical range and bias"
+          (%definstruction-error "DEFINSTRUCTION: field ~S: inline alias requires exactly one canonical variant with identical range, bias and :wrap"
                  field-name))
         (%check-alias-encodes-like-canonical! alias (first canonical) field-name))))
   (let ((max (1- (ash 1 field-width))) inline-chunks escapes)
@@ -2805,7 +2820,10 @@ variant is treated as signed here too."
         (:inline
          (let* ((lo (+ (car (word-variant-range v)) (word-variant-bias v)))
                 (hi (+ (cdr (word-variant-range v)) (word-variant-bias v)))
-                (signedp (%word-variant-signedp-at-parse v hole-signedp mode source)))
+                (signedp (%word-variant-signedp-at-parse v hole-signedp mode source))
+                (wrap (word-variant-wrap v)))
+           (when wrap
+             (%check-word-variant-wrap! v signedp wrap field-width field-name))
            (handler-case
                (dolist (chunk (%word-variant-raw-chunks lo hi signedp field-width))
                  (unless (word-variant-alias v)
@@ -2863,6 +2881,21 @@ non-alias variant on that escape to be an alias of" field-name e))
             (aliases
              (dolist (a aliases)
                (%check-alias-encodes-like-canonical! a (first canonical) field-name)))))))))
+
+(defun %check-word-variant-wrap! (variant signedp wrap field-width field-name)
+  "Signal an error unless :WRAP WRAP on the inline VARIANT keeps every wrapped
+value encodable: an unsigned operand, a field no wider than WRAP bits and a
+range that fits in WRAP bits."
+  (destructuring-bind (lo . hi) (word-variant-range variant)
+    (cond (signedp
+           (%definstruction-error "DEFINSTRUCTION: field ~S: :wrap applies only to an unsigned operand"
+                                  field-name))
+          ((> field-width wrap)
+           (%definstruction-error "DEFINSTRUCTION: field ~S: :wrap ~D is narrower than its ~D-bit field"
+                                  field-name wrap field-width))
+          ((>= (- hi lo) (ash 1 wrap))
+           (%definstruction-error "DEFINSTRUCTION: field ~S: inline range ~D..~D does not fit :wrap ~D"
+                                  field-name lo hi wrap)))))
 
 (defun %check-alias-encodes-like-canonical! (alias canonical field-name)
   "Require identical value interpretation for alternate encoding spellings."
@@ -3190,17 +3223,18 @@ narrower extra word before one needing a wider one."
         (word-variant-alias variant)
         (%word-variant-signedp-at-parse variant hole-signedp mode source)
         (word-variant-suffix variant)
-        (word-variant-endian variant)))
+        (word-variant-endian variant)
+        (word-variant-wrap variant)))
 
 (defun %build-word-alternatives (data)
   (mapcar (lambda (menu)
             (mapcar (lambda (entry)
-                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp &optional suffix endian)
+                      (destructuring-bind (width shift kind bias range escape extra-cells choice alias signedp &optional suffix endian wrap)
                           entry
                         (make-word-field-choice
                          :width width :shift shift :kind kind :bias bias :range range
                          :escape escape :extra-cells extra-cells :choice choice
-                         :alias alias :signedp signedp :suffix suffix :endian endian)))
+                         :alias alias :signedp signedp :suffix suffix :endian endian :wrap wrap)))
                     menu))
           data))
 

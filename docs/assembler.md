@@ -69,7 +69,7 @@ When several variants match an operand, the assembler chooses in this order:
 | Syntax | Keep matching patterns and `one-of` alternatives. |
 | Specificity | Prefer more literal tokens, then register-qualified holes. |
 | Size floor | Never choose a smaller variant after a statement widens. |
-| Value | Choose the first variant whose operands fit. |
+| Value | Choose the first variant whose operands fit, counting a [`:wrap`](word-instructions.md#wrapped-inline-values) inline variant's congruent values. |
 | Unknown value | Start with the narrowest eligible variant. |
 | No fitting value | Use the widest eligible variant and wrap, unless the selected `choice` requires an error. |
 

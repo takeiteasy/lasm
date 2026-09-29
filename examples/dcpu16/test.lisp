@@ -58,6 +58,8 @@
           ("set a, [0x1000]" #x7801 #x1000)
           ("set a, 0x1000" #x7c01 #x1000)
           ("set a, -1" #x8001)
+          ("set a, 0xffff" #x8001)
+          ("set a, 65535" #x8001)
           ("set a, 30" #xfc01)
           ("set a, 31" #x7c01 31)
           ("set [a + 3], 5" #x9a01 3)
@@ -103,6 +105,12 @@ hwi 1")
     (fiveam:is (= 7 (length lines)))
     (fiveam:is (equalp (assembly-cells assembly)
                        (assembly-cells (assemble (format nil "~{~A~%~}" lines) :machine 'dcpu16))))))
+
+(fiveam:test all-ones-literal-disassembles-as-minus-one
+  (let ((lines (mapcar #'disassembly-line-text
+                       (disassemble-assembly (assemble "set a, 0xffff" :machine 'dcpu16)
+                                             :machine 'dcpu16 :labels nil))))
+    (fiveam:is (equal '("set a,-1") lines))))
 
 (fiveam:test a-register-in-an-expression-is-an-error
   (dolist (source '("set a, [2*b]" "set a, [b - 5]" "set a, [a + b]" "set a, b + 1"))

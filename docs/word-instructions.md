@@ -7,14 +7,14 @@ cell-encoded instructions.
 
 ```lisp
 (operand [NAME] :field FIELD-NAME
-  [(variant (range LO HI) inline [:bias N])
+  [(variant (range LO HI) inline [:bias N] [:wrap BITS])
    (variant :else (extra-word :escape N [:cells K] [:endian ORDER]))]*)
 ```
 
 | Form | Encoding |
 | --- | --- |
 | No `variant` | Value occupies the field directly. |
-| `(range LO HI) inline` | Values in the range occupy the field; `:bias` adjusts stored bits. |
+| `(range LO HI) inline` | Values in the range occupy the field; `:bias` adjusts stored bits; [`:wrap`](#wrapped-inline-values) also takes congruent values. |
 | `:else (extra-word ...)` | Escape code occupies the field; value follows in extra cells. |
 | `(operand [NAME] :trailing-word [:cells K] [:endian ORDER])` | Unconditional value in extra cells; see [Extra holes](#extra-holes-with-for-choice). |
 
@@ -184,6 +184,22 @@ A named alternative with no holes can use `(for-choice (slot alternative)
 `:width` or `:mode` fields for extra holes, with a sub-opcode selector on
 the base hole.
 
+## Wrapped inline values
+
+`:wrap BITS` on an inline variant, `(range ...)` or `choice`, makes a value
+of that many bits take the inline form when it equals an in-range value
+modulo 2<sup>BITS</sup>:
+
+```lisp
+(variant (choice d-lit) inline :range (-1 30) :bias 33 :wrap 16)
+```
+
+With 16-bit operands, `-1` and `0xffff` both pack into the field. Values
+outside `-2^(BITS-1)..2^BITS-1` do not fold. Decode and disassembly show the
+in-range value, so `0xffff` reads back as `-1`. The operand must be unsigned
+and not relative, the field no wider than `BITS`, and the range within `BITS`
+bits. An alias must repeat its canonical variant's `:wrap`.[^wrap]
+
 ## Signed choice fields
 
 A `choice` variant takes signedness from its selected mode. Decode
@@ -206,6 +222,10 @@ value-selected fallback cannot identify which signedness to decode.
   output still follows the memory's `:endian`. A `(layout ...)` cannot set
   its own `:endian`, because decode reads the word before it knows the layout.
   Aliased extra words must agree on `:endian`.
+
+[^wrap]: Use it where the semantics wrap to the operand's width, as
+  DCPU-16's `(wrap alit)` does. Elsewhere `-1` and `0xffff` are different
+  values. `:strict` and forced-suffix range checks fold the same way.
 
 [^aliases]: Exactly one matching variant is canonical. Value-selected
   variants cannot use `:alias`. An alias with a different hole shape or
