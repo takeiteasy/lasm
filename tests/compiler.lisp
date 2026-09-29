@@ -1723,9 +1723,9 @@ two |#
 
 ;;; #429: a load and store by label
 
-(defbackend cl-label-abi (:extends cl-static-abi)
-  (ops (:peek-label (d label) (ldm d label))
-       (:poke-label (label s) (stm s label))))
+(eval '(defbackend cl-label-abi (:extends cl-static-abi)
+         (ops (:peek-label (d label) (ldm d label))
+              (:poke-label (label s) (stm s label)))))
 
 (defun %cl-label-op-counts (source backend)
   (let ((names (%cl-op-names (%cl-compile source backend))))
@@ -1799,8 +1799,8 @@ two |#
               (:peek-pointer (dst) (ldx (reg dst) (ind d)))
               (:poke-pointer (src) (stx (ind d) (reg src))))))
 
-(defbackend cl-pointer-label-abi (:extends cl-pointer-abi)
-  (ops (:point-label (label) (ldi (reg d) (imm label)))))
+(eval '(defbackend cl-pointer-label-abi (:extends cl-pointer-abi)
+         (ops (:point-label (label) (ldi (reg d) (imm label))))))
 
 (defparameter +cl-pointer-programs+
   (append (remove-if (lambda (program) (search ":op :poke" (car program))) +cl-static-programs+)
@@ -1856,9 +1856,28 @@ two |#
 
 (fiveam:test pointer-register-operations-take-their-parameter-counts
   (dolist (form '((:point (a b) (ldi a b)) (:point-label (a b) (ldi a b))
-                  (:peek-pointer (a b) (ldi a b)) (:poke-pointer (a b) (ldi a b))))
+                  (:peek-pointer (a b) (ldi a b)) (:poke-pointer (a b) (ldi a b))
+                  (:peek-byte-pointer (a b) (ldi a b)) (:poke-byte-pointer (a b) (ldi a b))))
     (fiveam:is (typep (%backend-error-of `(defbackend cl-pointer-arity-abi (:machine callfoo) (ops ,form)))
                       'backend-definition-error) "~S" form)))
+
+;;; #432: byte access through the pointer register
+
+(eval `(defbackend cl-pointer-byte-abi (:extends cl-pointer-abi)
+         (without-ops :peek-byte :poke-byte)
+         (ops (:peek-byte-pointer (dst) (ldb (reg dst) (ind d)))
+              (:poke-byte-pointer (src) (stb (ind d) (reg src))))))
+
+(fiveam:test byte-access-goes-through-the-pointer-register
+  (dolist (source (append (mapcar #'car +cl-packed-programs+)
+                          '("(defarray a 2) (defun main () (aset-byte a 3 200) (aset-byte a 0 5) (+ (aref-byte a 3) (aref a 0)))"
+                            "(defvar w 0) (defun main () (poke-byte w 5) (poke-byte (+ w 1) 9) (+ (peek-byte w) (peek-byte (+ w 1))))")))
+    (let ((expected (%cv-a (%cl-run source 'callfoo-lang-abi))))
+      (fiveam:is (= expected (%cv-a (%cl-run source 'cl-pointer-byte-abi))) "~A" source)
+      (fiveam:is (= 0 (%cl-count-op "PEEK-BYTE" source 'cl-pointer-byte-abi)))
+      (fiveam:is (= 0 (%cl-count-op "POKE-BYTE" source 'cl-pointer-byte-abi)))))
+  (fiveam:is (plusp (%cl-count-op "PEEK-BYTE-POINTER" "(defstring s \"ab\" :packed) (defun main () (aref-byte s 1))" 'cl-pointer-byte-abi)))
+  (fiveam:is (plusp (%cl-count-op "POKE-BYTE-POINTER" "(defstring s \"ab\" :packed) (defun main () (aset-byte s 1 65))" 'cl-pointer-byte-abi))))
 
 ;;; #430: -label variants
 

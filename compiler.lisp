@@ -20,7 +20,8 @@
 ;;;; addressed data; the name is its address, never peeked through like a
 ;;;; global. (peek-byte A)/(poke-byte A V) are the backend's optional
 ;;;; :peek-byte/:poke-byte, byte-addressing within a word, for a machine whose
-;;;; registers are wider than its cells.
+;;;; registers are wider than its cells, or :peek-byte-pointer/:poke-byte-pointer
+;;;; through the :address register.
 ;;;;
 ;;;; (defstring NAME "TEXT" :packed) holds as many 8-bit characters a cell
 ;;;; as fit (a .packz directive), byte order from the memory's endianness; (aref-byte S I)/(aset-byte
@@ -1050,15 +1051,27 @@ comparison, to a landing that loads the result."
 ;; (peek-byte A)/(poke-byte A V) mirror (peek A)/(poke A V) through the
 ;; backend's optional :peek-byte/:poke-byte, for a machine whose registers are
 ;; wider than its cells; a machine byte-addresses A as it defines those ops.
+(defun %cc-through-byte-pointer-p ()
+  "T when a byte address goes through the :address register, the backend having no :peek-byte and :poke-byte."
+  (and (%cc-address-register) (not (%cc-op-p :peek-byte)) (not (%cc-op-p :poke-byte))))
+
 (defun %cc-peek-byte (form)
   (%cc-check-length form 2 2)
   (%cc-expr (second form))
-  (%cc-op :peek-byte *cc-acc-name* *cc-acc-name*))
+  (cond ((%cc-through-byte-pointer-p)
+         (%cc-op :point *cc-acc-name*)
+         (setf *cc-pointer* nil)
+         (%cc-op :peek-byte-pointer *cc-acc-name*))
+        (t (%cc-op :peek-byte *cc-acc-name* *cc-acc-name*))))
 
 (defun %cc-poke-byte (form)
   (%cc-check-length form 3 3)
   (%cc-operands (second form) (third form))
-  (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)
+  (cond ((%cc-through-byte-pointer-p)
+         (%cc-op :point *cc-acc-name*)
+         (setf *cc-pointer* nil)
+         (%cc-op :poke-byte-pointer *cc-temp-name*))
+        (t (%cc-op :poke-byte *cc-acc-name* *cc-temp-name*)))
   (%cc-op :move *cc-acc* *cc-temp*))
 
 ;; (aref A I)/(aset A I V) index by word, sugar for

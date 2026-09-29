@@ -374,6 +374,7 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
             ("PEEK-LABEL" . 2) ("POKE-LABEL" . 2)
             ("POINT" . 1) ("POINT-LABEL" . 1) ("PEEK-POINTER" . 1) ("POKE-POINTER" . 1)
             ("PEEK-BYTE" . 2) ("POKE-BYTE" . 2) ("BYTE-ADDRESS" . 1)
+            ("PEEK-BYTE-POINTER" . 1) ("POKE-BYTE-POINTER" . 1)
             ("JUMP" . 1) ("BRANCH-ZERO" . 2) ("HALT" . 0))
           (loop for name in +backend-binary-ops+
                 collect (cons name 2)

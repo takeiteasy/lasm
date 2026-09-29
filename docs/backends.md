@@ -174,7 +174,8 @@ The [source language](language.md) emits `:const :get :set :peek :poke
 `:eq :ne :lt :gt :le :ge`. Each has a fixed number of parameters, checked at
 definition, and a backend defines those its programs use; `:peek-byte`/
 `:poke-byte` are needed only by `peek-byte`/`poke-byte` and packed-string access
-(#366, #379). An optional `:byte-address (d)` turns a cell address in `d` into
+(#366, #379), or `:peek-byte-pointer`/`:poke-byte-pointer` with a
+[pointer register](#pointer-register). An optional `:byte-address (d)` turns a cell address in `d` into
 the byte address those take; without it, the address is multiplied by the
 8-bit characters a cell holds.
 
@@ -210,6 +211,7 @@ that load and use it. The compiler keeps `REG` out of its register pools.
 | `:point (r)` | `REG` = register `r`. Required. |
 | `:point-label (label)` | Optional: `REG` = `label`. Without it, `:const` then `:point`. |
 | `:peek-pointer (d)` `:poke-pointer (s)` | `d` = the word at `REG`; the word at `REG` = `s`. Required, and they leave `REG` as it was. |
+| `:peek-byte-pointer (d)` `:poke-byte-pointer (s)` | As above, a byte. Optional: for `peek-byte`, `poke-byte`, `aref-byte` and `aset-byte` on a backend with no `:peek-byte`/`:poke-byte`. |
 
 A global, a static slot and a constant-index `aref`/`aset` load and store through it, and a computed address
 does when the backend has no `:peek`/`:poke`. `:peek-label`/`:poke-label` win
@@ -226,8 +228,7 @@ write `REG`.
 ;; (set g (+ g 1))  ->  :point-label gvg, :peek-pointer a, :add-imm a 1, :poke-pointer a
 ```
 
-Byte access and repeated computed addresses do not use it
-([Limitations](language.md#limitations)).
+A repeated computed address still reloads it ([Limitations](language.md#limitations)).
 
 ## Branches
 
