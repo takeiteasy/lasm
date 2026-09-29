@@ -7,7 +7,7 @@
 (defun benchmark-cpus (label source count frames &optional verify)
   (let* ((assembly (star/anima16:assemble-anima16 source))
          (machines (loop repeat count
-                         collect (let ((machine (lasm:make-machine 'lasm::anima16)))
+                         collect (let ((machine (lasm:make-machine 'star/anima16::anima16)))
                                    (lasm:load-program machine assembly)
                                    machine)))
          (samples (make-array frames))

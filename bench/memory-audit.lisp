@@ -16,7 +16,7 @@
 (defvar *audit-machines* nil)
 (defun audit-allocate-machines (count)
   (setf *audit-machines*
-        (loop repeat count collect (lasm:make-machine 'lasm::anima16)))
+        (loop repeat count collect (lasm:make-machine 'star/anima16::anima16)))
   nil)
 
 (defun audit-instance-footprint ()
@@ -35,7 +35,7 @@
 
 (let* ((assembly (star/anima16:assemble-anima16
                   (format nil "loop: add a, #1~%set PC, #loop~%")))
-       (machine (lasm:make-machine 'lasm::anima16)))
+       (machine (lasm:make-machine 'star/anima16::anima16)))
   (lasm:load-program machine assembly)
   (let ((start (get-internal-real-time)))
     (lasm:step-machine machine)

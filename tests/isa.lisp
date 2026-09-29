@@ -236,3 +236,13 @@
             (reset-pc 300))))
   (fiveam:is (null (gethash 'isa-bridge-bad *isas*)))
   (fiveam:is (null (gethash 'isa-bridge-bad *machines*))))
+
+;;; Snapshots
+
+(defcpu (isa-twin-a (:isa isa-toy)) (clock-speed 1000))
+(defcpu (isa-twin-b (:isa isa-toy)) (clock-speed 2000))
+
+(fiveam:test a-snapshot-restores-only-onto-its-own-cpu
+  (let ((snapshot (machine-snapshot (make-machine 'isa-twin-a))))
+    (fiveam:signals snapshot-machine-mismatch (restore-snapshot (make-machine 'isa-twin-b) snapshot))
+    (fiveam:is (typep (restore-snapshot (make-machine 'isa-twin-a) snapshot) 'machine))))
