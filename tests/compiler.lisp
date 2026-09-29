@@ -1670,7 +1670,7 @@ two |#
   (flet ((reserved (source)
            (count-if (lambda (item) (and (consp item) (eq (first item) :directive) (string-equal (second item) "res")))
                      (%cl-static-items source))))
-    (fiveam:is (= 4 (reserved "(defarray tbl ((function f))) (defun f (x) x) (defun g (y) (funcall (aref tbl 0) y)) (defun main () (g 1))"))
+    (fiveam:is (= 4 (reserved "(defarray tbl ((function f))) (defun f (x) x) (defun g (y) (funcall (aref tbl y) y)) (defun main () (g 0))"))
                "g's slot, f's slot beyond it, main's temporary, and the argument block")))
 
 (fiveam:test static-frames-still-check-a-computed-funcall-arity
@@ -1969,3 +1969,31 @@ two |#
 (fiveam:test aref-leaf-operand-errors-are-the-arefs-own
   (fiveam:is (search "unknown variable" (%cl-fail "(defun main () (+ 1 (aref nope 1)))" 'cl-label-variant-abi)))
   (fiveam:is (%cl-fail "(defarray a 2) (defun main () (+ 1 (aref a 1 2)))" 'cl-label-variant-abi)))
+
+;;; #435: funcall reads its callee before the arguments
+
+(defparameter +cl-callee-order-globals+
+  "(defvar g 0) (defun one (n) 1) (defun two (n) 2)
+   (defun pick (n) (set g (function two)) n)
+   (defun main () (set g (function one)) (funcall g (pick 0)))")
+
+(fiveam:test global-callee-is-read-before-an-argument-sets-it
+  (dolist (backend '(callfoo-lang-abi cl-static-abi cl-label-variant-abi))
+    (fiveam:is (= 1 (%cv-a (%cl-run +cl-callee-order-globals+ backend))))))
+
+(fiveam:test local-callee-is-read-before-an-argument-sets-it
+  (let ((source "(defun one (n) 1) (defun two (n) 2)
+                 (defun main () (let ((f (function one))) (funcall f (progn (set f (function two)) 0))))"))
+    (dolist (backend '(callfoo-lang-abi cl-static-abi))
+      (fiveam:is (= 1 (%cv-a (%cl-run source backend)))))))
+
+(fiveam:test leaf-callee-still-loads-after-leaf-arguments
+  (let ((source "(defvar g 0) (defun add (a b) (+ a b))
+                 (defun main () (set g (function add)) (funcall g 3 4))"))
+    (dolist (backend '(callfoo-lang-abi cl-static-abi))
+      (fiveam:is (= 7 (%cv-a (%cl-run source backend)))))))
+
+(fiveam:test aref-callee-loads-after-leaf-arguments
+  (let ((source "(defarray ops ((function add))) (defun add (a b) (+ a b))
+                 (defun main () (funcall (aref ops 0) 3 4))"))
+    (fiveam:is (= 7 (%cv-a (%cl-run source 'cl-label-variant-abi))))))

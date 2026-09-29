@@ -127,7 +127,7 @@ Symbols are compared by name, ignoring case.
 
 `(function F)` is `F`'s address, a value like any other -- stored in a
 variable, put in a `defarray`, or called through. `(funcall E ARG...)` calls
-through `E`'s value: a literal `(function F)` compiles the same direct call
+through `E`'s value, which is evaluated before the arguments: a literal `(function F)` compiles the same direct call
 `(F ARG...)` does, arity-checked at compile time. Any other `E` computes its
 target at run time, and its argument count must be one of the function values
 that can reach it: those put in a `let` variable, global or parameter, in a

@@ -1311,11 +1311,11 @@ function value takes, or that the function values reaching its target do not."
                     (%cc-fail form "no function value takes ~D argument~:P~@[ (function values take ~{~D~^, ~})~]"
                               arity (sort (copy-list *cc-value-arities*) #'<)))))))
 
-;; FIXME: a leaf callee, a global too, loads after the arguments; one that sets it changes the target (#435).
-(defun %cc-callee-leaf-p (callee)
-  "T when CALLEE loads straight into the call target register, after the arguments.
-An element is computed first, as an argument could aset it."
-  (and (%cc-leaf-p callee) (not (%cc-element-leaf-p callee))))
+(defun %cc-callee-late-p (callee args)
+  "T when the leaf CALLEE loads straight into the call target register, after
+ARGS: none of them can change it (%CC-SWAPPABLE-P)."
+  (and (%cc-leaf-p callee)
+       (every (lambda (arg) (%cc-swappable-p callee arg)) args)))
 
 (defun %cc-note-indirect-call (callee args form function)
   (unless (%cc-raw-address-p callee)
@@ -1328,7 +1328,7 @@ An element is computed first, as an argument could aset it."
 ;; thunk copies them into the function's own parameter words.
 (defun %cc-static-indirect-funcall (callee args)
   (let ((form *cc-form*) (function *cc-function*)
-        (callee-slot (unless (%cc-callee-leaf-p callee)
+        (callee-slot (unless (%cc-callee-late-p callee args)
                        (%cc-expr callee)
                        (let ((slot (%cc-alloc)))
                          (%cc-store slot)
@@ -1354,7 +1354,7 @@ An element is computed first, as an argument could aset it."
   (when (%cc-static-p)
     (return-from %cc-indirect-funcall (%cc-static-indirect-funcall callee args)))
   (let ((form *cc-form*) (function *cc-function*)
-        (callee-slot (unless (%cc-callee-leaf-p callee)
+        (callee-slot (unless (%cc-callee-late-p callee args)
                        (%cc-expr callee)
                        (let ((slot (%cc-alloc)))
                          (%cc-op :set slot *cc-acc*)
