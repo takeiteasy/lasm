@@ -52,7 +52,7 @@ add b, #1
 and b, #4095
 bor b, #4096
 set PC, #loop" count frames
-                  (lambda (machine) (assert (= 777 (lasm:mref machine 'lasm::ram 4096)))))
+                  (lambda (machine) (assert (= 777 (lasm:mref machine 'star/anima16::ram 4096)))))
   (benchmark-cpus "Clock interrupts"
                   "set a, #0
 set b, #1
@@ -65,4 +65,4 @@ loop: add x, #1
 set PC, #loop
 handler: add y, #1
 rfi #0" count frames
-                  (lambda (machine) (assert (plusp (lasm:regref machine 'lasm::reg 4))))))
+                  (lambda (machine) (assert (plusp (lasm:regref machine 'star/anima16::reg 4))))))
