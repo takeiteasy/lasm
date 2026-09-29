@@ -109,6 +109,8 @@
    #:*strict-operand-range*
 
    ;; Machine definition
+   #:defisa
+   #:defcpu
    #:defmachine
    #:make-machine
    #:reset

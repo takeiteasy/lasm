@@ -1515,6 +1515,115 @@ PARENT's."
               (setf parent-seen t parent (second option)))
             (values name parent))))))
 
+(defun %parse-name-options (name-spec definer &rest allowed)
+  "Values NAME and a plist of the (:KEY VALUE) options of a DEFINER name spec,
+each key one of ALLOWED and given once."
+  (%with-definition ((if (consp name-spec) (car name-spec) name-spec) machine-definition-error)
+    (if (symbolp name-spec)
+        (values name-spec nil)
+        (%definition-bind (name &rest options) name-spec
+          (let (plist)
+            (dolist (option options)
+              (unless (and (consp option) (member (first option) allowed) (= (length option) 2)
+                           (symbolp (second option)))
+                (%defmachine-error "~A ~S: unknown name option ~S; expected ~{(~S NAME)~^ or ~}"
+                                   definer name option allowed))
+              (when (getf plist (first option))
+                (%defmachine-error "~A ~S: more than one ~S option" definer name (first option)))
+              (setf (getf plist (first option)) (second option)))
+            (values name plist))))))
+
+(defparameter *dsl-known-machine-heads*
+  '(register stack memory flags instruction-word stack-pointer interrupts privilege
+    device clock-speed reset-pc idle undefined-opcode properties
+    without-instructions instruction-cycles without-storage without-devices))
+
+(defun %check-clause-heads (clauses definer allowed hint)
+  (dolist (clause clauses)
+    (unless (member (first clause) allowed)
+      (%defmachine-error "~A: ~S is ~A" definer (first clause)
+                         (if (member (first clause) *dsl-known-machine-heads*) hint "not a clause")))))
+
+(defun %define-isa (name parent clauses)
+  "Build and register the ISA NAME."
+  (%with-definition (name machine-definition-error)
+    (%check-clause-heads clauses "DEFISA"
+                         '(register stack memory flags instruction-word stack-pointer interrupts privilege)
+                         "a CPU clause; declare it in DEFCPU")
+    (dolist (clause clauses)
+      (case (first clause)
+        (memory (when (some #'%region-form-p (cddr clause))
+                  (%defmachine-error "DEFISA: memory ~S declares a region; regions belong to DEFCPU"
+                                     (second clause))))
+        (interrupts (when (loop for (key) on (rest clause) by #'cddr thereis (member key *cpu-interrupt-keys*))
+                      (%defmachine-error "DEFISA: interrupts takes ~{~S~^, ~} in DEFCPU"
+                                         *cpu-interrupt-keys*)))))
+    (let ((isa (%build-isa name parent clauses)))
+      (setf (gethash name *isas*) isa)
+      (incf *instruction-generation*)
+      isa)))
+
+(defun %define-cpu (name isa-name parent clauses)
+  "Build and register the CPU NAME of ISA ISA-NAME, or of PARENT's ISA when that is NIL."
+  (%with-definition (name machine-definition-error)
+    (let* ((parent-md (and parent (gethash parent *machines*)))
+           (isa-name (or isa-name
+                         (and parent-md (machine-descriptor-isa parent-md))
+                         (%defmachine-error "DEFCPU ~S needs an (:isa ISA) option" name)))
+           (isa (or (gethash isa-name *isas*)
+                    (%defmachine-error "DEFCPU ~S: no ISA named ~S has been defined" name isa-name))))
+      (when (and parent-md
+                 (not (or (eq isa-name (machine-descriptor-isa parent-md))
+                          (member (machine-descriptor-isa parent-md) (%isa-ancestors isa-name)))))
+        (%defmachine-error "DEFCPU ~S: ISA ~S is not ~S's ISA ~S or a descendant of it"
+                           name isa-name parent (machine-descriptor-isa parent-md)))
+      (%check-clause-heads clauses "DEFCPU"
+                           (append '(register stack memory interrupts) *cpu-clause-heads*)
+                           "an ISA clause; declare it in DEFISA")
+      (let ((known (%declared-names (machine-descriptor-source-clauses isa))))
+        (dolist (clause clauses)
+          (when (and (member (first clause) '(register stack memory))
+                     (not (member (second clause) known)))
+            (%defmachine-error "DEFCPU: ~(~A~) ~S is not declared by ISA ~S; declare it in DEFISA"
+                               (first clause) (second clause) isa-name))
+          (when (and (eq (first clause) 'interrupts)
+                     (loop for (key) on (rest clause) by #'cddr
+                           thereis (not (member key *cpu-interrupt-keys*))))
+            (%defmachine-error "DEFCPU: interrupts takes only ~{~S~^, ~}; the delivery layout is the ISA's"
+                               *cpu-interrupt-keys*))))
+      (let ((cpu (%build-cpu name isa parent clauses)))
+        (%register-machine nil cpu)))))
+
+(defmacro defisa (name &body clauses)
+  "Define the architecture NAME: the storage layout, instruction word and
+stack pointer its instructions are compiled against, plus the delivery layout
+of its interrupts and its privilege levels. The clauses are DEFMACHINE's
+register, stack, memory (without regions), flags, instruction-word,
+stack-pointer, interrupts (without :queue, :on-overflow, :cycles and
+:max-depth) and privilege. NAME may be (NAME (:extends ISA)), which adds
+storage and instructions to ISA. DEFINSTRUCTION and DEFMODE name an ISA, and
+DEFCPU builds a machine on it. See docs/isa.md."
+  (%expanding-definition
+    (multiple-value-bind (isa-name options) (%parse-name-options name "DEFISA" :extends)
+      (%definition-toplevel-form
+       `(%define-isa ',isa-name ',(getf options :extends) ',(mapcar #'%dsl-machine-clause clauses))
+       `',isa-name))))
+
+(defmacro defcpu (name &body clauses)
+  "Define the machine NAME of an ISA: its clock, memory size and regions,
+devices, interrupt queue, register widths, undefined-opcode policy, properties,
+and which of the ISA's instructions it removes or re-times. NAME is
+(NAME (:isa ISA)), (NAME (:extends CPU)), or both; a CPU extending another
+takes its ISA unless :isa names a descendant of it. A CPU can override a
+register's :width and a memory's :addr-width, and declares no storage its ISA
+lacks. See docs/isa.md."
+  (%expanding-definition
+    (multiple-value-bind (cpu-name options) (%parse-name-options name "DEFCPU" :isa :extends)
+      (%definition-toplevel-form
+       `(%define-cpu ',cpu-name ',(getf options :isa) ',(getf options :extends)
+                     ',(mapcar #'%dsl-machine-clause clauses))
+       `',cpu-name))))
+
 (defmacro defmachine (name &body clauses)
   "Define a fantasy-CPU storage model named NAME from CLAUSES, each one of:
      (register NAME :width n [:count n] [:names (A B C ...)])
