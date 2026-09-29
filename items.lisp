@@ -594,7 +594,7 @@ cell holding that half, the word's cells lying in the memory's endian order."
   (let ((place (second operand)))
     (if (integerp place)
         (let* ((highp (%keyword-named-p which "HI"))
-               (little (eq (%descriptor-endian (find-machine-descriptor (backend-descriptor-machine *items-backend*)))
+               (little (eq (%descriptor-endian (%backend-storage *items-backend*))
                      :little)))
           (list (first operand) (+ place (if (eq highp little) 1 0))))
         (let ((pair (%pair-named place)))
@@ -1214,15 +1214,33 @@ A value that depends on a label is checked when the assembler encodes it."
        (loop for key being the hash-keys of table
              when (%same-name-p key designator) return key)))
 
+(defun %backend-accepts-machine-p (backend machine)
+  "True when MACHINE, a machine name, is one BACKEND describes: its CPU, or a CPU
+of its ISA or an ISA extending it."
+  (let ((cpu (backend-descriptor-cpu backend))
+        (name (%find-machine-name machine)))
+    (and name
+         (if cpu
+             (%same-name-p cpu name)
+             (let ((isa (machine-descriptor-isa (find-machine-descriptor name))))
+               (or (%same-name-p isa (backend-descriptor-isa backend))
+                   (member (backend-descriptor-isa backend) (%isa-ancestors isa))))))))
+
 (defun %items-context (backend machine lexer)
   "Values BACKEND, MACHINE and LEXER resolved."
   (let* ((backend (and backend (find-backend backend)))
-         (machine (cond ((and backend machine
-                              (not (%same-name-p (backend-descriptor-machine backend) machine)))
-                         (%signal-usage-error 'usage-error "backend ~A targets machine ~A, not ~A"
+         (machine (cond ((and backend machine (not (%backend-accepts-machine-p backend machine)))
+                         (%signal-usage-error 'usage-error "backend ~A targets ~A, not machine ~A"
                                               (backend-descriptor-name backend)
-                                              (backend-descriptor-machine backend) machine))
-                        (backend (backend-descriptor-machine backend))
+                                              (or (backend-descriptor-cpu backend)
+                                                  (format nil "ISA ~A" (backend-descriptor-isa backend)))
+                                              machine))
+                        ((and backend machine) (%find-machine-name machine))
+                        (backend (or (backend-descriptor-machine backend)
+                                     (%signal-usage-error 'usage-error
+                                                          "backend ~A targets ISA ~A, which has no machine of that name: pass :machine"
+                                                          (backend-descriptor-name backend)
+                                                          (backend-descriptor-isa backend))))
                         (machine (or (%find-machine-name machine)
                                      (%lookup-error 'unknown-machine machine "No machine named ~S" machine)))
                         (t (%signal-usage-error 'usage-error "items need a :machine or a :backend"))))

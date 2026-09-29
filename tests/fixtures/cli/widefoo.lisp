@@ -137,7 +137,7 @@
 ;; word size without needing :mul.
 (defarith shlr 22 (ash x y))
 
-(defbackend widefoo-lang-abi (:machine widefoo)
+(defbackend widefoo-lang-abi (:isa widefoo)
   (registers :return (a) :scratch (a b) :callee-saved (c d)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)

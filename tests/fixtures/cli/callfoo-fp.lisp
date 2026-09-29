@@ -39,7 +39,7 @@
   (encoding (opcode 23) (operand offset :width 1) (operand src :width 1))
   (semantics (set! (mref machine 'ram (wrap-value (+ fp offset) 16)) (r src))))
 
-(defbackend callfoo-fp-abi (:extends callfoo-abi :machine callfoo-fp)
+(defbackend callfoo-fp-abi (:extends callfoo-abi :isa callfoo-fp)
   (frame :pointer fp :slot fp-idx :stack-slot sp-idx)
   (operands (fp-idx call-fp-idx))
   (ops (:enter () (pushfp) (movfs))

@@ -259,6 +259,8 @@
    #:backend-descriptor-p
    #:backend-descriptor-name
    #:backend-descriptor-machine
+   #:backend-descriptor-isa
+   #:backend-descriptor-cpu
    #:backend-descriptor-registers
    #:backend-descriptor-call
    #:backend-descriptor-frame

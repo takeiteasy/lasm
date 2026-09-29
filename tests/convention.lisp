@@ -24,7 +24,7 @@
                                   (:return () (ret))))
                      (and return-pop '((:return-pop (n) (retn (imm n)))))
                      extra-ops)))
-    `(defbackend ,name (:machine callfoo)
+    `(defbackend ,name (:isa callfoo)
        (registers ,@registers :stack-pointer sp :program-counter pc :operand reg)
        (call :args ,args :order ,order :cleanup ,cleanup :return-address-slots 1)
        (frame :grows :down :alignment ,alignment :slot sp-idx)
@@ -84,7 +84,7 @@
   (encoding (opcode 0))
   (semantics (trap :halt)))
 
-(defbackend cv-up-abi (:machine cv-up)
+(defbackend cv-up-abi (:isa cv-up)
   (registers :return (a) :callee-saved (c d) :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
   (frame :grows :up :slot sp-idx)
@@ -381,14 +381,14 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
   (fiveam:is (search "callee-saved" (%cv-malformed '((:function f (:save (b)) (:return))) 'callfoo-abi))))
 
 (fiveam:test a-missing-hook-names-the-operation-that-needs-it
-  (eval '(defbackend cv-bare-abi (:machine callfoo)
+  (eval '(defbackend cv-bare-abi (:isa callfoo)
           (registers :return (a) :callee-saved (c) :stack-pointer sp :operand reg)
           (frame :slot sp-idx)
           (operands (reg call-reg) (sp-idx call-sp-idx))))
   (fiveam:is (search ":call" (%cv-malformed '((:call f)) 'cv-bare-abi)))
   (fiveam:is (search ":push" (%cv-malformed '((:push (reg a))) 'cv-bare-abi)))
   (fiveam:is (search ":alloc" (%cv-malformed '((:function f (:locals 1) (:return))) 'cv-bare-abi)))
-  (eval '(defbackend cv-no-operand-abi (:machine callfoo)
+  (eval '(defbackend cv-no-operand-abi (:isa callfoo)
           (registers :callee-saved (c) :stack-pointer sp)
           (operands (reg call-reg))))
   (fiveam:is (search ":operand" (%cv-malformed '((:function f (:save (c)) (:return))) 'cv-no-operand-abi)))
@@ -399,19 +399,19 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
            (handler-case (progn (eval form) nil)
              (backend-definition-error (c) (princ-to-string c)))))
     (fiveam:is (search "not a declared operand kind"
-                       (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                       (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                            (registers :operand nowhere) (operands (reg call-reg))))))
     (fiveam:is (search "not a declared operand kind"
-                       (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                       (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                            (frame :slot nowhere) (operands (reg call-reg))))))
     (fiveam:is (search "drop :slot"
-                       (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                       (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                            (frame :static t :slot nowhere) (operands (reg call-reg))))))
     (fiveam:is (not (search "drop :slot"
-                            (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                            (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                                 (frame :slot nowhere) (operands (reg call-reg)))))))
     (fiveam:is (search "takes 1 parameter"
-                       (definition-error '(defbackend cv-bad-abi (:machine callfoo)
+                       (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                            (operands (reg call-reg)) (ops (:push (a b) (pushv a)))))))))
 
 ;;; Frame pointer (#321)
@@ -429,7 +429,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
   (encoding (opcode 23) (operand offset :width 1) (operand src :width 1))
   (semantics (set! (mref machine 'ram (wrap-value (+ fp offset) 16)) (r src))))
 
-(defbackend cv-up-fp-abi (:extends cv-up-abi :machine cv-up-fp)
+(defbackend cv-up-fp-abi (:extends cv-up-abi :isa cv-up-fp)
   (frame :pointer fp :slot fp-idx)
   (operands (fp-idx call-fp-idx))
   (ops (:enter () (pushfp) (movfs))
@@ -546,7 +546,7 @@ ret
 (fiveam:test frame-pointer-lowering-signals-malformed-items
   (fiveam:is (search "frame pointer"
                      (%cv-malformed '((:function f (:save (fp)) (:return))) 'callfoo-fp-abi)))
-  (eval '(defbackend cv-fp-noenter-abi (:extends callfoo-abi :machine callfoo-fp)
+  (eval '(defbackend cv-fp-noenter-abi (:extends callfoo-abi :isa callfoo-fp)
           (frame :pointer fp :slot fp-idx)
           (operands (fp-idx call-fp-idx))))
   (fiveam:is (search ":enter" (%cv-malformed '((:function f () (:return))) 'cv-fp-noenter-abi)))
@@ -563,7 +563,7 @@ ret
 
 ;;; Frame pointer opt-out (#331)
 
-(eval '(defbackend cv-fp-nostack-abi (:extends callfoo-abi :machine callfoo-fp)
+(eval '(defbackend cv-fp-nostack-abi (:extends callfoo-abi :isa callfoo-fp)
         (frame :pointer fp :slot fp-idx)
         (operands (fp-idx call-fp-idx))
         (ops (:enter () (pushfp) (movfs))
@@ -759,7 +759,7 @@ ret
     (zero-page (opcode 32) (operand v :width 1) (semantics nil))
     (absolute (opcode 33) (operand v :width 2) (semantics (set! sp v)))))
 
-(defbackend cv-addx-abi (:extends callfoo-abi :machine cv-addx)
+(defbackend cv-addx-abi (:extends callfoo-abi :isa cv-addx)
   (ops (:plus (d s) (addx d s))
        (:bump (n) (addx (sp) (imm n)))))
 
@@ -902,7 +902,7 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
                (cv-sel-reg (set! a src))
                (cv-sel-imm (set! sp src)))))
 
-(defbackend cv-sel-abi (:machine cv-sel)
+(defbackend cv-sel-abi (:isa cv-sel)
   (registers :stack-pointer sp :program-counter pc)
   (ops (:return () (ret))))
 
@@ -1129,7 +1129,7 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
 (fiveam:test a-local-macro-shadows-a-global-one-of-the-same-name
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vshadow))))
 
-(defbackend cv-var-abi (:machine cv-var)
+(defbackend cv-var-abi (:isa cv-var)
   (registers :stack-pointer sp :program-counter pc)
   (ops (:nothing () (vlocal))))
 
@@ -1194,7 +1194,7 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
   (encoding (opcode 8))
   (semantics (set! pc (pop sp))))
 
-(defbackend cv-wide-up-abi (:machine cv-wide-up)
+(defbackend cv-wide-up-abi (:isa cv-wide-up)
   (registers :return (a) :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
   (frame :grows :up :slot sp-idx :offsets :cells :counts :cells)
@@ -1212,6 +1212,6 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
 
 (fiveam:test defbackend-rejects-a-bad-frame-unit
   (fiveam:signals backend-definition-error
-    (eval '(defbackend cv-bad-unit-abi (:machine callfoo) (frame :counts :bytes))))
+    (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :counts :bytes))))
   (fiveam:signals backend-definition-error
-    (eval '(defbackend cv-bad-unit-abi (:machine callfoo) (frame :offsets nil)))))
+    (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :offsets nil)))))

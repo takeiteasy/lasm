@@ -22,7 +22,8 @@
 
 (defstruct backend-descriptor
   name        ; symbol
-  machine     ; name of the machine described
+  isa         ; name of the ISA described
+  cpu         ; name of the one CPU it is narrowed to, or NIL for every CPU of the ISA
   registers   ; plist of role -> upcased name, or list of names (see +BACKEND-REGISTER-ROLES+); :OPERAND -> kind name
   call        ; plist :ARGS :ORDER :CLEANUP :RETURN-ADDRESS-SLOTS
   frame       ; plist :GROWS :ALIGNMENT, and :SLOT, :STACK-SLOT (kind names), :POINTER (a register name) and :STATIC when given
@@ -36,6 +37,22 @@
   options     ; the DEFBACKEND options as given
   own-clauses ; the DEFBACKEND clauses as given, before merging with the parent's
   clauses)    ; the registers, call, frame, operands, ops, branches and stack-writers clauses after merging with the parent's
+
+(defun backend-descriptor-machine (backend)
+  "The machine BACKEND assembles for by default: its CPU, else the CPU named like its ISA, else NIL."
+  (or (backend-descriptor-cpu backend)
+      (let ((isa (backend-descriptor-isa backend)))
+        (and (gethash isa *machines*) isa))))
+
+(defun %backend-storage (backend)
+  "The descriptor BACKEND reads storage from: its CPU's, else its ISA's."
+  (if (backend-descriptor-cpu backend)
+      (find-machine-descriptor (backend-descriptor-cpu backend))
+      (find-isa-descriptor (backend-descriptor-isa backend))))
+
+(defun %backend-checking-name (backend)
+  "The name whose instructions BACKEND's mnemonics are checked against."
+  (or (backend-descriptor-cpu backend) (backend-descriptor-isa backend)))
 
 (defvar *backends* (make-hash-table :test 'equal)
   "Defined backends, keyed by upcased name.")
@@ -60,7 +77,7 @@ name), or DESIGNATOR itself when it is one. Signals UNKNOWN-BACKEND."
 
 (defun %stack-roles (backend)
   "The upcased stack pointer and program counter register names of BACKEND, or NIL for each it lacks."
-  (let* ((descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
+  (let* ((descriptor (%backend-storage backend))
          (pointers (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
                          collect (%designator-name (stack-pointer-descriptor-register pointer)))))
     (values (%role-register backend :stack-pointer (and (null (rest pointers)) (first pointers)))
@@ -98,7 +115,7 @@ clauses its own choices select."
   "One (MNEMONIC MODE...) for each instruction of BACKEND's machine with a variant that writes
 the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addressing mode."
   (let* ((backend (find-backend backend))
-         (descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
+         (descriptor (%backend-storage backend))
          (result '()))
     (maphash (lambda (name variants)
                (let ((writers (remove-if-not (lambda (variant) (%stack-writer-p backend variant)) variants)))
@@ -123,7 +140,7 @@ the stack pointer, upcased and sorted; (MNEMONIC) when the variant has no addres
 holds (at least 1), and the machine's memory endianness, which orders them
 within a cell."
   (let* ((backend (find-backend backend))
-         (descriptor (find-machine-descriptor (backend-descriptor-machine backend))))
+         (descriptor (%backend-storage backend)))
     (values (max 1 (floor (%descriptor-cell-width descriptor) 8))
             (%descriptor-endian descriptor))))
 
@@ -146,7 +163,7 @@ backend declares pairs, else its declared stack pointer's slot width, which defa
 memory's own cell width, divided by that cell width and rounded up. 1 without a matching
 (stack-pointer ...) clause."
   (let* ((backend (find-backend backend))
-         (machine-descriptor (find-machine-descriptor (backend-descriptor-machine backend)))
+         (machine-descriptor (%backend-storage backend))
          (sp (%role-register backend :stack-pointer nil))
          (pointer (%backend-matched-stack-pointer sp machine-descriptor))
          (pairs (backend-pairs backend)))
@@ -165,8 +182,21 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
              (loop for name being the hash-keys of *machines*
                    when (string= key (%designator-name name)) return name)))))
 
-(defun %find-mode-by-name (designator machine)
+(defun %find-isa-name (designator)
   (let ((key (%designator-name designator)))
+    (and key
+         (or (and (symbolp designator) (gethash designator *isas*) designator)
+             (loop for name being the hash-keys of *isas*
+                   when (string= key (%designator-name name)) return name)))))
+
+(defun %mode-scope-of (name)
+  "The ISA whose modes NAME, a CPU or an ISA, sees."
+  (let ((cpu (gethash name *machines*)))
+    (if cpu (machine-descriptor-isa cpu) name)))
+
+(defun %find-mode-by-name (designator machine)
+  (let ((key (%designator-name designator))
+        (machine (%mode-scope-of machine)))
     (and key
          (or (and (symbolp designator) (%lookup-mode designator machine))
              (find key (%visible-modes machine) :test #'string=
@@ -625,7 +655,7 @@ local to one expansion of the operation."
       (let ((labels (%template-labels op params forms)))
         (dolist (form forms)
           (%check-op-form op form params (backend-descriptor-operands descriptor)
-                          (backend-descriptor-machine descriptor) labels))))))
+                          (%backend-checking-name descriptor) labels))))))
 
 (defun %backend-matched-stack-pointer (sp machine-descriptor)
   "The (stack-pointer ...) descriptor of MACHINE-DESCRIPTOR whose register is
@@ -803,32 +833,46 @@ its first position."
     found))
 
 (defun %backend-options (name options)
-  "The machine name and the parent descriptor (or NIL) DEFBACKEND's OPTIONS give."
+  "The ISA name, CPU name (or NIL) and parent descriptor (or NIL) DEFBACKEND's OPTIONS give."
   (unless (and (consp options) (evenp (length options)))
-    (%backend-error "DEFBACKEND ~S: expected (:machine NAME) and/or (:extends PARENT) after the name, got ~S"
+    (%backend-error "DEFBACKEND ~S: expected (:isa NAME), optionally (:cpu NAME), and/or (:extends PARENT) after the name, got ~S"
                     name options))
-  (%check-plist (format nil "DEFBACKEND ~S" name) options '(:machine :extends))
+  (%check-plist (format nil "DEFBACKEND ~S" name) options '(:isa :cpu :extends))
   (let* ((parent-name (getf options :extends))
          (parent (and parent-name
                       (or (and (%designator-name parent-name)
                                (or (cdr (assoc (%designator-name parent-name) *pending-backends* :test #'equal))
                                    (gethash (%designator-name parent-name) *backends*)))
                           (%backend-error "DEFBACKEND ~S extends ~S, which has not been defined" name parent-name))))
-         (given (getf options :machine))
-         (machine (cond ((and given (%find-machine-name given)))
-                        (given (%backend-error "DEFBACKEND ~S: machine ~S has not been defined" name given))
-                        (parent (backend-descriptor-machine parent))
-                        (t (%backend-error "DEFBACKEND ~S: expected (:machine NAME) after the name, got ~S"
-                                           name options)))))
+         (given-cpu (getf options :cpu))
+         (given-isa (getf options :isa))
+         (cpu (cond ((and given-cpu (%find-machine-name given-cpu)))
+                    (given-cpu (%backend-error "DEFBACKEND ~S: CPU ~S has not been defined" name given-cpu))
+                    (parent (backend-descriptor-cpu parent))))
+         (isa (cond ((and given-isa (%find-isa-name given-isa)))
+                    (given-isa (%backend-error "DEFBACKEND ~S: ISA ~S has not been defined" name given-isa))
+                    (cpu (machine-descriptor-isa (find-machine-descriptor cpu)))
+                    (parent (backend-descriptor-isa parent))
+                    (t (%backend-error "DEFBACKEND ~S: expected (:isa NAME) after the name, got ~S"
+                                       name options)))))
     (when (and parent (equal (%designator-name name) (%designator-name (backend-descriptor-name parent))))
       (%backend-error "DEFBACKEND ~S cannot extend itself" name))
     (when (and parent (member (%designator-name parent-name) (%backend-descendants name) :test #'equal))
       (%backend-error "DEFBACKEND ~S extends ~S, which extends ~S" name parent-name name))
-    (when (and parent (not (eq machine (backend-descriptor-machine parent)))
-               (not (member (backend-descriptor-machine parent) (%machine-ancestors machine))))
-      (%backend-error "DEFBACKEND ~S: machine ~S is not ~S or a machine extending it, which ~S targets"
-                      name machine (backend-descriptor-machine parent) (backend-descriptor-name parent)))
-    (values machine parent)))
+    (when cpu
+      (let ((cpu-isa (machine-descriptor-isa (find-machine-descriptor cpu))))
+        (unless (or (eq cpu-isa isa) (member isa (%isa-ancestors cpu-isa)))
+          (%backend-error "DEFBACKEND ~S: CPU ~S is built on ISA ~S, not ~S or an ISA extending it"
+                          name cpu cpu-isa isa))))
+    (when (and parent (not (eq isa (backend-descriptor-isa parent)))
+               (not (member (backend-descriptor-isa parent) (%isa-ancestors isa))))
+      (%backend-error "DEFBACKEND ~S: ISA ~S is not ~S or an ISA extending it, which ~S targets"
+                      name isa (backend-descriptor-isa parent) (backend-descriptor-name parent)))
+    (when (and parent (backend-descriptor-cpu parent) cpu (not (eq cpu (backend-descriptor-cpu parent)))
+               (not (member (backend-descriptor-cpu parent) (%machine-ancestors cpu))))
+      (%backend-error "DEFBACKEND ~S: CPU ~S is not ~S or a CPU extending it, which ~S targets"
+                      name cpu (backend-descriptor-cpu parent) (backend-descriptor-name parent)))
+    (values isa cpu parent)))
 
 (defun %check-backend-clause-heads (name clauses extendsp)
   (let ((seen '()))
@@ -844,9 +888,10 @@ its first position."
 
 (defun %build-backend (name options clauses)
   "The descriptor DEFBACKEND's arguments describe, not yet registered."
-  (multiple-value-bind (machine parent) (%backend-options name options)
+  (multiple-value-bind (isa cpu parent) (%backend-options name options)
     (%check-backend-clause-heads name clauses parent)
-    (let* ((machine-descriptor (find-machine-descriptor machine))
+    (let* ((machine (or cpu isa))
+           (machine-descriptor (if cpu (find-machine-descriptor cpu) (find-isa-descriptor isa)))
            (own clauses)
            (clauses (if parent
                         (%merge-backend-clauses name (backend-descriptor-clauses parent) clauses)
@@ -854,7 +899,7 @@ its first position."
            (*backend-pairs* (let ((pairs (getf (rest (find "REGISTERS" clauses :test #'equal :key #'%clause-head-name))
                                                :pairs)))
                               (and pairs (%parse-pairs machine-descriptor pairs))))
-           (descriptor (make-backend-descriptor :name name :machine machine :frame (list :grows nil :alignment 1)
+           (descriptor (make-backend-descriptor :name name :isa isa :cpu cpu :frame (list :grows nil :alignment 1)
                                                 :call (list :args :stack :order :right-to-left :cleanup :caller
                                                             :return-address-slots 1)
                                                 :parent (and parent (backend-descriptor-name parent))
@@ -913,7 +958,7 @@ its first position."
 
 (defmacro defbackend (name options &body clauses)
   "Define the compiler-target description NAME for a machine, from
-OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
+OPTIONS, (:isa ISA), optionally (:cpu CPU), and/or (:extends PARENT), and CLAUSES, each one of:
      (registers [:return (reg...)] [:arguments (reg...)] [:scratch (reg...)]
                 [:caller-saved (reg...)] [:callee-saved (reg...)]
                 [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg] [:address reg]
@@ -931,8 +976,9 @@ OPTIONS, (:machine MACHINE) and/or (:extends PARENT), and CLAUSES, each one of:
      (branches mnemonic...)
      (stack-writers [entry...] [:except entry...])   ; an entry is MNEMONIC or (MNEMONIC MODE)
      (without-ops NAME...)                    ; with :extends only
-:extends merges PARENT's clauses under these by key, for the same machine or one
-extending it. An operand kind names an addressing mode; an operation expands to instruction
+:extends merges PARENT's clauses under these by key, for the same ISA or one
+extending it. :cpu narrows the backend to one machine of the ISA, whose removed
+instructions its templates may not use. An operand kind names an addressing mode; an operation expands to instruction
 forms whose operands are (KIND value...) items, parameters, or expressions. A
 (:label NAME) form defines a label unique to each expansion. :pushes and :pops
 declare the cells (an integer or a parameter) an operation puts on or takes off

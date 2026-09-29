@@ -554,7 +554,7 @@ escaped, and each function whose label it spells as taken."
 (:clobbers REG...), or :ALL without one."
   (let ((item (second form)))
     (if (%cc-clobber-declaration-p item)
-        (let ((descriptor (find-machine-descriptor (backend-descriptor-machine *cc-backend*)))
+        (let ((descriptor (%backend-storage *cc-backend*))
               (*backend-pairs* (backend-pairs *cc-backend*)))
           (mapcar (lambda (name)
                     (unless (%cc-name-p name)

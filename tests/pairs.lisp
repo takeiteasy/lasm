@@ -52,7 +52,7 @@
              (fiveam:is (and c (search text (princ-to-string c))) "~S: ~A" form c))))
 
 (fiveam:test pairs-need-halves-of-one-width
-  (let ((c (%backend-error-of '(defbackend pf-bad-width (:machine pf-mixed-machine)
+  (let ((c (%backend-error-of '(defbackend pf-bad-width (:isa pf-mixed-machine)
                                 (registers :pairs ((ab a w)) :return (ab) :operand reg)))))
     (fiveam:is (typep c 'backend-definition-error))
     (fiveam:is (search "same width" (princ-to-string c)))))
@@ -118,7 +118,7 @@
 (eval '(definstruction pf-be-machine lds (modes pf-be-rs)
         (encoding (opcode 1) (operand dst :width 1) (operand offset :width 1))
         (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ sp offset) 16))))))
-(eval '(defbackend pf-be-abi (:machine pf-be-machine)
+(eval '(defbackend pf-be-abi (:isa pf-be-machine)
         (registers :pairs ((ab a b)) :return (ab) :stack-pointer sp :operand reg)
         (frame :grows :down :slot slot :offsets :cells :counts :cells)
         (operands (reg pf-be-reg) (slot pf-be-slot))

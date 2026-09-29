@@ -255,7 +255,7 @@ The slot kind takes one value, the offset from the stack pointer, or from the
 frame pointer with one.
 
 ```lisp
-(defbackend callfoo-abi (:machine callfoo)
+(defbackend callfoo-abi (:isa callfoo)
   (registers :return (a) :callee-saved (c d) :stack-pointer sp :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller)
   (frame :grows :down :slot sp-idx)

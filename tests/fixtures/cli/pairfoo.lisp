@@ -204,7 +204,7 @@ and the zero flag of the first."
 ;; Every value is a pair: ab is the accumulator, cd the right operand. A word
 ;; goes on the stack a byte at a time, high byte first, and a frame slot is
 ;; two cells, low byte first, so (:lo slot) is the cell at the slot's offset.
-(defbackend pairfoo-lang-abi (:machine pairfoo)
+(defbackend pairfoo-lang-abi (:isa pairfoo)
   (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
              :stack-pointer sp :program-counter pc :operand reg)

@@ -5,7 +5,7 @@ A [backend](backends.md) names pairs of narrow registers, and a
 compiles for an 8-bit machine.
 
 ```lisp
-(defbackend pairfoo-lang-abi (:machine pairfoo)
+(defbackend pairfoo-lang-abi (:isa pairfoo)
   (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
              :stack-pointer sp :operand reg)

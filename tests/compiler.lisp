@@ -48,7 +48,7 @@
   (encoding (opcode 42) (operand dst :width 1) (operand src :width 1))
   (semantics (set! (r dst) (if (< (r dst) (r src)) 1 0))))
 
-(defbackend cl-up-abi (:extends cv-up-abi :machine cl-up)
+(defbackend cl-up-abi (:extends cv-up-abi :isa cl-up)
   (registers :scratch (b))
   (ops (:const (r v) (ldi r (imm v)))
        (:get (r slot) (lds r slot))
@@ -428,7 +428,7 @@
 (fiveam:test a-variant-operation-has-its-arity-checked
   (dolist (name '(:add-imm :lt-slot))
     (fiveam:signals backend-definition-error
-      (eval `(defbackend cl-variant-arity-abi (:machine callfoo) (ops (,name (a b c) (ldi a b))))))))
+      (eval `(defbackend cl-variant-arity-abi (:isa callfoo) (ops (,name (a b c) (ldi a b))))))))
 
 ;;; #388: a leaf left operand swaps to the right
 
@@ -566,7 +566,7 @@
 (fiveam:test a-branch-operation-has-its-arity-checked
   (dolist (name '(:branch-lt-imm :branch-ge-slot :branch-eq))
     (fiveam:signals backend-definition-error
-      (eval `(defbackend cl-branch-arity-abi (:machine callfoo) (ops (,name (a b) (ldi a b))))))))
+      (eval `(defbackend cl-branch-arity-abi (:isa callfoo) (ops (,name (a b) (ldi a b))))))))
 
 ;;; #373: a register, not always the stack, holds a left operand
 
@@ -960,7 +960,7 @@
            (memory ram :width 8 :addr-width 16)
            (stack-pointer sp :memory ram :width 24)))
   (eval '(defmode cl-w3-reg (expr :register r)))
-  (eval '(defbackend cl-w3-abi (:machine cl-w3-machine)
+  (eval '(defbackend cl-w3-abi (:isa cl-w3-machine)
           (registers :return (a) :scratch (a b) :stack-pointer sp :operand reg)
           (operands (reg cl-w3-reg))))
   (fiveam:is (= 3 (backend-word-cells 'cl-w3-abi)))
@@ -1013,7 +1013,7 @@
            (memory ram :width 8 :addr-width 16)))
   (eval '(defmode cl-lay-reg (expr :register r)))
   (dolist (name '(cl-be cl-b8))
-    (eval `(defbackend ,(intern (format nil "~A-ABI" name)) (:machine ,(intern (format nil "~A-MACHINE" name)))
+    (eval `(defbackend ,(intern (format nil "~A-ABI" name)) (:isa ,(intern (format nil "~A-MACHINE" name)))
              (registers :return (a) :scratch (a b) :operand reg)
              (operands (reg cl-lay-reg)))))
   (flet ((cells (machine text)
@@ -1207,11 +1207,11 @@
     (fiveam:is (and detail (search "needs the operation :peek-byte" detail)))))
 
 (fiveam:test a-backend-without-a-temporary-register-is-rejected
-  (eval '(defbackend cl-bare-abi (:machine callfoo)
+  (eval '(defbackend cl-bare-abi (:isa callfoo)
           (registers :return (a) :stack-pointer sp :operand reg)
           (operands (reg call-reg))))
   (fiveam:is (search "scratch or :caller-saved" (%cl-fail "(defun main () 1)" 'cl-bare-abi)))
-  (eval '(defbackend cl-no-operand-abi (:machine callfoo)
+  (eval '(defbackend cl-no-operand-abi (:isa callfoo)
           (registers :return (a) :scratch (b) :stack-pointer sp)))
   (fiveam:is (search ":operand" (%cl-fail "(defun main () 1)" 'cl-no-operand-abi))))
 
@@ -1295,7 +1295,7 @@
 
 (fiveam:test a-backend-checks-the-arity-of-the-language-operations
   (fiveam:signals backend-definition-error
-    (eval '(defbackend cl-arity-abi (:machine callfoo) (ops (:const (a b c) (ldi a b)))))))
+    (eval '(defbackend cl-arity-abi (:isa callfoo) (ops (:const (a b c) (ldi a b)))))))
 
 (fiveam:test source-is-read-without-evaluation-or-interning
   (dolist (text '("(defun main () #.(+ 1 2))" "(defun main () 1" "(defun main () 1))"
@@ -1700,7 +1700,7 @@ two |#
     (fiveam:is (= 25 (%cv-a m)))))
 
 (fiveam:test defbackend-checks-the-static-frame-option
-  (fiveam:is (typep (%backend-error-of '(defbackend bk-static-bad (:machine callfoo) (frame :static 1)))
+  (fiveam:is (typep (%backend-error-of '(defbackend bk-static-bad (:isa callfoo) (frame :static 1)))
                     'backend-definition-error))
   (fiveam:is (getf (backend-descriptor-frame (find-backend 'cl-static-abi)) :static))
   (fiveam:is (not (getf (backend-descriptor-frame (find-backend 'callfoo-lang-abi)) :static))))
@@ -1906,9 +1906,9 @@ two |#
     (fiveam:is (= 7 (%cv-a m)))))
 
 (fiveam:test label-ops-must-take-two-parameters
-  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:machine callfoo) (ops (:peek-label (a b c) (ldi a b)))))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:isa callfoo) (ops (:peek-label (a b c) (ldi a b)))))
                     'backend-definition-error))
-  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:machine callfoo) (ops (:poke-label (a) (ldi a 1)))))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-arity-abi (:isa callfoo) (ops (:poke-label (a) (ldi a 1)))))
                     'backend-definition-error)))
 
 ;;; #417: a dedicated pointer register
@@ -1979,7 +1979,7 @@ two |#
   (dolist (form '((:point (a b) (ldi a b)) (:point-label (a b) (ldi a b))
                   (:peek-pointer (a b) (ldi a b)) (:poke-pointer (a b) (ldi a b))
                   (:peek-byte-pointer (a b) (ldi a b)) (:poke-byte-pointer (a b) (ldi a b))))
-    (fiveam:is (typep (%backend-error-of `(defbackend cl-pointer-arity-abi (:machine callfoo) (ops ,form)))
+    (fiveam:is (typep (%backend-error-of `(defbackend cl-pointer-arity-abi (:isa callfoo) (ops ,form)))
                       'backend-definition-error) "~S" form)))
 
 ;;; #432: byte access through the pointer register
@@ -2111,9 +2111,9 @@ two |#
     (fiveam:is (= 4 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
 
 (fiveam:test label-variants-must-take-the-parameters-of-their-operation
-  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:machine callfoo) (ops (:add-label (a) (ldi a 1)))))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:isa callfoo) (ops (:add-label (a) (ldi a 1)))))
                     'backend-definition-error))
-  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:machine callfoo) (ops (:branch-lt-label (a b) (ldi a b)))))
+  (fiveam:is (typep (%backend-error-of '(defbackend cl-label-variant-arity-abi (:isa callfoo) (ops (:branch-lt-label (a b) (ldi a b)))))
                     'backend-definition-error)))
 
 ;;; #434: a constant-index aref as an operand leaf

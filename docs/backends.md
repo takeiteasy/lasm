@@ -6,7 +6,7 @@ primitive operations. A backend is separate from `defmachine`; one machine can
 have several. [Items](items.md) are assembled against one.
 
 ```lisp
-(defbackend callfoo-abi (:machine callfoo)
+(defbackend callfoo-abi (:isa callfoo)
   (registers :return (a) :scratch (a b) :callee-saved (c d)
              :stack-pointer sp :program-counter pc)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
@@ -284,7 +284,7 @@ clauses. The child's clauses merge over them and the result is checked against
 the child's machine.
 
 ```lisp
-(defbackend callfoo-fp-abi (:extends callfoo-abi :machine callfoo-fp)
+(defbackend callfoo-fp-abi (:extends callfoo-abi :isa callfoo-fp)
   (frame :pointer fp :slot fp-idx :stack-slot sp-idx)
   (operands (fp-idx call-fp-idx))
   (ops (:enter () (pushfp) (movfs))

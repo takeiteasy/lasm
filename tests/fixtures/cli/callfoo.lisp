@@ -253,7 +253,7 @@
 
 ;; Arguments go on the stack right to left and the caller removes them; a
 ;; function finds its first argument above the return address.
-(defbackend callfoo-abi (:machine callfoo)
+(defbackend callfoo-abi (:isa callfoo)
   (registers :return (a) :scratch (a b) :callee-saved (c d)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
@@ -276,7 +276,7 @@
 
 ;; The first two arguments go in b and c, and a is free to break an argument
 ;; swap.
-(defbackend callfoo-reg-abi (:machine callfoo)
+(defbackend callfoo-reg-abi (:isa callfoo)
   (registers :return (a) :scratch (a) :caller-saved (b c) :callee-saved (d)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args (b c) :order :right-to-left :cleanup :caller :return-address-slots 1)

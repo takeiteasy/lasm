@@ -242,7 +242,7 @@
 ;;; the callee's static frame, and `:call` has a clause for a register target,
 ;;; which is how `funcall` on a computed function value compiles.
 ;;; See docs/backends.md.
-(defbackend host-lang (:machine host)
+(defbackend host-lang (:isa host)
   (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
              :stack-pointer sp :program-counter pc :operand reg)
