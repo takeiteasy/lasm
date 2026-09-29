@@ -290,6 +290,26 @@
   (fiveam:signals unknown-instruction (find-instruction 'fam-v-root "VCLASH"))
   (fiveam:signals unknown-instruction (find-instruction 'fam-v-leaf "VCLASH")))
 
+;;; Redefining a parent warns about a child that no longer fits it.
+
+(defisa fam-w-root (register pc :width 8) (register a :width 8) (memory ram :width 8 :addr-width 8))
+(defisa (fam-w-kid (:extends fam-w-root)))
+
+(defun fam-w-warnings (form)
+  (let ((warned '()))
+    (handler-bind ((style-warning (lambda (c) (cl:push (princ-to-string c) warned) (muffle-warning c))))
+      (eval form))
+    warned))
+
+(fiveam:test redefining-a-parent-warns-about-a-child-that-no-longer-fits
+  (fiveam:is (null (fam-w-warnings '(defisa fam-w-root (register pc :width 8) (register a :width 8)
+                                     (memory ram :width 8 :addr-width 8)))))
+  (let ((warnings (fam-w-warnings '(defisa fam-w-root (register pc :width 8) (register b :width 8)
+                                    (memory ram :width 8 :addr-width 8)))))
+    (fiveam:is (= 1 (length warnings)))
+    (fiveam:is (search "FAM-W-KID" (first warnings)))
+    (fiveam:is (search "re-evaluate" (first warnings)))))
+
 ;;; Regions
 
 (defmachine fam-region-base

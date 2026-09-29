@@ -1610,10 +1610,20 @@ PARENT's when given. Registers nothing."
         (%finish-identity cpu)
         cpu))))
 
+(defun %warn-incompatible-children (isa)
+  "Warn for each child ISA of ISA that no longer fits it."
+  (dolist (child (%isa-children (machine-descriptor-name isa)))
+    (handler-case (%check-inheritance-compatible isa child)
+      (error (c)
+        (warn 'simple-style-warning :format-control "~A; re-evaluate its definition"
+                                    :format-arguments (list c))))))
+
 (defun %register-machine (isa cpu)
   "Register ISA (when given) and CPU together, so a definition that failed
 above changed nothing."
-  (when isa (setf (gethash (machine-descriptor-name isa) *isas*) isa))
+  (when isa
+    (setf (gethash (machine-descriptor-name isa) *isas*) isa)
+    (%warn-incompatible-children isa))
   (setf (gethash (machine-descriptor-name cpu) *machines*) cpu)
   (incf *instruction-generation*)
   cpu)
@@ -1704,6 +1714,7 @@ each key one of ALLOWED and given once."
 manufacturer belong to DEFCPU")))))
     (let ((isa (%build-isa name parent clauses)))
       (setf (gethash name *isas*) isa)
+      (%warn-incompatible-children isa)
       (incf *instruction-generation*)
       isa)))
 
