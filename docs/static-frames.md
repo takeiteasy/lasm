@@ -196,8 +196,8 @@ taken to be any entered function that takes as many arguments.
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
   pushed share out. A function's offset is the largest offset plus size among
-  the functions that call it, and one that nobody calls starts at `0`. Every
-  word is `.res` of one language word, so a wider word reserves more cells.
+  the functions that call it, and one that nobody calls starts at `0`, or at the
+  start of its [handler's region](#interrupts). Every word is `.res` of one language word, so a wider word reserves more cells.
 
 [^regions]: A handler's region holds the words of the handler and of every
   function it calls, laid out as on the main line. The regions follow one another,
