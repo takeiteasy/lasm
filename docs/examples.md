@@ -148,9 +148,8 @@ reads `$FFFE` itself, and RTI undoes all three.[^irq]
 (signal-interrupt machine 1 :non-maskable t)        ; an NMI
 ```
 
-[^irq]: The machine has an `irq-data` register that nothing reads, because
-  `interrupts` needs a [`:message`](#limitations) register. Delivery costs 7 cycles.
-  Unset vectors read as zero and are not dropped, so a signal with no handler
+[^irq]: The clause has no `:message`, so delivery writes no data. Delivery costs 7
+  cycles. Unset vectors read as zero and are not dropped, so a signal with no handler
   jumps to `$0000`. Signals the queue cannot hold are dropped.
 
 | Operand | Written |
@@ -176,11 +175,3 @@ through the vector at `$FFFE`.
 | `(status m)`, `(flag-set-p m 'c)` | The flags, packed as `PHP` pushes them without B, or one flag. |
 | `(ram m address)`, `(word-at m address)` | A cell, or a little-endian word. |
 | `(demo-symbol assembly "label")` | The address of a label. |
-
-## Limitations
-
-What the examples needed that LASM does not model yet.
-
-| Limitation | Ticket |
-| --- | --- |
-| `interrupts` requires a `:message` register, so the 6502 declares one that nothing reads. | [#462](https://todo.sr.ht/~takeiteasy/lasm/462) |

@@ -307,6 +307,59 @@
     (fiveam:is (= 0 (sref m 'pc))) ; restored to the pre-interrupt pc
     (fiveam:is (zerop (stack-depth m 'sp)))))
 
+;;; #462: :message is optional
+
+(defmachine interrupt-no-message-test-machine
+  (register pc :width 16) (register ia :width 16) (register a :width 16) (register b :width 16)
+  (stack sp :width 16 :depth 8)
+  (flags iaq)
+  (memory ram :width 8 :addr-width 16)
+  (interrupts :vector ia :save (pc b) :mask-flag iaq))
+
+(definstruction interrupt-no-message-test-machine nop (encoding (opcode #x00)) (semantics nil))
+(definstruction interrupt-no-message-test-machine rfi (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(fiveam:test delivery-without-message-writes-no-data-and-returns
+  (let ((m (make-machine 'interrupt-no-message-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'a) 5 (sref m 'b) 99)
+    (load-program m (list #x00) :origin 0)
+    (load-program m (list #x00 #x01) :origin #x0010) ; nop, rfi
+    (setf (sref m 'pc) 0)
+    (signal-interrupt m 7)
+    (step-machine m)
+    (fiveam:is (= 5 (sref m 'a)))
+    (fiveam:is (= #x0011 (sref m 'pc)))
+    (fiveam:is (= 2 (stack-depth m 'sp)))
+    (step-machine m)
+    (fiveam:is (= 99 (sref m 'b)))
+    (fiveam:is (= 0 (sref m 'pc)))
+    (fiveam:is (zerop (stack-depth m 'sp)))))
+
+(fiveam:test masking-holds-back-a-signal-on-a-machine-without-message
+  (let ((m (make-machine 'interrupt-no-message-test-machine)))
+    (setf (sref m 'ia) #x0010 (flag m 'iaq) t)
+    (load-program m (list #x00 #x00) :origin 0)
+    (signal-interrupt m 7)
+    (step-machine m)
+    (fiveam:is (= 1 (machine-interrupt-pending-count m)))
+    (setf (flag m 'iaq) nil)
+    (step-machine m)
+    (fiveam:is (zerop (machine-interrupt-pending-count m)))))
+
+(fiveam:test defmachine-still-rejects-a-malformed-or-undeclared-message
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine interrupt-bad-message-shape-test
+             (register pc :width 8) (register ia :width 8)
+             (stack sp :width 8 :depth 4)
+             (memory ram :width 8 :addr-width 8)
+             (interrupts :vector ia :message 5 :save (pc)))))
+  (fiveam:signals machine-definition-error
+    (eval '(defmachine interrupt-undeclared-message-test
+             (register pc :width 8) (register ia :width 8)
+             (stack sp :width 8 :depth 4)
+             (memory ram :width 8 :addr-width 8)
+             (interrupts :vector ia :message nosuch :save (pc))))))
+
 (defmachine interrupt-return-no-clause-test
   (register pc :width 8)
   (memory ram :width 8 :addr-width 8))

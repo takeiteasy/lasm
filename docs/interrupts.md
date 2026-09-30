@@ -16,7 +16,7 @@ a machine. Devices and software instructions can signal the same queue.
 ## `defmachine`'s `interrupts` clause
 
 ```lisp
-(interrupts :vector reg :message reg :save (name...)
+(interrupts :vector reg :save (name...) [:message reg]
             [:nmi-vector place] [:stack name] [:queue n] [:on-overflow policy]
             [:mask-when fn] [:mask-flag name]
             [:mask-level place] [:mask-level-when fn] [:mask-level-on-deliver t/nil]
@@ -30,7 +30,7 @@ a machine. Devices and software instructions can signal the same queue.
 | --- | --- |
 | `:vector` | Register, or `(MEMORY ADDRESS)`, holding the handler address. See [Memory vectors](#memory-vectors). |
 | `:nmi-vector` | Register or memory vector holding the handler address for [non-maskable signals](#non-maskable-signals); defaults to `:vector`. |
-| `:message` | Register receiving signal data. |
+| `:message` | Register receiving signal data; without it delivery writes no data. |
 | `:save` | Registers, flags and [status registers](machine-model.md#status-registers) pushed before delivery. |
 | `:stack` | Fixed stack or register-backed stack pointer; defaults when unique. |
 | `:queue` | Pending-signal capacity, default `256`. |
@@ -179,7 +179,7 @@ A pending unmasked signal is delivered before `step-machine` fetches:
    unless [nesting](#nesting) holds it.
 2. Read the `:save` places, then switch to `:deliver-level` if declared.
 3. Push the values read, in declared order.
-4. Write data to `:message` and handler address to `pc`.
+4. Write data to `:message`, if declared, and the handler address to `pc`.
 5. Add `:cycles` and tick devices when the cost is nonzero.
 6. Fetch and execute the handler's first instruction in the same step.
 

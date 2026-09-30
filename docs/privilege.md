@@ -214,7 +214,8 @@ gate, otherwise `nil`; `privilege-violation-mask` reads it from the condition. `
 ### Violations as interrupts
 
 `(:interrupt DATA ...)` needs an `(interrupts ...)` clause. `DATA` is a
-non-negative integer that fits the `:message` register. `:priority` defaults
+non-negative integer that fits the `:message` register; a clause without
+`:message` drops it. `:priority` defaults
 to `0`. `:non-maskable t` makes the signal
 [ignore interrupt masks](interrupts.md#non-maskable-signals), so a masked
 machine still delivers it instead of repeating the violation each step.

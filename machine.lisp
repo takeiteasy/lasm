@@ -452,7 +452,7 @@ function), got ~S" name (car fn) (cdr fn))))
                              :save save :load load :read read :write write
                              :priority priority :non-maskable non-maskable)))
 
-;; (interrupts :vector NAME :message NAME :save (NAME...)
+;; (interrupts :vector NAME :save (NAME...) [:message NAME]
 ;;   [:nmi-vector NAME] [:stack NAME] [:queue n] [:on-overflow policy] [:mask-when fn]
 ;;   [:mask-flag name] [:mask-level place] [:mask-level-when fn]
 ;;   [:mask-level-on-deliver t/nil] [:cycles n] [:drop-on-zero-vector t/nil]
@@ -484,8 +484,7 @@ register or one address of a memory."
       (%defmachine-error "interrupts :vector must be a symbol or (NAME INDEX), got ~S" vector))
     (when (and nmi-vector (not (%interrupt-place-designator-p nmi-vector)))
       (%defmachine-error "interrupts :nmi-vector must be a symbol or (NAME INDEX), got ~S" nmi-vector))
-    (unless message (%defmachine-error "interrupts requires :message"))
-    (unless (%interrupt-place-designator-p message)
+    (when (and message (not (%interrupt-place-designator-p message)))
       (%defmachine-error "interrupts :message must be a symbol or (NAME INDEX), got ~S" message))
     (unless save (%defmachine-error "interrupts requires :save"))
     (unless (and (listp save) (every #'%interrupt-place-designator-p save))
@@ -623,7 +622,8 @@ name one cell as (~S INDEX), or use a scalar register" name what n n))))))
         (require-vector (interrupt-descriptor-vector interrupts) ":vector")
         (when (interrupt-descriptor-nmi-vector interrupts)
           (require-vector (interrupt-descriptor-nmi-vector interrupts) ":nmi-vector")))
-      (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
+      (when (interrupt-descriptor-message interrupts)
+        (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message"))
       (dolist (n (interrupt-descriptor-save interrupts))
         (require-kind n '(:register :flag) ":save"))
       (when (interrupt-descriptor-mask-flag interrupts)
@@ -1041,10 +1041,12 @@ DESCRIPTOR's finished elements."
             (%defmachine-error "privilege on machine ~S: :on-violation :interrupt requires an (interrupts ...) clause"
                    name))
           (let* ((message (interrupt-descriptor-message interrupts))
-                 (message-element (gethash (if (consp message) (first message) message)
-                                           (machine-descriptor-table descriptor))))
-            (unless (< (privilege-descriptor-violation-data privilege)
-                       (ash 1 (storage-element-width message-element)))
+                 (message-element (and message
+                                       (gethash (if (consp message) (first message) message)
+                                                (machine-descriptor-table descriptor)))))
+            (when (and message-element
+                       (>= (privilege-descriptor-violation-data privilege)
+                           (ash 1 (storage-element-width message-element))))
               (%defmachine-error "privilege on machine ~S: violation data ~D does not fit the interrupt :message ~S"
                      name (privilege-descriptor-violation-data privilege) message)))))
       (dolist (value (privilege-descriptor-values privilege))
@@ -1923,7 +1925,7 @@ attaches it, from its next MAKE-MACHINE or RESET. See docs/devices.md."
              [:init fn] [:tick fn] [:receive fn] [:detach fn]
              [:priority n] [:non-maskable t/nil])
      (stack-pointer REGISTER [:memory name] [:grows :down/:up] [:width n] [:bounds (low high)])
-     (interrupts :vector reg :message reg :save (name...)
+     (interrupts :vector reg :save (name...) [:message reg]
                  [:nmi-vector reg] [:stack name] [:queue n] [:on-overflow policy]
                  [:mask-when fn] [:mask-flag name] [:mask-level place]
                  [:mask-level-when fn] [:mask-level-on-deliver t/nil] [:cycles n]

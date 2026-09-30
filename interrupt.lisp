@@ -113,7 +113,7 @@ variant see delivery the same way. PC is the already-%RESOLVE-PC'd register
 name STEP-MACHINE is about to fetch through, so delivery sets the same
 register STEP-MACHINE reads next, honoring any :PC override the same way
 STEP-MACHINE itself does. Pushes every :SAVE place in declared order,
-writes the signal's DATA into :MESSAGE, sets :VECTOR's value (:NMI-VECTOR's for a
+writes the signal's DATA into :MESSAGE when the clause has one, sets :VECTOR's value (:NMI-VECTOR's for a
 non-maskable signal that has one) into PC, adds
 :CYCLES to MACHINE-CYCLES, and ticks devices with that delivery cost -- but
 only when it's non-zero, so the default :CYCLES 0 doesn't add a second,
@@ -153,7 +153,8 @@ stays idle until unmasked, same as delivery itself."
                                 :width (%interrupt-place-width (machine-descriptor machine) place)))
               (dolist (value saved)
                 (stack-push machine stack value)))
-          (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data)
+          (when (interrupt-descriptor-message interrupts)
+            (setf (%interrupt-place machine (interrupt-descriptor-message interrupts)) data))
           (setf (sref machine pc) (%interrupt-place machine (%interrupt-vector interrupts (pending-non-maskable entry)))))
         (when (interrupt-descriptor-mask-on-deliver interrupts)
           (setf (flag machine (interrupt-descriptor-mask-flag interrupts)) t))

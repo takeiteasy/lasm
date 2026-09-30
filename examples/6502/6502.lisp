@@ -71,8 +71,6 @@ on it, and here it stops the machine.
 ;;; keeps them, and PC starts at the word at $FFFC. IRQ and NMI save PC then P
 ;;; and jump through $FFFE and $FFFA, as the hardware does; the timer is mapped
 ;;; at $D000. See docs/machine-model.md and docs/interrupts.md.
-;;; TODO: IRQ-DATA only receives the signal's data, which nothing reads; drop it
-;;; once :message is optional (#462).
 (defmachine mos6502
   (register a :width 8)
   (register x :width 8)
@@ -81,14 +79,13 @@ on it, and here it stops the machine.
   (register pc :width 16)
   (flags n v d i z c)
   (status-register p (n v 1 0 d i z c))
-  (register irq-data :width 8)
   (memory ram :width 8 :addr-width 16
     (region timer-io #xd000 #xd003 :kind :device :device timer)
     (region vectors #xfffa #xffff :kind :rom))
   (devices timer)
   (stack-pointer s :memory ram :base #x100 :grows :down :push :post)
   (reset-pc (ram #xfffc))
-  (interrupts :vector (ram #xfffe) :nmi-vector (ram #xfffa) :message irq-data
+  (interrupts :vector (ram #xfffe) :nmi-vector (ram #xfffa)
               :save (pc p) :stack s :mask-flag i :mask-on-deliver t
               :cycles 7 :on-overflow :drop :drop-on-zero-vector nil))
 

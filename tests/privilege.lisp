@@ -630,6 +630,28 @@ rte")))
     (fiveam:is (= 7 (sref m 'a)))
     (fiveam:is (eq 'supervisor (privilege-level m)))))
 
+;;; #462: a violation interrupt on a clause without :message drops its data
+
+(defmachine priv-no-message-machine
+  (register pc :width 8) (register ia :width 8) (register a :width 8)
+  (register cr :width 8 :privilege supervisor)
+  (stack st :width 8 :depth 8)
+  (memory ram :width 8 :addr-width 8)
+  (flags s)
+  (privilege :level s :levels (user supervisor) :on-violation (:interrupt 300))
+  (interrupts :vector ia :save (pc s) :deliver-level supervisor))
+
+(definstruction priv-no-message-machine rd-cr (encoding (opcode #x02)) (semantics (set! a cr)))
+
+(fiveam:test violation-interrupt-without-message-defines-and-delivers
+  (let ((m (make-machine 'priv-no-message-machine)))
+    (load-program m (list #x02) :origin #x20)
+    (setf (sref m 'ia) #x10 (sref m 'pc) #x20 (sref m 'a) 9)
+    (fiveam:is (eq :privilege-violation (step-machine m)))
+    (step-machine m)
+    (fiveam:is (= 9 (sref m 'a)))
+    (fiveam:is (eq 'supervisor (privilege-level m)))))
+
 ;;; #299: a level held in bits of a wider register
 
 (defmachine priv-sr-machine
