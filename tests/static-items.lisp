@@ -376,3 +376,15 @@
         (fiveam:is (search "hlt" source))
         (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
         (fiveam:is (= (gethash "sfmainx0" symbols) (gethash "sfidlex0" symbols)))))))
+
+(fiveam:test a-lasm-file-reads-the-frame-option
+  (flet ((assemble-text (option)
+           (%call-with-items-file
+               (format nil "(:program (:backend zpfoo-label-abi :origin 512)
+  (:function f (:frame ~A :frames stack) (:return)))" option)
+             (lambda (path)
+               (handler-case (progn (assemble-items-file path) nil)
+                 (items-malformed (c) (princ-to-string c)))))))
+    (fiveam:is (null (assemble-text "nil")))
+    (fiveam:is (search ":frame t needs" (assemble-text "t")))
+    (fiveam:is (search "expected :frame to be t or nil" (assemble-text "maybe")))))

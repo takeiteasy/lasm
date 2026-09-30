@@ -1026,13 +1026,16 @@ the body, or at (:static-frames)."
            lines)
           (t (append lines (%static-word-lines function words))))))
 
-(defun %function-interrupt-p (options item)
-  "True when the :interrupt option of a function with OPTIONS is t. A .lasm file reads t as an
+(defun %function-flag (options name default item)
+  "The t or nil option NAME of a function with OPTIONS, or DEFAULT. A .lasm file reads t as an
 uninterned symbol, so the value is matched by name."
-  (let ((name (%designator-name (%function-option options "INTERRUPT" nil))))
-    (unless (member name '("T" "NIL") :test #'equal)
-      (%items-fail 'items-malformed item "expected :interrupt to be t or nil"))
-    (equal name "T")))
+  (let ((value (%designator-name (%function-option options name default))))
+    (unless (member value '("T" "NIL") :test #'equal)
+      (%items-fail 'items-malformed item "expected :~(~A~) to be t or nil" name))
+    (equal value "T")))
+
+(defun %function-interrupt-p (options item)
+  (%function-flag options "INTERRUPT" nil item))
 
 (defun %function-option (options name default)
   "The value of the function option NAME in the plist OPTIONS, or DEFAULT."
@@ -1052,18 +1055,17 @@ uninterned symbol, so the value is matched by name."
                (%items-fail 'items-malformed item "unknown function option ~S" key)))
     (flet ((option (name default) (%function-option options name default)))
       (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '()))
-            (interrupt (%function-interrupt-p options item)))
+            (interrupt (%function-interrupt-p options item))
+            (framep (%function-flag options "FRAME" t item))
+            (frame-asked (%function-flag options "FRAME" nil item)))
         (unless (and (typep nlocals '(integer 0)) (or (null nargs) (typep nargs '(integer 0))) (listp saves))
           (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
-        ;; A .lasm file reads t as an uninterned symbol, so this rejects `:frame t` there (#469).
-        (unless (member (option "FRAME" t) '(t nil))
-          (%items-fail 'items-malformed item "expected :frame to be t or nil"))
         (when (and interrupt nargs (plusp nargs))
           (%items-fail 'items-malformed item "an interrupt function takes no arguments"))
         (let ((staticp (%function-static-p (option "FRAMES" nil) item)))
-          (when (and (option "FRAME" nil) staticp)
+          (when (and frame-asked staticp)
             (%items-fail 'items-malformed item ":frame t is a stack frame's pointer; the function's frames are static"))
-          (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
+          (when (and frame-asked (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
             (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
           (when staticp
             (return-from %function-lines (%static-function-lines item name nargs nlocals saves body interrupt))))
@@ -1072,7 +1074,6 @@ uninterned symbol, so the value is matched by name."
                        (eq (%backend-call-option :order) :left-to-right)))
           (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
         (let* ((backend-pointer (getf (backend-descriptor-frame *items-backend*) :pointer))
-               (framep (option "FRAME" t))
                (pointer (and framep backend-pointer))
                (saves (mapcar (lambda (register)
                                 (when (equal backend-pointer (%designator-name register))

@@ -282,6 +282,5 @@ frame pointer with one.
 | Limitation | Ticket |
 | --- | --- |
 | A stack pointer write under a condition other than a `choice-case`, or a variable bound to one, tested by `if`, `when`, `unless`, `and`, `or`, `cond`, `not` or `null` counts as unconditional. | [#357](https://todo.sr.ht/~takeiteasy/lasm/357) |
-| A `.lasm` file rejects `:frame t` and `:frame nil`, because it reads `t` as an uninterned symbol. | [#469](https://todo.sr.ht/~takeiteasy/lasm/469) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.
