@@ -193,6 +193,12 @@ taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
 
+## Limitations
+
+| Limitation | Ticket |
+| --- | --- |
+| A `.lsp` function cannot be marked as an interrupt handler, so with static frames it shares words with functions it does not call. | [#470](https://todo.sr.ht/~takeiteasy/lasm/470) |
+
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
   pushed share out. A function's offset is the largest offset plus size among
