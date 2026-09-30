@@ -97,7 +97,7 @@
                (:file "backend")
                (:file "convention")
                (:file "compiler")
-               (:file "pairs")
+               (:file "words")
                (:file "static-items")
                (:file "cli")
                (:file "debugger")

@@ -144,13 +144,20 @@ within a cell."
     (values (max 1 (floor (%descriptor-cell-width descriptor) 8))
             (%descriptor-endian descriptor))))
 
-(defun backend-pairs (backend)
-  "BACKEND's register pairs, each (NAME HIGH LOW WIDTH) with upcased names and WIDTH the bit
-width of a half. A half is an upcased register name, or an integer memory address."
-  (getf (backend-descriptor-registers (find-backend backend)) :pairs))
+(defun backend-words (backend)
+  "BACKEND's register words, each (NAME (PART...) WIDTH) with an upcased name, its parts least
+significant first and WIDTH the bit width of a part. A part is an upcased register name, or an
+integer memory address."
+  (getf (backend-descriptor-registers (find-backend backend)) :words))
 
-(defun %pair-memory (descriptor)
-  "The memory element a pair backend's words live in: its stack pointer's, else the sole memory."
+(defun %word-name (word) (first word))
+(defun %word-parts (word) (second word))
+(defun %word-width (word) (third word))
+(defun %word-count (word) (length (second word)))
+(defun %word-part (word k) (nth k (second word)))
+
+(defun %word-memory (descriptor)
+  "The memory element a words backend's words live in: its stack pointer's, else the sole memory."
   (let ((pointer (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
                        return pointer)))
     (if pointer
@@ -158,11 +165,11 @@ width of a half. A half is an upcased register name, or an integer memory addres
         (let ((memories (remove-if-not (lambda (element) (eq (storage-element-kind element) :memory))
                                        (machine-descriptor-elements descriptor))))
           (unless (= (length memories) 1)
-            (%backend-error "registers :pairs: address halves need one memory, or a stack pointer to name it"))
+            (%backend-error "registers :words: address parts need one memory, or a stack pointer to name it"))
           (first memories)))))
 
-(defun %pair-cell-width (descriptor)
-  "The cell width, in bits, of the memory a pair backend's words live in."
+(defun %word-cell-width (descriptor)
+  "The cell width, in bits, of the memory a words backend's words live in."
   (let ((pointer (loop for pointer being the hash-values of (machine-descriptor-stack-pointers descriptor)
                        return pointer)))
     (if pointer
@@ -170,8 +177,8 @@ width of a half. A half is an upcased register name, or an integer memory addres
         (%descriptor-cell-width descriptor))))
 
 (defun backend-word-cells (backend)
-  "Cells a word spans on BACKEND's machine: twice the width of a register pair's half when the
-backend declares pairs, else its declared stack pointer's slot width, which defaults to the
+  "Cells a word spans on BACKEND's machine: its parts' total width when the
+backend declares words, else its declared stack pointer's slot width, which defaults to the
 memory's own cell width, divided by that cell width and rounded up. 1 without a matching
 (stack-pointer ...) clause."
   (let ((backend (find-backend backend)))
@@ -181,8 +188,9 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
   "BACKEND-WORD-CELLS for a backend descriptor that may not be registered yet."
   (let* ((sp (%role-register backend :stack-pointer nil))
          (pointer (%backend-matched-stack-pointer sp machine-descriptor))
-         (pairs (getf (backend-descriptor-registers backend) :pairs)))
-    (cond (pairs (ceiling (* 2 (fourth (first pairs))) (%pair-cell-width machine-descriptor)))
+         (words (getf (backend-descriptor-registers backend) :words)))
+    (cond (words (ceiling (* (%word-count (first words)) (%word-width (first words)))
+                          (%word-cell-width machine-descriptor)))
           (pointer (ceiling (stack-pointer-descriptor-width pointer)
                             (storage-element-cell-width
                              (descriptor-element machine-descriptor (stack-pointer-descriptor-memory pointer)))))
@@ -225,15 +233,15 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
   (let ((mode (%find-mode-by-name designator machine)))
     (and mode (mode-descriptor-name mode))))
 
-(defvar *backend-pairs* nil
-  "The (NAME HIGH LOW WIDTH) register pairs of the backend being built, upcased names.")
+(defvar *backend-words* nil
+  "The (NAME (PART...) WIDTH) register words of the backend being built, upcased names.")
 
 (defun %backend-register-name (descriptor designator)
-  "DESIGNATOR's upcased name, if it is a register or register alias of DESCRIPTOR's machine, or a register pair."
+  "DESIGNATOR's upcased name, if it is a register or register alias of DESCRIPTOR's machine, or a register word."
   (let ((key (%designator-name designator)))
     (unless key
       (%backend-error "~S is not a register name" designator))
-    (unless (or (assoc key *backend-pairs* :test #'string=)
+    (unless (or (assoc key *backend-words* :test #'string=)
                 (nth-value 1 (gethash key (machine-descriptor-register-aliases descriptor)))
                 (find-if (lambda (element)
                            (and (eq (storage-element-kind element) :register)
@@ -252,56 +260,59 @@ memory's own cell width, divided by that cell width and rounded up. 1 without a 
                               (machine-descriptor-elements descriptor)))))
     (storage-element-width element)))
 
-(defun %pair-half (descriptor key half)
-  "HALF of pair KEY: an integer memory address within the pair memory, else an upcased register name."
-  (cond ((not (integerp half))
-         (%backend-register-name descriptor half))
-        ((< -1 half (ash 1 (storage-element-addr-width (%pair-memory descriptor))))
-         half)
-        (t (%backend-error "registers :pairs: ~A: ~S is not an address of memory ~A"
-                           key half (storage-element-name (%pair-memory descriptor))))))
+(defun %word-part-value (descriptor key part)
+  "PART of word KEY: an integer memory address within the word memory, else an upcased register name."
+  (cond ((not (integerp part))
+         (%backend-register-name descriptor part))
+        ((< -1 part (ash 1 (storage-element-addr-width (%word-memory descriptor))))
+         part)
+        (t (%backend-error "registers :words: ~A: ~S is not an address of memory ~A"
+                           key part (storage-element-name (%word-memory descriptor))))))
 
-(defun %pair-half-width (descriptor half)
-  "The bit width of pair half HALF: a register's, or the memory's cell for an address."
-  (if (integerp half)
-      (%pair-cell-width descriptor)
-      (%register-width descriptor half)))
+(defun %word-part-width (descriptor part)
+  "The bit width of word part PART: a register's, or the memory's cell for an address."
+  (if (integerp part)
+      (%word-cell-width descriptor)
+      (%register-width descriptor part)))
 
-(defun %parse-pairs (descriptor entries)
-  "The (NAME HIGH LOW WIDTH) pairs the (registers :pairs ((NAME HIGH LOW)...)) ENTRIES declare. A
-half is a register, or an integer address in memory."
+(defun %parse-words (descriptor entries)
+  "The (NAME (PART...) WIDTH) words the (registers :words ((NAME PART...)...)) ENTRIES declare,
+each entry's parts most significant first and each word's parts stored least significant first. A
+part is a register, or an integer address in memory."
   (unless (and (listp entries) (null (cdr (last entries))))
-    (%backend-error "registers :pairs: expected a list of (NAME HIGH LOW), got ~S" entries))
-  (let ((*backend-pairs* nil) (result '()))
+    (%backend-error "registers :words: expected a list of (NAME PART PART...), got ~S" entries))
+  (let ((*backend-words* nil) (result '()))
     (dolist (entry entries (nreverse result))
-      (unless (and (consp entry) (= (length entry) 3))
-        (%backend-error "registers :pairs: expected (NAME HIGH LOW), got ~S" entry))
-      (destructuring-bind (name high low) entry
+      (unless (and (consp entry) (null (cdr (last entry))) (>= (length entry) 3))
+        (%backend-error "registers :words: expected (NAME PART PART...), got ~S" entry))
+      (destructuring-bind (name &rest parts) entry
         (let ((key (%designator-name name)))
           (unless key
-            (%backend-error "registers :pairs: ~S is not a pair name" name))
+            (%backend-error "registers :words: ~S is not a word name" name))
           (when (or (assoc key result :test #'string=)
                     (ignore-errors (%backend-register-name descriptor name)))
-            (%backend-error "registers :pairs: ~A is already a register, alias or pair" key))
-          (let* ((address (integerp high))
-                 (high (%pair-half descriptor key high))
-                 (low (%pair-half descriptor key low)))
-            (unless (eq address (integerp low))
-              (%backend-error "registers :pairs: ~A mixes a register and a memory address; both halves are registers or both are addresses" key))
-            (when (and result (not (eq address (integerp (second (first result))))))
-              (%backend-error "registers :pairs: ~A and ~A differ in kind; every pair is registers or every pair is addresses"
-                              (first (first result)) key))
-            (when (equal high low)
-              (%backend-error "registers :pairs: ~A uses ~A for both halves" key high))
-            (dolist (half (list high low))
-              (let ((other (find-if (lambda (pair) (member half (list (second pair) (third pair)) :test #'equal))
-                                    result)))
+            (%backend-error "registers :words: ~A is already a register, alias or word" key))
+          (when (and result (/= (length parts) (%word-count (first result))))
+            (%backend-error "registers :words: ~A has ~D parts, not ~D like ~A"
+                            key (length parts) (%word-count (first result)) (%word-name (first result))))
+          (let* ((address (integerp (first parts)))
+                 (parts (mapcar (lambda (part) (%word-part-value descriptor key part)) parts)))
+            (unless (every (lambda (part) (eq address (integerp part))) parts)
+              (%backend-error "registers :words: ~A mixes a register and a memory address; all parts are registers or all are addresses" key))
+            (when (and result (not (eq address (integerp (first (%word-parts (first result)))))))
+              (%backend-error "registers :words: ~A and ~A differ in kind; every word is registers or every word is addresses"
+                              (%word-name (first result)) key))
+            (loop for (part . rest) on parts
+                  when (member part rest :test #'equal)
+                    do (%backend-error "registers :words: ~A uses ~A for two parts" key part))
+            (dolist (part parts)
+              (let ((other (find-if (lambda (word) (member part (%word-parts word) :test #'equal)) result)))
                 (when other
-                  (%backend-error "registers :pairs: ~A is a half of both ~A and ~A" half (first other) key))))
-            (let ((width (%pair-half-width descriptor high)))
-              (unless (eql width (%pair-half-width descriptor low))
-                (%backend-error "registers :pairs: ~A and ~A, the halves of ~A, are not the same width" high low key))
-              (cl:push (list key high low width) result))))))))
+                  (%backend-error "registers :words: ~A is a part of both ~A and ~A" part (%word-name other) key))))
+            (let ((width (%word-part-width descriptor (first parts))))
+              (unless (every (lambda (part) (eql width (%word-part-width descriptor part))) parts)
+                (%backend-error "registers :words: the parts of ~A are not the same width" key))
+              (cl:push (list key (reverse parts) width) result))))))))
 
 ;;; Expression operators, shared with items.lisp
 
@@ -322,8 +333,8 @@ half is a register, or an integer address in memory."
   "Register roles holding one register.")
 
 (defparameter +backend-clause-keys+
-  `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand :pairs)
-    ("CALL" :args :order :cleanup :return-address-slots)
+  `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand :words)
+    ("CALL" :args :order :cleanup :return-address-slots :return-address-cells)
     ("FRAME" :grows :alignment :slot :stack-slot :label-slot :pointer :offsets :counts :static))
   "The keys each plist clause takes, by clause head.")
 
@@ -350,7 +361,7 @@ half is a register, or an integer address in memory."
                      ((eq role :operand)
                       (or (%designator-name value)
                           (%backend-error "registers :operand: ~S is not a kind name" value)))
-                     ((eq role :pairs) *backend-pairs*)
+                     ((eq role :words) *backend-words*)
                      ((member role +backend-register-roles+)
                       (unless (listp value)
                         (%backend-error "registers ~S: expected a list of registers, got ~S" role value))
@@ -370,7 +381,8 @@ half is a register, or an integer address in memory."
   (let ((arguments (getf args :args :stack))
         (order (getf args :order :right-to-left))
         (cleanup (getf args :cleanup :caller))
-        (slots (getf args :return-address-slots 1)))
+        (slots (getf args :return-address-slots 1))
+        (cells (getf args :return-address-cells)))
     (unless (or (eq arguments :stack) (listp arguments))
       (%backend-error "call :args must be :stack or a list of registers, got ~S" arguments))
     (unless (member order '(:left-to-right :right-to-left))
@@ -379,10 +391,15 @@ half is a register, or an integer address in memory."
       (%backend-error "call :cleanup must be :caller or :callee, got ~S" cleanup))
     (unless (typep slots '(integer 0))
       (%backend-error "call :return-address-slots must be a non-negative integer, got ~S" slots))
-    (list :args (if (eq arguments :stack)
-                    :stack
-                    (mapcar (lambda (register) (%backend-register-name descriptor register)) arguments))
-          :order order :cleanup cleanup :return-address-slots slots)))
+    (when (and (getf args :return-address-cells) (getf args :return-address-slots))
+      (%backend-error "call takes :return-address-slots or :return-address-cells, not both"))
+    (unless (typep cells '(or null (integer 0)))
+      (%backend-error "call :return-address-cells must be a non-negative integer, got ~S" cells))
+    (append (list :args (if (eq arguments :stack)
+                            :stack
+                            (mapcar (lambda (register) (%backend-register-name descriptor register)) arguments))
+                  :order order :cleanup cleanup :return-address-slots slots)
+            (and cells (list :return-address-cells cells)))))
 
 (defun %parse-frame-clause (descriptor args)
   (%check-plist "frame" args (%clause-keys "FRAME"))
@@ -606,19 +623,36 @@ operand differently by kind, such as a register versus a label."
           do (%backend-error "~A: ~A is not a declared operand kind~:[~;; with :static t and no slot operand, drop :slot~]"
                              what kind (and (equal what "frame :slot") (getf (backend-descriptor-frame descriptor) :static)))))
 
-(defun %half-form-p (form)
-  "True when FORM is (:hi X) or (:lo X): the high or low half of a register pair's word."
-  (and (consp form) (keywordp (first form)) (member (symbol-name (first form)) '("HI" "LO") :test #'string=)
-       (consp (cdr form)) (null (cddr form))))
+(defun %part-form-p (form)
+  "True when FORM is (:hi X), (:lo X) or (:part K X): a part of a register word."
+  (and (consp form) (keywordp (first form))
+       (let ((name (symbol-name (first form))))
+         (cond ((member name '("HI" "LO") :test #'string=) (and (consp (cdr form)) (null (cddr form))))
+               ((string= name "PART") (and (consp (cdr form)) (consp (cddr form)) (null (cdddr form))))))))
 
-(defun %check-half-form (op form)
-  (unless *backend-pairs*
-    (%backend-error "ops: ~A: ~S needs (registers :pairs ...)" op form)))
+(defun %part-form-target (form)
+  "The word FORM, a part form, takes a part of."
+  (car (last form)))
+
+(defun %part-form-index (form count)
+  "The index, from the least significant part, that FORM, a part form of a COUNT-part word, names."
+  (let ((name (symbol-name (first form))))
+    (cond ((string= name "LO") 0)
+          ((string= name "HI") (1- count))
+          (t (second form)))))
+
+(defun %check-part-form (op form)
+  (unless *backend-words*
+    (%backend-error "ops: ~A: ~S needs (registers :words ...)" op form))
+  (let ((count (%word-count (first *backend-words*)))
+        (index (%part-form-index form (%word-count (first *backend-words*)))))
+    (unless (and (integerp index) (< -1 index count))
+      (%backend-error "ops: ~A: ~S: the part must be an integer from 0 to ~D" op form (1- count)))))
 
 (defun %check-hole-value (op value params)
-  (when (%half-form-p value)
-    (%check-half-form op value)
-    (return-from %check-hole-value (%check-hole-value op (second value) params)))
+  (when (%part-form-p value)
+    (%check-part-form op value)
+    (return-from %check-hole-value (%check-hole-value op (%part-form-target value) params)))
   (typecase value
     ((or integer string) t)
     (symbol (when (keywordp value)
@@ -650,10 +684,10 @@ local to one expansion of the operation."
 
 (defun %check-op-operand (op operand params kinds machine &optional labels)
   (flet ((param-p (name) (member (%designator-name name) params :test #'equal)))
-    (when (%half-form-p operand)
-      (%check-half-form op operand)
+    (when (%part-form-p operand)
+      (%check-part-form op operand)
       (return-from %check-op-operand
-        (%check-op-operand op (second operand) params kinds machine labels)))
+        (%check-op-operand op (%part-form-target operand) params kinds machine labels)))
     (typecase operand
       ((or integer string) t)
       (symbol (unless (and (not (keywordp operand))
@@ -739,16 +773,22 @@ declared (stack-pointer ...), default the frame direction from it, and record it
 one cell, which a ~D-cell slot offset cannot say"
                         sp (getf frame :push) (%descriptor-word-cells descriptor machine-descriptor))))))
 
-;;; Register pairs
+;;; Register words
 
-(defun %finish-backend-pairs (descriptor machine-descriptor)
-  "Check that a backend with register pairs holds every operand in a pair, and that the words
-the pairs make fit the machine's memory and stack."
-  (let ((pairs (getf (backend-descriptor-registers descriptor) :pairs)))
-    (when pairs
-      (let* ((names (mapcar #'first pairs))
-             (width (fourth (first pairs)))
-             (cell (%pair-cell-width machine-descriptor))
+(defun %check-return-address-cells (descriptor)
+  "Check that a backend with :return-address-cells counts its frame in cells."
+  (when (and (getf (backend-descriptor-call descriptor) :return-address-cells)
+             (not (eq (getf (backend-descriptor-frame descriptor) :offsets) :cells)))
+    (%backend-error "call :return-address-cells needs (frame :offsets :cells)")))
+
+(defun %finish-backend-words (descriptor machine-descriptor)
+  "Check that a backend with register words holds every operand in a word, and that the words
+fit the machine's memory and stack."
+  (let ((words (getf (backend-descriptor-registers descriptor) :words)))
+    (when words
+      (let* ((names (mapcar #'%word-name words))
+             (width (%word-width (first words)))
+             (cell (%word-cell-width machine-descriptor))
              (registers (backend-descriptor-registers descriptor))
              (call-args (getf (backend-descriptor-call descriptor) :args)))
         (loop for (role list) in `((":return" ,(getf registers :return))
@@ -759,23 +799,23 @@ the pairs make fit the machine's memory and stack."
                                    ("call :args" ,(and (listp call-args) call-args)))
               do (dolist (name list)
                    (unless (member name names :test #'string=)
-                     (%backend-error "registers ~A: ~A is not a register pair; a backend with pairs holds values only in pairs"
+                     (%backend-error "registers ~A: ~A is not a register word; a backend with words holds values only in words"
                                      role name))))
         (unless (getf registers :return)
-          (%backend-error "registers :pairs: :return must name a pair, the accumulator"))
-        (dolist (pair (rest pairs))
-          (unless (= width (fourth pair))
-            (%backend-error "registers :pairs: ~A has ~D-bit halves, not ~D like ~A"
-                            (first pair) (fourth pair) width (first (first pairs)))))
+          (%backend-error "registers :words: :return must name a word, the accumulator"))
+        (dolist (word (rest words))
+          (unless (= width (%word-width word))
+            (%backend-error "registers :words: ~A has ~D-bit parts, not ~D like ~A"
+                            (%word-name word) (%word-width word) width (%word-name (first words)))))
         (unless (member (%descriptor-endian machine-descriptor) '(:little :big))
-          (%backend-error "registers :pairs: the machine's :endian must be :little or :big"))
+          (%backend-error "registers :words: the machine's :endian must be :little or :big"))
         (when (getf (backend-descriptor-frame descriptor) :slot)
           (unless (= width cell)
-            (%backend-error "registers :pairs: a pair's half is ~D bits but memory cells are ~D; a frame slot needs one cell a half"
+            (%backend-error "registers :words: a word's part is ~D bits but memory cells are ~D; a frame slot needs one cell a part"
                             width cell))
           (unless (and (eq (getf (backend-descriptor-frame descriptor) :offsets) :cells)
                        (eq (getf (backend-descriptor-frame descriptor) :counts) :cells))
-            (%backend-error "registers :pairs: (frame :slot ...) needs :offsets :cells and :counts :cells, since a word spans several cells")))))))
+            (%backend-error "registers :words: (frame :slot ...) needs :offsets :cells and :counts :cells, since a word spans several cells")))))))
 
 ;;; The frame pointer
 
@@ -952,9 +992,9 @@ its first position."
            (clauses (if parent
                         (%merge-backend-clauses name (backend-descriptor-clauses parent) clauses)
                         clauses))
-           (*backend-pairs* (let ((pairs (getf (rest (find "REGISTERS" clauses :test #'equal :key #'%clause-head-name))
-                                               :pairs)))
-                              (and pairs (%parse-pairs machine-descriptor pairs))))
+           (*backend-words* (let ((words (getf (rest (find "REGISTERS" clauses :test #'equal :key #'%clause-head-name))
+                                               :words)))
+                              (and words (%parse-words machine-descriptor words))))
            (descriptor (make-backend-descriptor :name name :isa isa :cpu cpu :frame (list :grows nil :alignment 1)
                                                 :call (list :args :stack :order :right-to-left :cleanup :caller
                                                             :return-address-slots 1)
@@ -982,7 +1022,8 @@ its first position."
                 ((equal head "STACK-WRITERS")
                  (%parse-stack-writers-clause descriptor machine (rest clause))))))
       (%finish-backend-stack descriptor machine-descriptor)
-      (%finish-backend-pairs descriptor machine-descriptor)
+      (%check-return-address-cells descriptor)
+      (%finish-backend-words descriptor machine-descriptor)
       (%finish-backend-pointer descriptor)
       (%check-backend-kinds descriptor)
       (%check-backend-ops descriptor)
@@ -1018,9 +1059,9 @@ OPTIONS, (:isa ISA), optionally (:cpu CPU), and/or (:extends PARENT), and CLAUSE
      (registers [:return (reg...)] [:arguments (reg...)] [:scratch (reg...)]
                 [:caller-saved (reg...)] [:callee-saved (reg...)]
                 [:stack-pointer reg] [:program-counter reg] [:frame-pointer reg] [:address reg]
-                [:operand kind] [:pairs ((NAME HIGH LOW)...)])
+                [:operand kind] [:words ((NAME PART...)...)])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
-           [:cleanup :caller/:callee] [:return-address-slots n])
+           [:cleanup :caller/:callee] [:return-address-slots n/:return-address-cells n])
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:label-slot kind]
             [:pointer reg] [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
      (operands (KIND mode-name)...)
@@ -1044,8 +1085,10 @@ instruction variants whose semantics write the stack pointer but not the program
 are stack writers, which call lowering rejects in a function whose stack depth it
 tracks, judged by the variant an instruction's operands select; stack-writers adds
 entries to them and :except removes some.
-:pairs names register pairs that hold a word; every role list then names pairs, and
-an operation reaches a pair's halves with (:hi X) and (:lo X), see docs/register-pairs.md.
+:words names register words that hold a word, each of two or more parts, most significant
+first; every role list then names words, and an operation reaches a word's parts with
+(:part K X), K from 0 at the least significant, or (:lo X) and (:hi X) for the ends, see
+docs/register-words.md.
 Registers, modes and mnemonics are checked against the machine, and clause
 heads are matched by name, so DEFBACKEND works from any package. Operations
 named :push :pop :alloc :free :move :call :return :return-pop :enter and :leave

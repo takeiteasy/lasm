@@ -19,7 +19,7 @@
 
 ;; No stack operations: a function is static unless it asks for a stack.
 (eval `(defbackend zs-bare-abi (:isa zpfoo)
-         (registers :pairs ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14))
+         (registers :words ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14))
                     :return (w0) :scratch (w0 w1) :callee-saved (w2)
                     :stack-pointer sp :program-counter pc :operand zp)
          (call :args (w1) :return-address-slots 1)

@@ -88,7 +88,7 @@ The spec is the block comment at the top of `examples/chip8/chip8.lsp`.
 | File | Holds |
 | --- | --- |
 | `package.lisp` | A package that only `use`s `#:lasm`. |
-| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 8-bit registers and cells, [register pairs](register-pairs.md) for 16-bit words, [static frames](static-frames.md), byte access, compare-and-branch, and the [operations the language needs](language.md#backend-requirements). |
+| `host.lisp` | The machine the emulator runs on and its [backend](backends.md): 8-bit registers and cells, [register words](register-words.md) for 16-bit words, [static frames](static-frames.md), byte access, compare-and-branch, and the [operations the language needs](language.md#backend-requirements). |
 | `chip8.lsp` | The interpreter: [`defarray`](language.md#arrays-strings-and-byte-access) memory and display, one byte a host cell, [macros](language.md#macros), and a table of [function values](language.md#function-values) indexed by opcode. |
 | `chip8.lisp` | Compiles `chip8.lsp` with `assemble-source-file`, loads a ROM and reads the state back. |
 | `test.lisp` | A FiveAM suite: a small ROM for each group of instructions, and one that asserts registers, memory and display together. |
@@ -122,7 +122,7 @@ is named `"6502"`, which is not a symbol, so its package is `mos6502`.
 | File | Holds |
 | --- | --- |
 | `package.lisp` | A package that `use`s `#:lasm`, and imports the built-in [mode](modes.md) names. |
-| `6502.lisp` | The [machine](machine-model.md) with its [interrupts](interrupts.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page pairs](register-pairs.md#memory-halves) and [static frames](static-frames.md). |
+| `6502.lisp` | The [machine](machine-model.md) with its [interrupts](interrupts.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page words](register-words.md#memory-parts) and [static frames](static-frames.md). |
 | `timer.lisp` | The [device](devices.md) mapped at `$D000` that raises IRQ or NMI. |
 | `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` with a [static local](static-frames.md#lasm-functions) and `(:call ...)`, and an IRQ handler fed by the timer. |
 | `test.lisp` | A FiveAM suite: the opcode matrix, mode selection, flags, decimal mode, the stack, BRK, IRQ, NMI and RTI, the timer, cycles, the demo, and `.lsp` programs on the backend. |

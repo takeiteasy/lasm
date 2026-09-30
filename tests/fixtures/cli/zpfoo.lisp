@@ -1,6 +1,6 @@
 ;;;; tests/fixtures/cli/zpfoo.lisp
 ;;;; An 8-bit accumulator machine whose 16-bit language words live in pairs of
-;;;; zero-page cells (docs/register-pairs.md#memory-halves). One register, A,
+;;;; zero-page cells (docs/register-words.md#memory-parts). One register, A,
 ;;;; with a carry chain and instructions that take zero-page addresses, so a
 ;;;; backend spells each language operation as its halves' loads and stores.
 ;;;; The word instructions (MULW, LDW...) take four cell addresses. Programs
@@ -196,7 +196,7 @@
 ;; role list, so a template uses it freely. A word goes on the stack a byte at a
 ;; time, high byte first, and a frame slot is two cells, low byte first.
 (defbackend zpfoo-lang-abi (:isa zpfoo)
-  (registers :pairs ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14) (w3 #x20 #x30))
+  (registers :words ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14) (w3 #x20 #x30))
              :return (w0) :scratch (w0 w1) :callee-saved (w2 w3)
              :stack-pointer sp :program-counter pc :operand zp)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)

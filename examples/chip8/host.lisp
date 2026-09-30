@@ -7,7 +7,7 @@
 (in-package #:chip8)
 
 ;;; 8-bit registers and 8-bit cells. A .lsp value is a 16-bit word held in a
-;;; register pair (docs/register-pairs.md), and a word in memory is two cells,
+;;; register pair (docs/register-words.md), and a word in memory is two cells,
 ;;; low cell first. There is no SP-relative addressing: locals and arguments
 ;;; have fixed addresses (docs/static-frames.md), so the stack only holds
 ;;; return addresses.
@@ -243,7 +243,7 @@
 ;;; which is how `funcall` on a computed function value compiles.
 ;;; See docs/backends.md.
 (defbackend host-lang (:isa host)
-  (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
+  (registers :words ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)

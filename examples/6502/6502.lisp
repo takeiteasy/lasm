@@ -405,7 +405,7 @@ on it, and here it stops the machine.
 (defimplied jam #x02 1 (trap :halt))
 
 ;;; The backend. A .lsp word is 16 bits, and the 6502 has three 8-bit registers, so
-;;; a word lives in a pair of zero-page cells (docs/register-pairs.md#memory-halves).
+;;; a word lives in a pair of zero-page cells (docs/register-words.md#memory-parts).
 ;;; A and Y are in no role list, so a template uses them freely. Locals and
 ;;; arguments have fixed addresses (docs/static-frames.md): the stack only holds
 ;;; return addresses, so a function cannot recurse. The word instructions the
@@ -413,7 +413,7 @@ on it, and here it stops the machine.
 ;;; out; a program that uses one is a compile error naming the form.
 ;;; See docs/backends.md.
 (defbackend mos6502-lang (:isa mos6502)
-  (registers :pairs ((w0 #x03 #x02) (w1 #x05 #x04) (w2 #x07 #x06)
+  (registers :words ((w0 #x03 #x02) (w1 #x05 #x04) (w2 #x07 #x06)
                      (w3 #x09 #x08) (w4 #x0b #x0a) (w5 #x0d #x0c))
              :return (w0) :scratch (w0 w1) :caller-saved (w2 w3) :callee-saved (w4 w5)
              :program-counter pc :operand zp)

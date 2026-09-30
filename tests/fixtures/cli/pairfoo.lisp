@@ -1,6 +1,6 @@
 ;;;; tests/fixtures/cli/pairfoo.lisp
 ;;;; #416: an 8-bit machine whose 16-bit language words live in register pairs
-;;;; (docs/register-pairs.md). Eight 8-bit registers, 8-bit cells, a carry
+;;;; (docs/register-words.md). Eight 8-bit registers, 8-bit cells, a carry
 ;;;; chain (ADD/ADC, SUB/SBC, CP/CPC) and one-byte pushes, so a backend spells
 ;;;; each language operation as its halves' instructions. The MULW family and
 ;;;; LDW/STW work on two register pairs at once. Little-endian, like memory's
@@ -205,7 +205,7 @@ and the zero flag of the first."
 ;; goes on the stack a byte at a time, high byte first, and a frame slot is
 ;; two cells, low byte first, so (:lo slot) is the cell at the slot's offset.
 (defbackend pairfoo-lang-abi (:isa pairfoo)
-  (registers :pairs ((ab a b) (cd c d) (ef e f) (gh g h))
+  (registers :words ((ab a b) (cd c d) (ef e f) (gh g h))
              :return (ab) :scratch (ab cd) :callee-saved (ef gh)
              :stack-pointer sp :program-counter pc :operand reg)
   (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)

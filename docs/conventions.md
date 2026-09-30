@@ -187,14 +187,14 @@ with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
 3. A `:move` of each register the call target reads into a free `:scratch`
    register, when an argument move would overwrite it. The call goes through
    the copy. With no free one, the call is `items-malformed`.
-   On a backend with [register pairs](register-pairs.md#calls), a stack argument
-   that is a frame slot is first moved into a free `:scratch` pair.
+   On a backend with [register words](register-words.md#calls), a stack argument
+   that is a frame slot is first moved into a free `:scratch` word.
 4. A `:move` into each argument register, ordered so no move overwrites a
    register a later one reads. A [cycle](#register-cycles) uses `:exchange`
    or a `:scratch` register.
-   On a backend with [register pairs](register-pairs.md#calls), an argument
+   On a backend with [register words](register-words.md#calls), an argument
    that is an integer, a label or an expression is loaded with `:const` after
-   those moves, and a stack one is loaded into a free `:scratch` pair first.
+   those moves, and a stack one is loaded into a free `:scratch` word first.
 5. The `:call`, `f`'s [operand-kind clause](backends.md#operand-kind-clauses)
    matching -- typically one clause for a label and another for a register
    target (#365).

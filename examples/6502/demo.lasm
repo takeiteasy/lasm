@@ -17,7 +17,7 @@
 ;;;;
 ;;;; A branch or jump takes a bare label. (zp w0) is the zero-page pair the
 ;;;; backend calls w0, two cells, and (:lo (zp w0)) is its low cell
-;;;; (docs/register-pairs.md#memory-halves).
+;;;; (docs/register-words.md#memory-parts).
 ;;;;
 ;;;; The program runs from the reset vector and stops on JAM. The results are
 ;;;; at `results`, read back by test.lisp.
