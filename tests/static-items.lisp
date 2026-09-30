@@ -152,3 +152,37 @@
       (lambda (path)
         (fiveam:is (null (search "subs" (assembly-source (assemble-items-file path)))))
         (fiveam:is (search "subs" (assembly-source (assemble-items-file path :frames :stack))))))))
+
+;;; #465: a static function that can call itself
+
+(fiveam:test a-static-function-that-calls-itself-is-rejected
+  (let ((message (%zs-error '((:function f (:args 1) (:call f (:arg 0)) (:return))) 'zs-bare-abi)))
+    (fiveam:is (search "f calls itself" message))
+    (fiveam:is (search ":frames stack" message))))
+
+(fiveam:test static-functions-in-a-cycle-are-rejected
+  (fiveam:is (search "a calls b calls a is recursive"
+                     (%zs-error '((:function a () (:call b) (:return))
+                                  (:function b () (:call a) (:return)))
+                                'zs-bare-abi)))
+  (fiveam:is (search "b calls c calls b is recursive"
+                     (%zs-error '((:function a () (:call b) (:return))
+                                  (:function b () (:call c) (:return))
+                                  (:function c () (:call b) (:return)))
+                                'zs-bare-abi))))
+
+(fiveam:test any-mention-of-a-function-is-a-call
+  (fiveam:is (search "f calls itself"
+                     (%zs-error '((:function f () (:op :call f) (:return))) 'zs-bare-abi)))
+  (fiveam:is (search "f calls itself"
+                     (%zs-error '((:function f () (jmp f))) 'zs-bare-abi)))
+  (fiveam:is (null (%zs-error '((:function f () (:label f2) (jmp f2) (:return))) 'zs-bare-abi))))
+
+(fiveam:test a-cycle-through-a-static-function-is-rejected-but-not-one-of-stack-functions
+  (fiveam:is (search "recursive"
+                     (%zs-error '((:function a (:frames stack) (:call b) (:return))
+                                  (:function b (:frames static) (:call a) (:return)))
+                                'zpfoo-label-abi)))
+  (fiveam:is (null (%zs-error '((:function a (:frames stack) (:call b) (:return))
+                                (:function b (:frames stack) (:call a) (:return)))
+                              'zpfoo-label-abi))))

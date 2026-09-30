@@ -2227,57 +2227,19 @@ register, so any of these are free once nothing above still needs them."
 
 (defun %cc-call-cycles ()
   "An EQUAL table, upcased function name -> the number of its group of functions that call each other, for each function that lies in a cycle of the call graph or calls itself."
-  (let ((edges (make-hash-table :test 'equal)) (order (make-hash-table :test 'equal))
-        (low (make-hash-table :test 'equal)) (open (make-hash-table :test 'equal))
-        (cycles (make-hash-table :test 'equal)) (stack '()) (count 0) (groups 0))
-    (loop for (caller callee) in (reverse *cc-calls*)
-          do (pushnew callee (gethash caller edges) :test #'string=))
-    (labels ((visit (key)
-               (setf (gethash key order) count (gethash key low) count (gethash key open) t)
-               (incf count)
-               (cl:push key stack)
-               (dolist (callee (reverse (gethash key edges)))
-                 (cond ((not (gethash callee order))
-                        (visit callee)
-                        (setf (gethash key low) (min (gethash key low) (gethash callee low))))
-                       ((gethash callee open)
-                        (setf (gethash key low) (min (gethash key low) (gethash callee order))))))
-               (when (= (gethash key low) (gethash key order))
-                 (let ((members '()))
-                   (loop for member = (cl:pop stack)
-                         do (setf (gethash member open) nil)
-                            (cl:push member members)
-                         until (string= member key))
-                   (when (or (rest members) (member key (gethash key edges) :test #'string=))
-                     (dolist (member members)
-                       (setf (gethash member cycles) groups))
-                     (incf groups))))))
-      (loop for key being the hash-keys of edges
-            unless (gethash key order) do (visit key)))
-    cycles))
+  (%call-graph-cycles (reverse *cc-calls*)))
 
 (defun %cc-fail-recursion ()
   "Fail at the first call that closes a cycle in the call graph."
-  (let ((edges (make-hash-table :test 'equal)) (state (make-hash-table :test 'equal)))
-    (dolist (edge (reverse *cc-calls*))
-      (cl:push edge (gethash (first edge) edges)))
-    (labels ((visit (key path)
-               (setf (gethash key state) :active)
-               (dolist (edge (reverse (gethash key edges)))
-                 (destructuring-bind (caller callee form function) edge
-                   (declare (ignore caller))
-                   (case (gethash callee state)
-                     (:active
-                      (let ((*cc-function* function))
-                        (if (string= key callee)
-                            (%cc-fail form "~(~A~) calls itself; a recursive function needs a stack frame, and the backend has no stack operations" key)
-                            (%cc-fail form "~(~{~A~^ calls ~}~) is recursive; a recursive function needs a stack frame, and the backend has no stack operations"
-                                      (append (member callee (reverse (cons key path)) :test #'string=)
-                                              (list callee))))))
-                     ((nil) (visit callee (cons key path))))))
-               (setf (gethash key state) :done)))
-      (loop for (caller) in (reverse *cc-calls*)
-            unless (gethash caller state) do (visit caller '())))))
+  (multiple-value-bind (edge path) (%call-graph-closing-edge (reverse *cc-calls*))
+    (when edge
+      (destructuring-bind (key callee form function) edge
+        (let ((*cc-function* function))
+          (if (string= key callee)
+              (%cc-fail form "~(~A~) calls itself; a recursive function needs a stack frame, and the backend has no stack operations" key)
+              (%cc-fail form "~(~{~A~^ calls ~}~) is recursive; a recursive function needs a stack frame, and the backend has no stack operations"
+                        (append (member callee (reverse path) :test #'string=)
+                                (list callee)))))))))
 
 (defun %cc-check-recursion ()
   "The upcased names of the functions in a cycle of the call graph. Fails at the first call that closes one when the backend has no stack frames, or when the cycles are not the functions already given stack frames."
@@ -2313,39 +2275,20 @@ register, so any of these are free once nothing above still needs them."
   "The items reserving every static frame. A function's frame starts after the
 frames of its callers, so two functions share the slots at an address. The
 functions that call each other start together, after the callers outside them."
-  (let ((callers (make-hash-table :test 'equal)) (offsets (make-hash-table :test 'equal))
-        (cycles (%cc-call-cycles)))
-    (loop for (caller callee) in *cc-calls*
-          do (pushnew caller (gethash callee callers) :test #'string=))
-    (labels ((group (key)
-               (let ((number (gethash key cycles)))
-                 (if number
-                     (loop for member being the hash-keys of cycles using (hash-value at)
-                           when (= at number) collect member)
-                     (list key))))
-             (offset (key)
-               (or (gethash key offsets)
-                   (let* ((group (group key))
-                          (base (reduce #'max
-                                        (loop for member in group
-                                              append (loop for caller in (gethash member callers)
-                                                           unless (member caller group :test #'string=)
-                                                             collect (+ (offset caller) (gethash caller *cc-sizes* 0))))
-                                        :initial-value 0)))
-                     (dolist (member group base)
-                       (setf (gethash member offsets) base))))))
-      (let* ((slots (loop for (name nil nil label) in definitions
-                          for key = (%designator-name name)
-                          append (loop for index below (gethash key *cc-sizes* 0)
-                                       collect (cons (+ (offset key) index) (%cc-slot-label label index)))))
-             (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
-        (append (loop for address below size
-                      append (append (loop for (at . label) in slots
-                                           when (= at address) collect (list :label label))
-                                     (list (list :directive (%cc-symbol "res") *cc-word-cells*))))
-                (loop for index below *cc-block-size*
-                      append (list (list :label (%cc-block-label index))
-                                   (list :directive (%cc-symbol "res") *cc-word-cells*))))))))
+  (let* ((keys (loop for (name) in definitions collect (%designator-name name)))
+         (offsets (%call-graph-offsets keys *cc-calls* *cc-sizes*))
+         (slots (loop for (name nil nil label) in definitions
+                      for key = (%designator-name name)
+                      append (loop for index below (gethash key *cc-sizes* 0)
+                                   collect (cons (+ (gethash key offsets) index) (%cc-slot-label label index)))))
+         (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
+    (append (loop for address below size
+                  append (append (loop for (at . label) in slots
+                                       when (= at address) collect (list :label label))
+                                 (list (list :directive (%cc-symbol "res") *cc-word-cells*))))
+            (loop for index below *cc-block-size*
+                  append (list (list :label (%cc-block-label index))
+                               (list :directive (%cc-symbol "res") *cc-word-cells*))))))
 
 (defun %cc-array-value (value form)
   "The integer VALUE, an element of a DEFARRAY's (VALUE...), resolves to: an

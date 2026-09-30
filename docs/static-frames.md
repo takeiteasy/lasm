@@ -101,8 +101,15 @@ See [`demo.lasm`](../examples/6502/demo.lasm).
 | Halves | `(:lo (:local i))` and `(:hi (:local i))` are the cells of the word; the second is the label plus one. |
 | Not allowed | `:frame t`, and `:alloc`, `:free`, `:enter` and `:leave`. |
 
-A static function is not re-entrant: it cannot call itself or run from an interrupt
-while it runs. Use `:frames stack` for one that does.
+A static function is not re-entrant. A call to itself, directly or through other
+functions, is an `items-malformed` error at the call that closes the cycle; any
+mention of a function's name in another's body, such as `(jmp f)`, counts as a call.
+Use `:frames stack` for a function that recurses, or that runs from an interrupt
+while it runs.
+
+```
+demo.lasm:9:5: a calls b calls a is recursive; a static function keeps its locals in fixed words, so give it :frames stack
+```
 
 ## Recursion
 
@@ -164,7 +171,6 @@ taken to be any entered function that takes as many arguments.
 | --- | --- |
 | A static `.lasm` function takes arguments in registers only. | [#463](https://todo.sr.ht/~takeiteasy/lasm/463) |
 | Each static `.lasm` function reserves its own words; none are shared. | [#464](https://todo.sr.ht/~takeiteasy/lasm/464) |
-| Nothing rejects a static `.lasm` function that calls itself. | [#465](https://todo.sr.ht/~takeiteasy/lasm/465) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been

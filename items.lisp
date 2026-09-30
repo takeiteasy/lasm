@@ -67,6 +67,7 @@
 (defvar *items-frames* nil "The frames choice for functions with no :frames option: :STATIC, :STACK, or NIL for the backend's own.")
 (defvar *items-static-placed* nil "True when the items have a (:static-frames) item to hold the static words.")
 (defvar *items-static-words* nil "The lines reserving each static function's words, reversed, for (:static-frames) to hold.")
+(defvar *items-functions* nil "EQUAL table, upcased function name -> (NAME NARGS STATIC-P ITEM), for the items being lowered.")
 (defvar *items-memory* nil "The memory element name items are assembled for, or NIL for the default.")
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
 (defvar *items-serial* 0 "Generated labels made so far, for the assembly in progress.")
@@ -842,6 +843,99 @@ the stack pointer. A line whose operands leave variants that differ is left to %
                        value))))
           (values (- (cells :pushes) (cells :pops)) t))))))
 
+(defun %call-graph-cycles (edges)
+  "An EQUAL table, key -> the number of its group of keys that call each other, for each key
+that lies in a cycle of the call graph or calls itself. EDGES is a list of (CALLER CALLEE ...)."
+  (let ((out (make-hash-table :test 'equal)) (order (make-hash-table :test 'equal))
+        (low (make-hash-table :test 'equal)) (open (make-hash-table :test 'equal))
+        (cycles (make-hash-table :test 'equal)) (stack '()) (count 0) (groups 0))
+    (loop for (caller callee) in edges
+          do (pushnew callee (gethash caller out) :test #'string=))
+    (labels ((visit (key)
+               (setf (gethash key order) count (gethash key low) count (gethash key open) t)
+               (incf count)
+               (cl:push key stack)
+               (dolist (callee (reverse (gethash key out)))
+                 (cond ((not (gethash callee order))
+                        (visit callee)
+                        (setf (gethash key low) (min (gethash key low) (gethash callee low))))
+                       ((gethash callee open)
+                        (setf (gethash key low) (min (gethash key low) (gethash callee order))))))
+               (when (= (gethash key low) (gethash key order))
+                 (let ((members '()))
+                   (loop for member = (cl:pop stack)
+                         do (setf (gethash member open) nil)
+                            (cl:push member members)
+                         until (string= member key))
+                   (when (or (rest members) (member key (gethash key out) :test #'string=))
+                     (dolist (member members)
+                       (setf (gethash member cycles) groups))
+                     (incf groups))))))
+      (loop for key being the hash-keys of out
+            unless (gethash key order) do (visit key)))
+    cycles))
+
+(defun %call-graph-closing-edge (edges)
+  "The first of EDGES, in order, that closes a cycle, and the keys from the start of its path
+to its caller, most recent first. NIL when there is no cycle."
+  (let ((out (make-hash-table :test 'equal)) (state (make-hash-table :test 'equal)))
+    (dolist (edge edges)
+      (cl:push edge (gethash (first edge) out)))
+    (block search
+      (labels ((visit (key path)
+                 (setf (gethash key state) :active)
+                 (dolist (edge (reverse (gethash key out)))
+                   (case (gethash (second edge) state)
+                     (:active (return-from search (values edge (cons key path))))
+                     ((nil) (visit (second edge) (cons key path)))))
+                 (setf (gethash key state) :done)))
+        (loop for (caller) in edges
+              unless (gethash caller state) do (visit caller '()))
+        nil))))
+
+(defun %call-graph-path (edges from to)
+  "The shortest list of EDGES leading from the key FROM to the key TO, in order, or NIL."
+  (let ((seen (make-hash-table :test 'equal)) (queue (list '())))
+    (loop while queue
+          do (let* ((path (cl:pop queue))
+                    (at (if path (second (first path)) from)))
+               (dolist (edge edges)
+                 (when (string= (first edge) at)
+                   (when (string= (second edge) to)
+                     (return-from %call-graph-path (reverse (cons edge path))))
+                   (unless (gethash (second edge) seen)
+                     (setf (gethash (second edge) seen) t)
+                     (setf queue (append queue (list (cons edge path)))))))))))
+
+(defun %call-graph-offsets (keys edges sizes)
+  "An EQUAL table, each of KEYS -> the offset its static frame starts at: after the frames of
+its callers, with the keys that call each other starting together. SIZES is a table of key ->
+frame size, 0 for a key it lacks."
+  (let ((callers (make-hash-table :test 'equal)) (offsets (make-hash-table :test 'equal))
+        (cycles (%call-graph-cycles edges)))
+    (loop for (caller callee) in edges
+          do (pushnew caller (gethash callee callers) :test #'string=))
+    (labels ((group (key)
+               (let ((number (gethash key cycles)))
+                 (if number
+                     (loop for member being the hash-keys of cycles using (hash-value at)
+                           when (= at number) collect member)
+                     (list key))))
+             (offset (key)
+               (or (gethash key offsets)
+                   (let* ((group (group key))
+                          (base (reduce #'max
+                                        (loop for member in group
+                                              append (loop for caller in (gethash member callers)
+                                                           unless (member caller group :test #'string=)
+                                                             collect (+ (offset caller) (gethash caller sizes 0))))
+                                        :initial-value 0)))
+                     (dolist (member group base)
+                       (setf (gethash member offsets) base))))))
+      (dolist (key keys)
+        (offset key)))
+    offsets))
+
 (defun %function-static-p (choice item)
   "True when a function whose :frames option is CHOICE keeps its locals in labelled words."
   (let ((name (and choice (%designator-name choice))))
@@ -880,6 +974,12 @@ the body, or at (:static-frames)."
            lines)
           (t (append lines (%static-word-lines function words))))))
 
+(defun %function-option (options name default)
+  "The value of the function option NAME in the plist OPTIONS, or DEFAULT."
+  (loop for (key value) on options by #'cddr
+        when (%keyword-named-p key name) return value
+        finally (return default)))
+
 (defun %function-lines (item)
   (unless (and (>= (length item) 3) (listp (third item)) (evenp (length (third item))))
     (%items-fail 'items-malformed item "expected (:function NAME (:args n :locals n :save (reg...)) ITEM...)"))
@@ -890,10 +990,7 @@ the body, or at (:static-frames)."
           do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE")
                    (%keyword-named-p key "FRAME") (%keyword-named-p key "FRAMES"))
                (%items-fail 'items-malformed item "unknown function option ~S" key)))
-    (flet ((option (name default)
-             (loop for (key value) on options by #'cddr
-                   when (%keyword-named-p key name) return value
-                   finally (return default))))
+    (flet ((option (name default) (%function-option options name default)))
       (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '())))
         (unless (and (typep nlocals '(integer 0)) (or (null nargs) (typep nargs '(integer 0))) (listp saves))
           (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
@@ -1428,6 +1525,53 @@ of its ISA or an ISA extending it."
 (defun %static-frames-item-p (item)
   (and (consp item) (%keyword-named-p (first item) "STATIC-FRAMES")))
 
+(defun %items-function-table (items)
+  "An EQUAL table, upcased name -> (NAME NARGS STATIC-P ITEM), for each (:function ...) of ITEMS
+that is well formed enough to name."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (item items table)
+      (when (and (consp item) (%keyword-named-p (first item) "FUNCTION") (>= (length item) 3)
+                 (listp (third item)) (evenp (length (third item))) (%designator-name (second item)))
+        (let ((options (third item)))
+          (setf (gethash (%designator-name (second item)) table)
+                (list (second item) (%function-option options "ARGS" nil)
+                      (%function-static-p (%function-option options "FRAMES" nil) item) item)))))))
+
+(defun %items-call-edges (table)
+  "The calls between the functions of TABLE, as (CALLER CALLEE FORM): FORM is the smallest
+form of CALLER's body that mentions CALLEE, as a call, a jump or an address."
+  (let ((edges '()))
+    (labels ((walk (caller form)
+               (typecase form
+                 (cons (unless (and (%keyword-named-p (first form) "LABEL") (null (cddr form)))
+                         (dolist (part (if (symbolp (first form)) (rest form) form))
+                           (walk-part caller form part))))))
+             (walk-part (caller form part)
+               (typecase part
+                 (cons (walk caller part))
+                 ((or string symbol)
+                  (let ((callee (and part (not (keywordp part)) (%designator-name part))))
+                    (when (and callee (gethash callee table))
+                      (cl:push (list caller callee form) edges)))))))
+      (maphash (lambda (caller entry)
+                 (dolist (element (cdddr (fourth entry)))
+                   (walk caller element)))
+               table))
+    (nreverse edges)))
+
+(defun %check-static-recursion (table)
+  "Fail at the call that closes a cycle through a static function of TABLE."
+  (let ((edges (%items-call-edges table)))
+    (maphash (lambda (key entry)
+               (when (third entry)
+                 (let ((path (%call-graph-path edges key key)))
+                   (when path
+                     (%items-fail 'items-malformed (third (car (last path)))
+                                  "~:[~(~{~A~^ calls ~}~) is recursive~;~(~A~) calls itself~]; a static function keeps its locals in fixed words, so give it :frames stack"
+                                  (null (rest path))
+                                  (if (rest path) (append (mapcar #'first path) (list key)) key))))))
+             table)))
+
 (defun %items-lines (items)
   "The lines of ITEMS, with every static function's words at the (:static-frames) item."
   (let ((placeholders (remove-if-not #'%static-frames-item-p items)))
@@ -1436,9 +1580,11 @@ of its ISA or an ISA extending it."
     (dolist (placeholder placeholders)
       (unless (null (rest placeholder))
         (%items-fail 'items-malformed placeholder "expected (:static-frames)")))
-    (let* ((*items-static-placed* (and placeholders t))
+    (let* ((*items-functions* (%items-function-table items))
+           (*items-static-placed* (and placeholders t))
            (*items-static-words* '())
            (chunks (loop for item in items
+                         initially (%check-static-recursion *items-functions*)
                          collect (if (%static-frames-item-p item) :static-frames (%item-lines item)))))
       (loop for chunk in chunks
             append (if (eq chunk :static-frames)
