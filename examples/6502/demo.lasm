@@ -88,9 +88,7 @@
   ;; The backend's operations. w2 * w3 is a call to a function written below
   ;; with raw instructions: its arguments arrive in w2 and w3 and its result
   ;; leaves in w0. A word is stored little-endian at a label.
-  (:op :const (zp w2) 300)
-  (:op :const (zp w3) 7)
-  (:call multiply (zp w2) (zp w3))
+  (:call multiply 300 7)
   (:op :poke-label product (zp w0))
   (:op :const (zp w1) 5)
   (:op :add (zp w0) (zp w1))

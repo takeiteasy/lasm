@@ -1030,6 +1030,21 @@ survive a call, and any other register cannot be kept."
         when (member name (backend-register *items-backend* :caller-saved) :test #'equal)
           collect name))
 
+(defun %value-argument-p (operand)
+  "True when OPERAND, a call argument on a backend with register pairs, is a value: an
+integer, a label or an expression, which :const loads."
+  (and *items-backend* (backend-pairs *items-backend*)
+       (or (integerp operand)
+           (and (or (symbolp operand) (stringp operand)) operand
+                (not (keywordp operand)) (not (%pair-named operand)))
+           (and (consp operand) (%expression-head-p (first operand))))))
+
+(defun %argument-moves (registers arguments item)
+  "The (REGISTER DESTINATION SOURCE) entries that pass ARGUMENTS in REGISTERS, sources resolved at the current depth."
+  (loop for register in registers
+        for argument in arguments
+        collect (list register (%register-operand register item) (%resolve-operand argument item))))
+
 (defun %call-lines (item)
   (unless (rest item)
     (%items-fail 'items-malformed item "expected (:call TARGET ARG... [:keep (reg...)])"))
@@ -1042,6 +1057,9 @@ survive a call, and any other register cannot be kept."
              (arguments (subseq all 0 keep-position))
              (registers (%arg-registers))
              (on-stack (nthcdr (length registers) arguments))
+             (target (%resolve-operand target item))
+             (early-reads (remove-if (lambda (move) (%value-argument-p (third move)))
+                                     (%argument-moves registers arguments item)))
              (lines '()))
         (labels ((emit (new) (setf lines (append lines new)))
                  (push-cell (operand)
@@ -1049,28 +1067,34 @@ survive a call, and any other register cannot be kept."
                    (%bump-depth 1))
                  ;; A pair's :push template pushes two cells, so a slot read
                  ;; after the first would be off by one: go through a register.
+                 ;; A value is loaded into that register with :const.
                  (push-lines (operand)
-                   (let* ((slotp (and (backend-pairs *items-backend*) (%frame-operand-p operand)
+                   (let* ((valuep (%value-argument-p operand))
+                          (slotp (and (backend-pairs *items-backend*) (%frame-operand-p operand)
                                       (integerp (second (%resolve-operand operand item)))))
-                          (scratch (and slotp (%free-scratch '() '() target))))
-                     (when (and slotp (null scratch))
+                          (scratch (and (or slotp valuep) (%free-scratch '() early-reads target))))
+                     (when (and (or slotp valuep) (null scratch))
                        (%items-fail 'items-malformed item
-                                    "pushing a frame slot on a backend with register pairs needs a :scratch pair the call target does not read"))
-                     (if scratch
-                         (append (%hook-lines :move (list (%register-operand scratch item) (%resolve-operand operand item)) item)
-                                 (%hook-lines :push (list (%register-operand scratch item)) item))
-                         (%hook-lines :push (list operand) item)))))
+                                    "pushing a frame slot or a value on a backend with register pairs needs a :scratch pair the call target and the register arguments do not read"))
+                     (cond (valuep
+                            (append (%hook-lines :const (list (%register-operand scratch item) operand) item)
+                                    (%hook-lines :push (list (%register-operand scratch item)) item)))
+                           (scratch
+                            (append (%hook-lines :move (list (%register-operand scratch item) (%resolve-operand operand item)) item)
+                                    (%hook-lines :push (list (%register-operand scratch item)) item)))
+                           (t (%hook-lines :push (list operand) item))))))
           (dolist (name keeps)
             (push-cell (%register-operand name item)))
           (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
             (push-cell argument))
-          (let* ((moves (loop for register in registers
-                              for argument in arguments
-                              collect (list register (%register-operand register item) (%resolve-operand argument item))))
-                 (target (%resolve-operand target item)))
+          (let* ((moves (%argument-moves registers arguments item))
+                 (register-moves (remove-if (lambda (move) (%value-argument-p (third move))) moves))
+                 (value-moves (remove-if-not (lambda (move) (%value-argument-p (third move))) moves)))
             (multiple-value-bind (copies target) (%protect-target moves target item)
-              (dolist (move (append copies (%order-moves moves target item)))
+              (dolist (move (append copies (%order-moves register-moves target item)))
                 (emit (%hook-lines (first move) (rest move) item)))
+              (dolist (move value-moves)
+                (emit (%hook-lines :const (list (second move) (third move)) item)))
               (emit (%hook-lines :call (list target) item))))
           (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
             (emit (%hook-lines :free (list (%frame-count (length on-stack))) item)))

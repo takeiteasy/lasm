@@ -191,6 +191,9 @@ with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
 4. A `:move` into each argument register, ordered so no move overwrites a
    register a later one reads. A [cycle](#register-cycles) uses `:exchange`
    or a `:scratch` register.
+   On a backend with [register pairs](register-pairs.md#calls), an argument
+   that is an integer, a label or an expression is loaded with `:const` after
+   those moves, and a stack one is loaded into a free `:scratch` pair first.
 5. The `:call`, `f`'s [operand-kind clause](backends.md#operand-kind-clauses)
    matching -- typically one clause for a label and another for a register
    target (#365).

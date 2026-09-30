@@ -89,8 +89,8 @@ in two memory cells. An integer half is the cell's address.
 
 A raw instruction in a [`.lasm`](items.md#lasm-files) body takes a half too,
 `(lda (:lo (zp w0)))`. Using a memory pair whole, `(lda (zp w0))`, is an
-`items-malformed` error. A call [argument](#limitations) that is an integer or a label is
-moved as a cell operand; load it into the pair first with `:const`.
+`items-malformed` error. A call argument that is an integer, a label or an expression is a
+value: [call lowering](#calls) loads it with `:const`.
 
 ## Words and slots
 
@@ -111,15 +111,20 @@ big-endian memory.[^endian]
 
 A backend's `:push` and `:pop` move two halves in whatever order fits its memory.
 A stack argument that is a frame slot goes through a free `:scratch` pair first,
-so both halves read the slot at the same depth.[^push] Without one the call is
-`items-malformed`.
+so both halves read the slot at the same depth.[^push] A stack argument that is a
+value is loaded into that pair with `:const`. The pair is not one a register
+argument or the call target reads; without one the call is `items-malformed`.
+A value in an argument register is loaded with `:const` after the other moves.
+
+```lisp
+(:call f 300 some-label)   ; :const, then the call
+```
 
 ## Limitations
 
 | Limitation | Ticket |
 | --- | --- |
 | A word is exactly two registers. | [#423](https://todo.sr.ht/~takeiteasy/lasm/423) |
-| A call argument that is an integer or a label is read as a cell, not a value. | [#452](https://todo.sr.ht/~takeiteasy/lasm/452) |
 
 [^clobbers]: `(:clobbers a)` and `(:clobbers ab)` both mark `ab`. A register that is in no
   pair marks itself.

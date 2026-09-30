@@ -370,3 +370,83 @@
     (setf (sref m 'sp) +pf-sp+)
     (run m :max-steps 1000)
     (fiveam:is (= 65529 (%zf-word m)) "sub2 gets 3 and 10, so it returns 3 - 10")))
+
+;;; A call argument that is an integer or a label is a value, loaded with :const (#452).
+
+(defparameter +value-call-specs+
+  '((pairfoo pairfoo-lang-abi reg ab cd %pf-word :get)
+    (pairfoo pairfoo-lang-reg-abi reg ab cd %pf-word :move)
+    (zpfoo zpfoo-lang-abi zp w0 w1 %zf-word :get)
+    (zpfoo zpfoo-lang-reg-abi zp w0 w1 %zf-word :move))
+  "(MACHINE BACKEND KIND RESULT OTHER READER LOAD): the reg-abi backends pass the first argument in OTHER,
+the others on the stack. LOAD is the operation that reads it.")
+
+(defun %value-call (spec prefix call &optional (backend (second spec)) (load-other :get))
+  "Run PREFIX, then CALL, a call of sub2 returning its first argument less its second, on SPEC's machine.
+Returns the result word and the assembly."
+  (destructuring-bind (name ignored kind result other reader load) spec
+    (declare (ignore ignored))
+    (let* ((items `(,@prefix ,call (:op :halt)
+                    (:function sub2 (:args 2)
+                      (:op ,load (,kind ,result) (:arg 0))
+                      (:op ,load-other (,kind ,other) (:arg 1))
+                      (:op :sub (,kind ,result) (,kind ,other))
+                      (:return))))
+           (assembly (assemble-items items :backend backend :origin #x300))
+           (m (make-machine name)))
+      (load-program m assembly)
+      (setf (sref m 'sp) +pf-sp+)
+      (run m :max-steps 1000)
+      (values (funcall reader m) assembly (sref m 'sp)))))
+
+(fiveam:test a-call-argument-that-is-an-integer-is-a-value
+  (loop for spec in +value-call-specs+
+        do (loop for (a b expected) in '((5 7 65534) (-2 1 65533) (300 44 256) (1000 1 999))
+                 do (multiple-value-bind (word assembly sp) (%value-call spec '() `(:call sub2 ,a ,b))
+                      (declare (ignore assembly))
+                      (fiveam:is (= expected word) "~A (:call sub2 ~A ~A) gave ~A" (second spec) a b word)
+                      (fiveam:is (= +pf-sp+ sp) "~A leaves the stack balanced" (second spec))))))
+
+(fiveam:test a-call-argument-that-is-a-label-or-expression-is-a-value
+  (loop for spec in +value-call-specs+
+        do (let ((address (symbol-info-value
+                           (assembly-symbol (nth-value 1 (%value-call spec '() '(:call sub2 0 0))) "sub2"))))
+             (fiveam:is (> address 255) "the label lies above the low half")
+             (fiveam:is (= (- address 3) (%value-call spec '() '(:call sub2 sub2 3)))
+                        "~A passes a label" (second spec))
+             (fiveam:is (= (+ address 4) (%value-call spec '() '(:call sub2 (+ sub2 10) 6)))
+                        "~A passes an expression" (second spec)))))
+
+(fiveam:test a-value-argument-is-loaded-after-the-moves-that-read-its-register
+  (loop for spec in +value-call-specs+
+        do (multiple-value-bind (kind other) (values (third spec) (fifth spec))
+             (fiveam:is (= 65531 (%value-call spec `((:op :const (,kind ,other) 10)) `(:call sub2 5 (,kind ,other))))
+                        "~A pushes the pair before the value overwrites it" (second spec))))
+  (eval '(defbackend zf-swap-abi (:extends zpfoo-lang-abi)
+          (registers :scratch (w0 w3) :caller-saved (w1 w2) :callee-saved ())
+          (call :args (w1 w2) :order :left-to-right :cleanup :caller :return-address-slots 1)))
+  (fiveam:is (= 65531 (%value-call (fourth +value-call-specs+) '((:op :const (zp w1) 10)) '(:call sub2 5 (zp w1)) 'zf-swap-abi :move))
+             "w2 takes w1 before w1 takes 5"))
+
+(fiveam:test a-value-argument-does-not-disturb-a-computed-call-target
+  (loop for spec in (list (second +value-call-specs+) (fourth +value-call-specs+))
+        do (destructuring-bind (name backend kind result other reader load) spec
+             (declare (ignore name backend result reader load))
+             (fiveam:is (= 2 (%value-call spec `((:op :const (,kind ,other) sub2)) `(:call (,kind ,other) 5 3)))
+                        "~A calls through the pair the first argument is loaded into" (second spec)))))
+
+(fiveam:test a-stack-value-is-staged-through-a-scratch-pair-no-argument-reads
+  (loop for spec in (list (second +value-call-specs+) (fourth +value-call-specs+))
+        do (destructuring-bind (name backend kind result other reader load) spec
+             (declare (ignore name backend other reader load))
+             (fiveam:is (= 993 (%value-call spec `((:op :const (,kind ,result) 1000)) `(:call sub2 (,kind ,result) 7)))
+                        "~A keeps the register argument out of the staging pair" (second spec)))))
+
+(fiveam:test a-stack-value-without-a-free-scratch-pair-is-an-items-error
+  (eval '(defbackend pf-tight-abi (:extends pairfoo-lang-reg-abi) (registers :scratch (ab))))
+  (let ((c (handler-case (progn (%value-call (second +value-call-specs+) '((:op :const (reg ab) 1))
+                                             '(:call sub2 (reg ab) 7) 'pf-tight-abi)
+                                nil)
+             (items-malformed (c) c))))
+    (fiveam:is (typep c 'items-malformed))
+    (fiveam:is (and c (search "value" (princ-to-string c))))))
