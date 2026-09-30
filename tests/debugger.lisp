@@ -1850,6 +1850,18 @@ loop:   sta $10
       (multiple-value-bind (path format) (%split-save-arguments (first case))
         (fiveam:is (equal (rest case) (list path format)))))))
 
+(fiveam:test debug-save-no-program-leaves-the-source-out
+  (uiop:with-temporary-file (:pathname path :type "snap")
+    (let ((session (%dbg-file-session))
+          (name (namestring path)))
+      (dolist (flags '("--no-program" "--binary --no-program" "--no-program --binary"))
+        (fiveam:is (search "saved" (debug-command session (format nil "save ~A ~A" flags name))))
+        (fiveam:is (null (getf (cdr (read-snapshot path)) :program)) "~A" flags))
+      (fiveam:is (search "saved" (debug-command session (format nil "save ~A" name))))
+      (fiveam:is (getf (cdr (read-snapshot path)) :program)))
+    (fiveam:is (equal '("a b.snap" :binary nil) (multiple-value-list (%split-save-arguments "--no-program --binary a b.snap"))))
+    (fiveam:is (equal '("--no-programx" :sexp t) (multiple-value-list (%split-save-arguments "--no-programx"))))))
+
 (fiveam:test session-defaults-to-every-retained-program
   (multiple-value-bind (m bios program) (%bios-and-program)
     (let ((session (make-debug-session m)))

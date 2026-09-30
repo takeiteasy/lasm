@@ -89,7 +89,8 @@ disk.
 
 Only an assembly from `assemble-file` has a file to embed; one from
 `assemble` on a string does not. `restore-snapshot` ignores `:program`, and a
-snapshot without one still restores.
+snapshot without one still restores. The CLI's `--no-embed-program` and the
+debugger's `save --no-program` write a snapshot without one.
 
 ## Reading
 

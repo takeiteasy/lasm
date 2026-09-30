@@ -221,8 +221,8 @@
 (fiveam:test cli-load-does-not-leak-modes
   (let ((before (gethash 'immediate *modes*)))
     (%cli-call-with-definitions (list :machine-file (%cli-path "tests/fixtures/cli/local-mode.lisp"))
-                                (lambda (machine lexer)
-                                  (declare (ignore lexer))
+                                (lambda (machine lexer snapshot)
+                                  (declare (ignore lexer snapshot))
                                   (fiveam:is (eq 'cli-local-mode machine))
                                   (fiveam:is (find-mode-descriptor 'cli-leak-probe))
                                   (fiveam:is (find-mode-descriptor 'cli-leak-local 'cli-local-mode))))
@@ -470,6 +470,43 @@
       (fiveam:is (= 1 status))
       (fiveam:is (string= "" out))
       (fiveam:is (search "no embedded program" err)))))
+
+;; #293
+(fiveam:test cli-no-embed-program-leaves-the-source-out
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%save-counter-snapshot snap "--no-embed-program")
+    (fiveam:is (null (getf (cdr (read-snapshot snap)) :program)))
+    (multiple-value-bind (status out err) (%run-cli (%sixtyfoo-args "run" "--load-snapshot" (namestring snap)))
+      (fiveam:is (= 1 status))
+      (fiveam:is (string= "" out))
+      (fiveam:is (search "no embedded program" err)))
+    (multiple-value-bind (status out)
+        (%run-cli (%cli-args "run" "tests/fixtures/cli/counter.asm" "--load-snapshot" (namestring snap)))
+      (fiveam:is (= 0 status))
+      (fiveam:is (search "stopped: trap after 18 steps" out)))))
+
+;; #286
+(defun %two-machines-args (command &rest more)
+  (list* command "-m" (%cli-path "tests/fixtures/cli/two-machines.lisp") more))
+
+(fiveam:test cli-load-snapshot-defaults-the-cpu-to-the-snapshots
+  (uiop:with-temporary-file (:pathname snap :type "snap")
+    (%call-with-temp-sources
+     '(("one.asm" . ".byte 0"))
+     (lambda (file dir)
+       (declare (ignore dir))
+       (%run-cli (%two-machines-args "run" (namestring file) "--cpu" "cli-second"
+                                     "--save-snapshot" (namestring snap)))
+       (dolist (args (list (%two-machines-args "run" "--load-snapshot" (namestring snap))
+                           (%two-machines-args "run" (namestring file) "--load-snapshot" (namestring snap))))
+         (multiple-value-bind (status out err) (%run-cli args)
+           (fiveam:is (search "stopped:" out) "~D ~S" status err)
+           (fiveam:is (string= "" err))))
+       (multiple-value-bind (status out err)
+           (%run-cli (%two-machines-args "run" "--cpu" "cli-first" "--load-snapshot" (namestring snap)))
+         (fiveam:is (= 1 status))
+         (fiveam:is (string= "" out))
+         (fiveam:is (search "CLI-SECOND" err)))))))
 
 (fiveam:test cli-assembly-options-need-a-file
   (uiop:with-temporary-file (:pathname snap :type "snap")

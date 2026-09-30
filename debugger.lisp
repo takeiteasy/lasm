@@ -1578,7 +1578,9 @@ or :NONE when TEXT is not bracketed. Commas inside parentheses do not split."
   x/N ADDR           dump N memory cells starting at ADDR
   x/N BANK:ADDR      dump N cells of a bank of the banked region at ADDR
   bank REGION N      map bank N into a banked region
-  save [--binary] PATH write the machine's state to a snapshot file (--binary: compact)
+  save [--binary] [--no-program] PATH
+                     write the machine's state to a snapshot file (--binary: compact,
+                     --no-program: leave the program source out)
   load PATH          restore the machine's state from a snapshot file
   where              show pc, current instruction, and source context
   help               this text
@@ -1741,11 +1743,11 @@ this call."
                              (t "bank: usage: bank REGION N")))))
                   ((string-equal cmd "where") (debug-where-text session))
                   ((string-equal cmd "save")
-                   (multiple-value-bind (path format) (%split-save-arguments rest)
+                   (multiple-value-bind (path format embed-p) (%split-save-arguments rest)
                      (if (zerop (length path))
                          "save: missing path"
                          (progn (write-snapshot (machine-snapshot (debug-session-machine session)
-                                                                  :assembly (debug-session-assembly session))
+                                                                  :assembly (and embed-p (debug-session-assembly session)))
                                                 path :format format)
                                 (format nil "saved ~A~%" path)))))
                   ((string-equal cmd "load")
@@ -1764,17 +1766,19 @@ this call."
       (values (if stream (progn (write-string text stream) nil) text) quit-p))))
 
 (defun %split-save-arguments (rest)
-  "(VALUES PATH FORMAT) for the arguments of the save command: an optional
-leading `--binary`, then PATH."
-  (let* ((line (string-trim '(#\Space #\Tab) rest))
-         (flag "--binary")
-         (flagged (and (>= (length line) (length flag))
-                       (string= flag line :end2 (length flag))
-                       (or (= (length line) (length flag))
-                           (member (char line (length flag)) '(#\Space #\Tab))))))
-    (if flagged
-        (values (string-trim '(#\Space #\Tab) (subseq line (length flag))) :binary)
-        (values line :sexp))))
+  "(VALUES PATH FORMAT EMBED-P) for the arguments of the save command: any
+leading `--binary` and `--no-program` flags, then PATH."
+  (let ((line (string-trim '(#\Space #\Tab) rest))
+        (format :sexp)
+        (embed-p t))
+    (loop
+      (let* ((end (or (position-if (lambda (c) (member c '(#\Space #\Tab))) line) (length line)))
+             (word (subseq line 0 end)))
+        (cond ((string= word "--binary") (setf format :binary))
+              ((string= word "--no-program") (setf embed-p nil))
+              (t (return)))
+        (setf line (string-left-trim '(#\Space #\Tab) (subseq line end)))))
+    (values line format embed-p)))
 
 (defun debugger-repl (session &key (input *standard-input*) (output *standard-output*) (prompt "(lasm-dbg) "))
   "A thin read/dispatch/print loop over DEBUG-COMMAND -- the reference

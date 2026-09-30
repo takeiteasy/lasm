@@ -27,8 +27,9 @@ A `.lisp` machine file holds the DSL forms — `deflexer`, `defisa`, `defcpu`, `
 `in-package` line is needed. Definitions live only for one command.
 
 The file's sole CPU and sole lexer are used. A file defining several
-CPUs needs `--cpu`; several lexers need `--lexer`. A `defmachine` is one CPU. With no lexer
-defined, the default lexer is used.
+CPUs needs `--cpu`, unless `--load-snapshot` names the snapshot's CPU; several
+lexers need `--lexer`. A `defmachine` is one CPU. With no lexer defined, the
+default lexer is used.
 
 ## Items programs
 
@@ -65,8 +66,8 @@ lasm compile fact.lsp -m callfoo.lisp -o fact.lasm
 | --- | --- | --- |
 | `compile FILE` | writes a `.lsp` program as a `.lasm` items program | `-o OUT`, `--backend NAME`, `--optimize size\|speed`, `--frames static\|stack` |
 | `assemble FILE` | writes the assembled program | `-o OUT`, `--format bin\|hex`, `--bank N`, `--region NAME`, `--packing pad\|bits` |
-| `run [FILE]` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
-| `debug [FILE]` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary` |
+| `run [FILE]` | assembles, then runs to a stop | `--max-steps N`, `--cycles N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary`, `--no-embed-program` |
+| `debug [FILE]` | assembles, then opens the [debugger](debugger.md) | `--break WHERE`, `--commands FILE`, `--history N`, `--load-snapshot PATH`, `--save-snapshot PATH`, `--snapshot-format sexp\|binary`, `--no-embed-program` |
 | `disassemble FILE` | disassembles a binary file | `--annotate`, `--data-region START:END`, `--packing pad\|bits`, `--cells N` |
 | `listing FILE` | prints the assembly listing | `--symbols`, `--cycle-costs` |
 
@@ -119,7 +120,7 @@ Breakpoint 1 at $0002
 
 Commands from a pipe work the same way: `echo "continue" | lasm debug ...`.
 The [command list](debugger.md#command-dispatcher-and-repl) includes `save
-[--binary] PATH` and `load PATH` for snapshots. Breakpoint conditions use the
+[--binary] [--no-program] PATH` and `load PATH` for snapshots. Breakpoint conditions use the
 lexer the program was assembled with.
 
 ## Snapshots
@@ -129,14 +130,17 @@ lexer the program was assembled with.
 state before running, so `--max-steps` and `--cycles` count from the snapshot.
 Both work on `run` and `debug`.
 `--snapshot-format` picks `sexp` (readable, the default) or `binary`
-(compact); loading detects either.
+(compact); loading detects either. `--no-embed-program` leaves the program
+source out, for a large source or a private one; the snapshot then needs `FILE`
+to load.
 
 ```sh
 lasm run counter.asm -m sixtyfoo.lisp --max-steps 5 --save-snapshot s.snap
 lasm run -m sixtyfoo.lisp --load-snapshot s.snap
 ```
 
-With `FILE` the program is assembled from it. Without `FILE` it is rebuilt
+The snapshot's CPU is the default, so a machine file with several CPUs needs no
+`--cpu`. With `FILE` the program is assembled from it. Without `FILE` it is rebuilt
 from the source in the snapshot, `.include`d files too, so the source files
 need not exist. `--origin`, `--memory` and `--lexer` then come from the
 snapshot and are usage errors. A snapshot with no embedded program (one

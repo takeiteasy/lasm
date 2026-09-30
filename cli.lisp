@@ -1,6 +1,6 @@
 ;;;; cli.lisp
 ;;;; The command-line front end. RUN-CLI is a pure function over an
-;;;; argument list so it can be tested without a shell; roswell/lasm.ros is
+;;;; argument list so it can be tested without a shell; lasm.ros is
 ;;;; the thin executable around it.
 
 (in-package #:lasm)
@@ -23,11 +23,13 @@ commands:
                     [--bank N] [--region NAME] [--packing pad|bits]
   run [FILE]        assemble and run          [--max-steps N] [--cycles N]
                     [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
+                    [--no-embed-program]
   disassemble FILE  disassemble a binary file [--origin N] [--annotate] [--packing pad|bits]
                     [--cells N] [--data-region START:END]...
   listing FILE      print an assembly listing [--symbols] [--cycle-costs]
   debug [FILE]      assemble and debug        [--break WHERE]... [--commands FILE] [--history N]
                     [--load-snapshot PATH] [--save-snapshot PATH] [--snapshot-format sexp|binary]
+                    [--no-embed-program]
 
 FILE is assembly source (.asm, .s), with the .lasm extension an items
 program (see docs/items.md), or with .lsp a program in the small source
@@ -37,7 +39,8 @@ from the source it holds.
 
 options:
   -m, --machine FILE     machine definition (.lisp), required
-  --cpu NAME             CPU to use when FILE defines several
+  --cpu NAME             CPU to use when FILE defines several; defaults to the
+                         --load-snapshot snapshot's
   --quiet                suppress assembly warnings
   --lexer NAME           lexer to use when FILE defines several
   --backend NAME         backend for a .lasm or .lsp program that names none
@@ -53,6 +56,7 @@ options:
   --load-snapshot PATH   restore machine state from a snapshot after loading (run, debug)
   --save-snapshot PATH   write machine state and program source to a snapshot at the end (run, debug)
   --snapshot-format F    sexp (readable, default) or binary (compact) for --save-snapshot
+  --no-embed-program     leave the program source out of --save-snapshot
   --break WHERE          set a breakpoint before the prompt appears (debug)
   --commands FILE        run debugger commands from FILE first (debug)
   --history N            keep N steps of step-back history (debug)
@@ -77,7 +81,7 @@ options:
 
 (defparameter *cli-flag-options*
   '(("--symbols" . :symbols) ("--cycle-costs" . :cycle-costs) ("--annotate" . :annotate)
-    ("--quiet" . :quiet)
+    ("--quiet" . :quiet) ("--no-embed-program" . :no-embed-program)
     ("-h" . :help) ("--help" . :help)))
 
 (defun %cli-parse (args)
@@ -141,9 +145,9 @@ options:
   (or (%table-key-named table text)
       (%signal-usage-error 'usage-error "~A defines no ~A named ~A" file what text)))
 
-(defun %cli-pick-cpu (file explicit)
-  (if explicit
-      (%cli-named explicit *machines* "CPU" file)
+(defun %cli-pick-cpu (file explicit snapshot)
+  (if (or explicit snapshot)
+      (%cli-named (or explicit (princ-to-string (%snapshot-field snapshot :cpu))) *machines* "CPU" file)
       (let ((names (%table-keys *machines*)))
         (case (length names)
           (0 (%signal-usage-error 'usage-error "~A defines no CPU" file))
@@ -162,8 +166,8 @@ options:
 
 (defun %cli-call-with-definitions (options function)
   "Load OPTIONS' machine file into private machine tables and call FUNCTION
-with the chosen CPU and lexer names. Loaded definitions never leak into
-the calling image."
+with the chosen CPU and lexer names and the --load-snapshot snapshot, if any.
+Loaded definitions never leak into the calling image."
   (let ((file (or (getf options :machine-file) (%usage-error "-m MACHINE.lisp is required"))))
     (let* ((*machines* (make-hash-table :test 'eq))
            (*isas* (make-hash-table :test 'eq))
@@ -176,10 +180,13 @@ the calling image."
       (let ((*standard-output* (make-broadcast-stream))
             (*error-output* (make-broadcast-stream)))
         (load file))
-      (funcall function
-               (%cli-pick-cpu file (getf options :cpu))
-               (and (not (getf options :snapshot-only))
-                    (%cli-pick-lexer file (getf options :lexer) before))))))
+      (let ((snapshot (and (getf options :load-snapshot)
+                           (read-snapshot (getf options :load-snapshot)))))
+        (funcall function
+                 (%cli-pick-cpu file (getf options :cpu) snapshot)
+                 (and (not (getf options :snapshot-only))
+                      (%cli-pick-lexer file (getf options :lexer) before))
+                 snapshot)))))
 
 ;;; Commands
 
@@ -268,13 +275,13 @@ the calling image."
   "(VALUES ASSEMBLY SNAPSHOT): ASSEMBLY of FILE, or rebuilt from the
 --load-snapshot snapshot's embedded source when there is no FILE. SNAPSHOT is
 that snapshot, or NIL."
-  (let ((path (getf options :load-snapshot)))
-    (if file
-        (values (%cli-assemble file machine lexer options) (and path (read-snapshot path)))
-        (let ((snapshot (read-snapshot path)))
-          (values (or (snapshot-assembly snapshot :cpu machine)
-                      (%snapshot-fail 'snapshot-malformed "~A has no embedded program; pass FILE" path))
-                  snapshot)))))
+  (let ((snapshot (getf options :snapshot)))
+    (values (if file
+                (%cli-assemble file machine lexer options)
+                (or (snapshot-assembly snapshot :cpu machine)
+                    (%snapshot-fail 'snapshot-malformed "~A has no embedded program; pass FILE"
+                                    (getf options :load-snapshot))))
+            snapshot)))
 
 (defun %cli-loaded-machine (assembly machine snapshot)
   "A MACHINE instance with ASSEMBLY loaded, then restored from SNAPSHOT when
@@ -288,7 +295,8 @@ there is one."
 (defun %cli-save-snapshot (m assembly options)
   (let ((path (getf options :save-snapshot)))
     (when path
-      (write-snapshot (machine-snapshot m :assembly assembly) path
+      (write-snapshot (machine-snapshot m :assembly (and (not (getf options :no-embed-program)) assembly))
+                      path
                       :format (%cli-snapshot-format options)))))
 
 (defun %cli-fatal-trap-p (condition)
@@ -426,7 +434,8 @@ to OUT, diagnostics to ERR."
                    (setf (getf options :snapshot-only) t))
                  (%cli-call-with-definitions
                   options
-                  (lambda (machine lexer)
+                  (lambda (machine lexer snapshot)
+                    (setf (getf options :snapshot) snapshot)
                     (handler-bind ((lasm-warning (%cli-report-warning err (getf options :quiet))))
                       (funcall handler file machine lexer options out))))))))
     (cli-usage-error (c)
