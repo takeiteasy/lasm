@@ -60,7 +60,8 @@
 
 (defun %script-command (core script args)
   #+sbcl (apply #'%sbcl "--core" core "--script" (namestring script) args)
-  #+ecl (list* "ecl" "--norc" "--shell" (namestring script) args))
+  #+ecl (list* "ecl" "--norc" "--shell" (namestring script) args)
+  #+ccl (list* (namestring (ccl::kernel-path)) "-n" "-b" "-l" (namestring script) "--" args))
 
 ;; Scripts are standalone and redefine globals, so each gets its own Lisp.
 (defun %run-scripts (runs)

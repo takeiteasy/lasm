@@ -681,7 +681,8 @@ twice
       (fiveam:is (%unwritable-p vector format) "circular vector")
       (fiveam:is (%unwritable-p (list (make-hash-table)) format) "hash table")
       (fiveam:is (%unwritable-p (list #+sbcl sb-ext:double-float-positive-infinity
-                                                 #+ecl ext:double-float-positive-infinity) format) "infinity")
+                                                 #+ecl ext:double-float-positive-infinity
+                                                 #+ccl ccl::double-float-positive-infinity) format) "infinity")
       (fiveam:is (%unwritable-p (list (make-array 2 :element-type 'bit)) format) "bit vector"))))
 
 (fiveam:test write-snapshot-rejects-circular-device-and-interrupt-data

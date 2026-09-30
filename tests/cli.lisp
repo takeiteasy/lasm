@@ -294,19 +294,21 @@
     (fiveam:is (search "macro-bad.asm:5" err))
     (fiveam:is (search "frobnicate" err))))
 
-(defun %ambi-args (&rest more)
+(defun %ambi-args (output &rest more)
   (list* "assemble" (%cli-path "tests/fixtures/cli/ambi.asm")
-         "-m" (%cli-path "tests/fixtures/cli/ambi.lisp") "-o" "/dev/null" more))
+         "-m" (%cli-path "tests/fixtures/cli/ambi.lisp") "-o" output more))
 
 (fiveam:test cli-warnings-print-to-err-and-quiet-suppresses-them
-  (multiple-value-bind (status out err) (%run-cli (%ambi-args))
-    (fiveam:is (= 0 status))
-    (fiveam:is (search "wrote /dev/null" out))
-    (fiveam:is (search "ambi.asm:1: warning:" err)))
-  (multiple-value-bind (status out err) (%run-cli (%ambi-args "--quiet"))
-    (declare (ignore out))
-    (fiveam:is (= 0 status))
-    (fiveam:is (string= "" err))))
+  (uiop:with-temporary-file (:pathname path :type "bin")
+    (let ((output (namestring path)))
+      (multiple-value-bind (status out err) (%run-cli (%ambi-args output))
+        (fiveam:is (= 0 status))
+        (fiveam:is (search (format nil "wrote ~A" output) out))
+        (fiveam:is (search "ambi.asm:1: warning:" err)))
+      (multiple-value-bind (status out err) (%run-cli (%ambi-args output "--quiet"))
+        (declare (ignore out))
+        (fiveam:is (= 0 status))
+        (fiveam:is (string= "" err))))))
 
 (fiveam:test cli-run-saves-and-resumes-from-a-snapshot
   (uiop:with-temporary-file (:pathname path :type "snap")

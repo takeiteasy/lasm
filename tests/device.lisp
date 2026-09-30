@@ -358,6 +358,9 @@ at the start of each test that reads it.")
     (semantics (wait-outer))
     (cycles 2)))
 
+;; TODO: ECL and CCL evaluate the compile-time registration without the enclosing
+;; macrolet, so an outer macro used in an inner macrolet's expander is undefined (#471)
+#+sbcl
 (macrolet ((wait-amount () 7))
   (definstruction elapse-machine viaoutermacroinexpander
     (encoding (opcode #x06))
@@ -369,7 +372,7 @@ at the start of each test that reads it.")
            (instruction-descriptor-variable-cycles (first (find-instruction-variants 'elapse-machine name)))))
     (fiveam:is-true (variable-cycles 'viamacrolet))
     (fiveam:is-true (variable-cycles 'viaoutermacrolet))
-    (fiveam:is-true (variable-cycles 'viaoutermacroinexpander))
+    #+sbcl (fiveam:is-true (variable-cycles 'viaoutermacroinexpander))
     (fiveam:is-false (variable-cycles 'shadowed))))
 
 (fiveam:test elapse-ticks-devices-between-the-bodys-side-effects

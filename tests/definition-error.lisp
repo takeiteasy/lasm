@@ -92,9 +92,14 @@
     (with-definition-errors
       (ignore-errors (eval '(defmode bad-def-mode-5 (one-of just-one)))))))
 
+;; The fasl type differs between implementations, and COMPILE-FILE insists on its own.
+(defun %temp-fasl (name)
+  (uiop:tmpize-pathname (make-pathname :name name :type (pathname-type (compile-file-pathname "x.lisp"))
+                                       :defaults (uiop:temporary-directory))))
+
 (fiveam:test with-definition-errors-types-a-compile-file-failure
   (let* ((source (asdf:system-relative-pathname :lasm "tests/fixtures/definition/bad-mode.lisp"))
-         (output (uiop:tmpize-pathname (merge-pathnames "bad-mode.fasl" (uiop:temporary-directory))))
+         (output (%temp-fasl "bad-mode"))
          (c (unwind-protect
                  (handler-case
                      (let ((*error-output* (make-broadcast-stream))
@@ -111,8 +116,7 @@
 returning the condition the load signals."
   (let* ((source (asdf:system-relative-pathname
                   :lasm (format nil "tests/fixtures/definition/~A.lisp" name)))
-         (output (uiop:tmpize-pathname (merge-pathnames (format nil "~A.fasl" name)
-                                                        (uiop:temporary-directory)))))
+         (output (%temp-fasl name)))
     (unwind-protect
          (let ((*error-output* (make-broadcast-stream))
                (*standard-output* (make-broadcast-stream)))
@@ -128,7 +132,7 @@ returning the condition the load signals."
 
 (fiveam:test compile-file-of-a-bad-definition-reports-failure
   (let ((source (asdf:system-relative-pathname :lasm "tests/fixtures/definition/bad-mode.lisp"))
-        (output (uiop:tmpize-pathname (merge-pathnames "failure.fasl" (uiop:temporary-directory)))))
+        (output (%temp-fasl "failure")))
     (unwind-protect
          (let ((*error-output* (make-broadcast-stream))
                (*standard-output* (make-broadcast-stream)))
@@ -152,7 +156,7 @@ returning the condition the load signals."
   (loop for fixture in '("bad-instruction" "bad-directive" "bad-machine-name" "bad-semantics")
         do (let ((source (asdf:system-relative-pathname
                           :lasm (format nil "tests/fixtures/definition/~A.lisp" fixture)))
-                 (output (uiop:tmpize-pathname (merge-pathnames "failure.fasl" (uiop:temporary-directory)))))
+                 (output (%temp-fasl "failure")))
              (unwind-protect
                   (let ((*error-output* (make-broadcast-stream))
                         (*standard-output* (make-broadcast-stream)))

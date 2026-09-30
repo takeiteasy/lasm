@@ -9,19 +9,23 @@
 ;; Threads, on the hosts the tests run on.
 (defun %make-thread (function &optional (name "thread"))
   #+sbcl (sb-thread:make-thread function :name name)
-  #+ecl (mp:process-run-function name function))
+  #+ecl (mp:process-run-function name function)
+  #+ccl (ccl:process-run-function name function))
 
 (defun %join-thread (thread)
   #+sbcl (sb-thread:join-thread thread)
-  #+ecl (mp:process-join thread))
+  #+ecl (mp:process-join thread)
+  #+ccl (ccl:join-process thread))
 
 (defun %make-lock ()
   #+sbcl (sb-thread:make-mutex)
-  #+ecl (mp:make-lock))
+  #+ecl (mp:make-lock)
+  #+ccl (ccl:make-lock))
 
 (defmacro %with-lock ((lock) &body body)
   #+sbcl `(sb-thread:with-mutex (,lock) ,@body)
-  #+ecl `(mp:with-lock (,lock) ,@body))
+  #+ecl `(mp:with-lock (,lock) ,@body)
+  #+ccl `(ccl:with-lock-grabbed (,lock) ,@body))
 
 (defun %call-wrapped (name wrapper thunk)
   "Call THUNK with the function NAME replaced by one that calls WRAPPER with the original

@@ -1053,6 +1053,9 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
     (encoding (opcode #x16))
     (semantics (macrolet ((cv-outer-wipe () '(set! a 0))) (cv-outer-wipe)))))
 
+;; TODO: ECL and CCL evaluate the compile-time registration without the enclosing
+;; macrolet, so an outer macro used in an inner macrolet's expander is undefined (#471)
+#+sbcl
 (macrolet ((cv-target () ''sp))
   (definstruction cv-var vexpander
     (encoding (opcode #x19))
@@ -1121,10 +1124,10 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vouter-shadowed))))
 
 (fiveam:test an-expander-body-can-use-the-macros-bound-around-it
-  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander)))
+  #+sbcl (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander)))
   (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander-nested)))
-  (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander-sibling))
-             "a sibling macro is not visible to an expander"))
+  #+sbcl (fiveam:is (equal '(("SP")) (%cv-var-writes 'vexpander-sibling))
+                    "a sibling macro is not visible to an expander"))
 
 (fiveam:test a-local-macro-shadows-a-global-one-of-the-same-name
   (fiveam:is (equal '(("A")) (%cv-var-writes 'vshadow))))
