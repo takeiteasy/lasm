@@ -1,5 +1,5 @@
 name: Set up Lisp
-description: Roswell with one Lisp, a Quicklisp at ~/quicklisp and the timer dependency
+description: Roswell with one Lisp, its Quicklisp at ~/quicklisp and the timer dependency
 inputs:
   lisp:
     description: Roswell implementation name
@@ -21,21 +21,18 @@ runs:
         echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
         ros install "$LISP"
         ros use "$LISP"
-    - name: Install Quicklisp and the timer
+    - name: Link Quicklisp and the timer
       shell: bash
       run: |
-        # A standalone Quicklisp: the one inside ~/.roswell needs Roswell's package to load.
-        curl -fsSLO https://beta.quicklisp.org/quicklisp.lisp
-        ros -Q -e '(load "quicklisp.lisp")' -e '(quicklisp-quickstart:install)' -q
+        # Bare Lisps load ~/quicklisp/setup.lisp, and Roswell's hook in it needs Roswell's package.
+        ln -sfn ~/.roswell/lisp/quicklisp ~/quicklisp
+        rm -f ~/quicklisp/local-init/roswell.lisp
         git clone --depth 1 https://github.com/takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
         ln -sfn "$GITHUB_WORKSPACE" ~/quicklisp/local-projects/lasm
-        ln -sfn ~/quicklisp/local-projects/trivial-high-precision-timer ~/.roswell/local-projects/trivial-high-precision-timer
-        ln -sfn "$GITHUB_WORKSPACE" ~/.roswell/local-projects/lasm
-        ros -Q -e '(load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))' \
-          -e '(ql:quickload (list :eclector :cffi :fiveam :closer-mop))' -q
-    - name: Put the Lisp on PATH
+        ros -Q -e '(ql:quickload (list :eclector :cffi :fiveam :closer-mop))' -q
+    - name: Put ECL on PATH
+      if: inputs.lisp == 'ecl'
       shell: bash
       run: |
-        # The example scripts start bare `ecl`, so its directory must be on PATH.
-        bin=$(dirname "$(find ~/.roswell/impls -path '*/bin/*' -type f \( -name ecl -o -name sbcl \) | head -n 1)")
-        echo "$bin" >> "$GITHUB_PATH"
+        # The example scripts start bare `ecl`.
+        dirname "$(find ~/.roswell/impls -path '*/bin/ecl' -type f | head -n 1)" >> "$GITHUB_PATH"
