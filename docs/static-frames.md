@@ -116,8 +116,8 @@ demo.lasm:9:5: a calls b calls a is recursive; a static function keeps its local
 A function the machine runs at any time, an interrupt handler, takes
 `:interrupt t` in a `.lasm` file, or `(declare (interrupt))` in a `.lsp` file.
 Its words, and those of the functions it runs, lie apart from the main line's
-and from other handlers', so an interrupt never overwrites a function it
-interrupts.
+and from other handlers', and it saves the registers its code may write, so the
+code it interrupts goes on as it was.
 
 ```lisp
 (:function irq (:interrupt t :locals 1)
@@ -129,9 +129,10 @@ interrupts.
 
 | Part | Behavior |
 | --- | --- |
-| Return | `(:return)` loads the saved registers back, then emits the backend's `:return-interrupt`, which the backend must define. |
+| Registers | At entry the handler saves every register its code may write: each of a role other than `:callee-saved`, with `:save` adding more. They go in words, or on the stack for a stack frame, and `(:return)` loads them back.[^saves] |
+| Backend | `:enter-interrupt`, if the backend defines it, runs first, and `:return-interrupt`, which it must define, ends the handler. Together they save what the backend's operations write besides its registers, such as the 6502's A, X and Y. |
 | Arguments | None: `:args` is an error. |
-| Words | The main line's first, then each handler's region in program order.[^regions] |
+| Words | The main line's first, then each handler's region in program order, with the handler's saved registers.[^regions] |
 | Shared functions | A static function run from a handler and from the main line, or from two handlers, is an `items-malformed` error. Give it `:frames stack`. |
 | Mentions | Naming a handler in other code, to load its address into a vector, is not a call. |
 | Not covered | A handler written as a plain label, like `irq` in [`demo.lasm`](../examples/6502/demo.lasm), is outside the call graph and is not kept apart. |
@@ -143,8 +144,9 @@ demo.lasm:14:5: interrupt irq calls log, and main calls log; a static function i
 ### `.lsp` handlers
 
 A `defun` with no parameters and `(declare (interrupt))` first in its body is a
-handler. The words are laid out as for a `.lasm` handler, and it returns with the
-backend's `:return-interrupt`.
+handler. The words are laid out, and the registers saved, as for a `.lasm`
+handler. The saves go in words when the backend has `:poke-label` and
+`:peek-label`, else on the stack.
 
 ```lisp
 (defvar ticks 0)
@@ -228,6 +230,11 @@ taken to be any entered function that takes as many arguments.
 [^regions]: A handler's region holds the words of the handler and of every
   function it calls, laid out as on the main line. The regions follow one another,
   so no address is shared between them.
+
+[^saves]: The registers are those the backend names as `:return`, `:arguments`,
+  `:scratch`, `:caller-saved` and `:address`, less the frame pointer. A handler
+  written as a plain label saves none, nor does the machine's `:save` unless it
+  lists them.
 
 [^saved]: The word follows the function's other slots, so a callee's frame never
   overlaps it. The register is stored at the function's start, and each restore

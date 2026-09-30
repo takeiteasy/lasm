@@ -710,6 +710,25 @@ one, its part."
                    designator role (backend-descriptor-name *items-backend*)))
     name))
 
+(defun %interrupt-saved-registers (explicit)
+  "The upcased names of the registers an interrupt function saves besides EXPLICIT, its :save: the
+ones its code may write that the interrupted code did not expect it to, every register of a
+role but :callee-saved, less the frame pointer."
+  (let ((pointer (getf (backend-descriptor-frame *items-backend*) :pointer)))
+    (remove-duplicates
+     (remove-if (lambda (name) (or (equal name pointer) (member name explicit :test #'string=)))
+                (loop for role in '(:return :arguments :scratch :caller-saved :address)
+                      for value = (backend-register *items-backend* role)
+                      append (mapcar #'%designator-name (if (listp value) value (list value)))))
+     :test #'string= :from-end t)))
+
+(defun %enter-interrupt-lines (interrupt item)
+  "The lines of the backend's optional :enter-interrupt, which an interrupt function starts with,
+saving what the backend's operations write besides its registers."
+  (and interrupt *items-backend*
+       (assoc "ENTER-INTERRUPT" (backend-descriptor-ops *items-backend*) :test #'equal)
+       (%op-lines :enter-interrupt '() item)))
+
 (defun %depth-tracked-p ()
   (and *items-frame* (null (items-frame-pointer *items-frame*))))
 
@@ -1045,13 +1064,15 @@ the main line and from each other, one region after another."
 (defun %static-function-lines (item name nargs nlocals saves body interrupt)
   "The lines of a function whose locals and saved registers are labelled words: reserved after
 the body, or at (:static-frames)."
-  (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
+  (let* ((saves (let ((explicit (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves)))
+                  (if interrupt (append (%interrupt-saved-registers explicit) explicit) explicit)))
          (function (%source-name name item))
          (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals 0 :saves saves
                                   :static t :interrupt interrupt :name function))
          (saved-from (+ (%static-arg-words frame) nlocals))
          (words (+ saved-from (length saves)))
          (prologue (append (%item-lines (list :label name))
+                           (%enter-interrupt-lines interrupt item)
                            (loop for register in saves
                                  for index from saved-from
                                  append (%hook-lines :poke-label
@@ -1116,17 +1137,19 @@ uninterned symbol, so the value is matched by name."
           (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
         (let* ((backend-pointer (getf (backend-descriptor-frame *items-backend*) :pointer))
                (pointer (and framep backend-pointer))
-               (saves (mapcar (lambda (register)
-                                (when (equal backend-pointer (%designator-name register))
-                                  (%items-fail 'items-malformed item "~A is the frame pointer; the prologue already saves it"
-                                               backend-pointer))
-                                (%frame-register register :callee-saved item))
-                              saves))
+               (saves (let ((explicit (mapcar (lambda (register)
+                                                (when (equal backend-pointer (%designator-name register))
+                                                  (%items-fail 'items-malformed item "~A is the frame pointer; the prologue already saves it"
+                                                               backend-pointer))
+                                                (%frame-register register :callee-saved item))
+                                              saves)))
+                        (if interrupt (append (%interrupt-saved-registers explicit) explicit) explicit)))
                (alignment (getf (backend-descriptor-frame *items-backend*) :alignment))
                (locals (+ nlocals (mod (- (+ nlocals (length saves) (if pointer 1 0))) alignment)))
                (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals locals :saves saves
                                         :pointer pointer :interrupt interrupt))
                (lines (append (%item-lines (list :label name))
+                              (%enter-interrupt-lines interrupt item)
                               (loop for register in saves
                                     append (%hook-lines :push (list (%register-operand register item)) item))
                               (and pointer (%hook-lines :enter '() item))

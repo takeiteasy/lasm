@@ -454,7 +454,8 @@ on it, and here it stops the machine.
               (jsr trampoline) (jmp after) (:label trampoline) (jmp (ind 14)) (:label after))
        (:call (f) (jsr f))
        (:return () (rts))
-       (:return-interrupt () (rti))
+       (:enter-interrupt () (pha) (txa) (pha) (tya) (pha))
+       (:return-interrupt () (pla) (tay) (pla) (tax) (pla) (rti))
        (:halt () (jam))))
 
 ;;; Driving the machine from Lisp. The demo is a .lasm program: an items program

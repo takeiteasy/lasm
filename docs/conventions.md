@@ -255,6 +255,7 @@ an `items-malformed`.
 | `:return ()` | `(:return)`, or with `:cleanup :caller`. |
 | `:return-pop (n)` | `(:return)` with `:cleanup :callee` and stack arguments. |
 | `:return-interrupt ()` | `(:return)` in a function with `:interrupt t`. |
+| `:enter-interrupt ()` | The start of a function with `:interrupt t`, before its registers are saved. Optional. |
 | `:enter ()` `:leave ()` | The prologue and epilogue of a [frame pointer](#frame-pointer). |
 
 The backend also names the operand kind that writes a register, `(registers

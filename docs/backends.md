@@ -174,7 +174,7 @@ label is never captured. Operations that [call lowering](conventions.md#backend-
 emits may define labels too.
 
 `:push` `:pop` `:alloc` `:free` `:move` `:exchange` `:call` `:return` `:return-pop`
-`:return-interrupt` `:enter` and `:leave` are the operations
+`:return-interrupt` `:enter-interrupt` `:enter` and `:leave` are the operations
 [call lowering](conventions.md#backend-operations) emits; each has a fixed
 number of parameters.
 

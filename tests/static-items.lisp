@@ -297,7 +297,7 @@
                                 (:function helper (:locals 1) (:return)))
                               'zs-int-bare-abi)))
     (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
-    (fiveam:is (= 4 (- (gethash "sfhelperx0" symbols) (gethash "sfmainx0" symbols))))))
+    (fiveam:is (= 8 (- (gethash "sfhelperx0" symbols) (gethash "sfmainx0" symbols))))))
 
 (fiveam:test interrupt-functions-keep-apart-from-each-other
   (let ((symbols (%zs-symbols '((:function nmi (:interrupt t :locals 1) (:return))
@@ -305,7 +305,7 @@
                                 (:function main (:locals 1) (:return)))
                               'zs-int-bare-abi)))
     (fiveam:is (= 2 (- (gethash "sfnmix0" symbols) (gethash "sfmainx0" symbols))))
-    (fiveam:is (= 4 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))))
+    (fiveam:is (= 8 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))))
 
 (fiveam:test mentioning-an-interrupt-function-is-not-a-call
   (let ((symbols (%zs-symbols '((:function main (:locals 1) (jmp irq))
@@ -313,7 +313,7 @@
                                 (:function shared (:locals 1) (:return)))
                               'zs-int-bare-abi)))
     (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
-    (fiveam:is (= 4 (- (gethash "sfsharedx0" symbols) (gethash "sfmainx0" symbols))))))
+    (fiveam:is (= 8 (- (gethash "sfsharedx0" symbols) (gethash "sfmainx0" symbols))))))
 
 (fiveam:test a-static-function-run-from-an-interrupt-and-the-main-line-is-rejected
   (let ((message (%zs-error '((:function main () (:call shared) (:return))
@@ -352,6 +352,27 @@
     (fiveam:is (< (search "lda" static) (search "hlt" static)))
     (fiveam:is (< (search "adds" stack) (search "hlt" stack)))
     (fiveam:is (null (search "ret" stack)))))
+
+(defbackend zs-int-enter-abi (:extends zs-int-bare-abi)
+  (ops (:enter-interrupt () (clc))))
+
+(defun %count-of (needle text)
+  (loop for at = (search needle text) then (search needle text :start2 (1+ at))
+        while at count t))
+
+(fiveam:test an-interrupt-function-saves-the-registers-its-code-may-write
+  (flet ((stores (items backend) (%count-of "sta [ sf" (render-items items :backend backend))))
+    (fiveam:is (= 2 (stores '((:function irq (:interrupt t) (:return))) 'zs-int-bare-abi)) "w0 and w1")
+    (fiveam:is (= 3 (stores '((:function irq (:interrupt t :save (w2)) (:return))) 'zs-int-bare-abi)) "and the :save")
+    (fiveam:is (= 0 (stores '((:function f () (:return))) 'zs-bare-abi)) "a plain function saves none")
+    (fiveam:is (= 4 (%count-of "pha" (render-items '((:function irq (:interrupt t :frames stack) (:return))) :backend 'zs-int-abi))))))
+
+(fiveam:test an-interrupt-function-starts-with-the-backends-enter-interrupt
+  (let ((text (render-items '((:function irq (:interrupt t) (:return)) (:function f () (:return))) :backend 'zs-int-enter-abi)))
+    (fiveam:is (= 1 (%count-of "clc" text)))
+    (fiveam:is (< (search "clc" text) (search "sta" text)) "before the registers are saved")
+    (fiveam:is (< (search "lda" text :from-end t) (search "hlt" text)))
+    (fiveam:is (= 0 (%count-of "clc" (render-items '((:function irq (:interrupt t) (:return))) :backend 'zs-int-bare-abi))) "the hook is optional")))
 
 (fiveam:test an-interrupt-function-needs-the-backends-interrupt-return
   (fiveam:is (search "return-interrupt"

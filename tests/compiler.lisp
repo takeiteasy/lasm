@@ -2238,7 +2238,7 @@ two |#
 (defbackend cl-int-abi (:extends callfoo-lang-abi)
   (ops (:return-interrupt () (hlt))))
 
-(eval '(defbackend cl-int-static-abi (:extends cl-static-abi)
+(eval '(defbackend cl-int-static-abi (:extends cl-label-abi)
          (ops (:return-interrupt () (hlt)))))
 
 (defun %cl-int-items (source &key (backend 'cl-int-static-abi) (frames :static))
@@ -2254,11 +2254,15 @@ two |#
 (fiveam:test a-declared-handler-is-an-interrupt-function-that-returns-with-the-interrupt-return
   (let ((items (%cl-int-items "(defun irq () (declare (interrupt)) (let ((v 1)) v)) (defun main () 1)")))
     (fiveam:is (getf (%cl-function-options items "irq") :interrupt))
-    (fiveam:is (null (getf (%cl-function-options items "main") :interrupt))))
+    (fiveam:is (null (getf (%cl-function-options items "main") :interrupt)))
+    (fiveam:is (eq :none (getf (%cl-function-options items "main") :frames :none)))
+    (fiveam:is (getf (%cl-function-options items "irq") :frames) "saves in words on a backend with :poke-label"))
+  (let ((items (%cl-int-items "(defun irq () (declare (interrupt)) 1) (defun main () 1)" :backend 'cl-int-abi)))
+    (fiveam:is (eq :none (getf (%cl-function-options items "irq") :frames :none)) "else on the stack"))
   (fiveam:is (search "return-interrupt"
                      (handler-case (progn (assemble-items (%cl-int-items "(defun irq () (declare (interrupt)) 1) (defun main () 1)"
-                                                                         :backend 'cl-static-abi)
-                                                          :backend 'cl-static-abi :frames :stack)
+                                                                         :backend 'cl-label-abi)
+                                                          :backend 'cl-label-abi :frames :stack)
                                           nil)
                        (items-malformed (c) (princ-to-string c))))))
 
@@ -2293,7 +2297,7 @@ two |#
                      (%cl-int-fail "(defun helper (x) x) (defun irq () (declare (interrupt)) (helper 1)) (defun nmi () (declare (interrupt)) (helper 2)) (defun main () 1)"
                                    :backend 'cl-int-abi))))
 
-(fiveam:test a-function-shared-through-a-stack-function-is-found
+(fiveam:test a-function-shared-through-another-function-is-found
   (fiveam:is (search "interrupt irq calls f calls g, and main calls f calls g"
                      (%cl-int-fail "(defun g (x) x) (defun f (x) (g x)) (defun irq () (declare (interrupt)) (f 1)) (defun main () (f 2))"
                                    :backend 'cl-int-abi))))

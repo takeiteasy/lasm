@@ -413,6 +413,64 @@
     (fiveam:is (equal '(1 1 7) (list (ram machine #x10) (ram machine #x11) (reg machine 'x))))
     (fiveam:is (= #xff (reg machine 's)))))
 
+;;; An interrupt function saves what its code writes, so the code it interrupts goes on as before.
+
+(defun handler-machine (items)
+  "A machine that has run ITEMS to the label `spin`, with an IRQ signalled there."
+  (let* ((assembly (assemble-items items :backend 'mos6502-lang :origin 512 :frames :stack))
+         (machine (load-6502 assembly))
+         (spin (demo-symbol assembly "spin")))
+    (setf (reg machine 's) #xff)
+    (loop until (= spin (reg machine 'pc)) do (step-machine machine))
+    (signal-interrupt machine 1)
+    machine))
+
+(defparameter +handler-items+
+  '((cli)
+    (:op :const (zp w0) 1234)
+    (:op :const (zp w1) 4321)
+    (lda (imm 7)) (ldx (imm 8)) (ldy (imm 9))
+    (:label spin) (nop) (jmp spin)
+    (:function irq (:interrupt t :frames static)
+      (:op :const (zp w0) 99)
+      (:op :const (zp w1) 98)
+      (lda (imm 1)) (ldx (imm 2)) (ldy (imm 3))
+      (inc (abs fired))
+      (:return))
+    (:label fired) (:directive byte 0)
+    (:directive org 65534) (:directive word irq)))
+
+(fiveam:test an-interrupt-function-leaves-the-interrupted-registers-as-it-found-them
+  (let ((machine (handler-machine +handler-items+)))
+    (dotimes (i 120) (step-machine machine))
+    (fiveam:is (= 1 (ram machine (demo-symbol (assemble-items +handler-items+ :backend 'mos6502-lang :origin 512 :frames :stack) "fired")))
+               "the handler ran")
+    (fiveam:is (equal '(7 8 9) (list (reg machine 'a) (reg machine 'x) (reg machine 'y))))
+    (fiveam:is (= 1234 (word-at machine 2)) "w0")
+    (fiveam:is (= 4321 (word-at machine 4)) "w1")
+    (fiveam:is (= #xff (reg machine 's)) "the stack is balanced")))
+
+(fiveam:test a-compiled-handler-leaves-the-interrupted-registers-as-it-found-them
+  (let* ((program (read-source-from-string "(defvar ticks 0) (defun irq () (declare (interrupt)) (set ticks (+ ticks 1))) (defun main () ticks)"))
+         (items (compile-program (items-program-items program) :backend 'mos6502-lang :frames :static))
+         (assembly (assemble-items (append '((cli)
+                                             (:op :const (zp w0) 1234)
+                                             (lda (imm 7)) (ldx (imm 8)) (ldy (imm 9))
+                                             (:label spin) (nop) (jmp spin))
+                                           items
+                                           '((:directive org 65534) (:directive word fnirq)))
+                                   :backend 'mos6502-lang :origin 512 :frames :stack))
+         (machine (load-6502 assembly))
+         (spin (demo-symbol assembly "spin")))
+    (setf (reg machine 's) #xff)
+    (loop until (= spin (reg machine 'pc)) do (step-machine machine))
+    (signal-interrupt machine 1)
+    (dotimes (i 160) (step-machine machine))
+    (fiveam:is (= 1 (word-at machine (demo-symbol assembly "gvticks"))) "the handler ran")
+    (fiveam:is (equal '(7 8 9) (list (reg machine 'a) (reg machine 'x) (reg machine 'y))))
+    (fiveam:is (= 1234 (word-at machine 2)) "w0")
+    (fiveam:is (= #xff (reg machine 's)))))
+
 ;;; The timer at $D000.
 
 (defun timer-program (control)

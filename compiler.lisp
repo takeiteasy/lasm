@@ -2141,7 +2141,12 @@ names must stay literal for the rest of the compiler to resolve."
              (append (if (%cc-static-p)
                          (list :args 0 :locals 0 :frame nil)
                          (list :args (if (%cc-static-calls-p) 0 (length params)) :locals *cc-max*))
-                     (and (member *cc-caller* *cc-interrupts* :test #'string=) (list :interrupt t))
+                     (and (member *cc-caller* *cc-interrupts* :test #'string=)
+                          (append (list :interrupt t)
+                                  ;; The handler's own register saves go in words when the backend can
+                                  ;; peek and poke a label, else on the stack.
+                                  (and (%cc-static-p) (%cc-op-p :poke-label) (%cc-op-p :peek-label)
+                                       (list :frames (%cc-symbol "static")))))
                      ;; A preserved register %CC-TAKE used; the backend's
                      ;; own :callee-saved convention pushes and pops it, which
                      ;; also restores it correctly across an early (return).
