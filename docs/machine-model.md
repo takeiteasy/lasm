@@ -26,7 +26,7 @@ one namespace.
 | --- | --- | --- |
 | `(register NAME :width n [:count n] [:names (...)])` | Scalar or banked registers and optional aliases. | [Registers](#registers) |
 | `(stack NAME :width n :depth n)` | Fixed-depth LIFO storage. | [Stacks](#stacks) |
-| `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width n] [:bounds (LOW HIGH)])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
+| `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width n] [:bounds (LOW HIGH)] [:base n] [:push :pre/:post])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
 | `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
 | `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
@@ -69,15 +69,33 @@ the number of live entries. Moving the pointer does not clear stored cells.
 Overflow and underflow signal storage conditions.
 
 A `(stack-pointer REGISTER ...)` instead uses a scalar register to index
-memory. `:down` (default) points at the top and pre-decrements on push;
-`:up` points past the top and post-increments on push. The indexed address
-wraps to the memory address width. `push`/`pop`, `stack-ref` and interrupt
-delivery accept either stack form. See [Semantics vocabulary](semantics.md).
+memory. `:grows :down` (default) moves the register down on push; `:up` moves
+it up. `:push` picks the order. The indexed address wraps to the memory
+address width. `push`/`pop`, `stack-ref` and interrupt delivery accept either
+stack form. See [Semantics vocabulary](semantics.md).
+
+| `:grows` | `:push` | Push | Register points at |
+| --- | --- | --- | --- |
+| `:down` | `:pre` (default) | Decrement, then store. | The top item. |
+| `:down` | `:post` | Store, then decrement. | The free cell below the top item. |
+| `:up` | `:post` (default) | Store, then increment. | The cell past the top item. |
+| `:up` | `:pre` | Increment, then store. | The top item's last cell. |
+
+The 6502's stack lives in page `$01`, is 8 bits wide and stores before it
+decrements:
+
+```lisp
+(register s :width 8)
+(memory ram :width 8 :addr-width 16)
+(stack-pointer s :memory ram :base #x100 :grows :down :push :post)
+```
 
 | Option | Meaning |
 | --- | --- |
 | `:width n` | Bits per slot for `push`, `pop` and `stack-ref`. Defaults to the memory's `:cell-width`. Also sets the [source language](language.md#words-wider-than-a-cell)'s word size on a backend targeting this stack pointer. |
-| `:bounds (LOW HIGH)` | Inclusive cell addresses the stack may touch. Without it nothing is checked. |
+| `:bounds (LOW HIGH)` | Inclusive cell addresses the stack may touch, `:base` included. Without it nothing is checked. |
+| `:base n` | Added to the register to address memory, default `0`. The register wraps at its own width, so it can be narrower than the address space. |
+| `:push :pre/:post` | Whether the register moves before or after the store. |
 
 A slot wider than one cell spans consecutive cells in the memory's `:endian`
 order. On 8-bit little-endian cells a 16-bit `#xBEEF` pushed on a `:down`
@@ -277,6 +295,7 @@ in any package is found.
 | --- | --- |
 | `push`/`pop` on a register stack use the clause `:width`; there is no per-call width. | [#358](https://todo.sr.ht/~takeiteasy/lasm/358) |
 | The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
+| A backend's frame layout is checked against a stack pointer's `:grows` but not its `:base` or `:push`. | [#459](https://todo.sr.ht/~takeiteasy/lasm/459) |
 
 [^regions]: Regions change access behavior over one backing array.
   `:device` regions do not store values. `mpeek` reads zero there. A mapper

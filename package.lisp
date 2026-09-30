@@ -206,6 +206,8 @@
    #:stack-pointer-descriptor-register
    #:stack-pointer-descriptor-memory
    #:stack-pointer-descriptor-grows
+   #:stack-pointer-descriptor-base
+   #:stack-pointer-descriptor-push
    #:stack-pointer-descriptor-width
    #:stack-pointer-descriptor-bounds
 

@@ -127,7 +127,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
                              :write-privilege write-privilege))))
 
 ;; (stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width N]
-;; [:bounds (LOW HIGH)]) -- binds
+;; [:bounds (LOW HIGH)] [:base N] [:push :pre/:post]) -- binds
 ;; an existing scalar :register element as an address pointer into a :memory
 ;; element, for machines whose "stack" is a plain register indexed by
 ;; push/pop convention rather than a lasm :stack element (DCPU-16, ANIMA-16).
@@ -136,7 +136,7 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
 ;; REGISTER/MEMORY actually name the right kind of element can't be checked
 ;; until every other clause is known (%FINISH-STACK-POINTERS, below).
 (defun parse-stack-pointer-clause (form)
-  (%definition-bind (register &key memory (grows :down) width bounds) form
+  (%definition-bind (register &key memory (grows :down) width bounds (base 0) push) form
     (unless (symbolp register)
       (%defmachine-error "stack-pointer ~S must be a symbol" register))
     (when (and memory (not (symbolp memory)))
@@ -145,12 +145,17 @@ each :LITTLE or :BIG, GROUP an integer of at least 2 (see
       (%defmachine-error "stack-pointer ~S :grows must be :DOWN or :UP, got ~S" register grows))
     (when width
       (%check-positive width ":width" register))
+    (unless (and (integerp base) (>= base 0))
+      (%defmachine-error "stack-pointer ~S :base must be a non-negative integer, got ~S" register base))
+    (unless (member push '(nil :pre :post))
+      (%defmachine-error "stack-pointer ~S :push must be :PRE or :POST, got ~S" register push))
     (when (and bounds (not (and (consp bounds) (= (length bounds) 2) (every #'integerp bounds)
                                 (<= 0 (first bounds) (second bounds)))))
       (%defmachine-error "stack-pointer ~S :bounds must be (LOW HIGH) with 0 <= LOW <= HIGH, got ~S"
                          register bounds))
     (make-stack-pointer-descriptor :register register :memory memory :grows grows
-                                   :width width :bounds bounds)))
+                                   :width width :bounds bounds :base base
+                                   :push (or push (if (eq grows :down) :pre :post)))))
 
 ;; Resolves every (stack-pointer ...) clause's REGISTER/MEMORY against
 ;; DESCRIPTOR's own ELEMENTS, once they're fully known -- same two-pass split
@@ -192,6 +197,10 @@ declared (~{~S~^ ~}) -- name one explicitly with :memory"
               (bounds (stack-pointer-descriptor-bounds sp)))
           (unless (stack-pointer-descriptor-width sp)
             (setf (stack-pointer-descriptor-width sp) (storage-element-cell-width memory)))
+          (when (>= (stack-pointer-descriptor-base sp) (ash 1 (storage-element-addr-width memory)))
+            (%defmachine-error "stack-pointer ~S on machine ~S: :base ~D exceeds memory ~S's ~D-bit address space"
+                               reg name (stack-pointer-descriptor-base sp)
+                               (storage-element-name memory) (storage-element-addr-width memory)))
           (when (and bounds (>= (second bounds) (ash 1 (storage-element-addr-width memory))))
             (%defmachine-error "stack-pointer ~S on machine ~S: :bounds ~S exceeds memory ~S's ~D-bit address space"
                                reg name bounds (storage-element-name memory) (storage-element-addr-width memory))))
@@ -1405,6 +1414,10 @@ instructions are compiled against the parent's" head))
                                       (stack-pointer-descriptor-memory csp))
                                   (eq (stack-pointer-descriptor-grows psp)
                                       (stack-pointer-descriptor-grows csp))
+                                  (eq (stack-pointer-descriptor-push psp)
+                                      (stack-pointer-descriptor-push csp))
+                                  (eql (stack-pointer-descriptor-base psp)
+                                       (stack-pointer-descriptor-base csp))
                                   (eql (stack-pointer-descriptor-width psp)
                                        (stack-pointer-descriptor-width csp))
                                   (equal (stack-pointer-descriptor-bounds psp)

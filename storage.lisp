@@ -449,13 +449,22 @@ re-derived first when that device has been redefined."
 ;;   WIDTH      bits per push/pop/ref slot; defaults to MEMORY's
 ;;              cell width, and a wider slot spans several cells in MEMORY's
 ;;              own endianness.
-;;   BOUNDS     NIL, or (LOW HIGH): the inclusive cell-address window the
-;;              stack may touch. A push, pop or ref outside it signals
-;;              before anything changes.
+;;   BOUNDS     NIL, or (LOW HIGH): the inclusive absolute cell-address
+;;              window the stack may touch. A push, pop or ref outside it
+;;              signals before anything changes.
+;;   BASE       added to REGISTER's value to address MEMORY, so a register
+;;              narrower than the address space can index one page of it.
+;;              The register part wraps at the register's own width.
+;;   PUSH       :PRE -- REGISTER moves before the item is stored, so it
+;;              points at the item (:DOWN) or its last cell (:UP).
+;;              :POST -- the item is stored first, so REGISTER points past
+;;              it. Defaults to :PRE for :DOWN and :POST for :UP.
 (defstruct stack-pointer-descriptor
   (register nil :type symbol)
   (memory nil :type (or null symbol))
   (grows :down :type (member :down :up))
+  (base 0 :type (integer 0))
+  (push nil :type (or null (member :pre :post)))
   (width nil :type (or null (integer 1)))
   (bounds nil :type (or null (cons integer (cons integer null)))))
 
@@ -1773,17 +1782,34 @@ of banked region REGION, bypassing the region's write policy."
     (or (gethash reg (machine-descriptor-stack-pointers machine-descriptor))
         (error 'unknown-storage :machine (machine-descriptor-name machine-descriptor) :name reg))))
 
-(defun %sp-cells (machine sp base cells condition &rest initargs)
-  "The CELLS wrapped addresses from BASE. Signals CONDITION, before any state
-changes, when SP has :BOUNDS and one of them lies outside."
-  (let* ((memory (descriptor-element (machine-descriptor machine) (stack-pointer-descriptor-memory sp)))
-         (addresses (loop for i below cells collect (wrap-value (+ base i) (storage-element-addr-width memory))))
+(defun %sp-cells (machine sp start cells condition &rest initargs)
+  "The CELLS absolute addresses from register offset START. Signals CONDITION,
+before any state changes, when SP has :BOUNDS and one of them lies outside."
+  (let* ((descriptor (machine-descriptor machine))
+         (memory (descriptor-element descriptor (stack-pointer-descriptor-memory sp)))
+         (register-width (storage-element-width
+                          (descriptor-element descriptor (stack-pointer-descriptor-register sp))))
+         (addresses (loop for i below cells
+                          collect (wrap-value (+ (stack-pointer-descriptor-base sp)
+                                                 (wrap-value (+ start i) register-width))
+                                              (storage-element-addr-width memory))))
          (bounds (stack-pointer-descriptor-bounds sp)))
     (when (and bounds (notevery (lambda (address) (<= (first bounds) address (second bounds))) addresses))
       (apply #'error condition
-             :machine (machine-descriptor-name (machine-descriptor machine))
+             :machine (machine-descriptor-name descriptor)
              :name (stack-pointer-descriptor-register sp) initargs))
     addresses))
+
+(defun %sp-item-start (sp top cells)
+  "The register offset of the lowest cell of the item REGISTER = TOP describes."
+  (ecase (stack-pointer-descriptor-grows sp)
+    (:down (if (eq (stack-pointer-descriptor-push sp) :post) (1+ top) top))
+    (:up (if (eq (stack-pointer-descriptor-push sp) :post) (- top cells) (1+ (- top cells))))))
+
+(defun %sp-moved-top (sp top cells)
+  (ecase (stack-pointer-descriptor-grows sp)
+    (:down (- top cells))
+    (:up (+ top cells))))
 
 (defun %sp-slot-cells (machine sp width)
   (let ((memory (descriptor-element (machine-descriptor machine) (stack-pointer-descriptor-memory sp))))
@@ -1809,31 +1835,28 @@ changes, when SP has :BOUNDS and one of them lies outside."
 
 (defun sp-push (machine reg value &key width)
   "Push VALUE onto REG's (stack-pointer ...) stack, WIDTH bits wide (default
-the clause's :width). :DOWN pre-decrements REG then stores; :UP stores then
-post-increments. Signals STACK-OVERFLOW when the slot leaves the clause's :BOUNDS."
+the clause's :width). :DOWN moves REG down and :UP up, before the store for
+:PRE and after it for :POST. Signals STACK-OVERFLOW when the slot leaves the
+clause's :BOUNDS."
   (let* ((sp (%sp-descriptor machine reg))
          (cells (%sp-slot-cells machine sp width))
-         (top (sref machine reg))
-         (value (wrap-value value (or width (stack-pointer-descriptor-width sp)))))
-    (ecase (stack-pointer-descriptor-grows sp)
-      (:down (let ((addresses (%sp-cells machine sp (- top cells) cells 'stack-overflow)))
-               (setf (sref machine reg) (- top cells))
-               (%sp-write machine sp addresses value)))
-      (:up (%sp-write machine sp (%sp-cells machine sp top cells 'stack-overflow) value)
-           (setf (sref machine reg) (+ top cells))))))
+         (new-top (%sp-moved-top sp (sref machine reg) cells))
+         (value (wrap-value value (or width (stack-pointer-descriptor-width sp))))
+         (addresses (%sp-cells machine sp (%sp-item-start sp new-top cells) cells 'stack-overflow)))
+    (setf (sref machine reg) new-top)
+    (%sp-write machine sp addresses value)))
 
 (defun sp-pop (machine reg &key width)
   "Pop and return a WIDTH-bit value from REG's (stack-pointer ...) stack -- the
 mirror of SP-PUSH. Signals STACK-UNDERFLOW when the slot leaves the clause's :BOUNDS."
   (let* ((sp (%sp-descriptor machine reg))
          (cells (%sp-slot-cells machine sp width))
-         (top (sref machine reg)))
-    (ecase (stack-pointer-descriptor-grows sp)
-      (:down (prog1 (%sp-read machine sp (%sp-cells machine sp top cells 'stack-underflow))
-               (setf (sref machine reg) (+ top cells))))
-      (:up (let ((addresses (%sp-cells machine sp (- top cells) cells 'stack-underflow)))
-             (setf (sref machine reg) (- top cells))
-             (%sp-read machine sp addresses))))))
+         (top (sref machine reg))
+         (addresses (%sp-cells machine sp (%sp-item-start sp top cells) cells 'stack-underflow))
+         (value (%sp-read machine sp addresses)))
+    (setf (sref machine reg)
+          (%sp-moved-top sp top (- cells)))
+    value))
 
 ;; top-relative access without popping, the SP counterpart of
 ;; %STACK-REF. OFFSET counts slots of the clause's :width from the top (0 =
@@ -1847,9 +1870,9 @@ mirror of SP-PUSH. Signals STACK-UNDERFLOW when the slot leaves the clause's :BO
     (unless (and (integerp offset) (>= offset 0))
       (error 'stack-index-out-of-range :machine name :name reg :index offset))
     (values sp (%sp-cells machine sp
-                          (ecase (stack-pointer-descriptor-grows sp)
-                            (:down (+ top (* offset cells)))
-                            (:up (- top (* (1+ offset) cells))))
+                          (funcall (ecase (stack-pointer-descriptor-grows sp) (:down #'+) (:up #'-))
+                                   (%sp-item-start sp top cells)
+                                   (* offset cells))
                           cells 'stack-index-out-of-range :index offset))))
 
 (defun sp-ref (machine reg offset)

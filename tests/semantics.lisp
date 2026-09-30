@@ -344,7 +344,10 @@
   (dolist (clause '((stack-pointer sp :memory ram :width 0)
                     (stack-pointer sp :memory ram :bounds (5 2))
                     (stack-pointer sp :memory ram :bounds (1))
-                    (stack-pointer sp :memory ram :bounds (0 #x100))))
+                    (stack-pointer sp :memory ram :bounds (0 #x100))
+                    (stack-pointer sp :memory ram :base -1)
+                    (stack-pointer sp :memory ram :base #x100)
+                    (stack-pointer sp :memory ram :push :sideways)))
     (fiveam:signals machine-definition-error
       (eval `(defmachine stack-pointer-invalid-clause-test
                (register sp :width 8) (memory ram :width 8 :addr-width 8)

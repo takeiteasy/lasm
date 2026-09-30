@@ -136,6 +136,98 @@
     (sp-push m 'sp 9)
     (fiveam:is (= 9 (mref m 'ram 1)))))
 
+;;; :BASE and :PUSH (#454). An 8-bit register indexes a page of a 16-bit memory;
+;;; :DOWN :POST is the 6502's stack, :UP :PRE its mirror.
+
+(defmacro %define-page-stack-machine (name grows push &optional (width 8))
+  `(defmachine ,name
+     (register sp :width 8)
+     (memory ram :width ,width :addr-width 16)
+     (stack-pointer sp :memory ram :base #x100 :grows ,grows :push ,push)))
+
+(%define-page-stack-machine sp-down-post-machine :down :post)
+(%define-page-stack-machine sp-down-pre-machine :down :pre)
+(%define-page-stack-machine sp-up-post-machine :up :post)
+(%define-page-stack-machine sp-up-pre-machine :up :pre)
+
+(fiveam:test sp-down-post-stores-then-decrements
+  (let ((m (make-machine 'sp-down-post-machine)))
+    (setf (sref m 'sp) #xff)
+    (sp-push m 'sp 7)
+    (fiveam:is (= 7 (mref m 'ram #x1ff)))
+    (fiveam:is (= #xfe (sref m 'sp)))
+    (sp-push m 'sp 8)
+    (fiveam:is (= 8 (mref m 'ram #x1fe)))
+    (fiveam:is (= 8 (sp-ref m 'sp 0)))
+    (fiveam:is (= 7 (sp-ref m 'sp 1)))
+    (fiveam:is (= 8 (sp-pop m 'sp)))
+    (fiveam:is (= 7 (sp-pop m 'sp)))
+    (fiveam:is (= #xff (sref m 'sp)))))
+
+(fiveam:test sp-down-post-wraps-within-the-page
+  (let ((m (make-machine 'sp-down-post-machine)))
+    (setf (sref m 'sp) 0)
+    (sp-push m 'sp 5)
+    (fiveam:is (= 5 (mref m 'ram #x100)))
+    (fiveam:is (= #xff (sref m 'sp)))
+    (fiveam:is (= 5 (sp-pop m 'sp)))
+    (fiveam:is (= 0 (sref m 'sp)))))
+
+(fiveam:test sp-pre-modes-address-the-item-through-the-register
+  (let ((down (make-machine 'sp-down-pre-machine))
+        (up (make-machine 'sp-up-pre-machine))
+        (up-post (make-machine 'sp-up-post-machine)))
+    (setf (sref down 'sp) #x10 (sref up 'sp) #x10 (sref up-post 'sp) #x10)
+    (sp-push down 'sp 1)
+    (sp-push up 'sp 1)
+    (sp-push up-post 'sp 1)
+    (fiveam:is (= 1 (mref down 'ram #x10f)))
+    (fiveam:is (= 1 (mref up 'ram #x111)) ":up :pre increments, then stores")
+    (fiveam:is (= 1 (mref up-post 'ram #x110)))
+    (dolist (m (list down up up-post))
+      (fiveam:is (= 1 (sp-ref m 'sp 0)))
+      (fiveam:is (= 1 (sp-pop m 'sp)))
+      (fiveam:is (= #x10 (sref m 'sp))))))
+
+(fiveam:test sp-push-defaults-follow-the-direction
+  (flet ((pointer (name)
+           (gethash 'sp (machine-descriptor-stack-pointers
+                         (machine-descriptor (make-machine name))))))
+    (let ((down (pointer 'sp-storage-test-machine))
+          (up (pointer 'sp-storage-up-test-machine)))
+      (fiveam:is (eq :pre (stack-pointer-descriptor-push down)))
+      (fiveam:is (eq :post (stack-pointer-descriptor-push up)))
+      (fiveam:is (= 0 (stack-pointer-descriptor-base down))))))
+
+(defmachine sp-page-wide-cells-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :base #x100 :grows :down :push :post :width 16))
+
+(fiveam:test sp-post-decrement-spans-several-cells
+  (let ((m (make-machine 'sp-page-wide-cells-machine)))
+    (setf (sref m 'sp) #xff)
+    (sp-push m 'sp #x1234)
+    (fiveam:is (= #xfd (sref m 'sp)))
+    (fiveam:is (= #x34 (mref m 'ram #x1fe)) "little-endian, lowest address first")
+    (fiveam:is (= #x12 (mref m 'ram #x1ff)))
+    (fiveam:is (= #x1234 (sp-ref m 'sp 0)))
+    (fiveam:is (= #x1234 (sp-pop m 'sp)))
+    (fiveam:is (= #xff (sref m 'sp)))))
+
+(defmachine sp-page-bounded-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :base #x100 :grows :down :push :post :bounds (#x1f0 #x1ff)))
+
+(fiveam:test sp-bounds-are-absolute-addresses
+  (let ((m (make-machine 'sp-page-bounded-machine)))
+    (setf (sref m 'sp) #xff)
+    (fiveam:finishes (sp-push m 'sp 1))
+    (setf (sref m 'sp) #xef)
+    (fiveam:signals stack-overflow (sp-push m 'sp 1))
+    (fiveam:is (= #xef (sref m 'sp)) "nothing changed")))
+
 ;;; STACK-REF / (SETF STACK-REF) (#50) -- top-relative, unsigned indexed
 ;;; access: offset 0 is the top (what STACK-POP would return), 1 is one
 ;;; below that, and so on.
