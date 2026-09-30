@@ -172,16 +172,6 @@ on it, and here it stops the machine.
      (set! z (ldb (byte 1 1) status))
      (set! c (ldb (byte 1 0) status))))
 
-(defmacro push-address (form)
-  `(let ((address ,form))
-     (push (ash address -8))
-     (push (logand address 255))))
-
-(defmacro pull-address ()
-  `(let* ((low (pop))
-          (high (pop)))
-     (logior low (ash high 8))))
-
 ;;; An instruction is written once and defined for each of its addressing modes
 ;;; (docs/instructions.md). WITH-OPERAND wraps the body for one mode: `value`
 ;;; reads the operand, `(store v)` writes it back, and `address` is where it is.
@@ -392,20 +382,20 @@ on it, and here it stops the machine.
   (encoding (opcode #x20) (operand :mode))
   (cycles 6)
   (semantics
-    (push-address (logand (1- pc) #xffff))
+    (push (logand (1- pc) #xffff) :width 16)
     (set! pc operand)))
 
-(defimplied rts #x60 6 (set! pc (logand (1+ (pull-address)) #xffff)))
+(defimplied rts #x60 6 (set! pc (logand (1+ (pop :width 16)) #xffff)))
 
 (defimplied brk #x00 7
-  (push-address (logand (1+ pc) #xffff))
+  (push (logand (1+ pc) #xffff) :width 16)
   (push (status-byte 1))
   (set! i 1)
   (set! pc (word-at machine #xfffe)))
 
 (defimplied rti #x40 6
   (load-status (pop))
-  (set! pc (pull-address)))
+  (set! pc (pop :width 16)))
 
 ;;; A real NMOS 6502 locks up on $02. Here it stops the machine, so a program
 ;;; ends on it and BRK stays a real interrupt.

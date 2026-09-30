@@ -22,7 +22,7 @@ access functions; see [Machine model](machine-model.md) and
 | --- | --- |
 | `(set! place value)` | Write a register, flag, or other settable place. |
 | `(mref machine [memory] address)` | Read or write a memory cell. |
-| `(push value [stack])`, `(pop [stack])` | Use a fixed stack or register-backed stack pointer. |
+| `(push value [stack] [:width n])`, `(pop [stack] [:width n])` | Use a fixed stack or register-backed stack pointer. `:width` sets the slot width of one call on a register stack. |
 | `(stack-depth [stack])`, `(stack-pointer [stack])` | Inspect a fixed stack. |
 | `(stack-ref offset [stack])` | Read or (with `setf`) write a slot below the top of a fixed or register stack. |
 | `(set-bank! region n)` | Map a memory bank. |

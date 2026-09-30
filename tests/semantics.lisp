@@ -303,6 +303,72 @@
     (fiveam:is (= #x1111 (stack-ref 1)))
     (fiveam:is (= 4 (sref m 'sp)))))
 
+;;; #358: a per-call :width on push and pop.
+
+(defmachine mixed-width-test-machine
+  (register sp :width 8)
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :base #x100 :grows :down :push :post))
+
+(fiveam:test a-per-call-width-mixes-slot-widths-on-one-stack
+  (with-machine (m mixed-width-test-machine)
+    (set! sp #xff)
+    (push #x1234 :width 16)
+    (fiveam:is (= #xfd (sref m 'sp)))
+    (fiveam:is (equal '(#x34 #x12) (list (mref m 'ram #x1fe) (mref m 'ram #x1ff))))
+    (push #x56)
+    (fiveam:is (= #xfc (sref m 'sp)))
+    (fiveam:is (= #x56 (mref m 'ram #x1fd)))
+    (fiveam:is (= #x56 (pop)))
+    (fiveam:is (= #x1234 (pop :width 16)))
+    (fiveam:is (= #xff (sref m 'sp)))))
+
+(fiveam:test a-per-call-width-narrows-a-wide-clause-width-and-names-the-stack
+  (with-machine (m wide-pointer-test-machine)
+    (set! sp #x40)
+    (push #xBEEF)
+    (push #xAB sp :width 8)
+    (fiveam:is (= #x3D (sref m 'sp)))
+    (fiveam:is (= #xAB (mref m 'ram #x3D)))
+    (fiveam:is (= #xAB (pop sp :width 8)))
+    (fiveam:is (= #xBEEF (pop)))
+    (fiveam:is (= #x40 (sref m 'sp)))))
+
+(fiveam:test a-per-call-width-wraps-the-value-to-the-width
+  (with-machine (m wide-pointer-test-machine)
+    (set! sp #x40)
+    (push #x1FF :width 8)
+    (fiveam:is (= #xFF (mref m 'ram #x3F)))))
+
+(fiveam:test a-per-call-width-on-a-grows-up-stack-pops-what-it-pushed
+  (with-machine (m wide-pointer-up-test-machine)
+    (push #x1234)
+    (push #x56 :width 8)
+    (fiveam:is (= 3 (sref m 'sp)))
+    (fiveam:is (= #x56 (pop :width 8)))
+    (fiveam:is (= #x1234 (pop)))
+    (fiveam:is (zerop (sref m 'sp)))))
+
+(defun %push-width-error (machine form)
+  "The message EVAL of FORM signals when expanded for MACHINE's semantics, or NIL. A compiler
+may wrap the definition error in its own macroexpansion error, so the message is what is compared."
+  (handler-case (progn (eval `(let ((m (make-machine ',machine)))
+                               (with-machine-bindings (m ,machine) ,form)))
+                       nil)
+    (error (c) (princ-to-string c))))
+
+(fiveam:test a-per-call-width-must-be-a-literal-positive-integer
+  (dolist (form '((push 1 :width 0) (push 1 :width (+ 4 4)) (push 1 :width -8) (push 1 :width)
+                  (pop :width 1.5) (push 1 sp :width :x)))
+    (fiveam:is (search ":WIDTH" (%push-width-error 'wide-pointer-test-machine form)) "~S" form))
+  (dolist (form '((push 1 sp :depth 8) (push 1 sp :width 8 :width 8) (pop sp 8)))
+    (fiveam:is (search "expected [STACK] [:WIDTH N]" (%push-width-error 'wide-pointer-test-machine form)) "~S" form)))
+
+(fiveam:test a-per-call-width-needs-a-stack-pointer-register
+  (fiveam:is (search "needs a (stack-pointer" (%push-width-error 'stack-and-pointer-test-machine '(push 1 :width 8))))
+  (fiveam:is (search "needs a (stack-pointer" (%push-width-error 'stack-and-pointer-test-machine '(pop s :width 8))))
+  (fiveam:is (null (%push-width-error 'stack-and-pointer-test-machine '(push 1 sp :width 8)))))
+
 (fiveam:test stack-ref-still-defaults-to-the-fixed-stack-on-a-mixed-machine
   (with-machine (m stack-and-pointer-test-machine)
     (push 9)

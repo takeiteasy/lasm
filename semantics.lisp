@@ -115,6 +115,17 @@ with no gate, otherwise CHECKED, which looks the gate up at run time."
   (let ((quoted (and (consp name) (eq (first name) 'quote) (symbolp (second name)) (second name))))
     `(,(if (and quoted (not (assoc quoted gates))) plain checked) ,machine ,name ,@args)))
 
+(defun %push-pop-arguments (operator args)
+  "The ARGS of a PUSH or POP after its value, [STACK] [:WIDTH N], as (VALUES STACK SUPPLIED-P WIDTH).
+WIDTH is a literal positive integer or NIL."
+  (let* ((named (and args (not (eq (first args) :width))))
+         (options (if named (rest args) args)))
+    (unless (or (null options) (and (eq (first options) :width) (= (length options) 2)))
+      (%definstruction-error "~A: expected [STACK] [:WIDTH N], got ~S" operator args))
+    (when (and options (not (typep (second options) '(integer 1))))
+      (%definstruction-error "~A :WIDTH must be a literal positive integer, got ~S" operator (second options)))
+    (values (and named (first args)) named (second options))))
+
 (defun %gate-stack-form (machine-var gates target accesses form)
   "FORM, preceded by a privilege check per access in ACCESSES (:READ, :WRITE)
 when TARGET (a stack or a stack-pointer register) is gated."
@@ -163,7 +174,10 @@ MACHINE-NAME. This is the piece DEFINSTRUCTION's (semantics ...) clause
 expands into (see instruction.lisp), since instruction semantics run against
 a machine instance the emulator already owns rather than a fresh one.
 
-PUSH/POP's STACK-NAME argument is optional: when omitted, it resolves to the
+PUSH/POP's STACK-NAME argument is optional, and a trailing :WIDTH n (a literal
+positive integer, stack-pointer registers only) overrides the clause's slot
+width for that call: (push value [stack] [:width n]), (pop [stack] [:width n]).
+When STACK-NAME is omitted, it resolves to the
 machine's sole :stack element, mirroring emulator.lisp's %RESOLVE-MEMORY
 convention for the sole :memory element; only when the machine declares no
 :stack element does the sole (stack-pointer ...)-bound register become
@@ -343,24 +357,30 @@ clause declared" machine-name)))
                             (let ((target ',sole-memory))
                               (unless target (%definstruction-error ',memory-error))
                               `(%semantics-mref ,machine ',target ,name-or-address))))
-                      (push (value &optional (stack-name nil supplied-p))
-                        (let* ((target (if supplied-p stack-name ',sole-stack))
-                               (pointer (member target ',pointer-names)))
-                          (unless target (%definstruction-error ',stack-error))
-                          (%gate-stack-form
-                           ',machine-var ',gates target '(:write)
-                           (if pointer
-                               `(%plain-sp-push ,',machine-var ',target ,value)
-                               `(%plain-stack-push ,',machine-var ',target ,value)))))
-                      (pop (&optional (stack-name nil supplied-p))
-                        (let* ((target (if supplied-p stack-name ',sole-stack))
-                               (pointer (member target ',pointer-names)))
-                          (unless target (%definstruction-error ',stack-error))
-                          (%gate-stack-form
-                           ',machine-var ',gates target '(:read :write)
-                           (if pointer
-                               `(%plain-sp-pop ,',machine-var ',target)
-                               `(%plain-stack-pop ,',machine-var ',target)))))
+                      (push (value &rest args)
+                        (multiple-value-bind (stack-name supplied-p width) (%push-pop-arguments 'push args)
+                          (let* ((target (if supplied-p stack-name ',sole-stack))
+                                 (pointer (member target ',pointer-names)))
+                            (unless target (%definstruction-error ',stack-error))
+                            (when (and width (not pointer))
+                              (%definstruction-error "PUSH :WIDTH needs a (stack-pointer ...) register, ~S is not one" target))
+                            (%gate-stack-form
+                             ',machine-var ',gates target '(:write)
+                             (if pointer
+                                 `(%plain-sp-push ,',machine-var ',target ,value ,@(and width (list width)))
+                                 `(%plain-stack-push ,',machine-var ',target ,value))))))
+                      (pop (&rest args)
+                        (multiple-value-bind (stack-name supplied-p width) (%push-pop-arguments 'pop args)
+                          (let* ((target (if supplied-p stack-name ',sole-stack))
+                                 (pointer (member target ',pointer-names)))
+                            (unless target (%definstruction-error ',stack-error))
+                            (when (and width (not pointer))
+                              (%definstruction-error "POP :WIDTH needs a (stack-pointer ...) register, ~S is not one" target))
+                            (%gate-stack-form
+                             ',machine-var ',gates target '(:read :write)
+                             (if pointer
+                                 `(%plain-sp-pop ,',machine-var ',target ,@(and width (list width)))
+                                 `(%plain-stack-pop ,',machine-var ',target))))))
                       (stack-pointer (&optional (stack-name nil supplied-p))
                         (let ((target (if supplied-p stack-name ',sole-fixed-stack)))
                           (unless target (%definstruction-error ',fixed-stack-error))

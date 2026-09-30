@@ -102,6 +102,17 @@ order. On 8-bit little-endian cells a 16-bit `#xBEEF` pushed on a `:down`
 stack stores `#xEF` at SP and `#xBE` at SP+1. An interrupt frame saves each
 `:save` place at its own width.
 
+`push` and `pop` take a per-call `:width`, a literal number of bits, in place of
+the clause's. The 6502 pushes a return address and a status byte onto one stack:
+
+```lisp
+(push return-address :width 16)   ; JSR
+(push status)                     ; PHP, the clause's 8-bit width
+```
+
+`stack-ref` offsets always count slots of the clause's `:width`, so a stack that
+mixes widths is read with `stack-ref` in clause-width steps.
+
 `(stack-ref offset [register])` reads the slot `offset` slots below the top
 (`0` is the top) without popping; `(setf stack-ref)` writes it. With `:bounds`,
 a push past the window signals `stack-overflow`, a pop past it
@@ -306,7 +317,6 @@ in any package is found.
 
 | Limitation | Ticket |
 | --- | --- |
-| `push`/`pop` on a register stack use the clause `:width`; there is no per-call width. | [#358](https://todo.sr.ht/~takeiteasy/lasm/358) |
 | The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
 
 [^regions]: Regions change access behavior over one backing array.
