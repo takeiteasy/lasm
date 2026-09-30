@@ -69,7 +69,7 @@
 (fiveam:test definition-bind-lets-body-errors-through
   (let ((*definition-type* 'mode-definition-error))
     (fiveam:signals type-error
-      (%definition-bind (a) '(1) (+ a :not-a-number)))))
+      (%definition-bind (a) '(1) (error 'type-error :datum a :expected-type 'string)))))
 
 (fiveam:test with-definition-errors-returns-body-values
   (fiveam:is (equal '(1 2) (multiple-value-list (with-definition-errors (values 1 2))))))
