@@ -66,7 +66,7 @@
 (defvar *items-backend* nil)
 (defvar *items-frames* nil "The frames choice for functions with no :frames option: :STATIC, :STACK, or NIL for the backend's own.")
 (defvar *items-static-placed* nil "True when the items have a (:static-frames) item to hold the static words.")
-(defvar *items-static-words* nil "The lines reserving each static function's words, reversed, for (:static-frames) to hold.")
+(defvar *items-static-words* nil "The (KEY FUNCTION COUNT) of each static function's words, reversed, for (:static-frames) to reserve.")
 (defvar *items-functions* nil "EQUAL table, upcased function name -> (NAME NARGS STATIC-P ITEM), for the items being lowered.")
 (defvar *items-memory* nil "The memory element name items are assembled for, or NIL for the default.")
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
@@ -956,8 +956,24 @@ frame size, 0 for a key it lacks."
                   (getf (backend-descriptor-frame *items-backend*) :static)
                   (not (assoc "ALLOC" (backend-descriptor-ops *items-backend*) :test #'equal)))))))
 
-;; TODO: each function reserves its own words; share them by call graph like %CC-STATIC-AREA
-;; if memory matters (#464).
+(defun %static-area-lines (words table)
+  "The lines reserving WORDS, the (KEY FUNCTION COUNT) of each static function. A function's
+words start after those of every function that calls it, so two functions that never run
+together share addresses."
+  (let ((sizes (make-hash-table :test 'equal)))
+    (loop for (key nil count) in words
+          do (setf (gethash key sizes) count))
+    (let* ((offsets (%call-graph-offsets (mapcar #'first words) (%items-call-edges table) sizes))
+           (slots (loop for (key function count) in words
+                        append (loop for index below count
+                                     collect (cons (+ (gethash key offsets) index)
+                                                   (%static-word-label function index)))))
+           (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
+      (loop for address below size
+            append (append (loop for (at . label) in slots
+                                 when (= at address) collect (make-item-line :label label))
+                           (list (%directive-line (list :directive "res" (backend-word-cells *items-backend*)))))))))
+
 (defun %static-function-lines (item name nargs nlocals saves body)
   "The lines of a function whose locals and saved registers are labelled words: reserved after
 the body, or at (:static-frames)."
@@ -979,7 +995,7 @@ the body, or at (:static-frames)."
                     (%check-label-depths frame)))))
     (cond ((zerop words) lines)
           (*items-static-placed*
-           (cl:push (%static-word-lines function words) *items-static-words*)
+           (cl:push (list (%designator-name name) function words) *items-static-words*)
            lines)
           (t (append lines (%static-word-lines function words))))))
 
@@ -1637,7 +1653,7 @@ form of CALLER's body that mentions CALLEE, as a call, a jump or an address."
                          collect (if (%static-frames-item-p item) :static-frames (%item-lines item)))))
       (loop for chunk in chunks
             append (if (eq chunk :static-frames)
-                       (apply #'append (reverse *items-static-words*))
+                       (%static-area-lines (reverse *items-static-words*) *items-functions*)
                        chunk)))))
 
 (defun %items-source (items)

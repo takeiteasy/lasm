@@ -104,9 +104,9 @@
                                                      (:function g (:locals 2) (:return)))
                                                    :backend 'zs-bare-abi :origin 0))))
     (fiveam:is (= 0 (gethash "sffx0" symbols)))
-    (fiveam:is (= 2 (gethash "sfgx0" symbols)))
-    (fiveam:is (= 4 (gethash "sfgx1" symbols)))
-    (fiveam:is (= 6 (gethash "f" symbols)))))
+    (fiveam:is (= 0 (gethash "sfgx0" symbols)))
+    (fiveam:is (= 2 (gethash "sfgx1" symbols)))
+    (fiveam:is (= 4 (gethash "f" symbols)))))
 
 (fiveam:test the-function-option-overrides-the-frames-choice
   (let ((stack '((:function f (:locals 1 :frames stack) (:return))))
@@ -224,3 +224,52 @@
                             :backend 'zpfoo-label-abi)))
     (fiveam:is (search "pha" text))
     (fiveam:is (null (search "sffx0" text)))))
+
+;;; #464: static words shared by call graph
+
+(fiveam:test functions-that-do-not-call-each-other-share-words
+  (let ((m (%zs-run '((:call a) (:op :move (zp w2) (zp w0)) (:call b) (:op :add (zp w0) (zp w2)) (:op :halt)
+                      (:function a (:locals 1)
+                        (:op :const (zp w0) 30)
+                        (:op :move (:local 0) (zp w0))
+                        (:op :move (zp w0) (:local 0))
+                        (:return))
+                      (:function b (:locals 1)
+                        (:op :const (zp w0) 12)
+                        (:op :move (:local 0) (zp w0))
+                        (:op :move (zp w0) (:local 0))
+                        (:return)))
+                    'zs-bare-abi)))
+    (fiveam:is (= 42 (%zs-word m #x10))))
+  (let ((symbols (assembly-symbols
+                  (assemble-items (append +zs-words+ '((:function a (:locals 1) (:return))
+                                                       (:function b (:locals 1) (:return))))
+                                  :backend 'zs-bare-abi))))
+    (fiveam:is (= (gethash "sfax0" symbols) (gethash "sfbx0" symbols)))))
+
+(fiveam:test a-function-and-what-it-calls-keep-apart
+  (multiple-value-bind (m assembly)
+      (%zs-run '((:call outer 20) (:op :halt)
+                 (:function outer (:args 1 :locals 1)
+                   (:op :move (:local 0) (:arg 0))
+                   (:call inner (:local 0))
+                   (:op :add (zp w0) (:local 0))
+                   (:return))
+                 (:function inner (:args 1 :locals 1)
+                   (:op :move (:local 0) (:arg 0))
+                   (:op :add (:local 0) (:local 0))
+                   (:op :move (zp w0) (:local 0))
+                   (:return)))
+               'zs-bare-abi)
+    (let ((symbols (assembly-symbols assembly)))
+      (fiveam:is (= 60 (%zs-word m #x10)))
+      (fiveam:is (= 2 (- (gethash "sfinnerx0" symbols) (gethash "sfouterx0" symbols)))))))
+
+(fiveam:test a-static-function-reached-through-a-stack-function-keeps-apart-from-its-caller
+  (let ((symbols (assembly-symbols
+                  (assemble-items (append +zs-words+
+                                          '((:function top (:locals 1 :frames static) (:call mid) (:return))
+                                            (:function mid (:frames stack) (:call leaf) (:return))
+                                            (:function leaf (:locals 1 :frames static) (:return))))
+                                  :backend 'zpfoo-label-abi))))
+    (fiveam:is (= 2 (- (gethash "sfleafx0" symbols) (gethash "sftopx0" symbols))))))

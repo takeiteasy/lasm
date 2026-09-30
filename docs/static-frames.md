@@ -95,7 +95,7 @@ See [`demo.lasm`](../examples/6502/demo.lasm).
 | --- | --- |
 | Choosing | The function's `:frames`, then the [program's choice](#choosing). A backend with `(frame :static t)` and no `:alloc` is static unless told otherwise. |
 | Words | One per argument past the registers, then `:locals`, then one per saved register, each `.res` of one language word. |
-| Placement | At `(:static-frames)`, which holds every function's words, in RAM if the code is ROM. Without it, a function's words follow its code, so end the body with `(:return)`. |
+| Placement | At `(:static-frames)`, which holds every function's words, in RAM if the code is ROM. A function's words start after those of every function that calls it, so two that never run together [share addresses](#how-it-works). Without it, a function's words follow its code, so end the body with `(:return)`, and none are shared. |
 | Arguments | `(:arg i)` is a register, or the word `sf`*function*`x`*n* for an argument past them. `(:call f ARG...)` stores each into that word, with no push. |
 | `:save` | A saved register is stored in a word at entry and loaded back by `(:return)`. The backend needs `:poke-label` and `:peek-label`. |
 | Halves | `(:lo (:local i))` and `(:hi (:local i))` are the cells of the word; the second is the label plus one. |
@@ -105,7 +105,8 @@ A static function is not re-entrant. A call to itself, directly or through other
 functions, is an `items-malformed` error at the call that closes the cycle; any
 mention of a function's name in another's body, such as `(jmp f)`, counts as a call.
 Use `:frames stack` for a function that recurses, or that runs from an interrupt
-while it runs.
+while it runs; with `(:static-frames)`, an interrupt handler shares words with the
+functions it does not call.
 
 ```
 demo.lasm:9:5: a calls b calls a is recursive; a static function keeps its locals in fixed words, so give it :frames stack
@@ -169,7 +170,7 @@ taken to be any entered function that takes as many arguments.
 
 | Limitation | Ticket |
 | --- | --- |
-| Each static `.lasm` function reserves its own words; none are shared. | [#464](https://todo.sr.ht/~takeiteasy/lasm/464) |
+| With `(:static-frames)`, a static `.lasm` interrupt handler shares words with functions it does not call. | [#468](https://todo.sr.ht/~takeiteasy/lasm/468) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
