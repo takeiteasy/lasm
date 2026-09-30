@@ -3,7 +3,8 @@
 A [`.lsp`](language.md) program keeps its locals and arguments at fixed
 addresses, not in stack frames, so a machine with no SP-relative addressing (the
 6502, CHIP-8) can be a target. A function that calls itself keeps a stack frame, so
-the backend needs stack operations only for recursion.
+the backend needs stack operations only for recursion. A [`.lasm`](items.md#lasm-files)
+function can keep its locals in [labelled words](#lasm-functions) too.
 
 ```lisp
 (defun square (n) (* n n))
@@ -23,8 +24,9 @@ other frames.
 
 | Where | Spelling | Wins |
 | --- | --- | --- |
-| Command line | `--frames static\|stack` | first |
-| Compile call | `:frames :static` or `:stack` | first |
+| `.lasm` function | `(:function f (:frames static\|stack))` | first |
+| Command line | `--frames static\|stack` | next |
+| Compile or assemble call | `:frames :static` or `:stack` | next |
 | Program header | `(:program (:frames static))` | next |
 | Backend | `(frame :static t)` in [`defbackend`](backends.md#frame) | last |
 
@@ -71,6 +73,36 @@ is ready.[^staging]
 
 `(:var NAME)` in an [`(asm ...)`](language.md#inline-items) is the word's label,
 like a global's, not a frame slot.
+
+## `.lasm` functions
+
+A [`(:function ...)`](conventions.md#items) keeps its locals in labelled words when
+its frames are static. `(:local i)` is the word `sf`*function*`x`*i*, addressed
+with the backend's `(frame :label-slot KIND)`.
+
+```lisp
+(:function square-plus (:args 1 :locals 1)
+  (:op :move (:local 0) (:arg 0))
+  (:call multiply (:local 0) (:local 0))
+  (:op :add (zp w0) (:local 0))
+  (:return))
+(:static-frames)
+```
+
+See [`demo.lasm`](../examples/6502/demo.lasm).
+
+| Part | Behavior |
+| --- | --- |
+| Choosing | The function's `:frames`, then the [program's choice](#choosing). A backend with `(frame :static t)` and no `:alloc` is static unless told otherwise. |
+| Words | `:locals` words, one per saved register, each `.res` of one language word. |
+| Placement | At `(:static-frames)`, which holds every function's words, in RAM if the code is ROM. Without it, a function's words follow its code, so end the body with `(:return)`. |
+| Arguments | `(:arg i)` is a register; a function takes no more than the backend has. |
+| `:save` | A saved register is stored in a word at entry and loaded back by `(:return)`. The backend needs `:poke-label` and `:peek-label`. |
+| Halves | `(:lo (:local i))` and `(:hi (:local i))` are the cells of the word; the second is the label plus one. |
+| Not allowed | `:frame t`, and `:alloc`, `:free`, `:enter` and `:leave`. |
+
+A static function is not re-entrant: it cannot call itself or run from an interrupt
+while it runs. Use `:frames stack` for one that does.
 
 ## Recursion
 
@@ -125,6 +157,13 @@ recursion check and the frame layout. A target the compiler cannot trace is
 taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
+
+## Limitations
+
+| Limitation | Ticket |
+| --- | --- |
+| A static `.lasm` function takes arguments in registers only. | [#463](https://todo.sr.ht/~takeiteasy/lasm/463) |
+| Each static `.lasm` function reserves its own words; none are shared. | [#464](https://todo.sr.ht/~takeiteasy/lasm/464) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been

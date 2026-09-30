@@ -2655,7 +2655,8 @@ names one, and FRAMES is the backend's when neither does."
 (defun assemble-source-file (path &key backend ((:cpu machine)) lexer origin memory optimize frames)
   "Compile the source file PATH and assemble it as ASSEMBLE-ITEMS-FILE does."
   (%assemble-items-program (compile-source-file path :backend backend :optimize optimize :frames frames) path
-                           :backend backend :cpu machine :lexer lexer :origin origin :memory memory))
+                           :backend backend :cpu machine :lexer lexer :origin origin :memory memory
+                           :frames :stack))
 
 ;;; Writing
 

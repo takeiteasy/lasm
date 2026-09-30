@@ -124,7 +124,7 @@ is named `"6502"`, which is not a symbol, so its package is `mos6502`.
 | `package.lisp` | A package that `use`s `#:lasm`, and imports the built-in [mode](modes.md) names. |
 | `6502.lisp` | The [machine](machine-model.md) with its [interrupts](interrupts.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page pairs](register-pairs.md#memory-halves) and [static frames](static-frames.md). |
 | `timer.lisp` | The [device](devices.md) mapped at `$D000` that raises IRQ or NMI. |
-| `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` and `(:call ...)`, and an IRQ handler fed by the timer. |
+| `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` with a [static local](static-frames.md#lasm-functions) and `(:call ...)`, and an IRQ handler fed by the timer. |
 | `test.lisp` | A FiveAM suite: the opcode matrix, mode selection, flags, decimal mode, the stack, BRK, IRQ, NMI and RTI, the timer, cycles, the demo, and `.lsp` programs on the backend. |
 
 Assembly text uses `assemble-6502`; `$` is hex and `;` starts a comment.
@@ -183,5 +183,4 @@ What the examples needed that LASM does not model yet.
 
 | Limitation | Ticket |
 | --- | --- |
-| A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
 | `interrupts` requires a `:message` register, so the 6502 declares one that nothing reads. | [#462](https://todo.sr.ht/~takeiteasy/lasm/462) |

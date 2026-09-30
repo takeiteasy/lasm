@@ -21,9 +21,6 @@
 ;;;;
 ;;;; The program runs from the reset vector and stops on JAM. The results are
 ;;;; at `results`, read back by test.lisp.
-;;;;
-;;;; TODO: a `.lasm` function cannot have `:locals` on a static-frame backend, so
-;;;; this program keeps its own cells; see docs/examples.md#limitations.
 
 (:program (:backend mos6502-lang :origin 512)
 
@@ -94,6 +91,10 @@
   (:op :add (zp w0) (zp w1))
   (:op :poke-label total (zp w0))
 
+  ;; A function with a local: 12 * 12 + 12.
+  (:call square_plus 12)
+  (:op :poke-label squared (zp w0))
+
   ;; Decimal mode: 58 + 46 = 104, the sum $04 with a carry out.
   (sed)
   (clc)
@@ -163,6 +164,15 @@
     (bne multiply_loop)
     (:return))
 
+  ;; The backend has no stack slots, so a local is a labelled word, `sfsquare_plusx0`,
+  ;; reserved at (:static-frames) below. (:local 0) is that word, and (:lo ...) and
+  ;; (:hi ...) its cells.
+  (:function square_plus (:args 1 :locals 1)
+    (:op :move (:local 0) (:arg 0))
+    (:call multiply (:local 0) (:local 0))
+    (:op :add (zp w0) (:local 0))
+    (:return))
+
   (:label nmi)
   (rti)
 
@@ -222,6 +232,12 @@
   (:directive res 2)
   (:label buffer)
   (:directive res 6)
+  (:label squared)
+  (:directive res 2)
+
+  ;; The words of the functions' locals, in RAM. Without this item, a function's
+  ;; words follow its code.
+  (:static-frames)
 
   ;; The vectors: NMI, reset, IRQ and BRK.
   (:directive org 65530)

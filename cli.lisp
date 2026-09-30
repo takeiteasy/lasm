@@ -43,8 +43,8 @@ options:
   --backend NAME         backend for a .lasm or .lsp program that names none
   --optimize size|speed  .lsp code generation: fewest instructions (default), or
                          fewest run-time memory accesses; overrides the header
-  --frames static|stack  .lsp locals: at fixed addresses (no recursion), or on the
-                         stack; overrides the header and the backend
+  --frames static|stack  .lsp or .lasm locals: at fixed addresses (no recursion), or
+                         on the stack; overrides the header and the backend
   --memory NAME          memory element to target
   --bank N               write only bank N of a banked region (assemble)
   --region NAME          banked region for --bank when there are several
@@ -204,7 +204,8 @@ the calling image."
                                       :frames (%cli-frames options)))
           ((string-equal "lasm" (pathname-type file))
            (assemble-items-file file :cpu machine :lexer lexer :memory (%cli-memory options)
-                                     :origin origin :backend (getf options :backend)))
+                                     :origin origin :backend (getf options :backend)
+                                     :frames (%cli-frames options)))
           (t (assemble-file file :cpu machine :lexer lexer :memory (%cli-memory options)
                                  :origin (or origin 0))))))
 

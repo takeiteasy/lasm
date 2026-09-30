@@ -482,6 +482,7 @@ each counted at $10 by the handler `irq` or `nmi`."
                "(zp),Y copied HELLO")
     (fiveam:is (= 2100 (result machine "product" 2)) "300 * 7 through the backend's call")
     (fiveam:is (= 2105 (result machine "total" 2)) "and its :add")
+    (fiveam:is (= 156 (result machine "squared" 2)) "a function with a static local")
     (fiveam:is (= 4 (result machine "bcd")) "decimal 58 + 46")
     (fiveam:is (= 1 (result machine "bcd_carry")))
     (fiveam:is (= 66 (result machine "pulled")))

@@ -418,7 +418,7 @@ on it, and here it stops the machine.
              :return (w0) :scratch (w0 w1) :caller-saved (w2 w3) :callee-saved (w4 w5)
              :program-counter pc :operand zp)
   (call :args (w2 w3) :return-address-slots 0)
-  (frame :static t)
+  (frame :static t :label-slot abs)
   (operands (zp zero-page) (zpx zero-page-x) (zpy zero-page-y)
             (imm immediate) (abs absolute) (absx absolute-x) (absy absolute-y)
             (indx indirect-x) (indy indirect-y) (ind indirect) (acc accumulator))

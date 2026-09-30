@@ -50,7 +50,8 @@ A `.lsp` file is a program in the [source language](language.md). Every command
 that takes a program accepts one; it compiles in memory through its backend,
 named by `(:program (:backend NAME))` or `--backend NAME`. `--optimize`
 overrides its `(:program (:optimize NAME))`, and `--frames static|stack` its
-`(:program (:frames NAME))` and the backend's [static frames](static-frames.md).
+`(:program (:frames NAME))` and the backend's [static frames](static-frames.md). A
+`.lasm` file takes `--frames` too, for its [functions](static-frames.md#lasm-functions).
 [`fact.lsp`](../tests/fixtures/cli/fact.lsp) runs on [`callfoo.lisp`](../tests/fixtures/cli/callfoo.lisp).
 
 ```sh

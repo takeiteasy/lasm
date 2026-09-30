@@ -64,6 +64,9 @@
 (defvar *items-machine* nil)
 (defvar *items-frame* nil "The ITEMS-FRAME of the function being lowered, or NIL.")
 (defvar *items-backend* nil)
+(defvar *items-frames* nil "The frames choice for functions with no :frames option: :STATIC, :STACK, or NIL for the backend's own.")
+(defvar *items-static-placed* nil "True when the items have a (:static-frames) item to hold the static words.")
+(defvar *items-static-words* nil "The lines reserving each static function's words, reversed, for (:static-frames) to hold.")
 (defvar *items-memory* nil "The memory element name items are assembled for, or NIL for the default.")
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
 (defvar *items-serial* 0 "Generated labels made so far, for the assembly in progress.")
@@ -370,11 +373,11 @@ alternative of the assembled instruction (see %CLAIM-RIVAL)."
       (and (consp value) (= (length value) 2) (not (keywordp (first value))) (%pair-named (second value)) t)))
 
 (defun %slot-operand-p (value)
-  "True when VALUE is a resolved frame slot operand, (KIND OFFSET) of the backend's frame :slot or :stack-slot kind."
-  (and (consp value) (= (length value) 2) (integerp (second value)) (not (keywordp (first value)))
+  "True when VALUE is a resolved frame slot operand: (KIND OFFSET) of the backend's frame :slot or :stack-slot kind, or (KIND LABEL) of its :label-slot kind."
+  (and (consp value) (= (length value) 2) (not (keywordp (first value)))
        (let ((frame (backend-descriptor-frame *items-backend*)))
          (some (lambda (key) (and (getf frame key) (%same-name-p (first value) (getf frame key))))
-               '(:slot :stack-slot)))))
+               (if (stringp (second value)) '(:label-slot) (and (integerp (second value)) '(:slot :stack-slot)))))))
 
 (defun %half-value (which pair)
   "The half WHICH of PAIR: a lowercase register name, or a memory address."
@@ -537,6 +540,8 @@ to the enclosing label when one has been defined and the lexer has local labels.
   locals    ; slots allocated for locals, padded to the frame alignment
   saves     ; registers saved on entry
   pointer   ; the frame pointer register, or NIL
+  static    ; true when locals are labelled words, not stack slots
+  name      ; the function's name, which a static word's label is made from
   (depth 0) ; slots pushed since the prologue
   labels    ; (NAME . DEPTH) for each label defined in the body
   references) ; (NAME DEPTH ITEM) for each name an instruction of the body mentions
@@ -588,6 +593,21 @@ to the enclosing label when one has been defined and the lexer has local labels.
                          distance))
                   (if (%frame-push-shifted-p frame) 1 0)))))
 
+(defun %static-word-label (function index)
+  (string-downcase (format nil "sf~Ax~D" function index)))
+
+(defun %static-slot-operand (function index item)
+  (let ((kind (getf (backend-descriptor-frame *items-backend*) :label-slot)))
+    (unless kind
+      (%items-fail 'items-malformed item "~A needs (frame :label-slot KIND) in the backend" (first item)))
+    (list kind (%static-word-label function index))))
+
+(defun %static-word-lines (function count)
+  "The lines reserving COUNT words, labelled for FUNCTION's static slots."
+  (loop for index below count
+        collect (make-item-line :label (%static-word-label function index))
+        collect (%directive-line (list :directive "res" (backend-word-cells *items-backend*)))))
+
 (defun %bump-depth (n)
   (when *items-frame*
     (incf (items-frame-depth *items-frame*) n)))
@@ -604,17 +624,20 @@ to the enclosing label when one has been defined and the lexer has local labels.
 
 (defun %frame-half (which operand item)
   "The half WHICH of OPERAND, a resolved frame operand: a pair's half register, or the slot's
-cell holding that half, the word's cells lying in the memory's endian order."
+cell holding that half, the word's cells lying in the memory's endian order. A static word's
+other half is its label plus one."
   (let ((place (second operand)))
-    (if (integerp place)
-        (let* ((highp (%keyword-named-p which "HI"))
-               (little (eq (%descriptor-endian (%backend-storage *items-backend*))
-                     :little)))
-          (list (first operand) (+ place (if (eq highp little) 1 0))))
-        (let ((pair (%pair-named place)))
-          (unless pair
-            (%items-fail 'items-malformed item "cannot take the ~(~A~) half of ~S" (symbol-name which) operand))
-          (list (first operand) (%half-value which pair))))))
+    (flet ((upperp ()
+             (eq (%keyword-named-p which "HI")
+                 (eq (%descriptor-endian (%backend-storage *items-backend*)) :little))))
+      (if (integerp place)
+          (list (first operand) (+ place (if (upperp) 1 0)))
+          (let ((pair (%pair-named place)))
+            (cond (pair (list (first operand) (%half-value which pair)))
+                  ((stringp place)
+                   (list (first operand) (if (upperp) (list (intern "+" :lasm) place 1) place)))
+                  (t (%items-fail 'items-malformed item "cannot take the ~(~A~) half of ~S"
+                                  (symbol-name which) operand))))))))
 
 (defun %frame-operand (operand item)
   "The operand (:arg i) or (:local i) addresses in the current function; for (:hi ...) or
@@ -632,7 +655,9 @@ cell holding that half, the word's cells lying in the memory's endian order."
           (progn
             (unless (< index (items-frame-nlocals frame))
               (%items-fail 'items-malformed item "~S: the function has ~D local~:P" operand (items-frame-nlocals frame)))
-            (%slot-operand (+ base index) item))
+            (if (items-frame-static frame)
+                (%static-slot-operand (items-frame-name frame) index item)
+                (%slot-operand (+ base index) item)))
           (let* ((registers (%arg-registers))
                  (nstack (max 0 (- (items-frame-nargs frame) (length registers))))
                  (stack-index (- index (length registers))))
@@ -802,6 +827,44 @@ the stack pointer. A line whose operands leave variants that differ is left to %
                        value))))
           (values (- (cells :pushes) (cells :pops)) t))))))
 
+(defun %function-static-p (choice item)
+  "True when a function whose :frames option is CHOICE keeps its locals in labelled words."
+  (let ((name (and choice (%designator-name choice))))
+    (cond ((equal name "STATIC") t)
+          ((equal name "STACK") nil)
+          (choice (%items-fail 'items-malformed item "expected :frames to be static or stack, got ~S" choice))
+          ((eq *items-frames* :static) t)
+          ((eq *items-frames* :stack) nil)
+          (t (and *items-backend*
+                  (getf (backend-descriptor-frame *items-backend*) :static)
+                  (not (assoc "ALLOC" (backend-descriptor-ops *items-backend*) :test #'equal)))))))
+
+;; TODO: each function reserves its own words; share them by call graph like %CC-STATIC-AREA
+;; if memory matters (#464).
+(defun %static-function-lines (item name nargs nlocals saves body)
+  "The lines of a function whose locals and saved registers are labelled words: reserved after
+the body, or at (:static-frames)."
+  (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
+         (function (%source-name name item))
+         (words (+ nlocals (length saves)))
+         (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals 0 :saves saves
+                                  :static t :name function))
+         (prologue (append (%item-lines (list :label name))
+                           (loop for register in saves
+                                 for index from nlocals
+                                 append (%hook-lines :poke-label
+                                                     (list (%static-word-label function index)
+                                                           (%register-operand register item))
+                                                     item))))
+         (lines (let ((*items-frame* frame))
+                  (prog1 (append prologue (loop for element in body append (%item-lines element)))
+                    (%check-label-depths frame)))))
+    (cond ((zerop words) lines)
+          (*items-static-placed*
+           (cl:push (%static-word-lines function words) *items-static-words*)
+           lines)
+          (t (append lines (%static-word-lines function words))))))
+
 (defun %function-lines (item)
   (unless (and (>= (length item) 3) (listp (third item)) (evenp (length (third item))))
     (%items-fail 'items-malformed item "expected (:function NAME (:args n :locals n :save (reg...)) ITEM...)"))
@@ -810,7 +873,7 @@ the stack pointer. A line whose operands leave variants that differ is left to %
   (destructuring-bind (name options &rest body) (rest item)
     (loop for (key nil) on options by #'cddr
           do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE")
-                   (%keyword-named-p key "FRAME"))
+                   (%keyword-named-p key "FRAME") (%keyword-named-p key "FRAMES"))
                (%items-fail 'items-malformed item "unknown function option ~S" key)))
     (flet ((option (name default)
              (loop for (key value) on options by #'cddr
@@ -821,8 +884,16 @@ the stack pointer. A line whose operands leave variants that differ is left to %
           (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
         (unless (member (option "FRAME" t) '(t nil))
           (%items-fail 'items-malformed item "expected :frame to be t or nil"))
-        (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
-          (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
+        (let ((staticp (%function-static-p (option "FRAMES" nil) item)))
+          (when (and (option "FRAME" nil) staticp)
+            (%items-fail 'items-malformed item ":frame t is a stack frame's pointer; the function's frames are static"))
+          (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
+            (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
+          (when (and staticp (> (or nargs 0) (length (%arg-registers))))
+            (%items-fail 'items-malformed item "a static function takes at most ~D argument~:P, in registers"
+                         (length (%arg-registers))))
+          (when staticp
+            (return-from %function-lines (%static-function-lines item name nargs nlocals saves body))))
         (when (and (null nargs)
                    (or (eq (%backend-call-option :cleanup) :callee)
                        (eq (%backend-call-option :order) :left-to-right)))
@@ -856,6 +927,15 @@ the stack pointer. A line whose operands leave variants that differ is left to %
     (unless (or (items-frame-pointer frame) (zerop (items-frame-depth frame)))
       (%items-fail 'items-malformed item "the stack is ~D slot~:P deeper than at the function's entry"
                    (items-frame-depth frame)))
+    (when (items-frame-static frame)
+      (return-from %return-lines
+        (append (loop for register in (items-frame-saves frame)
+                      for index from (items-frame-nlocals frame)
+                      append (%hook-lines :peek-label
+                                          (list (%register-operand register item)
+                                                (%static-word-label (items-frame-name frame) index))
+                                          item))
+                (%hook-lines :return '() item))))
     (let ((nstack (max 0 (- (items-frame-nargs frame) (length (%arg-registers))))))
       (append (if (items-frame-pointer frame)
                   (%hook-lines :leave '() item)
@@ -1210,6 +1290,8 @@ A value that depends on a label is checked when the assembler encodes it."
       ((%keyword-named-p head "RETURN") (%return-lines item))
       ((or (%keyword-named-p head "PUSH") (%keyword-named-p head "POP")) (%push-pop-lines item))
       ((%keyword-named-p head "DEPTH") (%depth-lines item))
+      ((%keyword-named-p head "STATIC-FRAMES")
+       (%items-fail 'items-malformed item "(:static-frames) is only valid at the top level of a program"))
       ((keywordp head)
        (%items-fail 'items-malformed item "unknown item ~S" head))
       (t (%check-stack-forms (list item) item)
@@ -1295,9 +1377,15 @@ of its ISA or an ISA extending it."
                                       (backend-descriptor-name backend) (car kind) lexer)))
     (values backend machine lexer)))
 
-(defmacro %with-items-context ((backend machine lexer &optional memory) &body body)
+(defun %check-frames-choice (frames)
+  (unless (member frames '(nil :static :stack))
+    (%signal-usage-error 'usage-error ":frames must be :static or :stack, not ~S" frames))
+  frames)
+
+(defmacro %with-items-context ((backend machine lexer &optional memory frames) &body body)
   `(multiple-value-bind (backend* machine* lexer*) (%items-context ,backend ,machine ,lexer)
      (let* ((*items-backend* backend*)
+            (*items-frames* (%check-frames-choice ,frames))
             (*items-machine* machine*)
             (*items-memory* (and ,memory
                                  (or (%find-element-name machine* ,memory)
@@ -1322,10 +1410,30 @@ of its ISA or an ISA extending it."
     (symbol (when tree
               (setf (gethash (%source-name tree nil) *items-used-names*) t)))))
 
+(defun %static-frames-item-p (item)
+  (and (consp item) (%keyword-named-p (first item) "STATIC-FRAMES")))
+
+(defun %items-lines (items)
+  "The lines of ITEMS, with every static function's words at the (:static-frames) item."
+  (let ((placeholders (remove-if-not #'%static-frames-item-p items)))
+    (when (rest placeholders)
+      (%items-fail 'items-malformed (second placeholders) "a program has at most one (:static-frames)"))
+    (dolist (placeholder placeholders)
+      (unless (null (rest placeholder))
+        (%items-fail 'items-malformed placeholder "expected (:static-frames)")))
+    (let* ((*items-static-placed* (and placeholders t))
+           (*items-static-words* '())
+           (chunks (loop for item in items
+                         collect (if (%static-frames-item-p item) :static-frames (%item-lines item)))))
+      (loop for chunk in chunks
+            append (if (eq chunk :static-frames)
+                       (apply #'append (reverse *items-static-words*))
+                       chunk)))))
+
 (defun %items-source (items)
   "The statements ITEMS make, the source text they render as, its unit and the item lines."
   (%seed-used-names items)
-  (let* ((lines (loop for item in items append (%item-lines item)))
+  (let* ((lines (%items-lines items))
          (descriptor *items-lexer-descriptor*)
          (text (make-string-output-stream))
          (token-lines (loop for line in lines
@@ -1356,13 +1464,13 @@ as ASSUME says, and return that layout's size."
         (%check-assembled-stack-lines (%build-listing sized) lines unit)
         (- final-address asm-origin)))))
 
-(defun render-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory)
+(defun render-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory frames)
   "The assembly source text ITEMS render as. Assembling it gives the cells
 ASSEMBLE-ITEMS gives. MEMORY sizes the range check of a forced mode's operand. A line
 whose operands leave variants that differ in writing the stack pointer is judged by the
 layout ORIGIN gives, an operand with no value taking its :WIDEST variant; an error of that
-layout is left to ASSEMBLE-ITEMS."
-  (%with-items-context (backend machine lexer memory)
+layout is left to ASSEMBLE-ITEMS. FRAMES is ASSEMBLE-ITEMS's."
+  (%with-items-context (backend machine lexer memory frames)
     (multiple-value-bind (statements text unit lines) (%items-source items)
       (when (some #'item-line-stack-check lines)
         (handler-case (%check-laid-out-stack-lines statements text unit lines origin :widest)
@@ -1373,11 +1481,12 @@ layout is left to ASSEMBLE-ITEMS."
           (lasm-syntax-error () nil)))
       text)))
 
-(defun assemble-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory file positions source)
+(defun assemble-items (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory frames file positions source)
   "Assemble ITEMS, a list of items, for the machine of BACKEND (a name or
 BACKEND-DESCRIPTOR) or for MACHINE. Returns an ASSEMBLY like ASSEMBLE, whose
 source is the text RENDER-ITEMS gives; LEXER, ORIGIN and MEMORY are ASSEMBLE's.
-FILE names the program in diagnostics. Signals ITEMS-MALFORMED for an item that
+FRAMES is :STATIC or :STACK, for a function with no :frames option; NIL lets the
+backend choose. FILE names the program in diagnostics. Signals ITEMS-MALFORMED for an item that
 is not well formed and ITEMS-OPERAND-MISMATCH for an operand that does not
 match its mode, or that the assembler read as another alternative of the
 instruction's modes; the assembler's own conditions otherwise. POSITIONS and
@@ -1385,7 +1494,7 @@ SOURCE, as READ-ITEMS and READ-ITEMS-FROM-STRING set them on an ITEMS-PROGRAM,
 let such an error report FILE:LINE:COLUMN."
   (let ((*items-positions* positions) (*items-source-text* source)
         (*items-file* (and file (namestring (pathname file)))))
-    (%with-items-context (backend machine lexer memory)
+    (%with-items-context (backend machine lexer memory frames)
       (multiple-value-bind (statements text unit lines) (%items-source items)
         (setf (source-unit-file unit) *items-file*)
         (let ((assembly (with-source-unit unit
@@ -1397,7 +1506,7 @@ let such an error report FILE:LINE:COLUMN."
           (%check-assembled-stack-lines (assembly-listing assembly) lines unit)
           assembly)))))
 
-(defun items-size (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory (assume :widest))
+(defun items-size (items &key backend ((:cpu machine)) (lexer 'default) (origin 0) memory frames (assume :widest))
   "The cells ITEMS occupy, from their first cell to the end of their last, laid
 out as ASSEMBLE-ITEMS would but without encoding, so a label ITEMS never define
 is allowed. An operand naming such a label is sized at its :WIDEST or :NARROWEST
@@ -1405,7 +1514,7 @@ variant, as ASSUME says; every other choice is the assembler's. The keys are
 ASSEMBLE-ITEMS's."
   (unless (member assume '(:widest :narrowest))
     (%signal-usage-error 'usage-error ":assume must be :widest or :narrowest, not ~S" assume))
-  (%with-items-context (backend machine lexer memory)
+  (%with-items-context (backend machine lexer memory frames)
     (multiple-value-bind (statements text unit lines) (%items-source items)
       (%check-laid-out-stack-lines statements text unit lines origin assume))))
 
@@ -1444,8 +1553,6 @@ ASSEMBLE-ITEMS's."
                           (%program-fail ":optimize must be size or speed, got ~S" value))
                         (setf (items-program-optimize program) (intern choice :keyword))))
                      ((equal name "FRAMES")
-                      (unless optimize
-                        (%program-fail ":frames is a .lsp program option"))
                       (let ((choice (and (symbolp value) value (symbol-name value))))
                         (unless (member choice '("STATIC" "STACK") :test #'equal)
                           (%program-fail ":frames must be static or stack, got ~S" value))
@@ -1486,7 +1593,7 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
               (items-program-positions program) positions)
         program))))
 
-(defun %assemble-items-program (program path &key backend ((:cpu machine)) lexer origin memory)
+(defun %assemble-items-program (program path &key backend ((:cpu machine)) lexer origin memory frames)
   "Assemble the ITEMS-PROGRAM read from PATH; the keys override its options."
   (let* ((truename (truename path))
          (*include-directory* (%file-directory truename))
@@ -1497,14 +1604,17 @@ Signals ITEMS-MALFORMED for an unreadable or malformed file."
                                    :lexer (or lexer (items-program-lexer program) 'default)
                                    :origin (or origin (items-program-origin program) 0)
                                    :memory (or memory (items-program-memory program))
+                                   :frames frames
                                    :file path
                                    :positions (items-program-positions program)
                                    :source (items-program-source program))))
     (setf (source-unit-path (assembly-source-unit assembly)) (namestring truename))
     assembly))
 
-(defun assemble-items-file (path &key backend ((:cpu machine)) lexer origin memory)
+(defun assemble-items-file (path &key backend ((:cpu machine)) lexer origin memory frames)
   "Read the items program at PATH and assemble it. The keys override the
 program's own options."
-  (%assemble-items-program (read-items path) path
-                           :backend backend :cpu machine :lexer lexer :origin origin :memory memory))
+  (let ((program (read-items path)))
+    (%assemble-items-program program path
+                             :backend backend :cpu machine :lexer lexer :origin origin :memory memory
+                             :frames (or frames (items-program-frames program)))))

@@ -324,7 +324,7 @@ half is a register, or an integer address in memory."
 (defparameter +backend-clause-keys+
   `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand :pairs)
     ("CALL" :args :order :cleanup :return-address-slots)
-    ("FRAME" :grows :alignment :slot :stack-slot :pointer :offsets :counts :static))
+    ("FRAME" :grows :alignment :slot :stack-slot :label-slot :pointer :offsets :counts :static))
   "The keys each plist clause takes, by clause head.")
 
 (defun %clause-keys (head)
@@ -387,7 +387,8 @@ half is a register, or an integer address in memory."
 (defun %parse-frame-clause (descriptor args)
   (%check-plist "frame" args (%clause-keys "FRAME"))
   (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot))
-        (stack-slot (getf args :stack-slot)) (pointer (getf args :pointer))
+        (stack-slot (getf args :stack-slot)) (label-slot (getf args :label-slot))
+        (pointer (getf args :pointer))
         (offsets (getf args :offsets :slots)) (counts (getf args :counts :slots))
         (static (getf args :static)))
     (unless (member static '(nil t))
@@ -399,12 +400,13 @@ half is a register, or an integer address in memory."
       (%backend-error "frame :grows must be :down or :up, got ~S" grows))
     (unless (typep alignment '(integer 1))
       (%backend-error "frame :alignment must be a positive integer, got ~S" alignment))
-    (loop for (what kind) in `((":slot" ,slot) (":stack-slot" ,stack-slot))
+    (loop for (what kind) in `((":slot" ,slot) (":stack-slot" ,stack-slot) (":label-slot" ,label-slot))
           when (and kind (not (%designator-name kind)))
             do (%backend-error "frame ~A: ~S is not a kind name" what kind))
     (append (list :grows grows :alignment alignment)
             (and slot (list :slot (%designator-name slot)))
             (and stack-slot (list :stack-slot (%designator-name stack-slot)))
+            (and label-slot (list :label-slot (%designator-name label-slot)))
             (and pointer (list :pointer (%backend-register-name descriptor pointer)))
             (and (eq offsets :cells) (list :offsets :cells))
             (and (eq counts :cells) (list :counts :cells))
@@ -598,7 +600,8 @@ operand differently by kind, such as a register versus a label."
 (defun %check-backend-kinds (descriptor)
   (loop for (what kind) in `(("registers :operand" ,(getf (backend-descriptor-registers descriptor) :operand))
                              ("frame :slot" ,(getf (backend-descriptor-frame descriptor) :slot))
-                             ("frame :stack-slot" ,(getf (backend-descriptor-frame descriptor) :stack-slot)))
+                             ("frame :stack-slot" ,(getf (backend-descriptor-frame descriptor) :stack-slot))
+                             ("frame :label-slot" ,(getf (backend-descriptor-frame descriptor) :label-slot)))
         when (and kind (not (assoc kind (backend-descriptor-operands descriptor) :test #'string=)))
           do (%backend-error "~A: ~A is not a declared operand kind~:[~;; with :static t and no slot operand, drop :slot~]"
                              what kind (and (equal what "frame :slot") (getf (backend-descriptor-frame descriptor) :static)))))
@@ -1018,8 +1021,8 @@ OPTIONS, (:isa ISA), optionally (:cpu CPU), and/or (:extends PARENT), and CLAUSE
                 [:operand kind] [:pairs ((NAME HIGH LOW)...)])
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n])
-     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:pointer reg]
-            [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
+     (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:label-slot kind]
+            [:pointer reg] [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
        ; a param is a name, or (NAME KIND) restricting it to an operand of that

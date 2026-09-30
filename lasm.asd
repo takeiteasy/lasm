@@ -98,6 +98,7 @@
                (:file "convention")
                (:file "compiler")
                (:file "pairs")
+               (:file "static-items")
                (:file "cli")
                (:file "debugger")
                (:file "banks")

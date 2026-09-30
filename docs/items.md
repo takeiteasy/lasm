@@ -29,6 +29,7 @@ as, so listings, diagnostics and [snapshots](snapshots.md) work as for any sourc
 | `(:op NAME ARG...)` | A backend [operation](backends.md#operations), expanded to instructions -- by ARG's operand kinds, when NAME has [several clauses](backends.md#operand-kind-clauses). |
 | `(MNEMONIC OPERAND...)` | An instruction. |
 | `(:function ...)` `(:call ...)` `(:return)` `(:push X)` `(:pop X)` `(:depth n)` | Lowered from the backend's [calling convention](conventions.md). |
+| `(:static-frames)` | Holds the words of every [static function](static-frames.md#lasm-functions). At most one, at the top level. |
 
 ## Operands
 
@@ -163,7 +164,7 @@ A `.lasm` file holds one `(:program (OPTION...) ITEM...)` form.
 | `:memory` | Memory element. |
 | `:lexer` | Lexer name. |
 | `:optimize` | `size` or `speed`; a [`.lsp` header](language.md#optimizing) only. |
-| `:frames` | `static` or `stack`; a [`.lsp` header](static-frames.md#choosing) only. |
+| `:frames` | `static` or `stack`: where a [function's locals](static-frames.md#choosing) live. |
 
 The file is untrusted. It is read with the same restricted reader as
 [snapshots](snapshots.md#reading): nothing is evaluated, symbols are never
@@ -174,10 +175,10 @@ rejected, and nesting and numbers are bounded. Anything else signals `items-malf
 | --- | --- |
 | `(read-items path)` | Returns an `items-program`: `items-program-items` `-backend` `-machine` `-origin` `-memory` `-lexer`, plus `-source` `-file` `-positions` for a positioned error. |
 | `(read-items-from-string text)` | The same for a string; `items-program-file` is `NIL`. |
-| `(assemble-items-file path &key backend machine lexer origin memory)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
-| `(assemble-items items &key backend machine lexer origin memory file positions source)` | Assembles a list of items. `positions` and `source`, as `read-items` sets them, are passed on for a positioned error. |
-| `(items-size items &key backend machine lexer origin memory assume)` | Returns the [size](#sizing) in cells. |
-| `(render-items items &key backend machine lexer origin memory)` | Returns the source text. |
+| `(assemble-items-file path &key backend machine lexer origin memory frames)` | Reads and assembles; a key overrides the file's option. `.include` resolves beside the file. |
+| `(assemble-items items &key backend machine lexer origin memory frames file positions source)` | Assembles a list of items. `positions` and `source`, as `read-items` sets them, are passed on for a positioned error. |
+| `(items-size items &key backend machine lexer origin memory frames assume)` | Returns the [size](#sizing) in cells. |
+| `(render-items items &key backend machine lexer origin memory frames)` | Returns the source text. |
 
 The [command line](cli.md#items-programs) assembles `.lasm` files.
 

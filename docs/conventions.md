@@ -31,7 +31,7 @@ ret
 
 | Item | Emits |
 | --- | --- |
-| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`, `:frame nil`. |
+| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`, `:frame nil`, `:frames static\|stack`. |
 | `(:return)` | The epilogue and the return. |
 | `(:call TARGET ARG... [:keep (reg...)])` | The [call sequence](#calls). |
 | `(:push X)` `(:pop X)` | One push or pop, tracked in the frame. |
@@ -40,7 +40,7 @@ ret
 | Operand | Is |
 | --- | --- |
 | `(:arg i)` | Argument `i`: a register, or a stack slot. |
-| `(:local i)` | Local `i`, a stack slot. |
+| `(:local i)` | Local `i`, a stack slot, or a labelled word in a [static function](static-frames.md#lasm-functions). |
 
 `(:arg)`, `(:local)` and `(:return)` are valid only inside a `:function`, which
 cannot nest. `:args` is required when the call is `:cleanup :callee` or
