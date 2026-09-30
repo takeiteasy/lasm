@@ -214,7 +214,10 @@ memory ~S on machine ~S"
   (read-privilege nil :type (or null symbol))
   (write-privilege nil :type (or null symbol))
   ;; bit-field write gates on a register, a list of (MASK LEVEL POLICY).
+  ;; A status register derives them from its gated flags.
   (field-privileges nil :type list)
+  ;; A gated flag's policy for a write through a status register, or NIL for :VIOLATE.
+  (write-policy nil :type (member nil :violate :ignore))
   ;; A (status-register ...) register: NIL, or its bits most significant
   ;; first, each a flag name or a constant 0/1. It has no value of its own;
   ;; SREF packs the flags and (SETF SREF) unpacks into them.

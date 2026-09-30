@@ -305,17 +305,32 @@ function), got ~S" context name (car fn) (cdr fn))))
                                :regions regions
                                :region-index (%sorted-region-index regions))))))
 
+;; :ON-WRITE POLICY in a flag's :privilege plist. Returns the plist without
+;; it and the policy, which only a status register applies.
+(defun %split-flag-write-policy (spec name)
+  (if (and (consp spec) (listp (cdr (last spec))) (evenp (length spec)) (member :on-write spec))
+      (let ((policy (getf spec :on-write))
+            (rest (loop for (key value) on spec by #'cddr unless (eq key :on-write) append (list key value))))
+        (unless (member policy '(:violate :ignore))
+          (%defmachine-error "flag ~S: :on-write must be :violate or :ignore, got ~S" name policy))
+        (unless (getf rest :write)
+          (%defmachine-error "flag ~S: :on-write needs a :write level" name))
+        (values rest policy))
+      (values spec nil)))
+
 (defun parse-flags-clause (form)
   ;; (flags A B C ...) -- expands to one storage-element per flag, width 1.
   ;; An entry may be (NAME :privilege LEVEL).
   (loop for entry in form
         collect (if (consp entry)
                     (%definition-bind (name &key privilege) entry
-                      (destructuring-bind (read-privilege write-privilege)
-                          (%parse-privilege-spec privilege 'flag name '(:read :write))
-                        (make-storage-element :name name :kind :flag :width 1
-                                              :read-privilege read-privilege
-                                              :write-privilege write-privilege)))
+                      (multiple-value-bind (privilege write-policy) (%split-flag-write-policy privilege name)
+                        (destructuring-bind (read-privilege write-privilege)
+                            (%parse-privilege-spec privilege 'flag name '(:read :write))
+                          (make-storage-element :name name :kind :flag :width 1
+                                                :read-privilege read-privilege
+                                                :write-privilege write-privilege
+                                                :write-policy write-policy))))
                     (make-storage-element :name entry :kind :flag :width 1))))
 
 ;; (status-register NAME (BIT ...)) -- a register over flags, for a machine whose
@@ -332,25 +347,37 @@ function), got ~S" context name (car fn) (cdr fn))))
       (%defmachine-error "status-register ~S: expected a list of flag names and 0/1 bits, got ~S" name bits))
     (make-storage-element :name name :kind :register :width (length bits) :bits bits)))
 
-;; TODO: a flag with a :privilege cannot be in a status register; its gate
-;; would become a field gate on the register (#460).
 (defun %finish-status-registers (descriptor)
-  "Check each status register of DESCRIPTOR names declared, ungated flags, once each."
-  (dolist (element (machine-descriptor-elements descriptor))
-    (let ((name (storage-element-name element)) (seen '()))
-      (dolist (bit (storage-element-bits element))
-        (when (symbolp bit)
-          (let ((flag (gethash bit (machine-descriptor-table descriptor))))
-            (unless (and flag (eq (storage-element-kind flag) :flag))
-              (%defmachine-error "status-register ~S on machine ~S: ~S is not a declared flag"
-                                 name (machine-descriptor-name descriptor) bit))
-            (when (member bit seen)
-              (%defmachine-error "status-register ~S on machine ~S: flag ~S is listed twice"
-                                 name (machine-descriptor-name descriptor) bit))
-            (when (or (storage-element-read-privilege flag) (storage-element-write-privilege flag))
-              (%defmachine-error "status-register ~S on machine ~S: flag ~S has a :privilege, which a status register cannot gate"
-                                 name (machine-descriptor-name descriptor) bit))
-            (cl:push bit seen)))))))
+  "Check each status register of DESCRIPTOR names declared flags, once each, and
+derive its gates from theirs: a flag's write level gates its bit, and the
+register reads at the highest of the flags' read levels."
+  (let ((levels (let ((privilege (machine-descriptor-privilege descriptor)))
+                  (and privilege (privilege-descriptor-levels privilege)))))
+    (dolist (element (machine-descriptor-elements descriptor))
+      (let ((name (storage-element-name element)) (seen '()) (fields '()) (read nil))
+        (loop for bit in (storage-element-bits element)
+              for position downfrom (1- (storage-element-width element))
+              when (symbolp bit)
+                do (let ((flag (gethash bit (machine-descriptor-table descriptor))))
+                     (unless (and flag (eq (storage-element-kind flag) :flag))
+                       (%defmachine-error "status-register ~S on machine ~S: ~S is not a declared flag"
+                                          name (machine-descriptor-name descriptor) bit))
+                     (when (member bit seen)
+                       (%defmachine-error "status-register ~S on machine ~S: flag ~S is listed twice"
+                                          name (machine-descriptor-name descriptor) bit))
+                     (cl:push bit seen)
+                     (when (storage-element-write-privilege flag)
+                       (cl:push (list (ash 1 position) (storage-element-write-privilege flag)
+                                      (or (storage-element-write-policy flag) :violate))
+                                fields))
+                     (let ((required (storage-element-read-privilege flag)))
+                       (when (and required (or (null read)
+                                               (> (or (position required levels) -1)
+                                                  (or (position read levels) -1))))
+                         (setf read required)))))
+        (when (storage-element-bits element)
+          (setf (storage-element-field-privileges element) (nreverse fields)
+                (storage-element-read-privilege element) read))))))
 
 ;; (clock-speed n) -- the machine's nominal rate in Hz, n a positive
 ;; integer. Optional; a machine with no such clause leaves MACHINE-
@@ -1509,6 +1536,8 @@ instructions are compiled against the parent's" head))
                                      (storage-element-read-privilege child-element))
                                  (eq (storage-element-write-privilege parent-element)
                                      (storage-element-write-privilege child-element))
+                                 (eq (storage-element-write-policy parent-element)
+                                     (storage-element-write-policy child-element))
                                  (equal (storage-element-field-privileges parent-element)
                                         (storage-element-field-privileges child-element)))))
               (fail "~S changes the inherited :privilege of ~S"

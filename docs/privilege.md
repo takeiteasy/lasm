@@ -95,6 +95,7 @@ is open to every level.
 | `:read` | `mref`, and semantics reads of the element | Regions, registers, flags, stacks |
 | `:write` | `(setf mref)`, and semantics writes of the element | Regions, registers, flags, stacks |
 | `:execute` | Instruction fetches | Regions |
+| `:on-write` | `:violate` (default) or `:ignore`, for a write through a [status register](#status-registers) | Flags, beside `:write` |
 
 An instruction fetch checks only `:execute`, and `mref` never does. `incf` on
 a register checks a read and a write. A stack needs `:write` to `push` and
@@ -148,6 +149,29 @@ bits unchanged is always allowed.
 and their aliases. It cannot gate a `(stack-pointer ...)` register, and masks
 must not overlap. Host access, delivery and `interrupt-return` bypass it as
 they bypass other [gates](#gating-registers-flags-and-stacks).
+
+### Status registers
+
+A [status register](machine-model.md#status-registers) gates its bits with its
+flags' levels. No `:fields` is needed.
+
+```lisp
+(flags (s :privilege (:write supervisor))
+       (ie :privilege (:write supervisor :on-write :ignore))
+       (k :privilege (:read supervisor))
+       z)
+(privilege :level s :levels (user supervisor))
+(status-register p (s ie k z))
+```
+
+| Flag declares | `p` in semantics |
+| --- | --- |
+| `:write LEVEL` | A write below `LEVEL` that changes the flag follows `:on-write`. |
+| `:on-write :violate` (default) | Violates as a `:register` write of `p` and changes nothing. |
+| `:on-write :ignore` | Keeps the flag's old value and stores the rest. |
+| `:read LEVEL` | A read below the highest such `LEVEL` violates as a `:register` read of `p`. |
+
+A direct write of the flag always violates.[^status]
 
 ## Interrupt delivery
 
@@ -237,3 +261,6 @@ snapshots do not save it. With `:deliver-level` and a saved level register,
 [^inherit]: A machine extending another keeps its `:level`, `:shift`,
     `:width`, `:levels` and values, and each element's `:privilege` including
     `:fields`; it can change `:on-violation`.
+[^status]: `:on-write` only applies to a write through the register. The
+    derived masks are one bit per flag, and a flag's level check reports the
+    bit as the violation's mask.

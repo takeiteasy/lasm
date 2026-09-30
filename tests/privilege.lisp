@@ -1042,3 +1042,100 @@ rte")))
     (eval '(with-machine (m priv-sp-ref-machine) (stack-ref 0))))
   (fiveam:signals privilege-violation
     (eval '(with-machine (m priv-sp-ref-machine) (setf (stack-ref 0) 1)))))
+
+;;; #460: a status register over gated flags gates each flag as a field.
+
+(defmachine priv-status-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (flags (s :privilege (:write supervisor))
+         (ie :privilege (:write supervisor :on-write :ignore))
+         (tr :privilege (:write supervisor))
+         z)
+  (privilege :level s :levels (user supervisor))
+  (status-register p (s ie tr z 0 0 0 0)))
+
+(defmachine priv-status-read-machine
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (flags s (k :privilege (:read supervisor)) z)
+  (privilege :level s :levels (user supervisor))
+  (status-register p (s k z)))
+
+(defmachine (priv-status-child (:extends priv-status-machine))
+  (flags x))
+
+(defun %priv-status-write (name value &key supervisor (initial 0))
+  "The machine and any violation from writing VALUE to p in semantics."
+  (let ((m (make-machine name)))
+    (setf (sref m 'p) initial)
+    (when supervisor (setf (flag m 's) 1))
+    (values m (handler-case (progn (eval `(let ((m ,m)) (with-machine-bindings (m ,name) (set! p ,value)))) nil)
+                (privilege-violation (c) c)))))
+
+(fiveam:test a-status-register-derives-its-gates-from-its-flags
+  (let ((p (descriptor-element (find-machine-descriptor 'priv-status-machine) 'p)))
+    (fiveam:is (equal '((#x80 supervisor :violate) (#x40 supervisor :ignore) (#x20 supervisor :violate))
+                      (storage-element-field-privileges p))))
+  (fiveam:is (eq 'supervisor
+                 (storage-element-read-privilege
+                  (descriptor-element (find-machine-descriptor 'priv-status-read-machine) 'p)))))
+
+(fiveam:test a-status-register-write-below-a-flags-level-violates-and-changes-nothing
+  (multiple-value-bind (m c) (%priv-status-write 'priv-status-machine #x30 :initial #x10)
+    (fiveam:is (typep c 'privilege-violation))
+    (fiveam:is (eq :register (privilege-violation-kind c)))
+    (fiveam:is (eq :write (privilege-violation-access c)))
+    (fiveam:is (eq 'p (storage-error-name c)))
+    (fiveam:is (= #x20 (privilege-violation-mask c)))
+    (fiveam:is (= #x10 (sref m 'p)))))
+
+(fiveam:test a-status-register-write-ignores-a-flag-with-the-ignore-policy
+  (multiple-value-bind (m c) (%priv-status-write 'priv-status-machine #x50)
+    (fiveam:is (null c))
+    (fiveam:is (= #x10 (sref m 'p)))))
+
+(fiveam:test a-status-register-write-that-leaves-the-gated-flags-alone-is-allowed
+  (multiple-value-bind (m c) (%priv-status-write 'priv-status-machine #x30 :initial #x20)
+    (fiveam:is (null c))
+    (fiveam:is (= #x30 (sref m 'p)))))
+
+(fiveam:test a-status-register-write-at-the-flags-level-changes-them
+  (multiple-value-bind (m c) (%priv-status-write 'priv-status-machine #x60 :supervisor t)
+    (fiveam:is (null c))
+    (fiveam:is (equal '(0 1 1) (mapcar (lambda (name) (flag m name)) '(s ie tr))))))
+
+(fiveam:test a-status-register-read-below-a-flags-read-level-violates
+  (let ((m (make-machine 'priv-status-read-machine)))
+    (setf (flag m 'k) 1)
+    (let ((c (handler-case (progn (eval `(let ((m ,m)) (with-machine-bindings (m priv-status-read-machine) p))) nil)
+               (privilege-violation (c) c))))
+      (fiveam:is (eq :read (privilege-violation-access c)))
+      (fiveam:is (eq 'p (storage-error-name c))))
+    (fiveam:is (= #b010 (logand (sref m 'p) #b010)))
+    (setf (flag m 's) 1)
+    (fiveam:is (= #b110 (eval `(let ((m ,m)) (with-machine-bindings (m priv-status-read-machine) p)))))))
+
+(fiveam:test a-status-register-gates-do-not-bind-the-host-or-disabled-checks
+  (let ((m (make-machine 'priv-status-machine)))
+    (setf (sref m 'p) #xE0)
+    (fiveam:is (= #xE0 (sref m 'p))))
+  (let ((*privilege-checks* nil))
+    (fiveam:is (= #x60 (sref (%priv-status-write 'priv-status-machine #x60) 'p)))))
+
+(fiveam:test a-child-inherits-a-gated-status-register
+  (multiple-value-bind (m c) (%priv-status-write 'priv-status-child #x20)
+    (fiveam:is (typep c 'privilege-violation))
+    (fiveam:is (= 0 (sref m 'p)))))
+
+(fiveam:test a-flags-on-write-policy-is-checked
+  (flet ((error-of (flag)
+           (handler-case (progn (eval `(defmachine priv-status-bad-machine
+                                         (register pc :width 8)
+                                         (flags ,flag) (flags s)
+                                         (privilege :level s :levels (user supervisor))))
+                                nil)
+             (machine-definition-error (c) (princ-to-string c)))))
+    (fiveam:is (search ":on-write must be" (error-of '(f :privilege (:write supervisor :on-write :frob)))))
+    (fiveam:is (search "needs a :write level" (error-of '(f :privilege (:read supervisor :on-write :ignore)))))
+    (fiveam:is (null (error-of '(f :privilege (:write supervisor :on-write :ignore)))))))

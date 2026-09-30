@@ -893,12 +893,11 @@ nop" :cpu 'rom-program-test-machine)))
     (fiveam:is (search "Malformed" (error-of '(status-register p))))
     (fiveam:is (null (error-of '(status-register p (n z)))))))
 
-(fiveam:test a-status-register-cannot-name-a-gated-flag
-  (fiveam:is (search "has a :privilege"
+(fiveam:test a-status-register-over-a-gated-flag-needs-a-privilege-clause
+  (fiveam:is (search "requires a (privilege"
                      (handler-case (progn (eval '(defmachine status-gated-machine
                                                   (register a :width 8)
                                                   (flags n (z :privilege supervisor))
-                                                  (privilege :level n :levels (user supervisor))
                                                   (status-register p (n z))))
                                           nil)
                        (machine-definition-error (c) (princ-to-string c))))))

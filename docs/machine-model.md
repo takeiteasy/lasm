@@ -84,6 +84,9 @@ It works wherever a scalar register does: in semantics, in an
 Its width is the number of bits. A [snapshot](snapshots.md) stores the flags, not
 the register.[^status]
 
+A flag declared with `:privilege` gates its bit of the register; see
+[Status registers](privilege.md#status-registers).
+
 ### Stacks
 
 A fixed `(stack ...)` holds `:depth` values. `stack-ref` addresses live
@@ -341,7 +344,6 @@ in any package is found.
 | Limitation | Ticket |
 | --- | --- |
 | The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
-| A status register cannot name a flag declared with `:privilege`. | [#460](https://todo.sr.ht/~takeiteasy/lasm/460) |
 
 [^status]: A write to the register reports the register to the
   [access hook](#access-hook), then each flag; a read reports only the register,
