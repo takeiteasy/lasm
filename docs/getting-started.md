@@ -9,7 +9,7 @@ directory.[^dependencies]
 
 ```sh
 git clone https://git.sr.ht/~takeiteasy/lasm ~/quicklisp/local-projects/lasm
-git clone https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
+git clone -b trunk https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
 ```
 
 Load LASM in SBCL, ECL or CCL:
