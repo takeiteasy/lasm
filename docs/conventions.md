@@ -31,7 +31,7 @@ ret
 
 | Item | Emits |
 | --- | --- |
-| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`, `:frame nil`, `:frames static\|stack`. |
+| `(:function NAME (OPTION...) ITEM...)` | The label, then the prologue. Options: `:args n`, `:locals n`, `:save (reg...)`, `:frame nil`, `:frames static\|stack`, `:interrupt t`. |
 | `(:return)` | The epilogue and the return. |
 | `(:call TARGET ARG... [:keep (reg...)])` | The [call sequence](#calls). |
 | `(:push X)` `(:pop X)` | One push or pop, tracked in the frame. |
@@ -254,6 +254,7 @@ an `items-malformed`.
 | `:call (f)` | `(:call ...)`. |
 | `:return ()` | `(:return)`, or with `:cleanup :caller`. |
 | `:return-pop (n)` | `(:return)` with `:cleanup :callee` and stack arguments. |
+| `:return-interrupt ()` | `(:return)` in a function with `:interrupt t`. |
 | `:enter ()` `:leave ()` | The prologue and epilogue of a [frame pointer](#frame-pointer). |
 
 The backend also names the operand kind that writes a register, `(registers

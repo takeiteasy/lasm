@@ -98,18 +98,45 @@ See [`demo.lasm`](../examples/6502/demo.lasm).
 | Placement | At `(:static-frames)`, which holds every function's words, in RAM if the code is ROM. A function's words start after those of every function that calls it, so two that never run together [share addresses](#how-it-works). Without it, a function's words follow its code, so end the body with `(:return)`, and none are shared. |
 | Arguments | `(:arg i)` is a register, or the word `sf`*function*`x`*n* for an argument past them. `(:call f ARG...)` stores each into that word, with no push. |
 | `:save` | A saved register is stored in a word at entry and loaded back by `(:return)`. The backend needs `:poke-label` and `:peek-label`. |
+| Interrupts | A function with `:interrupt t` is [an interrupt handler](#interrupts): its words lie apart from the main line's, and `(:return)` ends with the backend's `:return-interrupt`. |
 | Halves | `(:lo (:local i))` and `(:hi (:local i))` are the cells of the word; the second is the label plus one. |
 | Not allowed | `:frame t`, and `:alloc`, `:free`, `:enter` and `:leave`. |
 
 A static function is not re-entrant. A call to itself, directly or through other
 functions, is an `items-malformed` error at the call that closes the cycle; any
 mention of a function's name in another's body, such as `(jmp f)`, counts as a call.
-Use `:frames stack` for a function that recurses, or that runs from an interrupt
-while it runs; with `(:static-frames)`, an interrupt handler shares words with the
-functions it does not call.
+Use `:frames stack` for a function that recurses.
 
 ```
 demo.lasm:9:5: a calls b calls a is recursive; a static function keeps its locals in fixed words, so give it :frames stack
+```
+
+## Interrupts
+
+A function the machine runs at any time, an interrupt handler, takes
+`:interrupt t`. Its words, and those of the functions it runs, lie apart from
+the main line's and from other handlers', so an interrupt never overwrites a
+function it interrupts.
+
+```lisp
+(:function irq (:interrupt t :locals 1)
+  (:op :move (:local 0) (zp w0))
+  (:call log (:local 0))
+  (:return))
+(:static-frames)
+```
+
+| Part | Behavior |
+| --- | --- |
+| Return | `(:return)` loads the saved registers back, then emits the backend's `:return-interrupt`, which the backend must define. |
+| Arguments | None: `:args` is an error. |
+| Words | The main line's first, then each handler's region in program order.[^regions] |
+| Shared functions | A static function run from a handler and from the main line, or from two handlers, is an `items-malformed` error. Give it `:frames stack`. |
+| Mentions | Naming a handler in other code, to load its address into a vector, is not a call. |
+| Not covered | A handler written as a plain label, like `irq` in [`demo.lasm`](../examples/6502/demo.lasm), is outside the call graph and is not kept apart. |
+
+```
+demo.lasm:14:5: interrupt irq calls log, and main calls log; a static function is not re-entrant, so give it :frames stack
 ```
 
 ## Recursion
@@ -166,17 +193,15 @@ taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
 
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| With `(:static-frames)`, a static `.lasm` interrupt handler shares words with functions it does not call. | [#468](https://todo.sr.ht/~takeiteasy/lasm/468) |
-
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
   pushed share out. A function's offset is the largest offset plus size among
   the functions that call it, and one that nobody calls starts at `0`. Every
   word is `.res` of one language word, so a wider word reserves more cells.
+
+[^regions]: A handler's region holds the words of the handler and of every
+  function it calls, laid out as on the main line. The regions follow one another,
+  so no address is shared between them.
 
 [^saved]: The word follows the function's other slots, so a callee's frame never
   overlaps it. The register is stored at the function's start, and each restore

@@ -67,7 +67,8 @@
 (defvar *items-frames* nil "The frames choice for functions with no :frames option: :STATIC, :STACK, or NIL for the backend's own.")
 (defvar *items-static-placed* nil "True when the items have a (:static-frames) item to hold the static words.")
 (defvar *items-static-words* nil "The (KEY FUNCTION COUNT) of each static function's words, reversed, for (:static-frames) to reserve.")
-(defvar *items-functions* nil "EQUAL table, upcased function name -> (NAME NARGS STATIC-P ITEM), for the items being lowered.")
+(defvar *items-functions* nil "EQUAL table, upcased function name -> (NAME NARGS STATIC-P ITEM INTERRUPT-P), for the items being lowered.")
+(defvar *items-function-keys* nil "The keys of *ITEMS-FUNCTIONS*, in program order.")
 (defvar *items-memory* nil "The memory element name items are assembled for, or NIL for the default.")
 (defvar *items-literals* nil "Literal text -> its tokens, for the assembly in progress.")
 (defvar *items-serial* 0 "Generated labels made so far, for the assembly in progress.")
@@ -548,6 +549,7 @@ to the enclosing label when one has been defined and the lexer has local labels.
   saves     ; registers saved on entry
   pointer   ; the frame pointer register, or NIL
   static    ; true when locals are labelled words, not stack slots
+  interrupt ; true when the function runs from an interrupt, so it returns with :RETURN-INTERRUPT
   name      ; the function's name, which a static word's label is made from
   (depth 0) ; slots pushed since the prologue
   labels    ; (NAME . DEPTH) for each label defined in the body
@@ -915,6 +917,17 @@ to its caller, most recent first. NIL when there is no cycle."
                      (setf (gethash (second edge) seen) t)
                      (setf queue (append queue (list (cons edge path)))))))))))
 
+(defun %call-graph-reachable (roots edges)
+  "An EQUAL table of the keys ROOTS and every key reachable from them along EDGES."
+  (let ((seen (make-hash-table :test 'equal)) (queue (copy-list roots)))
+    (loop while queue
+          do (let ((key (cl:pop queue)))
+               (unless (gethash key seen)
+                 (setf (gethash key seen) t)
+                 (loop for (caller callee) in edges
+                       when (string= caller key) do (cl:push callee queue)))))
+    seen))
+
 (defun %call-graph-offsets (keys edges sizes)
   "An EQUAL table, each of KEYS -> the offset its static frame starts at: after the frames of
 its callers, with the keys that call each other starting together. SIZES is a table of key ->
@@ -959,28 +972,42 @@ frame size, 0 for a key it lacks."
 (defun %static-area-lines (words table)
   "The lines reserving WORDS, the (KEY FUNCTION COUNT) of each static function. A function's
 words start after those of every function that calls it, so two functions that never run
-together share addresses."
-  (let ((sizes (make-hash-table :test 'equal)))
+together share addresses. The functions an interrupt function runs are laid out apart from
+the main line and from each other, one region after another."
+  (let ((sizes (make-hash-table :test 'equal)) (edges (%items-flow-edges table)))
     (loop for (key nil count) in words
           do (setf (gethash key sizes) count))
-    (let* ((offsets (%call-graph-offsets (mapcar #'first words) (%items-call-edges table) sizes))
-           (slots (loop for (key function count) in words
-                        append (loop for index below count
-                                     collect (cons (+ (gethash key offsets) index)
-                                                   (%static-word-label function index)))))
-           (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
-      (loop for address below size
-            append (append (loop for (at . label) in slots
-                                 when (= at address) collect (make-item-line :label label))
-                           (list (%directive-line (list :directive "res" (backend-word-cells *items-backend*)))))))))
+    (let* ((offsets (%call-graph-offsets (mapcar #'first words) edges sizes))
+           (contexts (%interrupt-contexts table edges))
+           (base 0)
+           (slots '()))
+      (loop for region from -1 below (length contexts)
+            do (let ((end 0))
+                 (loop for (key function count) in words
+                       when (= region (or (position-if (lambda (context) (gethash key (cdr context))) contexts) -1))
+                         do (loop for index below count
+                                  do (cl:push (cons (+ base (gethash key offsets) index)
+                                                    (%static-word-label function index))
+                                              slots))
+                            (setf end (max end (+ (gethash key offsets) count))))
+                 (incf base end)))
+      (setf slots (nreverse slots))
+      (%static-area-size-lines slots base))))
 
-(defun %static-function-lines (item name nargs nlocals saves body)
+(defun %static-area-size-lines (slots size)
+  "The lines of SIZE words, each at the label of every one of SLOTS, (ADDRESS . LABEL), there."
+  (loop for address below size
+        append (append (loop for (at . label) in slots
+                             when (= at address) collect (make-item-line :label label))
+                       (list (%directive-line (list :directive "res" (backend-word-cells *items-backend*)))))))
+
+(defun %static-function-lines (item name nargs nlocals saves body interrupt)
   "The lines of a function whose locals and saved registers are labelled words: reserved after
 the body, or at (:static-frames)."
   (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
          (function (%source-name name item))
          (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals 0 :saves saves
-                                  :static t :name function))
+                                  :static t :interrupt interrupt :name function))
          (saved-from (+ (%static-arg-words frame) nlocals))
          (words (+ saved-from (length saves)))
          (prologue (append (%item-lines (list :label name))
@@ -999,6 +1026,14 @@ the body, or at (:static-frames)."
            lines)
           (t (append lines (%static-word-lines function words))))))
 
+(defun %function-interrupt-p (options item)
+  "True when the :interrupt option of a function with OPTIONS is t. A .lasm file reads t as an
+uninterned symbol, so the value is matched by name."
+  (let ((name (%designator-name (%function-option options "INTERRUPT" nil))))
+    (unless (member name '("T" "NIL") :test #'equal)
+      (%items-fail 'items-malformed item "expected :interrupt to be t or nil"))
+    (equal name "T")))
+
 (defun %function-option (options name default)
   "The value of the function option NAME in the plist OPTIONS, or DEFAULT."
   (loop for (key value) on options by #'cddr
@@ -1013,22 +1048,26 @@ the body, or at (:static-frames)."
   (destructuring-bind (name options &rest body) (rest item)
     (loop for (key nil) on options by #'cddr
           do (unless (or (%keyword-named-p key "ARGS") (%keyword-named-p key "LOCALS") (%keyword-named-p key "SAVE")
-                   (%keyword-named-p key "FRAME") (%keyword-named-p key "FRAMES"))
+                   (%keyword-named-p key "FRAME") (%keyword-named-p key "FRAMES") (%keyword-named-p key "INTERRUPT"))
                (%items-fail 'items-malformed item "unknown function option ~S" key)))
     (flet ((option (name default) (%function-option options name default)))
-      (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '())))
+      (let ((nargs (option "ARGS" nil)) (nlocals (option "LOCALS" 0)) (saves (option "SAVE" '()))
+            (interrupt (%function-interrupt-p options item)))
         (unless (and (typep nlocals '(integer 0)) (or (null nargs) (typep nargs '(integer 0))) (listp saves))
           (%items-fail 'items-malformed item "expected :args and :locals to be non-negative integers and :save a list"))
+        ;; A .lasm file reads t as an uninterned symbol, so this rejects `:frame t` there (#469).
         (unless (member (option "FRAME" t) '(t nil))
           (%items-fail 'items-malformed item "expected :frame to be t or nil"))
+        (when (and interrupt nargs (plusp nargs))
+          (%items-fail 'items-malformed item "an interrupt function takes no arguments"))
         (let ((staticp (%function-static-p (option "FRAMES" nil) item)))
           (when (and (option "FRAME" nil) staticp)
             (%items-fail 'items-malformed item ":frame t is a stack frame's pointer; the function's frames are static"))
           (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
             (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
           (when staticp
-            (return-from %function-lines (%static-function-lines item name nargs nlocals saves body))))
-        (when (and (null nargs)
+            (return-from %function-lines (%static-function-lines item name nargs nlocals saves body interrupt))))
+        (when (and (null nargs) (not interrupt)
                    (or (eq (%backend-call-option :cleanup) :callee)
                        (eq (%backend-call-option :order) :left-to-right)))
           (%items-fail 'items-malformed item "the backend's calling convention needs :args on a function"))
@@ -1044,7 +1083,7 @@ the body, or at (:static-frames)."
                (alignment (getf (backend-descriptor-frame *items-backend*) :alignment))
                (locals (+ nlocals (mod (- (+ nlocals (length saves) (if pointer 1 0))) alignment)))
                (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals locals :saves saves
-                                        :pointer pointer))
+                                        :pointer pointer :interrupt interrupt))
                (lines (append (%item-lines (list :label name))
                               (loop for register in saves
                                     append (%hook-lines :push (list (%register-operand register item)) item))
@@ -1053,6 +1092,9 @@ the body, or at (:static-frames)."
           (let ((*items-frame* frame))
             (prog1 (append lines (loop for element in body append (%item-lines element)))
               (%check-label-depths frame))))))))
+
+(defun %return-hook (frame)
+  (if (items-frame-interrupt frame) :return-interrupt :return))
 
 (defun %return-lines (item)
   (let ((frame *items-frame*))
@@ -1069,7 +1111,7 @@ the body, or at (:static-frames)."
                                           (list (%register-operand register item)
                                                 (%static-word-label (items-frame-name frame) index))
                                           item))
-                (%hook-lines :return '() item))))
+                (%hook-lines (%return-hook frame) '() item))))
     (let ((nstack (max 0 (- (items-frame-nargs frame) (length (%arg-registers))))))
       (append (if (items-frame-pointer frame)
                   (%hook-lines :leave '() item)
@@ -1078,7 +1120,7 @@ the body, or at (:static-frames)."
                     append (%hook-lines :pop (list (%register-operand register item)) item))
               (if (and (eq (%backend-call-option :cleanup) :callee) (plusp nstack))
                   (%hook-lines :return-pop (list (%frame-count nstack)) item)
-                  (%hook-lines :return '() item))))))
+                  (%hook-lines (%return-hook frame) '() item))))))
 
 (defun %depth-lines (item)
   (unless (and *items-frame* (= (length item) 2) (typep (second item) '(integer 0)))
@@ -1591,16 +1633,18 @@ of its ISA or an ISA extending it."
   (and (consp item) (%keyword-named-p (first item) "STATIC-FRAMES")))
 
 (defun %items-function-table (items)
-  "An EQUAL table, upcased name -> (NAME NARGS STATIC-P ITEM), for each (:function ...) of ITEMS
-that is well formed enough to name."
-  (let ((table (make-hash-table :test 'equal)))
-    (dolist (item items table)
+  "An EQUAL table, upcased name -> (NAME NARGS STATIC-P ITEM INTERRUPT-P), for each (:function ...)
+of ITEMS that is well formed enough to name, and the names in program order."
+  (let ((table (make-hash-table :test 'equal)) (keys '()))
+    (dolist (item items (values table (nreverse keys)))
       (when (and (consp item) (%keyword-named-p (first item) "FUNCTION") (>= (length item) 3)
                  (listp (third item)) (evenp (length (third item))) (%designator-name (second item)))
-        (let ((options (third item)))
-          (setf (gethash (%designator-name (second item)) table)
+        (let ((options (third item)) (key (%designator-name (second item))))
+          (cl:pushnew key keys :test #'string=)
+          (setf (gethash key table)
                 (list (second item) (%function-option options "ARGS" nil)
-                      (%function-static-p (%function-option options "FRAMES" nil) item) item)))))))
+                      (%function-static-p (%function-option options "FRAMES" nil) item) item
+                      (%function-interrupt-p options item))))))))
 
 (defun %items-call-edges (table)
   "The calls between the functions of TABLE, as (CALLER CALLEE FORM): FORM is the smallest
@@ -1637,6 +1681,44 @@ form of CALLER's body that mentions CALLEE, as a call, a jump or an address."
                                   (if (rest path) (append (mapcar #'first path) (list key)) key))))))
              table)))
 
+(defun %items-flow-edges (table)
+  "The call edges of TABLE that run code in the caller's context: not those into an interrupt
+function, which is run by the machine at any time and only mentioned, as an address, by other code."
+  (remove-if (lambda (edge) (fifth (gethash (second edge) table))) (%items-call-edges table)))
+
+(defun %interrupt-contexts (table edges)
+  "For each interrupt function of TABLE, in program order, (KEY . REACHED): REACHED is an EQUAL
+table of KEY and the functions it runs along EDGES."
+  (loop for key in *items-function-keys*
+        when (fifth (gethash key table))
+          collect (cons key (%call-graph-reachable (list key) edges))))
+
+(defun %check-interrupt-contexts (table)
+  "Fail at a static function of TABLE that runs from an interrupt and from any other context, the
+main line or another interrupt: an interrupt during it would overwrite its words."
+  (let* ((edges (%items-flow-edges table))
+         (contexts (%interrupt-contexts table edges)))
+    (when contexts
+      (let* ((roots (loop for key in *items-function-keys*
+                          unless (some (lambda (context) (gethash key (cdr context))) contexts)
+                            collect key))
+             (main (%call-graph-reachable roots edges)))
+        (dolist (key *items-function-keys*)
+          (when (third (gethash key table))
+            (let ((hits (remove-if-not (lambda (context) (gethash key (cdr context))) contexts)))
+              (when (or (rest hits) (and hits (gethash key main)))
+                (flet ((chain (from) (%call-graph-path edges from key)))
+                  (let* ((interrupted (chain (car (first hits))))
+                         (other-interrupt (and (rest hits) t))
+                         (other (if other-interrupt
+                                    (chain (car (second hits)))
+                                    (some #'chain roots))))
+                    (%items-fail 'items-malformed (third (car (last other)))
+                                 "interrupt ~(~{~A~^ calls ~}~), and ~:[~;interrupt ~]~(~{~A~^ calls ~}~); a static function is not re-entrant, so give it :frames stack"
+                                 (append (mapcar #'first interrupted) (list key))
+                                 other-interrupt
+                                 (append (mapcar #'first other) (list key)))))))))))))
+
 (defun %items-lines (items)
   "The lines of ITEMS, with every static function's words at the (:static-frames) item."
   (let ((placeholders (remove-if-not #'%static-frames-item-p items)))
@@ -1645,16 +1727,19 @@ form of CALLER's body that mentions CALLEE, as a call, a jump or an address."
     (dolist (placeholder placeholders)
       (unless (null (rest placeholder))
         (%items-fail 'items-malformed placeholder "expected (:static-frames)")))
-    (let* ((*items-functions* (%items-function-table items))
-           (*items-static-placed* (and placeholders t))
-           (*items-static-words* '())
-           (chunks (loop for item in items
-                         initially (%check-static-recursion *items-functions*)
-                         collect (if (%static-frames-item-p item) :static-frames (%item-lines item)))))
-      (loop for chunk in chunks
-            append (if (eq chunk :static-frames)
-                       (%static-area-lines (reverse *items-static-words*) *items-functions*)
-                       chunk)))))
+    (multiple-value-bind (table keys) (%items-function-table items)
+      (let* ((*items-functions* table)
+             (*items-function-keys* keys)
+             (*items-static-placed* (and placeholders t))
+             (*items-static-words* '())
+             (chunks (loop for item in items
+                           initially (%check-static-recursion *items-functions*)
+                                     (%check-interrupt-contexts *items-functions*)
+                           collect (if (%static-frames-item-p item) :static-frames (%item-lines item)))))
+        (loop for chunk in chunks
+              append (if (eq chunk :static-frames)
+                         (%static-area-lines (reverse *items-static-words*) *items-functions*)
+                         chunk))))))
 
 (defun %items-source (items)
   "The statements ITEMS make, the source text they render as, its unit and the item lines."

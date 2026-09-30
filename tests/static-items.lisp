@@ -273,3 +273,106 @@
                                             (:function leaf (:locals 1 :frames static) (:return))))
                                   :backend 'zpfoo-label-abi))))
     (fiveam:is (= 2 (- (gethash "sfleafx0" symbols) (gethash "sftopx0" symbols))))))
+
+;;; #468: functions that run from an interrupt
+
+(defbackend zs-int-bare-abi (:extends zs-bare-abi)
+  (ops (:return-interrupt () (hlt))))
+
+(defbackend zs-int-abi (:extends zpfoo-label-abi)
+  (ops (:return-interrupt () (hlt))))
+
+(defun %zs-symbols (items backend)
+  (assembly-symbols (assemble-items (append +zs-words+ items) :backend backend)))
+
+(fiveam:test an-interrupt-function-keeps-words-no-other-function-shares
+  (let ((symbols (%zs-symbols '((:function main (:locals 1) (:return))
+                                (:function irq (:interrupt t :locals 1) (:return)))
+                              'zs-int-bare-abi)))
+    (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))))
+
+(fiveam:test what-an-interrupt-function-calls-lies-in-its-region
+  (let ((symbols (%zs-symbols '((:function main (:locals 1) (:return))
+                                (:function irq (:interrupt t :locals 1) (:call helper) (:return))
+                                (:function helper (:locals 1) (:return)))
+                              'zs-int-bare-abi)))
+    (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
+    (fiveam:is (= 4 (- (gethash "sfhelperx0" symbols) (gethash "sfmainx0" symbols))))))
+
+(fiveam:test interrupt-functions-keep-apart-from-each-other
+  (let ((symbols (%zs-symbols '((:function nmi (:interrupt t :locals 1) (:return))
+                                (:function irq (:interrupt t :locals 1) (:return))
+                                (:function main (:locals 1) (:return)))
+                              'zs-int-bare-abi)))
+    (fiveam:is (= 2 (- (gethash "sfnmix0" symbols) (gethash "sfmainx0" symbols))))
+    (fiveam:is (= 4 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))))
+
+(fiveam:test mentioning-an-interrupt-function-is-not-a-call
+  (let ((symbols (%zs-symbols '((:function main (:locals 1) (jmp irq))
+                                (:function irq (:interrupt t :locals 1) (:call shared) (:return))
+                                (:function shared (:locals 1) (:return)))
+                              'zs-int-bare-abi)))
+    (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
+    (fiveam:is (= 4 (- (gethash "sfsharedx0" symbols) (gethash "sfmainx0" symbols))))))
+
+(fiveam:test a-static-function-run-from-an-interrupt-and-the-main-line-is-rejected
+  (let ((message (%zs-error '((:function main () (:call shared) (:return))
+                              (:function irq (:interrupt t) (:call shared) (:return))
+                              (:function shared (:locals 1) (:return)))
+                            'zs-int-bare-abi)))
+    (fiveam:is (search "interrupt irq calls shared, and main calls shared" message))
+    (fiveam:is (search ":frames stack" message))))
+
+(fiveam:test a-static-function-run-from-two-interrupts-is-rejected
+  (fiveam:is (search "interrupt irq calls shared, and interrupt nmi calls shared"
+                     (%zs-error '((:function irq (:interrupt t) (:call shared) (:return))
+                                  (:function nmi (:interrupt t) (:call shared) (:return))
+                                  (:function shared (:locals 1) (:return)))
+                                'zs-int-bare-abi))))
+
+(fiveam:test a-stack-function-may-be-run-from-an-interrupt-and-the-main-line
+  (fiveam:is (null (%zs-error '((:function main (:frames static) (:call shared) (:return))
+                                (:function irq (:interrupt t :frames static) (:call shared) (:return))
+                                (:function shared (:frames stack) (:return)))
+                              'zs-int-abi))))
+
+(fiveam:test a-stack-function-does-not-hide-a-static-function-it-calls
+  (fiveam:is (search "interrupt irq calls f calls g, and main calls f calls g"
+                     (%zs-error '((:function main (:frames static) (:call f) (:return))
+                                  (:function irq (:interrupt t :frames static) (:call f) (:return))
+                                  (:function f (:frames stack) (:call g) (:return))
+                                  (:function g (:frames static :locals 1) (:return)))
+                                'zs-int-abi))))
+
+(fiveam:test an-interrupt-function-returns-with-the-interrupt-return
+  (let ((static (render-items '((:function irq (:interrupt t :save (w2)) (:return))) :backend 'zs-int-bare-abi))
+        (stack (render-items '((:function irq (:interrupt t :frames stack :locals 1) (:return))) :backend 'zs-int-abi)))
+    (fiveam:is (search "hlt" static))
+    (fiveam:is (null (search "ret" static)))
+    (fiveam:is (< (search "lda" static) (search "hlt" static)))
+    (fiveam:is (< (search "adds" stack) (search "hlt" stack)))
+    (fiveam:is (null (search "ret" stack)))))
+
+(fiveam:test an-interrupt-function-needs-the-backends-interrupt-return
+  (fiveam:is (search "return-interrupt"
+                     (%zs-error '((:function irq (:interrupt t) (:return))) 'zs-bare-abi))))
+
+(fiveam:test the-interrupt-option-is-t-or-nil-and-takes-no-arguments
+  (fiveam:is (search ":interrupt to be t or nil"
+                     (%zs-error '((:function irq (:interrupt 5) (:return))) 'zs-int-bare-abi)))
+  (fiveam:is (search "takes no arguments"
+                     (%zs-error '((:function irq (:interrupt t :args 1) (:return))) 'zs-int-bare-abi)))
+  (fiveam:is (null (%zs-error '((:function f (:interrupt nil) (:return))) 'zs-bare-abi))))
+
+(fiveam:test a-lasm-file-reads-the-interrupt-option
+  (%call-with-items-file "(:program (:backend zs-int-bare-abi :origin 512)
+  (:function main (:locals 1) (:return))
+  (:function irq (:interrupt t :locals 1) (:return))
+  (:function idle (:interrupt nil :locals 1) (:return))
+  (:static-frames))"
+    (lambda (path)
+      (let ((source (assembly-source (assemble-items-file path)))
+            (symbols (assembly-symbols (assemble-items-file path))))
+        (fiveam:is (search "hlt" source))
+        (fiveam:is (= 2 (- (gethash "sfirqx0" symbols) (gethash "sfmainx0" symbols))))
+        (fiveam:is (= (gethash "sfmainx0" symbols) (gethash "sfidlex0" symbols)))))))
