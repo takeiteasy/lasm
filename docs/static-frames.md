@@ -164,6 +164,7 @@ taken to be any entered function that takes as many arguments.
 | --- | --- |
 | A static `.lasm` function takes arguments in registers only. | [#463](https://todo.sr.ht/~takeiteasy/lasm/463) |
 | Each static `.lasm` function reserves its own words; none are shared. | [#464](https://todo.sr.ht/~takeiteasy/lasm/464) |
+| Nothing rejects a static `.lasm` function that calls itself. | [#465](https://todo.sr.ht/~takeiteasy/lasm/465) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been
