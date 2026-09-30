@@ -12,5 +12,5 @@
       (load quicklisp-setup)
       (error "Quicklisp not found at ~A -- see docs/getting-started.md" quicklisp-setup)))
 (let ((here (make-pathname :name nil :type nil :defaults *load-truename*)))
-  (asdf:load-asd (merge-pathnames "../lasm.asd" here))
+  (asdf:load-asd (truename (merge-pathnames "../lasm.asd" here)))
   (asdf:load-system :lasm))

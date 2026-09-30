@@ -1,11 +1,16 @@
 ;;;; Runs the whole suite and exits nonzero on any failure or error:
 ;;;;   ros -L sbcl-bin -Q -l tests/ci.lisp
+;;;;   ecl --norc --load tests/ci.lisp
+;;;;   ccl -n -b -l tests/ci.lisp
 ;;;; Packages the file loads are named at run time, since the reader would
 ;;;; fail on them before they exist.
+
+(require :asdf)
 
 ;; Without this an error leaves some implementations at a REPL that exits 0 on end of input.
 (handler-bind ((error (lambda (condition)
                         (format *error-output* "~&tests/ci.lisp: ~A~%" condition)
+                        (uiop:print-backtrace :condition condition)
                         (uiop:quit 1))))
   (load (merge-pathnames "../bench/boot.lisp" *load-truename*))
   (asdf:load-system :lasm/test)

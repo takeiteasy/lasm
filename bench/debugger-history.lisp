@@ -42,7 +42,7 @@ loop:   sta $10
     (/ (- (get-internal-real-time) start) internal-time-units-per-second 1.0)))
 
 (defun report (label seconds steps)
-  (format t "~&~30A ~8,3F s  ~8,2F Msteps/s~%" label seconds (/ steps seconds 1000000.0)))
+  (format t "~&~30A ~8,3F s  ~8,2F Msteps/s~%" label seconds (/ steps (max seconds 1e-6) 1000000.0)))
 
 (defun bench-forward (label steps &key history condition)
   (let ((session (bench-session steps history)))

@@ -50,5 +50,10 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           lisp: ${{ matrix.lisp }}
-      - name: Test
-        run: ros -L ${{ matrix.lisp }} -Q -l tests/ci.lisp
+      # Roswell loads an old ASDF into ECL that cannot build the test system.
+      - name: Test on ECL
+        if: matrix.lisp == 'ecl'
+        run: ecl --norc --load tests/ci.lisp
+      - name: Test on CCL
+        if: matrix.lisp == 'ccl-bin'
+        run: ros -L ccl-bin -Q -l tests/ci.lisp

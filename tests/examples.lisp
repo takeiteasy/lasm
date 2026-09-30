@@ -70,21 +70,23 @@
         (queue runs)
         (results '())
         (lock (%make-lock)))
+    ;; CCL threads start from identical random states, so their temporary file names collide.
     (flet ((worker ()
-             (loop for run = (%with-lock (lock) (cl:pop queue))
-                   for (script . args) = run
-                   while run
-                   do (multiple-value-bind (out err status)
-                          (handler-case
-                              (uiop:with-temporary-file (:pathname err-file)
-                                (let ((status (nth-value 2 (uiop:run-program (%script-command core script args)
-                                                                             :output nil :error-output err-file
-                                                                             :ignore-error-status t))))
-                                  (values nil (uiop:read-file-string err-file) status)))
-                            (error (e) (values nil (princ-to-string e) -1)))
-                        (declare (ignore out))
-                        (%with-lock (lock)
-                          (cl:push (list run status err) results))))))
+             (let ((*random-state* (make-random-state t)))
+               (loop for run = (%with-lock (lock) (cl:pop queue))
+                     for (script . args) = run
+                     while run
+                     do (multiple-value-bind (out err status)
+                            (handler-case
+                                (uiop:with-temporary-file (:pathname err-file)
+                                  (let ((status (nth-value 2 (uiop:run-program (%script-command core script args)
+                                                                               :output nil :error-output err-file
+                                                                               :ignore-error-status t))))
+                                    (values nil (uiop:read-file-string err-file) status)))
+                              (error (e) (values nil (princ-to-string e) -1)))
+                          (declare (ignore out))
+                          (%with-lock (lock)
+                            (cl:push (list run status err) results)))))))
       (mapc #'%join-thread
             (loop repeat (%host-cores) collect (%make-thread #'worker "script"))))
     results))
