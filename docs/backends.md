@@ -145,6 +145,8 @@ clause; `(:call double ...)` the second. A single clause still reports a plain
 argument-count mismatch when called with the wrong number of arguments; with
 several, none matching is `items-malformed`.
 
+A frame operand, `(:arg i)` or `(:local i)`, dispatches as the operand it addresses: the frame's slot kind on the stack, the register kind in a register.
+
 ### Labels
 
 A `(:label NAME)` form in a template defines a label of that operation. Each

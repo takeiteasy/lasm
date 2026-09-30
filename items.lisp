@@ -1192,13 +1192,14 @@ A value that depends on a label is checked when the assembler encodes it."
        (when (and (%depth-tracked-p) (member (%designator-name (second item)) '("PUSH" "POP" "ALLOC" "FREE") :test #'equal))
          (%items-fail 'items-malformed item "(:op ~(~S~) ...) changes the stack depth; use (:push)/(:pop) or a frame pointer"
                       (second item)))
-       (let ((forms (%expand-op *items-backend* (second item) (cddr item))))
-         (multiple-value-bind (effect declaredp) (%op-stack-effect (second item) (cddr item) item)
+       (let* ((args (mapcar (lambda (arg) (%resolve-operand arg item)) (cddr item)))
+              (forms (%expand-op *items-backend* (second item) args)))
+         (multiple-value-bind (effect declaredp) (%op-stack-effect (second item) args item)
            (unless declaredp
              (%check-stack-forms forms item))
            (dolist (form forms)
              (%record-references form item))
-           (let ((lines (%op-lines (second item) (cddr item) item)))
+           (let ((lines (%op-lines (second item) args item)))
              (if declaredp
                  (%bump-depth effect)
                  (%check-stack-lines lines item))

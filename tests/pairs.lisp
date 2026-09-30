@@ -374,22 +374,22 @@
 ;;; A call argument that is an integer or a label is a value, loaded with :const (#452).
 
 (defparameter +value-call-specs+
-  '((pairfoo pairfoo-lang-abi reg ab cd %pf-word :get)
-    (pairfoo pairfoo-lang-reg-abi reg ab cd %pf-word :move)
-    (zpfoo zpfoo-lang-abi zp w0 w1 %zf-word :get)
-    (zpfoo zpfoo-lang-reg-abi zp w0 w1 %zf-word :move))
-  "(MACHINE BACKEND KIND RESULT OTHER READER LOAD): the reg-abi backends pass the first argument in OTHER,
-the others on the stack. LOAD is the operation that reads it.")
+  '((pairfoo pairfoo-lang-abi reg ab cd %pf-word)
+    (pairfoo pairfoo-lang-reg-abi reg ab cd %pf-word)
+    (zpfoo zpfoo-lang-abi zp w0 w1 %zf-word)
+    (zpfoo zpfoo-lang-reg-abi zp w0 w1 %zf-word))
+  "(MACHINE BACKEND KIND RESULT OTHER READER): the reg-abi backends pass the first argument in OTHER,
+the others on the stack.")
 
-(defun %value-call (spec prefix call &optional (backend (second spec)) (load-other :get))
+(defun %value-call (spec prefix call &optional (backend (second spec)))
   "Run PREFIX, then CALL, a call of sub2 returning its first argument less its second, on SPEC's machine.
 Returns the result word and the assembly."
-  (destructuring-bind (name ignored kind result other reader load) spec
+  (destructuring-bind (name ignored kind result other reader) spec
     (declare (ignore ignored))
     (let* ((items `(,@prefix ,call (:op :halt)
                     (:function sub2 (:args 2)
-                      (:op ,load (,kind ,result) (:arg 0))
-                      (:op ,load-other (,kind ,other) (:arg 1))
+                      (:op :move (,kind ,result) (:arg 0))
+                      (:op :move (,kind ,other) (:arg 1))
                       (:op :sub (,kind ,result) (,kind ,other))
                       (:return))))
            (assembly (assemble-items items :backend backend :origin #x300))
@@ -425,20 +425,20 @@ Returns the result word and the assembly."
   (eval '(defbackend zf-swap-abi (:extends zpfoo-lang-abi)
           (registers :scratch (w0 w3) :caller-saved (w1 w2) :callee-saved ())
           (call :args (w1 w2) :order :left-to-right :cleanup :caller :return-address-slots 1)))
-  (fiveam:is (= 65531 (%value-call (fourth +value-call-specs+) '((:op :const (zp w1) 10)) '(:call sub2 5 (zp w1)) 'zf-swap-abi :move))
+  (fiveam:is (= 65531 (%value-call (fourth +value-call-specs+) '((:op :const (zp w1) 10)) '(:call sub2 5 (zp w1)) 'zf-swap-abi))
              "w2 takes w1 before w1 takes 5"))
 
 (fiveam:test a-value-argument-does-not-disturb-a-computed-call-target
   (loop for spec in (list (second +value-call-specs+) (fourth +value-call-specs+))
-        do (destructuring-bind (name backend kind result other reader load) spec
-             (declare (ignore name backend result reader load))
+        do (destructuring-bind (name backend kind result other reader) spec
+             (declare (ignore name backend result reader))
              (fiveam:is (= 2 (%value-call spec `((:op :const (,kind ,other) sub2)) `(:call (,kind ,other) 5 3)))
                         "~A calls through the pair the first argument is loaded into" (second spec)))))
 
 (fiveam:test a-stack-value-is-staged-through-a-scratch-pair-no-argument-reads
   (loop for spec in (list (second +value-call-specs+) (fourth +value-call-specs+))
-        do (destructuring-bind (name backend kind result other reader load) spec
-             (declare (ignore name backend other reader load))
+        do (destructuring-bind (name backend kind result other reader) spec
+             (declare (ignore name backend other reader))
              (fiveam:is (= 993 (%value-call spec `((:op :const (,kind ,result) 1000)) `(:call sub2 (,kind ,result) 7)))
                         "~A keeps the register argument out of the staging pair" (second spec)))))
 
@@ -450,3 +450,25 @@ Returns the result word and the assembly."
              (items-malformed (c) c))))
     (fiveam:is (typep c 'items-malformed))
     (fiveam:is (and c (search "value" (princ-to-string c))))))
+
+;;; A frame operand of an :op dispatches as what it addresses (#458).
+
+(fiveam:test a-frame-operand-of-an-op-selects-the-clause-for-its-kind
+  (loop for spec in +value-call-specs+
+        do (fiveam:is (= 65534 (%value-call spec '() '(:call sub2 5 7)))
+                      "~A: :move from an argument on the stack or in a register" (second spec)))
+  (dolist (spec (list (first +value-call-specs+) (third +value-call-specs+)))
+    (destructuring-bind (name backend kind result other reader) spec
+      (declare (ignore other))
+      (let ((m (make-machine name)))
+        (load-program m (assemble-items `((:function getloc (:locals 1)
+                                            (:op :const (,kind ,result) 42)
+                                            (:op :set (:local 0) (,kind ,result))
+                                            (:op :const (,kind ,result) 0)
+                                            (:op :move (,kind ,result) (:local 0))
+                                            (:return))
+                                          (:call getloc) (:op :halt))
+                                        :backend backend :origin #x300))
+        (setf (sref m 'sp) +pf-sp+)
+        (run m :max-steps 1000)
+        (fiveam:is (= 42 (funcall reader m)) "~A: :move from a local" backend)))))
