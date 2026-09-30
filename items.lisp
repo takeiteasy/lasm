@@ -928,6 +928,55 @@ to its caller, most recent first. NIL when there is no cycle."
                        when (string= caller key) do (cl:push callee queue)))))
     seen))
 
+(defun %call-graph-flow-edges (edges interrupts)
+  "EDGES less those into a key of INTERRUPTS, the interrupt functions: the machine runs one at any
+time, and other code only mentions it, as an address."
+  (remove-if (lambda (edge) (member (second edge) interrupts :test #'string=)) edges))
+
+(defun %call-graph-contexts (edges interrupts)
+  "For each key of INTERRUPTS, in order, (KEY . REACHED): REACHED is an EQUAL table of KEY and the
+keys it runs along EDGES."
+  (let ((flow (%call-graph-flow-edges edges interrupts)))
+    (loop for key in interrupts
+          collect (cons key (%call-graph-reachable (list key) flow)))))
+
+(defun %call-graph-shared (keys edges interrupts)
+  "For each of KEYS, in order, that runs from an interrupt function and from another context, the
+main line or another interrupt function: (KEY INTERRUPTED OTHER OTHER-INTERRUPT-P). INTERRUPTED and
+OTHER are the shortest lists of EDGES from a root of each context to KEY."
+  (let* ((flow (%call-graph-flow-edges edges interrupts))
+         (contexts (%call-graph-contexts edges interrupts))
+         (roots (loop for key in keys
+                      unless (some (lambda (context) (gethash key (cdr context))) contexts)
+                        collect key))
+         (main (%call-graph-reachable roots flow)))
+    (when contexts
+      (loop for key in keys
+            for hits = (remove-if-not (lambda (context) (gethash key (cdr context))) contexts)
+            when (or (rest hits) (and hits (gethash key main)))
+              collect (flet ((chain (from) (%call-graph-path flow from key)))
+                        (let ((other-interrupt (and (rest hits) t)))
+                          (list key (chain (car (first hits)))
+                                (if other-interrupt (chain (car (second hits))) (some #'chain roots))
+                                other-interrupt)))))))
+
+(defun %call-graph-region-offsets (keys edges sizes interrupts)
+  "(VALUES OFFSETS SIZE): an EQUAL table, each of KEYS -> its offset, as %CALL-GRAPH-OFFSETS gives
+it, and the size of all their frames. What each interrupt function of INTERRUPTS runs lies in a
+region of its own, after the rest, so no address is shared between regions."
+  (let* ((relative (%call-graph-offsets keys (%call-graph-flow-edges edges interrupts) sizes))
+         (contexts (%call-graph-contexts edges interrupts))
+         (offsets (make-hash-table :test 'equal))
+         (base 0))
+    (loop for region from -1 below (length contexts)
+          do (let ((end 0))
+               (dolist (key keys)
+                 (when (= region (or (position-if (lambda (context) (gethash key (cdr context))) contexts) -1))
+                   (setf (gethash key offsets) (+ base (gethash key relative))
+                         end (max end (+ (gethash key relative) (gethash key sizes 0))))))
+               (incf base end)))
+    (values offsets base)))
+
 (defun %call-graph-offsets (keys edges sizes)
   "An EQUAL table, each of KEYS -> the offset its static frame starts at: after the frames of
 its callers, with the keys that call each other starting together. SIZES is a table of key ->
@@ -974,25 +1023,17 @@ frame size, 0 for a key it lacks."
 words start after those of every function that calls it, so two functions that never run
 together share addresses. The functions an interrupt function runs are laid out apart from
 the main line and from each other, one region after another."
-  (let ((sizes (make-hash-table :test 'equal)) (edges (%items-flow-edges table)))
+  (let ((sizes (make-hash-table :test 'equal)))
     (loop for (key nil count) in words
           do (setf (gethash key sizes) count))
-    (let* ((offsets (%call-graph-offsets (mapcar #'first words) edges sizes))
-           (contexts (%interrupt-contexts table edges))
-           (base 0)
-           (slots '()))
-      (loop for region from -1 below (length contexts)
-            do (let ((end 0))
-                 (loop for (key function count) in words
-                       when (= region (or (position-if (lambda (context) (gethash key (cdr context))) contexts) -1))
-                         do (loop for index below count
-                                  do (cl:push (cons (+ base (gethash key offsets) index)
-                                                    (%static-word-label function index))
-                                              slots))
-                            (setf end (max end (+ (gethash key offsets) count))))
-                 (incf base end)))
-      (setf slots (nreverse slots))
-      (%static-area-size-lines slots base))))
+    (multiple-value-bind (offsets size)
+        (%call-graph-region-offsets (mapcar #'first words) (%items-call-edges table) sizes
+                                    (%items-interrupt-keys table))
+      (%static-area-size-lines
+       (loop for (key function count) in words
+             append (loop for index below count
+                          collect (cons (+ (gethash key offsets) index) (%static-word-label function index))))
+       size))))
 
 (defun %static-area-size-lines (slots size)
   "The lines of SIZE words, each at the label of every one of SLOTS, (ADDRESS . LABEL), there."
@@ -1682,43 +1723,22 @@ form of CALLER's body that mentions CALLEE, as a call, a jump or an address."
                                   (if (rest path) (append (mapcar #'first path) (list key)) key))))))
              table)))
 
-(defun %items-flow-edges (table)
-  "The call edges of TABLE that run code in the caller's context: not those into an interrupt
-function, which is run by the machine at any time and only mentioned, as an address, by other code."
-  (remove-if (lambda (edge) (fifth (gethash (second edge) table))) (%items-call-edges table)))
-
-(defun %interrupt-contexts (table edges)
-  "For each interrupt function of TABLE, in program order, (KEY . REACHED): REACHED is an EQUAL
-table of KEY and the functions it runs along EDGES."
-  (loop for key in *items-function-keys*
-        when (fifth (gethash key table))
-          collect (cons key (%call-graph-reachable (list key) edges))))
+(defun %items-interrupt-keys (table)
+  "The keys of the interrupt functions of TABLE, in program order."
+  (remove-if-not (lambda (key) (fifth (gethash key table))) *items-function-keys*))
 
 (defun %check-interrupt-contexts (table)
   "Fail at a static function of TABLE that runs from an interrupt and from any other context, the
 main line or another interrupt: an interrupt during it would overwrite its words."
-  (let* ((edges (%items-flow-edges table))
-         (contexts (%interrupt-contexts table edges)))
-    (when contexts
-      (let* ((roots (loop for key in *items-function-keys*
-                          unless (some (lambda (context) (gethash key (cdr context))) contexts)
-                            collect key))
-             (main (%call-graph-reachable roots edges)))
-        (dolist (key *items-function-keys*)
-          (when (third (gethash key table))
-            (let ((hits (remove-if-not (lambda (context) (gethash key (cdr context))) contexts)))
-              (when (or (rest hits) (and hits (gethash key main)))
-                (flet ((chain (from) (%call-graph-path edges from key)))
-                  (let* ((interrupted (chain (car (first hits))))
-                         (other-interrupt (and (rest hits) t))
-                         (other (if other-interrupt
-                                    (chain (car (second hits)))
-                                    (some #'chain roots))))
-                    (%items-fail 'items-malformed (third (car (last other)))
-                                 "interrupt ~(~{~A~^ calls ~}~), and ~:[~;interrupt ~]~(~{~A~^ calls ~}~); a static function is not re-entrant, so give it :frames stack"
-                                 (append (mapcar #'first interrupted) (list key))
-                                 other-interrupt
-                                 (append (mapcar #'first other) (list key)))))))))))))
+  (dolist (shared (%call-graph-shared *items-function-keys* (%items-call-edges table)
+                                       (%items-interrupt-keys table)))
+    (destructuring-bind (key interrupted other other-interrupt) shared
+      (when (third (gethash key table))
+        (%items-fail 'items-malformed (third (car (last other)))
+                     "interrupt ~(~{~A~^ calls ~}~), and ~:[~;interrupt ~]~(~{~A~^ calls ~}~); a static function is not re-entrant, so give it :frames stack"
+                     (append (mapcar #'first interrupted) (list key))
+                     other-interrupt
+                     (append (mapcar #'first other) (list key)))))))
 
 (defun %items-lines (items)
   "The lines of ITEMS, with every static function's words at the (:static-frames) item."

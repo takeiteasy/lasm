@@ -114,9 +114,10 @@ demo.lasm:9:5: a calls b calls a is recursive; a static function keeps its local
 ## Interrupts
 
 A function the machine runs at any time, an interrupt handler, takes
-`:interrupt t`. Its words, and those of the functions it runs, lie apart from
-the main line's and from other handlers', so an interrupt never overwrites a
-function it interrupts.
+`:interrupt t` in a `.lasm` file, or `(declare (interrupt))` in a `.lsp` file.
+Its words, and those of the functions it runs, lie apart from the main line's
+and from other handlers', so an interrupt never overwrites a function it
+interrupts.
 
 ```lisp
 (:function irq (:interrupt t :locals 1)
@@ -137,6 +138,31 @@ function it interrupts.
 
 ```
 demo.lasm:14:5: interrupt irq calls log, and main calls log; a static function is not re-entrant, so give it :frames stack
+```
+
+### `.lsp` handlers
+
+A `defun` with no parameters and `(declare (interrupt))` first in its body is a
+handler. The words are laid out as for a `.lasm` handler, and it returns with the
+backend's `:return-interrupt`.
+
+```lisp
+(defvar ticks 0)
+(defun irq ()
+  (declare (interrupt))
+  (set ticks (+ ticks 1)))
+(defun main () ticks)
+```
+
+| Part | Behavior |
+| --- | --- |
+| Shared functions | A function run from a handler and from the main line, or from two handlers, keeps a stack frame, as a [recursive one](#recursion) does. The backend needs the stack operations, or it is a compile error. |
+| Parameters | A shared function takes none: its argument words would be shared, so an interrupt between a caller's store and the call could overwrite them. It is a compile error. |
+| Computed calls | A `funcall` of a computed target in a handler, or in a function it runs, is a compile error: it stores its arguments in a block the main line's computed calls share.[^block] |
+| Not allowed | `main` as a handler, and parameters on one. |
+
+```
+irq.lsp:6:3: interrupt irq calls log, and main calls log; a function run from both keeps its arguments in words the two share, so it cannot take parameters
 ```
 
 ## Recursion
@@ -192,12 +218,6 @@ recursion check and the frame layout. A target the compiler cannot trace is
 taken to be any entered function that takes as many arguments.
 
 `(funcall (function F) ARG...)` and `(F ARG...)` are plain calls, with no thunk.
-
-## Limitations
-
-| Limitation | Ticket |
-| --- | --- |
-| A `.lsp` function cannot be marked as an interrupt handler, so with static frames it shares words with functions it does not call. | [#470](https://todo.sr.ht/~takeiteasy/lasm/470) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
   its parameters, `let` variables and the temporaries that would have been

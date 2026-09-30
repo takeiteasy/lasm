@@ -14,6 +14,9 @@
 ;;;;   (aref A I), (aset A I V), (aref-byte S I), (aset-byte S I V), (return [E]), (asm ITEM...), (function F),
 ;;;;   (funcall E ARG...), (F ARG...)
 ;;;;
+;;;; (declare (interrupt)) first in the body of a parameterless defun makes it an
+;;;; interrupt handler (docs/static-frames.md#interrupts).
+;;;;
 ;;;; (function F) is F's address, a value; (funcall E ARG...) calls
 ;;;; through any expression, going straight to F's label when E is literally
 ;;;; (function F). (defarray ...) and (defstring ...) are initialised,
@@ -134,7 +137,8 @@
 (defvar *cc-arrays* nil "An EQ table from a DEFARRAY's label to the vector of its elements' bindings.")
 (defvar *cc-escaped* nil "Upcased names of the DEFARRAYs used other than as the base of an AREF or ASET, so any element may change.")
 (defvar *cc-frames* :stack "Where locals live: :STACK, in frame slots, or :STATIC, at fixed addresses laid out from the call graph.")
-(defvar *cc-stack-functions* nil "Upcased names of the functions that keep a stack frame under static frames, because they lie in a cycle of the call graph.")
+(defvar *cc-stack-functions* nil "Upcased names of the functions that keep a stack frame under static frames, because they lie in a cycle of the call graph or run from an interrupt and from another context.")
+(defvar *cc-interrupts* nil "Upcased names of the functions that declare (interrupt).")
 (defvar *cc-stack-function* nil "T while compiling a function in *CC-STACK-FUNCTIONS*.")
 (defvar *cc-calls* nil "(CALLER CALLEE FORM FUNCTION), reversed, for each call a static frame layout must account for.")
 (defvar *cc-caller* nil "The upcased name of the function being compiled.")
@@ -2137,6 +2141,7 @@ names must stay literal for the rest of the compiler to resolve."
              (append (if (%cc-static-p)
                          (list :args 0 :locals 0 :frame nil)
                          (list :args (if (%cc-static-calls-p) 0 (length params)) :locals *cc-max*))
+                     (and (member *cc-caller* *cc-interrupts* :test #'string=) (list :interrupt t))
                      ;; A preserved register %CC-TAKE used; the backend's
                      ;; own :callee-saved convention pushes and pops it, which
                      ;; also restores it correctly across an early (return).
@@ -2242,15 +2247,54 @@ register, so any of these are free once nothing above still needs them."
                                 (list callee)))))))))
 
 (defun %cc-check-recursion ()
-  "The upcased names of the functions in a cycle of the call graph. Fails at the first call that closes one when the backend has no stack frames, or when the cycles are not the functions already given stack frames."
+  "The upcased names of the functions in a cycle of the call graph. Fails at the first call that closes one when the backend has no stack frames."
   (let ((cycles (%cc-call-cycles)))
     (when (plusp (hash-table-count cycles))
       (unless (%cc-stack-frames-p)
         (%cc-fail-recursion))
-      (let ((cyclic (loop for key being the hash-keys of cycles collect key)))
-        (when (and *cc-stack-functions* (set-exclusive-or cyclic *cc-stack-functions* :test #'string=))
-          (%cc-fail nil "internal error: the call graph changed between compiles"))
-        cyclic))))
+      (loop for key being the hash-keys of cycles collect key))))
+
+(defun %cc-check-interrupts (definitions)
+  "The upcased names of the functions of DEFINITIONS that run from an interrupt handler and from
+another context, which keep a stack frame. Fails at one that takes parameters, whose argument
+words the contexts would share, at a computed call that a handler runs, and when the backend has
+no stack frames."
+  (let* ((keys (loop for (name) in definitions collect (%designator-name name)))
+         (interrupts (remove-if-not (lambda (key) (member key *cc-interrupts* :test #'string=)) keys))
+         (edges (reverse *cc-calls*)))
+    (when interrupts
+      (let ((shared (%call-graph-shared keys edges interrupts)))
+        (flet ((fail-shared (entry reason)
+                 (destructuring-bind (key interrupted other other-interrupt) entry
+                   (destructuring-bind (caller callee form function) (car (last other))
+                     (declare (ignore caller callee))
+                     (let ((*cc-function* function))
+                       (%cc-fail form "interrupt ~(~{~A~^ calls ~}~), and ~:[~;interrupt ~]~(~{~A~^ calls ~}~); ~A"
+                                 (append (mapcar #'first interrupted) (list key))
+                                 other-interrupt
+                                 (append (mapcar #'first other) (list key))
+                                 reason))))))
+          (dolist (entry shared)
+            (when (plusp (cdr (gethash (first entry) *cc-functions*)))
+              (fail-shared entry "a function run from both keeps its arguments in words the two share, so it cannot take parameters")))
+          (when (and shared (not (%cc-stack-frames-p)))
+            (fail-shared (first shared) "a function run from both needs a stack frame, and the backend has no stack operations")))
+        (let ((flow (%call-graph-flow-edges edges interrupts)))
+          (loop for (caller nil form function) in (reverse *cc-computed-calls*)
+                do (loop for (interrupt . reached) in (%call-graph-contexts edges interrupts)
+                         when (gethash caller reached)
+                           do (let ((*cc-function* function))
+                                (%cc-fail form "~(~{~A~^ calls ~}~) makes a computed call from an interrupt; its arguments go through a block that the main line's computed calls share"
+                                          (append (mapcar #'first (%call-graph-path flow interrupt caller))
+                                                  (list caller)))))))
+        (mapcar #'first shared)))))
+
+(defun %cc-stack-functions-needed (cycles shared)
+  "The union of the function names CYCLES and SHARED. Fails when it is not the *CC-STACK-FUNCTIONS* already given stack frames."
+  (let ((needed (union cycles shared :test #'string=)))
+    (when (and *cc-stack-functions* (set-exclusive-or needed *cc-stack-functions* :test #'string=))
+      (%cc-fail nil "internal error: the call graph changed between compiles"))
+    needed))
 
 (defun %cc-computed-edges ()
   "Add a call from each computed call's caller to each function with an entry thunk that its target can be. An unknown target can be any that takes as many arguments."
@@ -2274,21 +2318,23 @@ register, so any of these are free once nothing above still needs them."
 (defun %cc-static-area (definitions)
   "The items reserving every static frame. A function's frame starts after the
 frames of its callers, so two functions share the slots at an address. The
-functions that call each other start together, after the callers outside them."
+functions that call each other start together, after the callers outside them.
+What an interrupt handler runs lies in a region of its own, after the rest."
   (let* ((keys (loop for (name) in definitions collect (%designator-name name)))
-         (offsets (%call-graph-offsets keys *cc-calls* *cc-sizes*))
-         (slots (loop for (name nil nil label) in definitions
-                      for key = (%designator-name name)
-                      append (loop for index below (gethash key *cc-sizes* 0)
-                                   collect (cons (+ (gethash key offsets) index) (%cc-slot-label label index)))))
-         (size (1+ (reduce #'max slots :key #'car :initial-value -1))))
-    (append (loop for address below size
-                  append (append (loop for (at . label) in slots
-                                       when (= at address) collect (list :label label))
-                                 (list (list :directive (%cc-symbol "res") *cc-word-cells*))))
-            (loop for index below *cc-block-size*
-                  append (list (list :label (%cc-block-label index))
-                               (list :directive (%cc-symbol "res") *cc-word-cells*))))))
+         (interrupts (remove-if-not (lambda (key) (member key *cc-interrupts* :test #'string=)) keys)))
+    (multiple-value-bind (offsets size)
+        (%call-graph-region-offsets keys (reverse *cc-calls*) *cc-sizes* interrupts)
+      (let ((slots (loop for (name nil nil label) in definitions
+                         for key = (%designator-name name)
+                         append (loop for index below (gethash key *cc-sizes* 0)
+                                      collect (cons (+ (gethash key offsets) index) (%cc-slot-label label index))))))
+        (append (loop for address below size
+                      append (append (loop for (at . label) in slots
+                                           when (= at address) collect (list :label label))
+                                     (list (list :directive (%cc-symbol "res") *cc-word-cells*))))
+                (loop for index below *cc-block-size*
+                      append (list (list :label (%cc-block-label index))
+                                   (list :directive (%cc-symbol "res") *cc-word-cells*))))))))
 
 (defun %cc-array-value (value form)
   "The integer VALUE, an element of a DEFARRAY's (VALUE...), resolves to: an
@@ -2335,6 +2381,20 @@ for a one-cell word, else .emit with the width first."
   (when (find-if (lambda (char) (> (char-code char) 255)) string)
     (%cc-fail form "a :packed string holds 8-bit characters only")))
 
+(defun %cc-declarations (form)
+  "(VALUES BODY INTERRUPT-P) for the (defun ...) FORM: its body less a leading (declare ...), and
+whether that declares (interrupt)."
+  (let ((body (cdddr form)) (interrupt nil))
+    (when (and (consp (first body)) (%cc-name-p (first (first body)))
+               (string= (%designator-name (first (first body))) "DECLARE"))
+      (dolist (declaration (rest (first body)))
+        (unless (and (consp declaration) (null (rest declaration)) (%cc-name-p (first declaration))
+                     (string= (%designator-name (first declaration)) "INTERRUPT"))
+          (%cc-fail form "expected (declare (interrupt)), got ~S" declaration))
+        (setf interrupt t))
+      (setf body (rest body)))
+    (values body interrupt)))
+
 (defun %cc-collect (forms)
   "(VALUES DEFINITIONS GLOBALS DATA), registering functions, globals,
 constants, DEFARRAY/DEFSTRING data, macros and DEFUN-FOR-SYNTAX
@@ -2378,7 +2438,14 @@ defined later in FORMS."
                         (gethash key *cc-parameters*) (loop for index below (length (third form))
                                                             collect (list :parameter key index))
                         (gethash (string-upcase (symbol-name label)) *cc-label-keys*) key)
-                  (cl:push (list name (third form) (cdddr form) label) definitions)))
+                  (multiple-value-bind (body interrupt) (%cc-declarations form)
+                    (when interrupt
+                      (when (third form)
+                        (%cc-fail form "an interrupt handler takes no parameters"))
+                      (when (string= key "MAIN")
+                        (%cc-fail form "main cannot be an interrupt handler"))
+                      (cl:push key *cc-interrupts*))
+                    (cl:push (list name (third form) body label) definitions))))
                ((string= head "DEFVAR")
                 (unless (and (<= 2 (length form) 3) (or (null (cddr form)) (integerp (third form))))
                   (%cc-fail form "expected (defvar NAME [INTEGER])"))
@@ -2467,7 +2534,7 @@ what the backend's (frame :static t) says."
   (let ((*cc-backend* (find-backend backend))
         (*cc-frames* (or frames (if (getf (backend-descriptor-frame (find-backend backend)) :static) :static :stack)))
         (*cc-calls* '()) (*cc-caller* nil) (*cc-frame-label* nil) (*cc-sizes* (make-hash-table :test 'equal))
-        (*cc-stack-functions* stack-functions) (*cc-stack-function* nil) (cyclic '())
+        (*cc-stack-functions* stack-functions) (*cc-stack-function* nil) (cyclic '()) (*cc-interrupts* '())
         (*cc-entered* '()) (*cc-computed-calls* '()) (*cc-block-size* 0)
         (*cc-optimize* optimize) (*cc-shared* nil) (*cc-counting* nil)
         (*cc-functions* (make-hash-table :test 'equal))
@@ -2510,7 +2577,7 @@ what the backend's (frame :static t) says."
           (%cc-check-indirect-calls)
           (when (%cc-static-calls-p)
             (%cc-computed-edges)
-            (setf cyclic (%cc-check-recursion)))
+            (setf cyclic (%cc-stack-functions-needed (%cc-check-recursion) (%cc-check-interrupts definitions))))
           (values
            (append stub
                   (loop for (name) in definitions

@@ -34,7 +34,7 @@ A `.lsp` file holds top-level forms, in any order. A leading
 
 | Form | Is |
 | --- | --- |
-| `(defun NAME (PARAM...) BODY...)` | A function returning its last form's value. |
+| `(defun NAME (PARAM...) BODY...)` | A function returning its last form's value. `(declare (interrupt))` first in the body of one with no parameters makes it an [interrupt handler](static-frames.md#interrupts). |
 | `(defvar NAME [INTEGER])` | A one-word global, `0` unless given. |
 | `(defconstant NAME INTEGER)` | A compile-time integer. |
 | `(defarray NAME SIZE)` | `SIZE` words reserved, uninitialised. |

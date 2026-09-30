@@ -2232,3 +2232,84 @@ two |#
   (let ((source "(defarray ops ((function add))) (defun add (a b) (+ a b))
                  (defun main () (funcall (aref ops 0) 3 4))"))
     (fiveam:is (= 7 (%cv-a (%cl-run source 'cl-label-variant-abi))))))
+
+;;; #470: interrupt handlers
+
+(defbackend cl-int-abi (:extends callfoo-lang-abi)
+  (ops (:return-interrupt () (hlt))))
+
+(eval '(defbackend cl-int-static-abi (:extends cl-static-abi)
+         (ops (:return-interrupt () (hlt)))))
+
+(defun %cl-int-items (source &key (backend 'cl-int-static-abi) (frames :static))
+  (compile-program (items-program-items (read-source-from-string source)) :backend backend :frames frames))
+
+(defun %cl-int-fail (source &key (backend 'cl-int-static-abi) (frames :static))
+  (handler-case (progn (%cl-int-items source :backend backend :frames frames) nil)
+    (program-compile-error (c) (program-compile-error-detail c))))
+
+(defun %cl-int-symbols (source &key (backend 'cl-int-static-abi))
+  (assembly-symbols (assemble-items (%cl-int-items source :backend backend) :backend backend :frames :stack)))
+
+(fiveam:test a-declared-handler-is-an-interrupt-function-that-returns-with-the-interrupt-return
+  (let ((items (%cl-int-items "(defun irq () (declare (interrupt)) (let ((v 1)) v)) (defun main () 1)")))
+    (fiveam:is (getf (%cl-function-options items "irq") :interrupt))
+    (fiveam:is (null (getf (%cl-function-options items "main") :interrupt))))
+  (fiveam:is (search "return-interrupt"
+                     (handler-case (progn (assemble-items (%cl-int-items "(defun irq () (declare (interrupt)) 1) (defun main () 1)"
+                                                                         :backend 'cl-static-abi)
+                                                          :backend 'cl-static-abi :frames :stack)
+                                          nil)
+                       (items-malformed (c) (princ-to-string c))))))
+
+(fiveam:test a-handler-keeps-words-no-other-function-shares
+  (let ((plain (%cl-int-symbols "(defun a (x) x) (defun irq () (let ((v 1)) v)) (defun main () (a 1))"))
+        (handler (%cl-int-symbols "(defun a (x) x) (defun irq () (declare (interrupt)) (let ((v 1)) v)) (defun main () (a 1))")))
+    (fiveam:is (= (gethash "sfax0" plain) (gethash "sfirqx0" plain)))
+    (fiveam:is (/= (gethash "sfax0" handler) (gethash "sfirqx0" handler)))))
+
+(fiveam:test what-a-handler-calls-lies-in-its-region
+  (let ((symbols (%cl-int-symbols "(defun g (x) x) (defun irq () (declare (interrupt)) (let ((v 1)) (g v))) (defun a (x) x) (defun main () (a 1))")))
+    (fiveam:is (< (gethash "sfax0" symbols) (gethash "sfirqx0" symbols)))
+    (fiveam:is (< (gethash "sfirqx0" symbols) (gethash "sfgx0" symbols)))))
+
+(fiveam:test a-function-shared-by-a-handler-and-the-main-line-keeps-a-stack-frame
+  (let ((items (%cl-int-items "(defun helper () (let ((v 1)) v)) (defun irq () (declare (interrupt)) (helper)) (defun main () (helper))"
+                              :backend 'cl-int-abi)))
+    (fiveam:is (eq :none (getf (%cl-function-options items "helper") :frame :none)))
+    (fiveam:is (null (getf (%cl-function-options items "irq") :frame :none)))))
+
+(fiveam:test a-shared-function-needs-the-backend-to-have-stack-frames
+  (let ((detail (%cl-int-fail "(defun helper () 1) (defun irq () (declare (interrupt)) (helper)) (defun main () (helper))")))
+    (fiveam:is (search "interrupt irq calls helper, and main calls helper" detail))
+    (fiveam:is (search "needs a stack frame" detail))))
+
+(fiveam:test a-shared-function-cannot-take-parameters
+  (let ((detail (%cl-int-fail "(defun helper (x) x) (defun irq () (declare (interrupt)) (helper 1)) (defun main () (helper 2))"
+                              :backend 'cl-int-abi)))
+    (fiveam:is (search "interrupt irq calls helper, and main calls helper" detail))
+    (fiveam:is (search "cannot take parameters" detail)))
+  (fiveam:is (search "interrupt irq calls helper, and interrupt nmi calls helper"
+                     (%cl-int-fail "(defun helper (x) x) (defun irq () (declare (interrupt)) (helper 1)) (defun nmi () (declare (interrupt)) (helper 2)) (defun main () 1)"
+                                   :backend 'cl-int-abi))))
+
+(fiveam:test a-function-shared-through-a-stack-function-is-found
+  (fiveam:is (search "interrupt irq calls f calls g, and main calls f calls g"
+                     (%cl-int-fail "(defun g (x) x) (defun f (x) (g x)) (defun irq () (declare (interrupt)) (f 1)) (defun main () (f 2))"
+                                   :backend 'cl-int-abi))))
+
+(fiveam:test mentioning-a-handler-is-not-a-call
+  (fiveam:is (null (%cl-int-fail "(defvar vec 0) (defun irq () (declare (interrupt)) (let ((v 1)) v)) (defun main () (set vec (function irq)))"))))
+
+(fiveam:test a-computed-call-in-a-handler-is-rejected
+  (let ((detail (%cl-int-fail "(defarray tbl ((function f))) (defun f (x) x) (defun irq () (declare (interrupt)) (funcall (aref tbl 0) 1)) (defun main () 1)")))
+    (fiveam:is (search "irq makes a computed call from an interrupt" detail))))
+
+(fiveam:test stack-frames-need-no-handler-checks
+  (fiveam:is (null (%cl-int-fail "(defun helper (x) x) (defun irq () (declare (interrupt)) (helper 1)) (defun main () (helper 2))"
+                                 :backend 'cl-int-abi :frames :stack))))
+
+(fiveam:test a-handler-declaration-is-checked
+  (fiveam:is (search "takes no parameters" (%cl-int-fail "(defun irq (x) (declare (interrupt)) x) (defun main () 1)")))
+  (fiveam:is (search "main cannot be an interrupt handler" (%cl-int-fail "(defun main () (declare (interrupt)) 1)")))
+  (fiveam:is (search "expected (declare (interrupt))" (%cl-int-fail "(defun irq () (declare (inline)) 1) (defun main () 1)"))))
