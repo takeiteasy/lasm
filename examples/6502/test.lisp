@@ -316,6 +316,20 @@
     (fiveam:is (= #xfd (reg machine 's)))
     (fiveam:is (flag-set-p machine 'i))))
 
+(fiveam:test the-vectors-are-rom-and-survive-a-machine-reset
+  (let ((machine (load-6502 (assemble-6502 (format nil ".org $400~%start: jam~%.org $fffc~%.word start")))))
+    (lasm:reset machine)
+    (fiveam:is (= #x400 (reg machine 'pc)) "reset reads the vector it kept")
+    (fiveam:is (= #x400 (lasm:machine-reset-pc machine)))
+    (fiveam:is (= 0 (ram machine #x400)) "RAM was cleared")))
+
+(fiveam:test the-stack-is-page-one-and-stores-before-it-decrements
+  (let ((machine (load-6502 (assemble-6502 (format nil "lda #$5a~%pha~%jam")))))
+    (setf (reg machine 's) #xff)
+    (run-6502 machine)
+    (fiveam:is (= #x5a (ram machine #x1ff)))
+    (fiveam:is (= #xfe (reg machine 's)))))
+
 ;;; Cycles. See docs/emulator.md#dynamic-cycle-costs.
 
 (fiveam:test an-indexed-read-costs-a-cycle-across-a-page

@@ -56,13 +56,12 @@ on it, and here it stops the machine.
   (mode-suffix-separator "."))
 
 ;;; Storage. The flags are separate one-bit places, so PHP, PLP, BRK and RTI pack
-;;; and unpack the status byte themselves. S is a plain register: the stack is
-;;; page $01 with a post-decrement, which a machine (stack-pointer ...) clause
-;;; does not describe, so the push and pull macros below index memory by hand.
-;;; See docs/machine-model.md.
-;;; TODO: a status register over the flags, and a stack pointer with a page base
-;;; and post-decrement, would replace the hand-written packing and stack macros;
-;;; see docs/examples.md#limitations.
+;;; and unpack the status byte themselves. S is an 8-bit register over page $01
+;;; that stores before it decrements. The vectors at $FFFA-$FFFF are ROM, so a
+;;; reset keeps them, and PC starts at the word at $FFFC. See
+;;; docs/machine-model.md.
+;;; TODO: a status register over the flags would replace the hand-written
+;;; packing; see docs/examples.md#limitations.
 (defmachine mos6502
   (register a :width 8)
   (register x :width 8)
@@ -70,7 +69,10 @@ on it, and here it stops the machine.
   (register s :width 8)
   (register pc :width 16)
   (flags n v d i z c)
-  (memory ram :width 8 :addr-width 16))
+  (memory ram :width 8 :addr-width 16
+    (region vectors #xfffa #xffff :kind :rom))
+  (stack-pointer s :memory ram :base #x100 :grows :down :push :post)
+  (reset-pc (ram #xfffc)))
 
 ;;; Addressing modes. The built-in `immediate`, `zero-page`, `absolute` and
 ;;; `relative` are the 6502's own. The rest are local to this ISA: a local mode
@@ -158,15 +160,6 @@ on it, and here it stops the machine.
        (set! n (ash (logand ,result 255) -7))
        (set! z (flag-of (zerop (logand ,result 255)))))))
 
-(defmacro push-byte (form)
-  `(let ((byte ,form))
-     (set! (mref machine 'ram (+ #x100 s)) byte)
-     (set! s (logand (1- s) 255))))
-
-(defmacro pull-byte ()
-  `(progn (set! s (logand (1+ s) 255))
-          (mref machine 'ram (+ #x100 s))))
-
 (defmacro status-byte (break-bit)
   `(logior (ash n 7) (ash v 6) 32 (ash ,break-bit 4) (ash d 3) (ash i 2) (ash z 1) c))
 
@@ -181,12 +174,12 @@ on it, and here it stops the machine.
 
 (defmacro push-address (form)
   `(let ((address ,form))
-     (push-byte (ash address -8))
-     (push-byte (logand address 255))))
+     (push (ash address -8))
+     (push (logand address 255))))
 
 (defmacro pull-address ()
-  `(let* ((low (pull-byte))
-          (high (pull-byte)))
+  `(let* ((low (pop))
+          (high (pop)))
      (logior low (ash high 8))))
 
 ;;; An instruction is written once and defined for each of its addressing modes
@@ -357,10 +350,10 @@ on it, and here it stops the machine.
 (defimplied clv #xb8 2 (set! v 0))
 (defimplied nop #xea 2)
 
-(defimplied pha #x48 3 (push-byte a))
-(defimplied php #x08 3 (push-byte (status-byte 1)))
-(defimplied pla #x68 4 (set! a (pull-byte)) (set-nz a))
-(defimplied plp #x28 4 (load-status (pull-byte)))
+(defimplied pha #x48 3 (push a))
+(defimplied php #x08 3 (push (status-byte 1)))
+(defimplied pla #x68 4 (set! a (pop)) (set-nz a))
+(defimplied plp #x28 4 (load-status (pop)))
 
 ;;; Branches. The offset is signed and counts from the next instruction, so it
 ;;; is added to a PC that has already moved past it. A taken branch costs a
@@ -387,8 +380,9 @@ on it, and here it stops the machine.
 
 ;;; Jumps and calls. JSR pushes the address of its last byte, and BRK the address
 ;;; of the byte after its padding byte. BRK and RTI go through the $FFFE vector by
-;;; hand, because `interrupts` keeps its vector in a register.
-;;; TODO: memory-resident interrupt vectors; see docs/examples.md#limitations.
+;;; hand, because `interrupts` would need the status register to save.
+;;; TODO: an `interrupts` clause with (:vector (ram #xfffe)) once the flags have a
+;;; status register; see docs/examples.md#limitations.
 (definstruction mos6502 jmp
   (modes (absolute (opcode #x4c) (cycles 3) (semantics (set! pc operand)))
          (indirect (opcode #x6c) (cycles 5) (semantics (set! pc (indirect-jump-target machine operand))))))
@@ -405,12 +399,12 @@ on it, and here it stops the machine.
 
 (defimplied brk #x00 7
   (push-address (logand (1+ pc) #xffff))
-  (push-byte (status-byte 1))
+  (push (status-byte 1))
   (set! i 1)
   (set! pc (word-at machine #xfffe)))
 
 (defimplied rti #x40 6
-  (load-status (pull-byte))
+  (load-status (pop))
   (set! pc (pull-address)))
 
 ;;; A real NMOS 6502 locks up on $02. Here it stops the machine, so a program
@@ -490,11 +484,9 @@ on it, and here it stops the machine.
 
 (defun reset-6502 (machine)
   "What the reset line does: S = $FD, I = 1, PC from the vector at $FFFC."
-  ;; TODO: (reset-pc ...) cannot read a memory vector, so this function does; see
-  ;; docs/examples.md#limitations.
   (setf (sref machine 's) #xfd
         (flag machine 'i) 1
-        (sref machine 'pc) (word-at machine #xfffc))
+        (sref machine 'pc) (machine-reset-pc machine))
   machine)
 
 (defun run-6502 (machine &key (max-steps 1000000))

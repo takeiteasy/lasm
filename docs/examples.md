@@ -159,8 +159,5 @@ What the examples needed that LASM does not model yet.
 | Limitation | Ticket |
 | --- | --- |
 | The 6502 packs and unpacks its status byte by hand: a machine cannot declare one register over its flags. | [#453](https://todo.sr.ht/~takeiteasy/lasm/453) |
-| A machine `stack-pointer` has no page base or post-decrement, so the 6502's stack is hand-written. | [#454](https://todo.sr.ht/~takeiteasy/lasm/454) |
-| `reset-pc` is a fixed value, not a memory vector; the 6502's reset is a Lisp function. | [#455](https://todo.sr.ht/~takeiteasy/lasm/455) |
-| Interrupt vectors are registers, so `BRK` and `RTI` do not use `interrupts`. | [#313](https://todo.sr.ht/~takeiteasy/lasm/313) |
 | A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
 | The built-in mode names are internal, so a package imports them. | [#457](https://todo.sr.ht/~takeiteasy/lasm/457) |
