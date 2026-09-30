@@ -32,7 +32,8 @@ A malformed definition signals `mode-definition-error`.
 
 A mode may contain only literals and have no expression hole. Built-in modes
 are `immediate`, `zero-page`, `absolute`, `indexed-x`, `indirect-y`,
-`relative`, and `stack-relative`. Modes must be defined before an instruction
+`relative`, and `stack-relative`; `lasm` exports them, so a package that uses
+`#:lasm` names them with no import. Modes must be defined before an instruction
 uses them. A mode is global unless it is [ISA-local](#isa-local-modes).
 
 | Option | Meaning |

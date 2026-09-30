@@ -184,5 +184,4 @@ What the examples needed that LASM does not model yet.
 | Limitation | Ticket |
 | --- | --- |
 | A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
-| The built-in mode names are internal, so a package imports them. | [#457](https://todo.sr.ht/~takeiteasy/lasm/457) |
 | `interrupts` requires a `:message` register, so the 6502 declares one that nothing reads. | [#462](https://todo.sr.ht/~takeiteasy/lasm/462) |

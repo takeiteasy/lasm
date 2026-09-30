@@ -136,6 +136,17 @@
          (stack (opcode 3) (operand :mode)))
   (semantics (set! a operand)))
 
+(defmachine fpm-builtin
+  (register pc :width 16)
+  (register a :width 8)
+  (memory ram :width 8 :addr-width 16))
+
+(definstruction fpm-builtin lda
+  (modes (immediate (opcode 1) (operand :mode))
+         (zero-page (opcode 2) (operand :mode))
+         (absolute (opcode 3) (operand :mode)))
+  (semantics (set! a operand)))
+
 (in-package #:lasm)
 
 (defun %foreign-run (source)
@@ -201,3 +212,10 @@ halt" :cpu 'lasm-foreign-test::fpm))
   (fiveam:is (eq 'lasm-foreign-test::fpm (%table-key-named *machines* "fpm")))
   (fiveam:is (eq 'lasm-foreign-test::fpm (%table-key-named *machines* "FPM")))
   (fiveam:is (null (%table-key-named *machines* "no-such-machine"))))
+
+(fiveam:test foreign-package-uses-the-exported-builtin-modes
+  (fiveam:is (eq 'lasm:immediate 'lasm-foreign-test::immediate))
+  (fiveam:is (equalp #(1 5 2 6 3 0 16)
+                     (assembly-cells (assemble "lda #5
+lda 6
+lda.w $1000" :cpu 'lasm-foreign-test::fpm-builtin)))))

@@ -423,6 +423,13 @@
 
    ;; Addressing modes
    #:defmode
+   #:immediate
+   #:zero-page
+   #:absolute
+   #:indexed-x
+   #:indirect-y
+   #:relative
+   #:stack-relative
    #:find-mode-descriptor
    #:mode-descriptor
    #:mode-descriptor-p
