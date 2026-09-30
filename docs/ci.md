@@ -1,0 +1,42 @@
+# Continuous integration
+
+GitHub Actions runs the [test suite](getting-started.md#run-the-tests) on SBCL for every push and pull request, and on ECL and CCL on request.
+
+| Trigger | SBCL | ECL | CCL |
+|---|---|---|---|
+| Push, pull request | yes | no | no |
+| Version tag (`v*`) | yes | yes | yes |
+| Manual run | `all`, `sbcl` | `all`, `ecl` | `all`, `ccl` |
+
+Changes only to `docs/`, Markdown files or `LICENSE` skip the run, and a new push cancels the run it supersedes.
+
+## Run the full matrix
+
+```sh
+gh workflow run ci.yml -f lisps=all
+gh run watch
+```
+
+`lisps` takes `all`, `sbcl`, `ecl` or `ccl`. ECL builds from source, so its run is the slow one.
+
+## What a run does
+
+- Installs [Roswell](https://github.com/roswell/roswell) and the implementation.
+- Links Roswell's Quicklisp to `~/quicklisp` and clones `trivial-high-precision-timer` beside LASM, as in [Getting started](getting-started.md#install).
+- Runs `tests/ci.lisp`, which exits nonzero on any failure.
+- On SBCL, builds the standalone binary with `ros build lasm.ros` and runs an example through it.
+
+The same suite runs locally:
+
+```sh
+ros -L sbcl-bin -Q -l tests/ci.lisp
+```
+
+## Differences between implementations
+
+A few tests are skipped where an implementation cannot run them; see the [limitations](#limitations).
+
+## Limitations
+
+- ECL and CCL cannot use an outer `macrolet` macro in an inner `macrolet`'s expander inside `definstruction`; those cases run on SBCL only. Tracked in [ticket 471](https://todo.sr.ht/~takeiteasy/lasm/471).
+- CCL on arm64 macOS crashes in one reader test during a full run, so it is skipped there. Tracked in [ticket 472](https://todo.sr.ht/~takeiteasy/lasm/472).

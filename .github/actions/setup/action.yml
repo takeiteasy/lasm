@@ -1,0 +1,39 @@
+name: Set up Lisp
+description: Roswell with one Lisp, Quicklisp at ~/quicklisp and the timer dependency
+inputs:
+  lisp:
+    description: Roswell implementation name
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: ~/.roswell
+        key: roswell-${{ runner.os }}-${{ inputs.lisp }}-${{ hashFiles('lasm.asd') }}
+        restore-keys: roswell-${{ runner.os }}-${{ inputs.lisp }}-
+    - name: Install Roswell and ${{ inputs.lisp }}
+      shell: bash
+      env:
+        LISP: ${{ inputs.lisp }}
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/roswell/roswell/release/scripts/install-for-ci.sh | sh
+        echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+        ros install "$LISP"
+        ros use "$LISP"
+    - name: Link Quicklisp and the timer
+      shell: bash
+      run: |
+        ros -e '(ql:quickload :uiop)' -q
+        ln -sfn ~/.roswell/lisp/quicklisp ~/quicklisp
+        git clone --depth 1 https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/.roswell/local-projects/trivial-high-precision-timer
+        ln -sfn "$GITHUB_WORKSPACE" ~/.roswell/local-projects/lasm
+        ln -sfn ~/.roswell/local-projects/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
+        ln -sfn "$GITHUB_WORKSPACE" ~/quicklisp/local-projects/lasm
+        ros -e '(ql:quickload (list :eclector :cffi :fiveam :closer-mop))' -q
+    - name: Put the Lisp on PATH
+      shell: bash
+      run: |
+        # The example scripts start bare `ecl`, so its directory must be on PATH.
+        bin=$(dirname "$(find ~/.roswell/impls -path '*/bin/*' -type f \( -name ecl -o -name sbcl \) | head -n 1)")
+        echo "$bin" >> "$GITHUB_PATH"

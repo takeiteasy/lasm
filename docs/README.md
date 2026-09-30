@@ -1,6 +1,7 @@
 # LASM documentation
 
 - [Getting started](getting-started.md) — install, load, run the example and tests
+- [Continuous integration](ci.md) — what CI runs on SBCL, ECL and CCL, and how to start the full matrix
 - [Examples](examples.md) — packaged emulators loaded through ASDF
 - [Memory audit](memory-audit.md) — measured build, runtime and per-CPU costs
 - [ISA and CPU](isa.md) — `defisa`, `defcpu`, and how `defmachine` splits into both

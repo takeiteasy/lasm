@@ -12,7 +12,7 @@ git clone https://git.sr.ht/~takeiteasy/lasm ~/quicklisp/local-projects/lasm
 git clone https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
 ```
 
-Load LASM in SBCL or ECL:
+Load LASM in SBCL, ECL or CCL:
 
 ```lisp
 (ql:quickload :lasm)
@@ -48,6 +48,7 @@ ros lasm.ros run tests/fixtures/cli/counter.asm -m tests/fixtures/cli/sixtyfoo.l
 ```sh
 sbcl --non-interactive --eval '(asdf:test-system :lasm)'
 ecl --eval '(asdf:test-system :lasm)' --eval '(ext:quit)'
+ccl -n --eval '(asdf:test-system :lasm)' --eval '(ccl:quit)'
 ```
 
 The suite tests each [example](examples.md) in its own Lisp process and
@@ -64,5 +65,5 @@ or the [documentation index](README.md).
   `(asdf:load-system :lasm)`.
 [^tests]: On SBCL the suite caches a bootstrapped core as `examples.core`
   beside compiled LASM files; delete that core after changing Quicklisp
-  dependencies. ECL starts each script with `ecl --shell`. Set
+  dependencies. ECL starts each script with `ecl --shell` and CCL with `ccl -b -l`; the scripts need `ecl` on `PATH`. Set
   `LASM_BENCH=1` to run the external benchmarks with STAR at `../star`.
