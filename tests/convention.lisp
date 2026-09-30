@@ -1215,3 +1215,143 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
     (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :counts :bytes))))
   (fiveam:signals backend-definition-error
     (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :offsets nil)))))
+
+;;; Stack push order (#459): a :push other than the :grows default moves every slot one cell.
+
+(defmacro %cv-def-push-machine (name fp-name abi-name fp-abi-name &key grows push)
+  (let ((alloc (if (eq grows :down) 'subs 'adds))
+        (free (if (eq grows :down) 'adds 'subs)))
+    `(progn
+       (defmachine ,name
+         (register pc :width 16)
+         (register sp :width 16)
+         (register r :width 16 :names (a b c d))
+         (memory ram :width 16 :addr-width 16)
+         (stack-pointer sp :memory ram :grows ,grows :push ,push))
+       (definstruction ,name pushv
+         (modes
+           (call-reg (opcode 9) (operand src :width 1) (semantics (push (r src) sp)))
+           (call-imm (opcode 10) (operand :mode) (semantics (push operand sp)))))
+       (definstruction ,name popr (modes call-reg)
+         (encoding (opcode 14) (operand dst :width 1))
+         (semantics (set! (r dst) (pop sp))))
+       (definstruction ,name lds (modes call-rs)
+         (encoding (opcode 3) (operand dst :width 1) (operand offset :width 1))
+         (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ sp offset) 16)))))
+       (definstruction ,name adds (modes call-spi)
+         (encoding (opcode 6) (operand :mode))
+         (semantics (set! sp (wrap-value (+ sp operand) 16))))
+       (definstruction ,name subs (modes call-spi)
+         (encoding (opcode 15) (operand :mode))
+         (semantics (set! sp (wrap-value (- sp operand) 16))))
+       (definstruction ,name call (modes absolute)
+         (encoding (opcode 7) (operand :mode))
+         (semantics (push pc sp) (set! pc operand)))
+       (definstruction ,name ret
+         (encoding (opcode 8))
+         (semantics (set! pc (pop sp))))
+       (definstruction ,name hlt
+         (encoding (opcode 0))
+         (semantics (trap :halt)))
+       (defbackend ,abi-name (:isa ,name)
+         (registers :return (a) :callee-saved (c d) :stack-pointer sp :program-counter pc :operand reg)
+         (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
+         (frame :slot sp-idx)
+         (operands (reg call-reg) (imm call-imm) (sp-idx call-sp-idx) (sp call-sp))
+         (ops (:push (x) (pushv x))
+              (:pop (x) (popr x))
+              (:alloc (n) (,alloc (sp) (imm n)))
+              (:free (n) (,free (sp) (imm n)))
+              (:call (f) (call f))
+              (:return () (ret))))
+       (defmachine (,fp-name (:extends ,name))
+         (register fp :width 16))
+       (definstruction ,fp-name pushfp (encoding (opcode 18)) (semantics (push fp sp)))
+       (definstruction ,fp-name popfp (encoding (opcode 19)) (semantics (set! fp (pop sp))))
+       (definstruction ,fp-name movfs (encoding (opcode 20)) (semantics (set! fp sp)))
+       (definstruction ,fp-name movsf (encoding (opcode 21)) (semantics (set! sp fp)))
+       (definstruction ,fp-name ldf (modes call-rf)
+         (encoding (opcode 22) (operand dst :width 1) (operand offset :width 1))
+         (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ fp offset) 16)))))
+       (definstruction ,fp-name stf (modes call-fr)
+         (encoding (opcode 23) (operand offset :width 1) (operand src :width 1))
+         (semantics (set! (mref machine 'ram (wrap-value (+ fp offset) 16)) (r src))))
+       (defbackend ,fp-abi-name (:extends ,abi-name :isa ,fp-name)
+         (frame :pointer fp :slot fp-idx)
+         (operands (fp-idx call-fp-idx))
+         (ops (:enter () (pushfp) (movfs))
+              (:leave () (movsf) (popfp)))))))
+
+(%cv-def-push-machine cv-post cv-post-fp cv-post-abi cv-post-fp-abi :grows :down :push :post)
+(%cv-def-push-machine cv-pre-up cv-pre-up-fp cv-pre-up-abi cv-pre-up-fp-abi :grows :up :push :pre)
+
+(defparameter *cv-push-stack-items*
+  '((:call f (imm 21)) (hlt)
+    (:function f (:args 1 :locals 1 :save (c))
+      (lds (reg a) (:arg 0))
+      (:return))))
+
+(defparameter *cv-push-frame-items*
+  '((:call f (imm 21)) (hlt)
+    (:function f (:args 1 :locals 1 :save (c))
+      (ldf (reg a) (:arg 0))
+      (stf (:local 0) (reg a))
+      (ldf (reg b) (:local 0))
+      (:return))))
+
+(fiveam:test a-post-push-stack-shifts-stack-slots-one-cell
+  (let ((m (%cv-run *cv-push-stack-items* 'cv-post-abi :cpu 'cv-post)))
+    (fiveam:is (= 21 (%cv-a m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp))))
+  (fiveam:is (search "lds a, [ sp + 2 ]"
+                     (render-items '((:function f (:args 1) (lds (reg a) (:arg 0)) (:return))) :backend 'cv-post-abi))))
+
+(fiveam:test a-pre-push-stack-that-grows-up-shifts-stack-slots-one-cell
+  (let ((m (%cv-run *cv-push-stack-items* 'cv-pre-up-abi :cpu 'cv-pre-up)))
+    (fiveam:is (= 21 (%cv-a m)))
+    (fiveam:is (= +cv-sp+ (sref m 'sp))))
+  (fiveam:is (search "lds a, [ sp + - 1 ]"
+                     (render-items '((:function f (:args 1) (lds (reg a) (:arg 0)) (:return))) :backend 'cv-pre-up-abi))))
+
+(fiveam:test frame-pointer-slots-follow-the-push-order
+  (dolist (spec '((cv-post-fp-abi cv-post-fp) (cv-pre-up-fp-abi cv-pre-up-fp)))
+    (let ((m (%cv-run *cv-push-frame-items* (first spec) :cpu (second spec) :setup '((2 77)))))
+      (fiveam:is (= 21 (%cv-a m)))
+      (fiveam:is (= 21 (regref m 'r 1)))
+      (fiveam:is (= 77 (regref m 'r 2)))
+      (fiveam:is (= +cv-sp+ (sref m 'sp))))))
+
+(fiveam:test the-default-push-order-records-no-shift
+  (fiveam:is (null (getf (backend-descriptor-frame (find-backend 'cv-up-abi)) :push)))
+  (fiveam:is (eq :post (getf (backend-descriptor-frame (find-backend 'cv-post-abi)) :push)))
+  (fiveam:is (eq :pre (getf (backend-descriptor-frame (find-backend 'cv-pre-up-abi)) :push))))
+
+(defmachine cv-wide-post
+  (register pc :width 16)
+  (register sp :width 16)
+  (register r :width 16 :names (a b c d))
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :grows :down :push :post :width 16))
+(definstruction cv-wide-post lds (modes call-rs)
+  (encoding (opcode 3) (operand dst :width 1) (operand offset :width 1))
+  (semantics (set! (r dst) (mref machine 'ram (wrap-value (+ sp offset) 16)))))
+(definstruction cv-wide-post ret
+  (encoding (opcode 8))
+  (semantics (set! pc (pop sp))))
+
+(fiveam:test a-multi-cell-slot-over-a-shifted-push-order-needs-cell-offsets
+  (fiveam:is (search ":offsets must be :cells"
+                     (handler-case (eval '(defbackend cv-wide-post-slots-abi (:isa cv-wide-post)
+                                           (registers :return (a) :stack-pointer sp :program-counter pc :operand reg)
+                                           (frame :slot sp-idx)
+                                           (operands (reg call-reg) (sp-idx call-sp-idx))))
+                       (backend-definition-error (c) (princ-to-string c)))))
+  (eval '(defbackend cv-wide-post-cells-abi (:isa cv-wide-post)
+          (registers :return (a) :stack-pointer sp :program-counter pc :operand reg)
+          (call :args :stack :order :right-to-left :cleanup :caller :return-address-slots 1)
+          (frame :slot sp-idx :offsets :cells)
+          (operands (reg call-reg) (sp-idx call-sp-idx))
+          (ops (:return () (ret)))))
+  (fiveam:is (search "lds a, [ sp + 3 ]"
+                     (render-items '((:function f (:args 1) (lds (reg a) (:arg 0)) (:return)))
+                                   :backend 'cv-wide-post-cells-abi))))

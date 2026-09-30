@@ -89,6 +89,11 @@ must agree with it when both are given; it cannot be the stack pointer or a
 `:return` or `call :args` register. With a `:pointer`, `:slot` must address
 relative to it.
 
+A machine stack pointer that stores in the other order from its direction
+(`:down` with `:push :post`, `:up` with `:push :pre`) moves every slot one cell:
+lowering adds `1` to each offset. A word of more than one cell then needs
+`:offsets :cells`, or the definition fails.[^push]
+
 ## Operand kinds
 
 `(KIND MODE)` names an addressing mode by a short kind. An [item](items.md#operands)
@@ -325,6 +330,8 @@ parent no longer defines is dropped from the child with a `stale-backend`
 | `backend-descriptor-isa` `-cpu` `-registers` `-call` `-frame` `-operands` `-ops` `-branches` `-stack-writers` `-stack-writer-exceptions` | The stored clauses. |
 
 The command line loads backends from its machine file; see [Command line](cli.md).
+
+[^push]: The shift is one cell whatever the slot width, so `:offsets :slots` cannot write it for a multi-cell word. A stack pointer's `:base` is not part of the offset: the `:slot` operand's addressing mode adds it, as it adds the register.
 
 [^dispatch]: An untyped parameter position (`NAME`, no `KIND`) matches any
   argument; a match needs the same number of arguments as the clause has

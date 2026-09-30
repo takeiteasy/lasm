@@ -308,7 +308,6 @@ in any package is found.
 | --- | --- |
 | `push`/`pop` on a register stack use the clause `:width`; there is no per-call width. | [#358](https://todo.sr.ht/~takeiteasy/lasm/358) |
 | The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
-| A backend's frame layout is checked against a stack pointer's `:grows` but not its `:base` or `:push`. | [#459](https://todo.sr.ht/~takeiteasy/lasm/459) |
 
 [^regions]: Regions change access behavior over one backing array.
   `:device` regions do not store values. `mpeek` reads zero there. A mapper

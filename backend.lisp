@@ -174,16 +174,23 @@ width of a half. A half is an upcased register name, or an integer memory addres
 backend declares pairs, else its declared stack pointer's slot width, which defaults to the
 memory's own cell width, divided by that cell width and rounded up. 1 without a matching
 (stack-pointer ...) clause."
-  (let* ((backend (find-backend backend))
-         (machine-descriptor (%backend-storage backend))
-         (sp (%role-register backend :stack-pointer nil))
+  (let ((backend (find-backend backend)))
+    (%descriptor-word-cells backend (%backend-storage backend))))
+
+(defun %descriptor-word-cells (backend machine-descriptor)
+  "BACKEND-WORD-CELLS for a backend descriptor that may not be registered yet."
+  (let* ((sp (%role-register backend :stack-pointer nil))
          (pointer (%backend-matched-stack-pointer sp machine-descriptor))
-         (pairs (backend-pairs backend)))
+         (pairs (getf (backend-descriptor-registers backend) :pairs)))
     (cond (pairs (ceiling (* 2 (fourth (first pairs))) (%pair-cell-width machine-descriptor)))
           (pointer (ceiling (stack-pointer-descriptor-width pointer)
                             (storage-element-cell-width
                              (descriptor-element machine-descriptor (stack-pointer-descriptor-memory pointer)))))
           (t 1))))
+
+(defun %frame-push-shifted-p (frame)
+  "True when FRAME records a :push order other than its :grows default, which moves every slot one cell."
+  (and (getf frame :push) t))
 
 ;;; Resolution by name
 
@@ -703,7 +710,7 @@ SP, an upcased name, or NIL when SP is NIL or names none."
 
 (defun %finish-backend-stack (descriptor machine-descriptor)
   "Check the backend's stack pointer and frame direction against the machine's
-declared (stack-pointer ...), and default the frame direction from it."
+declared (stack-pointer ...), default the frame direction from it, and record its push order."
   (let* ((registers (backend-descriptor-registers descriptor))
          (sp (getf registers :stack-pointer))
          (declared (loop for pointer being the hash-values of (machine-descriptor-stack-pointers machine-descriptor)
@@ -716,8 +723,18 @@ declared (stack-pointer ...), and default the frame direction from it."
     (when (and match grows (not (eq grows (stack-pointer-descriptor-grows match))))
       (%backend-error "frame :grows ~S disagrees with the machine's (stack-pointer ~A :grows ~S)"
                       grows sp (stack-pointer-descriptor-grows match)))
-    (setf (getf (backend-descriptor-frame descriptor) :grows)
-          (or grows (and match (stack-pointer-descriptor-grows match)) :down))))
+    (let ((frame (backend-descriptor-frame descriptor)))
+      (setf (getf frame :grows) (or grows (and match (stack-pointer-descriptor-grows match)) :down))
+      (when (and match (not (eq (stack-pointer-descriptor-push match)
+                                (if (eq (getf frame :grows) :down) :pre :post))))
+        (setf (getf frame :push) (stack-pointer-descriptor-push match)))
+      (setf (backend-descriptor-frame descriptor) frame)
+      (when (and (%frame-push-shifted-p frame)
+                 (not (eq (getf frame :offsets) :cells))
+                 (> (%descriptor-word-cells descriptor machine-descriptor) 1))
+        (%backend-error "frame :offsets must be :cells: the machine's (stack-pointer ~A :push ~S) moves a slot ~
+one cell, which a ~D-cell slot offset cannot say"
+                        sp (getf frame :push) (%descriptor-word-cells descriptor machine-descriptor))))))
 
 ;;; Register pairs
 

@@ -82,7 +82,8 @@ Depth tracking, `:pushes`/`:pops` and `:alignment` stay in slots.
 From the top of the stack, a frame holds the locals, the saved registers, the
 return address, then the stack arguments. A slot is addressed by its distance from the top of the stack, through the
 frame's `:slot` operand kind: `+n` when the stack grows down, `-1-n` when it
-grows up.
+grows up, plus one cell when the stack pointer's `:push` is not the default
+for its direction ([frame](backends.md#frame)).
 
 `(:arg i)` for a register argument names that register, so an inner `(:call)`
 overwrites it: copy it first or `:keep` it.
@@ -154,8 +155,8 @@ grows down     [fp + n]
 `:leave` restores the stack pointer from it and pops it. The saved frame pointer
 counts towards the frame's `:alignment`. The frame pointer cannot be a `:save`
 register. The backend's `:slot` kind takes an offset from the frame pointer, with
-the same signs as from the stack pointer: `+n` when the stack grows down,
-`-1-n` when it grows up.
+the same signs and push-order shift as from the stack pointer: `+n` when the
+stack grows down, `-1-n` when it grows up.
 
 ### Opting out
 

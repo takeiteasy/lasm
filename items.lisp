@@ -582,10 +582,11 @@ to the enclosing label when one has been defined and the lexer has local labels.
          (kind (getf frame key)))
     (unless kind
       (%items-fail 'items-malformed item "~A needs (frame ~(~S~) KIND) in the backend" (first item) key))
-    (list kind (* (%frame-unit-scale :offsets)
-                  (if (eq (getf frame :grows) :up)
-                      (- -1 distance)
-                      distance)))))
+    (list kind (+ (* (%frame-unit-scale :offsets)
+                     (if (eq (getf frame :grows) :up)
+                         (- -1 distance)
+                         distance))
+                  (if (%frame-push-shifted-p frame) 1 0)))))
 
 (defun %bump-depth (n)
   (when *items-frame*
