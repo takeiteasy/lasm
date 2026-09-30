@@ -710,3 +710,23 @@ twice
     (let ((data (loop for i below 200000 collect i)))
       (write-snapshot (list :lasm-snapshot data) path :format :binary)
       (fiveam:is (equal data (second (read-snapshot path)))))))
+
+;;; #453: a status register holds no state; its flags do.
+
+(defmachine snapshot-status-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 8)
+  (flags n z c)
+  (status-register p (n 1 z c)))
+
+(fiveam:test a-snapshot-leaves-out-a-status-register-and-restores-its-flags
+  (let ((source (make-machine 'snapshot-status-machine))
+        (target (make-machine 'snapshot-status-machine)))
+    (setf (sref source 'p) #b1001)
+    (let ((snapshot (machine-snapshot source)))
+      (fiveam:is (null (assoc 'p (getf (cdr snapshot) :elements))))
+      (fiveam:is (null (assoc 'p (getf (cdr snapshot) :shape))))
+      (setf (sref target 'p) #b0110)
+      (restore-snapshot target snapshot)
+      (fiveam:is (= (sref source 'p) (sref target 'p)))
+      (fiveam:is (equal '(1 0 1) (mapcar (lambda (name) (flag target name)) '(n z c)))))))

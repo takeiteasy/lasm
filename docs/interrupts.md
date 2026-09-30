@@ -31,7 +31,7 @@ a machine. Devices and software instructions can signal the same queue.
 | `:vector` | Register, or `(MEMORY ADDRESS)`, holding the handler address. See [Memory vectors](#memory-vectors). |
 | `:nmi-vector` | Register or memory vector holding the handler address for [non-maskable signals](#non-maskable-signals); defaults to `:vector`. |
 | `:message` | Register receiving signal data. |
-| `:save` | Registers and flags pushed before delivery. |
+| `:save` | Registers, flags and [status registers](machine-model.md#status-registers) pushed before delivery. |
 | `:stack` | Fixed stack or register-backed stack pointer; defaults when unique. |
 | `:queue` | Pending-signal capacity, default `256`. |
 | `:on-overflow` | Error, trap, drop, or drop oldest. |

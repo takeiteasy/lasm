@@ -29,7 +29,8 @@ commands.
 Snapshots hold:
 
 - every register (banked ones cell by cell), flag, stack (whole backing
-  vector and stack pointer) and memory element
+  vector and stack pointer) and memory element; a
+  [status register](machine-model.md#status-registers) through its flags
 - `machine-cycles` and the idle flag
 - pending interrupts with their priorities, and the running-handler depth
 - banked regions: the mapped bank, every bank's contents, and the bank

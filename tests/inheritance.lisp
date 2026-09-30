@@ -690,3 +690,36 @@ stop" :cpu 'fam-w8))
 (fiveam:test reset-pc-integer-is-unchanged-by-machine-reset-pc
   (fiveam:is (= #x100 (machine-reset-pc (make-machine 'rm-base))))
   (fiveam:is (null (machine-reset-pc (make-machine 'sp-storage-test-machine)))))
+
+;;; #453: a status register in a family.
+
+(defmachine st-base
+  (register pc :width 8)
+  (memory ram :width 8 :addr-width 8)
+  (flags n z c)
+  (status-register p (n 1 z c)))
+
+(defmachine (st-child (:extends st-base))
+  (flags x))
+
+(fiveam:test a-child-inherits-its-parents-status-register
+  (let ((m (make-machine 'st-child)))
+    (setf (flag m 'c) 1 (flag m 'x) 1)
+    (fiveam:is (= #b0101 (sref m 'p)))
+    (setf (sref m 'p) #b1010)
+    (fiveam:is (equal '(1 1 0 1) (list (flag m 'n) (flag m 'z) (flag m 'c) (flag m 'x))))))
+
+(fiveam:test a-child-cannot-change-its-parents-status-register-bits
+  (fiveam:is (search "status-register bits"
+                     (handler-case (progn (eval '(defmachine (st-changed (:extends st-base))
+                                                  (status-register p (n 0 z c))))
+                                          nil)
+                       (machine-definition-error (c) (princ-to-string c))))))
+
+(fiveam:test a-child-can-remove-a-status-register-but-not-a-flag-it-names
+  (eval '(defmachine (st-cut (:extends st-base)) (without-storage p)))
+  (fiveam:signals unknown-storage (sref (make-machine 'st-cut) 'p))
+  (fiveam:is (search "not a declared flag"
+                     (handler-case (progn (eval '(defmachine (st-cut-flag (:extends st-base)) (without-storage z)))
+                                          nil)
+                       (machine-definition-error (c) (princ-to-string c))))))

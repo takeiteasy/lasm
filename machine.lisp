@@ -318,6 +318,40 @@ function), got ~S" context name (car fn) (cdr fn))))
                                               :write-privilege write-privilege)))
                     (make-storage-element :name entry :kind :flag :width 1))))
 
+;; (status-register NAME (BIT ...)) -- a register over flags, for a machine whose
+;; status byte is packed on the stack (PHP, interrupt frames). BITs run most
+;; significant first, each a declared flag or a constant 0 or 1; NAME has no
+;; storage, so SREF packs the flags and (SETF SREF) unpacks into them. Which
+;; symbols really are flags is %FINISH-STATUS-REGISTERS's job, once every flag
+;; is known.
+(defun parse-status-register-clause (form)
+  (%definition-bind (name bits) form
+    (unless (symbolp name)
+      (%defmachine-error "status-register ~S must be a symbol" name))
+    (unless (and (consp bits) (every (lambda (bit) (or (symbolp bit) (member bit '(0 1)))) bits))
+      (%defmachine-error "status-register ~S: expected a list of flag names and 0/1 bits, got ~S" name bits))
+    (make-storage-element :name name :kind :register :width (length bits) :bits bits)))
+
+;; TODO: a flag with a :privilege cannot be in a status register; its gate
+;; would become a field gate on the register (#460).
+(defun %finish-status-registers (descriptor)
+  "Check each status register of DESCRIPTOR names declared, ungated flags, once each."
+  (dolist (element (machine-descriptor-elements descriptor))
+    (let ((name (storage-element-name element)) (seen '()))
+      (dolist (bit (storage-element-bits element))
+        (when (symbolp bit)
+          (let ((flag (gethash bit (machine-descriptor-table descriptor))))
+            (unless (and flag (eq (storage-element-kind flag) :flag))
+              (%defmachine-error "status-register ~S on machine ~S: ~S is not a declared flag"
+                                 name (machine-descriptor-name descriptor) bit))
+            (when (member bit seen)
+              (%defmachine-error "status-register ~S on machine ~S: flag ~S is listed twice"
+                                 name (machine-descriptor-name descriptor) bit))
+            (when (or (storage-element-read-privilege flag) (storage-element-write-privilege flag))
+              (%defmachine-error "status-register ~S on machine ~S: flag ~S has a :privilege, which a status register cannot gate"
+                                 name (machine-descriptor-name descriptor) bit))
+            (cl:push bit seen)))))))
+
 ;; (clock-speed n) -- the machine's nominal rate in Hz, n a positive
 ;; integer. Optional; a machine with no such clause leaves MACHINE-
 ;; DESCRIPTOR-CLOCK-SPEED NIL (storage.lisp), which is what keeps
@@ -1112,6 +1146,7 @@ DESCRIPTOR's finished elements."
         (stack (cl:push (parse-stack-clause (rest clause)) elements))
         (memory (cl:push (parse-memory-clause (rest clause)) elements))
         (flags (dolist (e (parse-flags-clause (rest clause))) (cl:push e elements)))
+        (status-register (cl:push (parse-status-register-clause (rest clause)) elements))
         (instruction-word
          (when instruction-word
            (%defmachine-error "DEFMACHINE: more than one instruction-word clause"))
@@ -1227,6 +1262,7 @@ DESCRIPTOR's finished elements."
                        (memory-region-name region) name (memory-region-device region)))
               (setf (memory-region-device-index region) index)))))
       (setf (machine-descriptor-elements descriptor) elements)
+      (%finish-status-registers descriptor)
       (when reset-pc
         (let ((pc (gethash 'pc (machine-descriptor-table descriptor))))
           (unless (and pc (eq (storage-element-kind pc) :register) (= (storage-element-count pc) 1))
@@ -1296,8 +1332,8 @@ nested (region ...) forms are replaced wholesale when CHILD gives any."
 
 (defun %merge-machine-clauses (parent-clauses child-clauses)
   "PARENT-CLAUSES with CHILD-CLAUSES merged over them: a clause naming an
-existing register/stack/memory/device merges into the parent's in place, a new
-one is appended. Singletons replace (clock-speed, reset-pc, undefined-opcode) or merge
+existing register/stack/memory/device merges into the parent's in place (a
+status-register replaces the parent's), a new one is appended. Singletons replace (clock-speed, reset-pc, undefined-opcode) or merge
 key by key (interrupts, properties, identity, privilege, idle); flags are additive."
   (let ((merged (copy-list parent-clauses))
         (added '()))
@@ -1317,6 +1353,12 @@ instructions are compiled against the parent's" head))
              (if position
                  (setf (nth position merged)
                        (%merge-keyed-clause (nth position merged) clause))
+                 (cl:push clause added))))
+          (status-register
+           (let ((position (position-if (lambda (p) (and (eq (first p) head) (eq (second p) (second clause))))
+                                        merged)))
+             (if position
+                 (setf (nth position merged) clause)
                  (cl:push clause added))))
           (devices
            (let (new)
@@ -1376,14 +1418,14 @@ instructions are compiled against the parent's" head))
                      :format-control "Machine ~S: ~S is not a removable ~A of its parent"
                      :format-arguments (list machine-name name
                                              (if (eq (first heads) 'device) "device" "register or flag")))))))
-    (check storage-names '(register stack memory))
+    (check storage-names '(register stack memory status-register))
     (check device-names '(device devices))))
 
 (defun %drop-removed-clauses (merged storage-names device-names)
   "MERGED with the register/flag STORAGE-NAMES and the DEVICE-NAMES removed."
   (loop for clause in merged
         for kept = (case (first clause)
-                     ((register stack memory) (unless (member (second clause) storage-names) clause))
+                     ((register stack memory status-register) (unless (member (second clause) storage-names) clause))
                      (device (unless (member (second clause) device-names) clause))
                      (devices (let ((entries (remove-if (lambda (e) (member (%device-entry-name e) device-names))
                                                         (rest clause))))
@@ -1416,8 +1458,9 @@ instructions are compiled against the parent's" head))
           (case (storage-element-kind pe)
             (:register
              (unless (and (= (storage-element-count pe) (storage-element-count ce))
-                          (equal (storage-element-names pe) (storage-element-names ce)))
-               (fail "register ~S changes its :count or :names" name)))
+                          (equal (storage-element-names pe) (storage-element-names ce))
+                          (equal (storage-element-bits pe) (storage-element-bits ce)))
+               (fail "register ~S changes its :count, :names or status-register bits" name)))
             (:memory
              (unless (and (= (storage-element-cell-width pe) (storage-element-cell-width ce))
                           (equal (storage-element-endian pe) (storage-element-endian ce))
@@ -1516,7 +1559,7 @@ is the ISA's, the rest the CPU's; NIL for an empty part."
 (defun %declared-names (clauses)
   (loop for clause in clauses
         append (case (first clause)
-                 ((register stack memory) (list (second clause)))
+                 ((register stack memory status-register) (list (second clause)))
                  (flags (mapcar #'%flag-entry-name (rest clause))))))
 
 (defun %split-machine-clauses (clauses known)
@@ -1613,7 +1656,7 @@ PARENT's when given. Registers nothing."
                                     removed)))
            (inherited-storage (and parent-md
                                    (funcall redeclared (machine-descriptor-removed-storage parent-md)
-                                            '(register stack memory))))
+                                            '(register stack memory status-register))))
            (inherited-devices (and parent-md
                                    (funcall redeclared (machine-descriptor-removed-devices parent-md)
                                             '(device devices)))))
@@ -1721,7 +1764,7 @@ each key one of ALLOWED and given once."
             (values name plist))))))
 
 (defparameter *dsl-known-machine-heads*
-  '(register stack memory flags instruction-word stack-pointer interrupts privilege
+  '(register stack memory flags status-register instruction-word stack-pointer interrupts privilege
     device devices clock-speed reset-pc idle undefined-opcode properties identity
     without-instructions instruction-cycles without-storage without-devices))
 
@@ -1735,7 +1778,7 @@ each key one of ALLOWED and given once."
   "Build and register the ISA NAME."
   (%with-definition (name machine-definition-error)
     (%check-clause-heads clauses "DEFISA"
-                         '(register stack memory flags instruction-word stack-pointer interrupts privilege identity)
+                         '(register stack memory flags status-register instruction-word stack-pointer interrupts privilege identity)
                          "a CPU clause; declare it in DEFCPU")
     (dolist (clause clauses)
       (case (first clause)

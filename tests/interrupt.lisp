@@ -1439,3 +1439,34 @@ The test system's proclaimed style-warning muffling is lifted for the run."
 
 (fiveam:test interrupt-return-compiles-without-warnings-when-the-level-is-not-saved
   (fiveam:is (null (%warnings-compiling '(interrupt-return)))))
+
+;;; #453: a status register in :SAVE is pushed as one byte, and restored into its flags.
+
+(defmachine interrupt-status-test-machine
+  (register pc :width 16) (register ia :width 16) (register a :width 8) (register sp :width 8)
+  (flags n v d i z c)
+  (status-register p (n v 1 0 d i z c))
+  (memory ram :width 8 :addr-width 16)
+  (stack-pointer sp :memory ram :base #x100 :grows :down :push :post)
+  (interrupts :vector ia :message a :save (pc p)))
+
+(definstruction interrupt-status-test-machine nop
+  (encoding (opcode #x00)) (semantics nil) (cycles 1))
+(definstruction interrupt-status-test-machine rfi
+  (encoding (opcode #x01)) (semantics (interrupt-return)))
+
+(fiveam:test a-status-register-is-saved-as-one-byte-and-restored-into-its-flags
+  (let ((m (make-machine 'interrupt-status-test-machine)))
+    (setf (sref m 'ia) #x0010 (sref m 'pc) #x1234 (sref m 'sp) #xff
+          (flag m 'n) 1 (flag m 'c) 1)
+    (signal-interrupt m 7)
+    (step-machine m)
+    (fiveam:is (= #xfc (sref m 'sp)))
+    (fiveam:is (= #xA1 (mref m 'ram #x1fd)))
+    (fiveam:is (equal '(#x34 #x12) (list (mref m 'ram #x1fe) (mref m 'ram #x1ff))))
+    (setf (flag m 'n) 0 (flag m 'c) 0 (flag m 'z) 1)
+    (load-program m (list #x01) :origin #x0010)
+    (step-machine m)
+    (fiveam:is (= #xff (sref m 'sp)))
+    (fiveam:is (= #x1234 (sref m 'pc)))
+    (fiveam:is (equal '(1 0 0 0 0 1) (mapcar (lambda (name) (flag m name)) '(n v d i z c))))))

@@ -277,6 +277,15 @@
     (fiveam:is (= #xff (reg machine 's)))
     (fiveam:is (= #x29 (status machine)) "B is not a flag")))
 
+(fiveam:test p-is-one-register-over-the-flags
+  (let ((machine (load-6502 (assemble-6502 "nop"))))
+    (setf (reg machine 'p) #xff)
+    (fiveam:is (every (lambda (name) (flag-set-p machine name)) '(n v d i z c)))
+    (fiveam:is (= #xef (reg machine 'p)) "bit 5 reads 1 and B reads 0")
+    (setf (reg machine 'p) #x00)
+    (fiveam:is (notany (lambda (name) (flag-set-p machine name)) '(n v d i z c)))
+    (fiveam:is (= #x20 (reg machine 'p)))))
+
 (fiveam:test a-call-pushes-the-address-of-its-last-byte
   (let ((machine (run-source (format nil "jsr sub~%ldx #1~%jam~%sub: ldy #2~%rts"))))
     (fiveam:is (equal '(0 1 2) (regs machine)))

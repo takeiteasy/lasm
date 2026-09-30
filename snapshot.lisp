@@ -23,6 +23,10 @@
 
 ;;; Capture
 
+(defun %stored-elements (descriptor)
+  "DESCRIPTOR's storage elements that hold state: a status register's flags hold it instead."
+  (remove-if #'storage-element-bits (machine-descriptor-elements descriptor)))
+
 (defun %element-shape (element)
   (list (storage-element-name element)
         (storage-element-kind element)
@@ -77,12 +81,12 @@ Such a partial snapshot only restores through %RESTORE-SNAPSHOT with CELLS NIL."
     (list :lasm-snapshot
           :version +snapshot-version+
           :cpu (machine-descriptor-name descriptor)
-          :shape (mapcar #'%element-shape (machine-descriptor-elements descriptor))
+          :shape (mapcar #'%element-shape (%stored-elements descriptor))
           :bank-shape (%bank-shape descriptor)
           :cycles (machine-cycles machine)
           :idle (machine-idle machine)
           :elements (mapcar (lambda (element) (%snapshot-element machine element cells))
-                            (machine-descriptor-elements descriptor))
+                            (%stored-elements descriptor))
           :interrupt-queue (let (entries)
                              (map-pending-interrupts
                               (lambda (device data priority non-maskable)
@@ -254,7 +258,7 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
       (%snapshot-fail 'snapshot-machine-mismatch "snapshot is for machine ~S, not ~S"
                       (%snapshot-field snapshot :cpu) (machine-descriptor-name descriptor)))
     (unless (equal (%snapshot-field snapshot :shape)
-                   (mapcar #'%element-shape (machine-descriptor-elements descriptor)))
+                   (mapcar #'%element-shape (%stored-elements descriptor)))
       (%snapshot-fail 'snapshot-machine-mismatch
                       "snapshot storage layout differs from machine ~S"
                       (machine-descriptor-name descriptor)))
@@ -263,7 +267,7 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
                       "snapshot bank layout differs from machine ~S"
                       (machine-descriptor-name descriptor)))
     (let* ((saved (%snapshot-field snapshot :elements))
-           (values (loop for element in (machine-descriptor-elements descriptor)
+           (values (loop for element in (%stored-elements descriptor)
                          for entry = (assoc (storage-element-name element) saved)
                          do (unless entry
                               (%snapshot-fail 'snapshot-malformed "missing element ~S"
@@ -317,7 +321,7 @@ DEVICE-PLAN BANK-VALUES) ready to apply."
   "RESTORE-SNAPSHOT; without CELLS, memory and bank cell contents stay as they are."
   (multiple-value-bind (values plan banks) (%validate-snapshot machine snapshot cells)
     (when cells (%mark-all-dirty machine))
-    (loop for element in (machine-descriptor-elements (machine-descriptor machine))
+    (loop for element in (%stored-elements (machine-descriptor machine))
           for value in values
           do (%apply-element machine element value))
     (loop for (name current arrays loaded) in banks

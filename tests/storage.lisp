@@ -820,3 +820,85 @@ nop" :cpu 'rom-program-test-machine)))
     (fiveam:is (= 2 (length (machine-programs m))))
     (reset m)
     (fiveam:is (equal (list bios) (mapcar #'loaded-program-assembly (machine-programs m))))))
+
+;;; #453: (status-register NAME (BIT ...)), a register over flags.
+
+(defmachine status-test-machine
+  (register pc :width 16)
+  (register a :width 8)
+  (flags n v d i z c)
+  (status-register p (n v 1 0 d i z c)))
+
+(defun %status-definition-error (&rest clauses)
+  "The message defining a machine with CLAUSES signals, or NIL."
+  (handler-case (progn (eval `(defmachine status-bad-machine (register a :width 8) (flags n z) ,@clauses)) nil)
+    (machine-definition-error (c) (princ-to-string c))))
+
+(fiveam:test a-status-register-reads-the-flags-and-its-constant-bits-as-one-value
+  (let ((m (make-machine 'status-test-machine)))
+    (fiveam:is (= #x20 (sref m 'p)))
+    (setf (flag m 'n) 1 (flag m 'c) 1)
+    (fiveam:is (= #xA1 (sref m 'p)))
+    (setf (flag m 'v) 1 (flag m 'd) 1 (flag m 'i) 1 (flag m 'z) 1)
+    (fiveam:is (= #xEF (sref m 'p)))))
+
+(fiveam:test writing-a-status-register-sets-the-flags-and-ignores-its-constant-bits
+  (let ((m (make-machine 'status-test-machine)))
+    (setf (sref m 'p) #x93)
+    (fiveam:is (equal '(1 0 0 0 1 1) (mapcar (lambda (name) (flag m name)) '(n v d i z c))))
+    (fiveam:is (= #xA3 (sref m 'p)))
+    (setf (sref m 'p) #xFF)
+    (fiveam:is (every (lambda (name) (= 1 (flag m name))) '(n v d i z c)))
+    (fiveam:is (= #xEF (sref m 'p)))
+    (setf (sref m 'p) 0)
+    (fiveam:is (every (lambda (name) (= 0 (flag m name))) '(n v d i z c)))
+    (fiveam:is (= #x20 (sref m 'p)))))
+
+(fiveam:test writing-a-status-register-wraps-to-its-width-and-reset-clears-the-flags
+  (let ((m (make-machine 'status-test-machine)))
+    (setf (sref m 'p) #x1C3)
+    (fiveam:is (= #xE3 (sref m 'p)))
+    (reset m)
+    (fiveam:is (= #x20 (sref m 'p)))))
+
+(fiveam:test semantics-read-and-write-a-status-register-like-any-register
+  (with-machine (m status-test-machine)
+    (set! z 1)
+    (fiveam:is (= #x22 p))
+    (set! p (logior p #x10))
+    (fiveam:is (= #x22 (sref m 'p)))
+    (set! p #x05)
+    (fiveam:is (equal '(0 0 0 1 0 1) (mapcar (lambda (name) (flag m name)) '(n v d i z c))))))
+
+(fiveam:test a-status-register-notifies-flag-writes
+  (let ((m (make-machine 'status-test-machine)) (written '()))
+    (setf (machine-access-hook m)
+          (lambda (machine name index access value)
+            (declare (ignore machine index))
+            (when (eq access :write) (cl:push (list name value) written))))
+    (setf (sref m 'p) #x81)
+    (fiveam:is (equal '(n 1) (find 'n written :key #'first)))
+    (fiveam:is (equal '(p #x81) (find 'p written :key #'first)))
+    (fiveam:is (equal '(z 0) (find 'z written :key #'first)))))
+
+(fiveam:test a-status-register-definition-is-checked
+  (flet ((error-of (&rest clauses) (apply #'%status-definition-error clauses)))
+    (fiveam:is (search "nope is not a declared flag" (string-downcase (error-of '(status-register p (n nope))))))
+    (fiveam:is (search "is not a declared flag" (error-of '(status-register p (n a)))))
+    (fiveam:is (search "listed twice" (error-of '(status-register p (n z n)))))
+    (fiveam:is (search "list of flag names" (error-of '(status-register p (n 2)))))
+    (fiveam:is (search "list of flag names" (error-of '(status-register p ()))))
+    (fiveam:is (search "must be a symbol" (error-of '(status-register 3 (n z)))))
+    (fiveam:is (search "Duplicate" (error-of '(status-register a (n z)))))
+    (fiveam:is (search "Malformed" (error-of '(status-register p))))
+    (fiveam:is (null (error-of '(status-register p (n z)))))))
+
+(fiveam:test a-status-register-cannot-name-a-gated-flag
+  (fiveam:is (search "has a :privilege"
+                     (handler-case (progn (eval '(defmachine status-gated-machine
+                                                  (register a :width 8)
+                                                  (flags n (z :privilege supervisor))
+                                                  (privilege :level n :levels (user supervisor))
+                                                  (status-register p (n z))))
+                                          nil)
+                       (machine-definition-error (c) (princ-to-string c))))))

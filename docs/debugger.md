@@ -243,7 +243,7 @@ and prints until `quit` or end of input. `lasm debug` runs it from the
 | `info reg`, `info banks`, `info sym` | Inspect state and symbols; labels show their loaded addresses. |
 | `print EXPR`, `x/N ADDR`, `where` | Inspect a value, memory, or source location. |
 | `print REG[N]`, `print STACK[N]`, `print STACK.depth` | Read a banked register cell, a live stack slot (bottom first), or a stack's depth. Usable inside expressions and conditions. |
-| `set TARGET = EXPR` | Store an expression in a register, flag, `REG[N]`, `STACK[N]`, or memory. `N` may be an expression. |
+| `set TARGET = EXPR` | Store an expression in a register (a [status register](machine-model.md#status-registers) sets its flags), flag, `REG[N]`, `STACK[N]`, or memory. `N` may be an expression. |
 | `set STACK.depth = EXPR`, `set STACK = [EXPR, ...]` | Set a fixed stack's depth, or replace its entries bottom first. |
 | `write TARGET = EXPR` | Store to memory through the CPU write path. |
 | `bank REGION N` | Map a bank. |

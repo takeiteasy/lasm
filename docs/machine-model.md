@@ -29,6 +29,7 @@ one namespace.
 | `(stack-pointer REGISTER [:memory NAME] [:grows :down/:up] [:width n] [:bounds (LOW HIGH)] [:base n] [:push :pre/:post])` | A register used as a memory stack pointer. | [Stacks](#stacks) |
 | `(memory NAME :width n :addr-width n [:cell-width n] [:endian ORDER] ...)` | Addressable cells and optional regions. | [Memory regions](#memory-regions) |
 | `(flags NAME...)` | Single-bit flags. | [Accessors](#accessors) |
+| `(status-register NAME (BIT...))` | A register over flags and constant bits. | [Status registers](#status-registers) |
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
 | `(device NAME ...)`, `(devices ENTRY...)` | Bus-addressed peripheral, declared inline or attached from a `defdevice`. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
@@ -60,6 +61,28 @@ semantics, a banked register binds as `(NAME index)`:
 Aliases can be used in assembly source and rendered by the disassembler
 when an operand declares `:register`; see [Instructions](instructions.md#encoding).
 A label or assignment cannot reuse an alias name.
+
+### Status registers
+
+`(status-register NAME (BIT...))` declares a register over flags. Its bits run
+from the most significant down, each a declared flag or a constant `0` or `1`.
+A read packs the flags and the constant bits; a write unpacks into the flags and
+ignores the constant bits.
+
+```lisp
+(flags n v d i z c)
+(status-register p (n v 1 0 d i z c))   ; the 6502's P
+```
+
+| Access | Result |
+| --- | --- |
+| `p`, `(sref machine 'p)` | The flags as one byte: `N V 1 0 D I Z C`. |
+| `(set! p #xff)` | Every flag set; `p` then reads `#xef`. |
+
+It works wherever a scalar register does: in semantics, in an
+[interrupt `:save` list](interrupts.md), and in the [debugger](debugger.md).
+Its width is the number of bits. A [snapshot](snapshots.md) stores the flags, not
+the register.[^status]
 
 ### Stacks
 
@@ -318,6 +341,12 @@ in any package is found.
 | Limitation | Ticket |
 | --- | --- |
 | The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
+| A status register cannot name a flag declared with `:privilege`. | [#460](https://todo.sr.ht/~takeiteasy/lasm/460) |
+
+[^status]: A write to the register reports the register to the
+  [access hook](#access-hook), then each flag; a read reports only the register,
+  so a watch on a flag does not see reads through it. A flag named in the
+  register cannot be named twice.
 
 [^regions]: Regions change access behavior over one backing array.
   `:device` regions do not store values. `mpeek` reads zero there. A mapper

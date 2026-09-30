@@ -9,9 +9,10 @@ The MOS 6502 (NMOS, documented opcodes)
 Registers   A, X, Y   8-bit accumulator and index registers
             S         8-bit stack pointer; the stack is page $01 ($0100-$01FF)
             PC        16-bit program counter
-Flags       P         N V - B D I Z C, packed in one byte only on the stack:
-                      bit 7 N negative, 6 V overflow, 5 always 1, 4 B break,
-                      3 D decimal, 2 I interrupt disable, 1 Z zero, 0 C carry
+Flags       P         N V - B D I Z C, one register over the flags:
+                      bit 7 N negative, 6 V overflow, 5 always 1, 4 B break
+                      (0 in P; PHP and BRK push it set), 3 D decimal,
+                      2 I interrupt disable, 1 Z zero, 0 C carry
 Memory      64K of 8-bit cells; a 16-bit operand is little-endian
 Stack       PHA and PHP push at $0100+S then decrement S; PLA and PLP increment
             S then pull. JSR pushes the address of its last byte, high byte
@@ -55,13 +56,10 @@ on it, and here it stops the machine.
   (ident-chars :alnum "_.")
   (mode-suffix-separator "."))
 
-;;; Storage. The flags are separate one-bit places, so PHP, PLP, BRK and RTI pack
-;;; and unpack the status byte themselves. S is an 8-bit register over page $01
-;;; that stores before it decrements. The vectors at $FFFA-$FFFF are ROM, so a
-;;; reset keeps them, and PC starts at the word at $FFFC. See
-;;; docs/machine-model.md.
-;;; TODO: a status register over the flags would replace the hand-written
-;;; packing; see docs/examples.md#limitations.
+;;; Storage. P is a register over the flags: bit 5 reads 1 and bit 4 (B) reads 0,
+;;; and a write to P ignores both. S is an 8-bit register over page $01 that
+;;; stores before it decrements. The vectors at $FFFA-$FFFF are ROM, so a reset
+;;; keeps them, and PC starts at the word at $FFFC. See docs/machine-model.md.
 (defmachine mos6502
   (register a :width 8)
   (register x :width 8)
@@ -69,6 +67,7 @@ on it, and here it stops the machine.
   (register s :width 8)
   (register pc :width 16)
   (flags n v d i z c)
+  (status-register p (n v 1 0 d i z c))
   (memory ram :width 8 :addr-width 16
     (region vectors #xfffa #xffff :kind :rom))
   (stack-pointer s :memory ram :base #x100 :grows :down :push :post)
@@ -159,18 +158,6 @@ on it, and here it stops the machine.
     `(let ((,result ,form))
        (set! n (ash (logand ,result 255) -7))
        (set! z (flag-of (zerop (logand ,result 255)))))))
-
-(defmacro status-byte (break-bit)
-  `(logior (ash n 7) (ash v 6) 32 (ash ,break-bit 4) (ash d 3) (ash i 2) (ash z 1) c))
-
-(defmacro load-status (form)
-  `(let ((status ,form))
-     (set! n (ldb (byte 1 7) status))
-     (set! v (ldb (byte 1 6) status))
-     (set! d (ldb (byte 1 3) status))
-     (set! i (ldb (byte 1 2) status))
-     (set! z (ldb (byte 1 1) status))
-     (set! c (ldb (byte 1 0) status))))
 
 ;;; An instruction is written once and defined for each of its addressing modes
 ;;; (docs/instructions.md). WITH-OPERAND wraps the body for one mode: `value`
@@ -341,9 +328,9 @@ on it, and here it stops the machine.
 (defimplied nop #xea 2)
 
 (defimplied pha #x48 3 (push a))
-(defimplied php #x08 3 (push (status-byte 1)))
+(defimplied php #x08 3 (push (logior p #x10)))
 (defimplied pla #x68 4 (set! a (pop)) (set-nz a))
-(defimplied plp #x28 4 (load-status (pop)))
+(defimplied plp #x28 4 (set! p (pop)))
 
 ;;; Branches. The offset is signed and counts from the next instruction, so it
 ;;; is added to a PC that has already moved past it. A taken branch costs a
@@ -370,9 +357,7 @@ on it, and here it stops the machine.
 
 ;;; Jumps and calls. JSR pushes the address of its last byte, and BRK the address
 ;;; of the byte after its padding byte. BRK and RTI go through the $FFFE vector by
-;;; hand, because `interrupts` would need the status register to save.
-;;; TODO: an `interrupts` clause with (:vector (ram #xfffe)) once the flags have a
-;;; status register; see docs/examples.md#limitations.
+;;; hand: BRK pushes B set, which an `interrupts` delivery would not.
 (definstruction mos6502 jmp
   (modes (absolute (opcode #x4c) (cycles 3) (semantics (set! pc operand)))
          (indirect (opcode #x6c) (cycles 5) (semantics (set! pc (indirect-jump-target machine operand))))))
@@ -389,12 +374,12 @@ on it, and here it stops the machine.
 
 (defimplied brk #x00 7
   (push (logand (1+ pc) #xffff) :width 16)
-  (push (status-byte 1))
+  (push (logior p #x10))
   (set! i 1)
   (set! pc (word-at machine #xfffe)))
 
 (defimplied rti #x40 6
-  (load-status (pop))
+  (set! p (pop))
   (set! pc (pop :width 16)))
 
 ;;; A real NMOS 6502 locks up on $02. Here it stops the machine, so a program
@@ -493,7 +478,7 @@ any other reason the machine stopped is an error."
   (intern (string-upcase (string name)) '#:mos6502))
 
 (defun reg (machine name)
-  "The register NAME, one of A X Y S PC."
+  "The register NAME, one of A X Y S PC P."
   (sref machine (place name)))
 
 (defun (setf reg) (value machine name)
@@ -503,10 +488,8 @@ any other reason the machine stopped is an error."
   (= 1 (flag machine (place name))))
 
 (defun status (machine)
-  "The flags packed as PHP pushes them, with B clear."
-  (loop for (name bit) in '((c 0) (z 1) (i 2) (d 3) (v 6) (n 7))
-        when (flag-set-p machine name) sum (ash 1 bit) into byte
-        finally (return (logior byte 32))))
+  "The status register P: the flags as PHP pushes them, with B clear."
+  (reg machine 'p))
 
 (defun ram (machine address)
   (mref machine 'ram address))

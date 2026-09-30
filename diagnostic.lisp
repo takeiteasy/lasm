@@ -412,7 +412,7 @@ MODE-DESCRIPTOR.")
 ;; and CYCLES bodies stay the user's own.
 (defparameter *dsl-clause-heads*
   (let ((table (make-hash-table :test #'equal)))
-    (dolist (head '(register stack memory flags instruction-word clock-speed reset-pc device
+    (dolist (head '(register stack memory flags status-register instruction-word clock-speed reset-pc device
                     stack-pointer interrupts undefined-opcode properties identity privilege idle devices
                     without-instructions instruction-cycles without-storage without-devices
                     region field layout extra-word-order

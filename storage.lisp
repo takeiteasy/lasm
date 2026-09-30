@@ -214,7 +214,11 @@ memory ~S on machine ~S"
   (read-privilege nil :type (or null symbol))
   (write-privilege nil :type (or null symbol))
   ;; bit-field write gates on a register, a list of (MASK LEVEL POLICY).
-  (field-privileges nil :type list))
+  (field-privileges nil :type list)
+  ;; A (status-register ...) register: NIL, or its bits most significant
+  ;; first, each a flag name or a constant 0/1. It has no value of its own;
+  ;; SREF packs the flags and (SETF SREF) unpacks into them.
+  (bits nil :type list))
 
 ;; One declared (region NAME start end ...) form inside a memory
 ;; clause -- see PARSE-MEMORY-CLAUSE (machine.lisp) for how a DEFMACHINE
@@ -1343,11 +1347,26 @@ rather than left at zero."
                                :name name))
     (values (gethash name (machine-slots machine)) element)))
 
+(defun %status-value (machine element)
+  "The value of status-register ELEMENT: its flags and constant bits, most significant first."
+  (let ((value 0))
+    (dolist (bit (storage-element-bits element) value)
+      (setf value (logior (ash value 1) (if (integerp bit) bit (%sref machine bit)))))))
+
+(defun (setf %status-value) (value machine element)
+  "Write each flag of status-register ELEMENT from VALUE; constant bits are ignored."
+  (loop for bit in (reverse (storage-element-bits element))
+        for position from 0
+        when (symbolp bit)
+          do (setf (flag machine bit) (ldb (byte 1 position) value)))
+  value)
+
 (defun %sref (machine name)
   "SREF without access notification."
   (multiple-value-bind (slot element) (%slot-any machine name)
-    (declare (ignore element))
-    (aref slot 0)))
+    (if (storage-element-bits element)
+        (%status-value machine element)
+        (aref slot 0))))
 
 (defun sref (machine name)
   "Read a scalar register or flag by NAME as an unsigned integer. Signals
@@ -1372,13 +1391,18 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
 (defun (setf %sref) (value machine name)
   "(SETF SREF) without access notification."
   (multiple-value-bind (slot element) (%slot-any machine name)
-    (setf (aref slot 0) (wrap-value value (storage-element-width element)))))
+    (let ((wrapped (wrap-value value (storage-element-width element))))
+      (if (storage-element-bits element)
+          (setf (%status-value machine element) wrapped)
+          (setf (aref slot 0) wrapped)))))
 
 (defun (setf sref) (value machine name)
   (multiple-value-bind (slot element) (%slot-any machine name)
     (let ((wrapped (wrap-value value (storage-element-width element))))
       (%notify-access machine name nil :write wrapped)
-      (setf (aref slot 0) wrapped))))
+      (if (storage-element-bits element)
+          (setf (%status-value machine element) wrapped)
+          (setf (aref slot 0) wrapped)))))
 
 ;; Indexed access into a banked (:count > 1) register, e.g. CHIP8's
 ;; V0-VF or DCPU-16's A/B/C/X/Y/Z/I/J. INDEX is evaluated at run time --

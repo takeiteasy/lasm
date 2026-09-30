@@ -158,6 +158,5 @@ What the examples needed that LASM does not model yet.
 
 | Limitation | Ticket |
 | --- | --- |
-| The 6502 packs and unpacks its status byte by hand: a machine cannot declare one register over its flags. | [#453](https://todo.sr.ht/~takeiteasy/lasm/453) |
 | A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
 | The built-in mode names are internal, so a package imports them. | [#457](https://todo.sr.ht/~takeiteasy/lasm/457) |

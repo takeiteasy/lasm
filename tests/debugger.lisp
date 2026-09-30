@@ -1883,3 +1883,24 @@ loop:   sta $10
       (fiveam:is (search "Image 1 (origin $0040)" text))
       (fiveam:is (search "Image 2 (origin $0000)" text))
       (fiveam:is (search "boot" text)))))
+
+;;; #453: a status register shows and sets like any register.
+
+(defmachine dbg-status-test-machine
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16)
+  (flags n v d i z c)
+  (status-register p (n v 1 0 d i z c)))
+
+(fiveam:test the-debugger-shows-and-sets-a-status-register
+  (let* ((m (make-machine 'dbg-status-test-machine))
+         (session (make-debug-session m)))
+    (setf (flag m 'n) 1 (flag m 'c) 1)
+    (fiveam:is (search "p = 161" (debug-command session "print p")))
+    (fiveam:is (search "p" (debug-state-text session)))
+    (fiveam:is (search "161" (debug-state-text session)))
+    (debug-command session "set p = 2")
+    (fiveam:is (equal '(0 0 0 0 1 0) (mapcar (lambda (name) (flag m name)) '(n v d i z c))))
+    (fiveam:is (search "p = 34" (debug-command session "print p")))
+    (debug-command session "set z = 0")
+    (fiveam:is (= #x20 (sref m 'p)))))
