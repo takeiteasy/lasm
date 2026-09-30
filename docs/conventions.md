@@ -39,7 +39,7 @@ ret
 
 | Operand | Is |
 | --- | --- |
-| `(:arg i)` | Argument `i`: a register, or a stack slot. |
+| `(:arg i)` | Argument `i`: a register, a stack slot, or a labelled word in a [static function](static-frames.md#lasm-functions). |
 | `(:local i)` | Local `i`, a stack slot, or a labelled word in a [static function](static-frames.md#lasm-functions). |
 
 `(:arg)`, `(:local)` and `(:return)` are valid only inside a `:function`, which

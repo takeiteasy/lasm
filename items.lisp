@@ -605,6 +605,10 @@ to the enclosing label when one has been defined and the lexer has local labels.
 (defun %static-word-label (function index)
   (string-downcase (format nil "sf~Ax~D" function index)))
 
+(defun %static-arg-words (frame)
+  "The words of static FRAME that hold the arguments past the backend's argument registers."
+  (max 0 (- (items-frame-nargs frame) (length (%arg-registers)))))
+
 (defun %static-slot-operand (function index item)
   (let ((kind (getf (backend-descriptor-frame *items-backend*) :label-slot)))
     (unless kind
@@ -670,15 +674,19 @@ one, its part."
             (unless (< index (items-frame-nlocals frame))
               (%items-fail 'items-malformed item "~S: the function has ~D local~:P" operand (items-frame-nlocals frame)))
             (if (items-frame-static frame)
-                (%static-slot-operand (items-frame-name frame) index item)
+                (%static-slot-operand (items-frame-name frame) (+ (%static-arg-words frame) index) item)
                 (%slot-operand (+ base index) item)))
           (let* ((registers (%arg-registers))
                  (nstack (max 0 (- (items-frame-nargs frame) (length registers))))
                  (stack-index (- index (length registers))))
             (unless (< index (items-frame-nargs frame))
               (%items-fail 'items-malformed item "~S: the function has ~D argument~:P" operand (items-frame-nargs frame)))
-            (if (minusp stack-index)
-                (%register-operand (nth index registers) item)
+            (cond
+              ((minusp stack-index)
+               (%register-operand (nth index registers) item))
+              ((items-frame-static frame)
+               (%static-slot-operand (items-frame-name frame) stack-index item))
+              (t
                 (let ((return-cells (%backend-call-option :return-address-cells))
                       (pointer-cells (and (items-frame-pointer frame) (%pointer-cells))))
                   (%slot-operand (+ base (items-frame-locals frame)
@@ -687,7 +695,7 @@ one, its part."
                                     (if (eq (%backend-call-option :order) :right-to-left)
                                         stack-index
                                         (- nstack 1 stack-index)))
-                                 item (+ (or return-cells 0) (or pointer-cells 0))))))))))
+                                 item (+ (or return-cells 0) (or pointer-cells 0)))))))))))
 
 (defun %resolve-operand (operand item)
   (if (%frame-operand-p operand) (%frame-operand operand item) operand))
@@ -955,12 +963,13 @@ frame size, 0 for a key it lacks."
 the body, or at (:static-frames)."
   (let* ((saves (mapcar (lambda (register) (%frame-register register :callee-saved item)) saves))
          (function (%source-name name item))
-         (words (+ nlocals (length saves)))
          (frame (make-items-frame :nargs (or nargs 0) :nlocals nlocals :locals 0 :saves saves
                                   :static t :name function))
+         (saved-from (+ (%static-arg-words frame) nlocals))
+         (words (+ saved-from (length saves)))
          (prologue (append (%item-lines (list :label name))
                            (loop for register in saves
-                                 for index from nlocals
+                                 for index from saved-from
                                  append (%hook-lines :poke-label
                                                      (list (%static-word-label function index)
                                                            (%register-operand register item))
@@ -1001,9 +1010,6 @@ the body, or at (:static-frames)."
             (%items-fail 'items-malformed item ":frame t is a stack frame's pointer; the function's frames are static"))
           (when (and (option "FRAME" nil) (null (getf (backend-descriptor-frame *items-backend*) :pointer)))
             (%items-fail 'items-malformed item ":frame t needs (frame :pointer REG) in the backend"))
-          (when (and staticp (> (or nargs 0) (length (%arg-registers))))
-            (%items-fail 'items-malformed item "a static function takes at most ~D argument~:P, in registers"
-                         (length (%arg-registers))))
           (when staticp
             (return-from %function-lines (%static-function-lines item name nargs nlocals saves body))))
         (when (and (null nargs)
@@ -1042,7 +1048,7 @@ the body, or at (:static-frames)."
     (when (items-frame-static frame)
       (return-from %return-lines
         (append (loop for register in (items-frame-saves frame)
-                      for index from (items-frame-nlocals frame)
+                      for index from (+ (%static-arg-words frame) (items-frame-nlocals frame))
                       append (%hook-lines :peek-label
                                           (list (%register-operand register item)
                                                 (%static-word-label (items-frame-name frame) index))
@@ -1238,6 +1244,19 @@ integer, a label or an expression, which :const loads."
         for argument in arguments
         collect (list register (%register-operand register item) (%resolve-operand argument item))))
 
+(defun %static-callee (target)
+  "The (NAME NARGS STATIC-P ITEM) entry of the static function TARGET names, or NIL."
+  (let ((entry (and target (or (symbolp target) (stringp target)) (not (keywordp target))
+                    (gethash (%designator-name target) *items-functions*))))
+    (and entry (third entry) entry)))
+
+(defun %check-static-arguments (callee count item)
+  "Fail when a call passes COUNT arguments past the registers to CALLEE, which takes fewer."
+  (let ((words (max 0 (- (or (second callee) 0) (length (%arg-registers))))))
+    (when (> count words)
+      (%items-fail 'items-malformed item "~A takes ~D argument~:P past the registers, the call passes ~D"
+                   (%source-name (first callee) item) words count))))
+
 (defun %call-lines (item)
   (unless (rest item)
     (%items-fail 'items-malformed item "expected (:call TARGET ARG... [:keep (reg...)])"))
@@ -1250,9 +1269,14 @@ integer, a label or an expression, which :const loads."
              (arguments (subseq all 0 keep-position))
              (registers (%arg-registers))
              (on-stack (nthcdr (length registers) arguments))
+             (callee (%static-callee target))
              (target (%resolve-operand target item))
              (early-reads (remove-if (lambda (move) (%value-argument-p (third move)))
                                      (%argument-moves registers arguments item)))
+             (pending (append early-reads
+                              (loop for argument in on-stack
+                                    for operand = (%resolve-operand argument item)
+                                    unless (%value-argument-p operand) collect (list nil nil operand))))
              (lines '()))
         (labels ((emit (new) (setf lines (append lines new)))
                  (push-cell (operand)
@@ -1275,11 +1299,35 @@ integer, a label or an expression, which :const loads."
                            (scratch
                             (append (%hook-lines :move (list (%register-operand scratch item) (%resolve-operand operand item)) item)
                                     (%hook-lines :push (list (%register-operand scratch item)) item)))
-                           (t (%hook-lines :push (list operand) item))))))
+                           (t (%hook-lines :push (list operand) item)))))
+                 ;; The words a static callee takes past its registers: stored, not pushed.
+                 (store-lines (callee operand index)
+                   (let* ((label (%static-word-label (%source-name (first callee) item) index))
+                          (operand (%resolve-operand operand item))
+                          (valuep (%value-argument-p operand))
+                          (slotp (and (backend-words *items-backend*) (%slot-operand-p operand)
+                                      (integerp (second operand))))
+                          (scratch (and (or slotp valuep) (%free-scratch '() pending target))))
+                     (when (and (or slotp valuep) (null scratch))
+                       (%items-fail 'items-malformed item
+                                    "storing a frame slot or a value into a static function's word needs a :scratch word the call target and the register arguments do not read"))
+                     (cond (valuep
+                            (append (%hook-lines :const (list (%register-operand scratch item) operand) item)
+                                    (%hook-lines :poke-label (list label (%register-operand scratch item)) item)))
+                           (scratch
+                            (append (%hook-lines :move (list (%register-operand scratch item) operand) item)
+                                    (%hook-lines :poke-label (list label (%register-operand scratch item)) item)))
+                           (t (%hook-lines :poke-label (list label operand) item))))))
+          (when callee
+            (%check-static-arguments callee (length on-stack) item))
           (dolist (name keeps)
             (push-cell (%register-operand name item)))
-          (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
-            (push-cell argument))
+          (if callee
+              (loop for argument in on-stack
+                    for index from 0
+                    do (emit (store-lines callee argument index)))
+              (dolist (argument (if (eq (%backend-call-option :order) :right-to-left) (reverse on-stack) on-stack))
+                (push-cell argument)))
           (let* ((moves (%argument-moves registers arguments item))
                  (register-moves (remove-if (lambda (move) (%value-argument-p (third move))) moves))
                  (value-moves (remove-if-not (lambda (move) (%value-argument-p (third move))) moves)))
@@ -1289,9 +1337,10 @@ integer, a label or an expression, which :const loads."
               (dolist (move value-moves)
                 (emit (%hook-lines :const (list (second move) (third move)) item)))
               (emit (%hook-lines :call (list target) item))))
-          (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
-            (emit (%hook-lines :free (list (%frame-count (length on-stack))) item)))
-          (%bump-depth (- (length on-stack)))
+          (unless callee
+            (when (and on-stack (eq (%backend-call-option :cleanup) :caller))
+              (emit (%hook-lines :free (list (%frame-count (length on-stack))) item)))
+            (%bump-depth (- (length on-stack))))
           (dolist (name (reverse keeps))
             (emit (%hook-lines :pop (list (%register-operand name item)) item))
             (%bump-depth -1)))

@@ -131,8 +131,8 @@
   (fiveam:is (search ":label-slot"
                      (%zs-error '((:function f (:locals 1 :frames static) (:op :move (zp w0) (:local 0)) (:return)))
                                 'zpfoo-lang-abi)))
-  (fiveam:is (search "at most 1 argument"
-                     (%zs-error '((:function f (:args 2) (:return))) 'zs-bare-abi)))
+  (fiveam:is (search "f takes 1 argument past the registers, the call passes 2"
+                     (%zs-error '((:function f (:args 2) (:return)) (:call f 1 2 3)) 'zs-bare-abi)))
   (fiveam:is (search "static"
                      (%zs-error '((:function f (:frame t :frames static) (:return))) 'zpfoo-label-abi)))
   (fiveam:is (search "static or stack"
@@ -186,3 +186,41 @@
   (fiveam:is (null (%zs-error '((:function a (:frames stack) (:call b) (:return))
                                 (:function b (:frames stack) (:call a) (:return)))
                               'zpfoo-label-abi))))
+
+;;; #463: arguments past the backend's argument registers
+
+(fiveam:test a-static-function-takes-arguments-past-its-registers
+  (let ((m (%zs-run '((:call f 1 20 300) (:op :halt)
+                      (:function f (:args 3)
+                        (:op :move (zp w0) (:arg 0))
+                        (:op :add (zp w0) (:arg 1))
+                        (:op :add (zp w0) (:arg 2))
+                        (:return)))
+                    'zs-bare-abi)))
+    (fiveam:is (= 321 (%zs-word m #x10)))))
+
+(fiveam:test argument-words-come-before-locals-and-saved-registers
+  (multiple-value-bind (m assembly)
+      (%zs-run '((:op :const (zp w2) 99) (:call outer 20) (:op :halt)
+                 (:function outer (:args 1 :locals 1)
+                   (:op :move (:local 0) (:arg 0))
+                   (:call g 3 (:local 0))
+                   (:return))
+                 (:function g (:args 2 :locals 1 :save (w2))
+                   (:op :move (:local 0) (:arg 1))
+                   (:op :const (zp w2) 5)
+                   (:op :move (zp w0) (:arg 0))
+                   (:op :add (zp w0) (:local 0))
+                   (:return)))
+               'zs-bare-abi)
+    (let ((symbols (assembly-symbols assembly)))
+      (fiveam:is (= 23 (%zs-word m #x10)))
+      (fiveam:is (= 99 (%zs-word m #x14)))
+      (fiveam:is (= 2 (- (gethash "sfgx1" symbols) (gethash "sfgx0" symbols))))
+      (fiveam:is (= 4 (- (gethash "sfgx2" symbols) (gethash "sfgx0" symbols)))))))
+
+(fiveam:test a-call-to-a-stack-function-still-pushes-its-arguments
+  (let ((text (render-items '((:call f 1 2 3) (:function f (:args 3 :frames stack) (:return)))
+                            :backend 'zpfoo-label-abi)))
+    (fiveam:is (search "pha" text))
+    (fiveam:is (null (search "sffx0" text)))))

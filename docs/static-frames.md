@@ -77,8 +77,8 @@ like a global's, not a frame slot.
 ## `.lasm` functions
 
 A [`(:function ...)`](conventions.md#items) keeps its locals in labelled words when
-its frames are static. `(:local i)` is the word `sf`*function*`x`*i*, addressed
-with the backend's `(frame :label-slot KIND)`.
+its frames are static. `(:local i)` is the word `sf`*function*`x`*n*, addressed
+with the backend's `(frame :label-slot KIND)`; *n* is `i` plus the argument words.
 
 ```lisp
 (:function square-plus (:args 1 :locals 1)
@@ -94,9 +94,9 @@ See [`demo.lasm`](../examples/6502/demo.lasm).
 | Part | Behavior |
 | --- | --- |
 | Choosing | The function's `:frames`, then the [program's choice](#choosing). A backend with `(frame :static t)` and no `:alloc` is static unless told otherwise. |
-| Words | `:locals` words, one per saved register, each `.res` of one language word. |
+| Words | One per argument past the registers, then `:locals`, then one per saved register, each `.res` of one language word. |
 | Placement | At `(:static-frames)`, which holds every function's words, in RAM if the code is ROM. Without it, a function's words follow its code, so end the body with `(:return)`. |
-| Arguments | `(:arg i)` is a register; a function takes no more than the backend has. |
+| Arguments | `(:arg i)` is a register, or the word `sf`*function*`x`*n* for an argument past them. `(:call f ARG...)` stores each into that word, with no push. |
 | `:save` | A saved register is stored in a word at entry and loaded back by `(:return)`. The backend needs `:poke-label` and `:peek-label`. |
 | Halves | `(:lo (:local i))` and `(:hi (:local i))` are the cells of the word; the second is the label plus one. |
 | Not allowed | `:frame t`, and `:alloc`, `:free`, `:enter` and `:leave`. |
@@ -169,7 +169,6 @@ taken to be any entered function that takes as many arguments.
 
 | Limitation | Ticket |
 | --- | --- |
-| A static `.lasm` function takes arguments in registers only. | [#463](https://todo.sr.ht/~takeiteasy/lasm/463) |
 | Each static `.lasm` function reserves its own words; none are shared. | [#464](https://todo.sr.ht/~takeiteasy/lasm/464) |
 
 [^layout]: Every function's frame is as large as its most slots at once, which
