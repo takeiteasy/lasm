@@ -201,6 +201,7 @@
    #:interrupt-descriptor-drop-on-zero-vector
    #:interrupt-descriptor-stack-kind
    #:machine-descriptor-stack-pointers
+   #:machine-reset-pc
    #:stack-pointer-descriptor
    #:stack-pointer-descriptor-p
    #:stack-pointer-descriptor-register

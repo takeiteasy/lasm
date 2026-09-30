@@ -576,7 +576,7 @@ machine's default layout -- callers hold no other kind."
   (clock-speed nil :type (or null (integer 1)))
   ;; NIL unless DEFMACHINE declares (reset-pc n) -- the value MAKE-MACHINE
   ;; and RESET give the PC register instead of zero.
-  (reset-pc nil :type (or null (integer 0)))
+  (reset-pc nil :type (or null (integer 0) (cons symbol (cons (integer 0) null))))
   ;; DEVICE-DESCRIPTORs from every (device ...) clause, in declaration
   ;; order -- that order is a runtime MACHINE's initial bus index order (see
   ;; %ATTACH-DEVICE-DESCRIPTOR below and MAKE-MACHINE). NIL on a machine
@@ -1224,8 +1224,17 @@ machine, a machine descriptor or a CPU name -- as three values."
       (%apply-reset-pc m)
       m)))
 
+(defun machine-reset-pc (machine)
+  "The value RESET gives MACHINE's PC: its (reset-pc ...) integer, the word
+currently at its (reset-pc (MEMORY ADDRESS)) vector, or NIL with no such clause."
+  (let ((reset-pc (machine-descriptor-reset-pc (machine-descriptor machine))))
+    (if (consp reset-pc)
+        (%memory-word machine (first reset-pc) (second reset-pc)
+                      (storage-element-width (descriptor-element (machine-descriptor machine) 'pc)))
+        reset-pc)))
+
 (defun %apply-reset-pc (machine)
-  (let ((pc (machine-descriptor-reset-pc (machine-descriptor machine))))
+  (let ((pc (machine-reset-pc machine)))
     (when pc
       (setf (sref machine 'pc) pc))))
 
@@ -1815,15 +1824,26 @@ before any state changes, when SP has :BOUNDS and one of them lies outside."
   (let ((memory (descriptor-element (machine-descriptor machine) (stack-pointer-descriptor-memory sp))))
     (ceiling (or width (stack-pointer-descriptor-width sp)) (storage-element-cell-width memory))))
 
-(defun %sp-read (machine sp addresses)
-  (let* ((name (stack-pointer-descriptor-memory sp))
-         (memory (descriptor-element (machine-descriptor machine) name))
+(defun %read-cells (machine name addresses)
+  "The value ADDRESSES of memory NAME make, in the memory's endianness."
+  (let* ((memory (descriptor-element (machine-descriptor machine) name))
          (cell-width (storage-element-cell-width memory))
          (value 0))
     (loop for address in addresses
           for shift in (%cell-significance-order (or (storage-element-endian memory) :little) (length addresses))
           do (setf value (logior value (ash (mref machine name address) (* cell-width shift)))))
     value))
+
+(defun %memory-word (machine name address width)
+  "The WIDTH-bit word at ADDRESS of memory NAME, read through MREF."
+  (let* ((memory (descriptor-element (machine-descriptor machine) name))
+         (cells (ceiling width (storage-element-cell-width memory))))
+    (%read-cells machine name
+                 (loop for i below cells
+                       collect (wrap-value (+ address i) (storage-element-addr-width memory))))))
+
+(defun %sp-read (machine sp addresses)
+  (%read-cells machine (stack-pointer-descriptor-memory sp) addresses))
 
 (defun %sp-write (machine sp addresses value)
   (let* ((name (stack-pointer-descriptor-memory sp))

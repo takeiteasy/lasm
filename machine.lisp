@@ -328,14 +328,31 @@ function), got ~S" context name (car fn) (cdr fn))))
   (%definition-bind (hz) form
     (%check-positive hz ":clock-speed" 'clock-speed)))
 
-;; (reset-pc n) -- the value RESET (and MAKE-MACHINE) gives the PC
-;; register; n a non-negative integer that BUILD-MACHINE-DESCRIPTOR checks
-;; against PC's width once the elements are known.
+;; (reset-pc n) / (reset-pc (MEMORY ADDRESS)) -- the value RESET (and
+;; MAKE-MACHINE) gives the PC register: a non-negative integer, or the word at
+;; ADDRESS of a memory element. BUILD-MACHINE-DESCRIPTOR checks either against
+;; the elements once they are known.
 (defun parse-reset-pc-clause (form)
   (%definition-bind (pc) form
-    (unless (and (integerp pc) (>= pc 0))
-      (%defmachine-error "reset-pc must be a non-negative integer, got ~S" pc))
+    (unless (or (and (integerp pc) (>= pc 0)) (%memory-vector-shape-p pc))
+      (%defmachine-error "reset-pc must be a non-negative integer or (MEMORY ADDRESS), got ~S" pc))
     pc))
+
+(defun %memory-vector-shape-p (place)
+  (and (consp place) (= (length place) 2)
+       (symbolp (first place)) (integerp (second place)) (>= (second place) 0)))
+
+(defun %check-memory-vector (descriptor place what)
+  "Signal a definition error unless PLACE, (MEMORY ADDRESS), names an address of a
+memory element of DESCRIPTOR. WHAT names the clause for the message."
+  (let ((memory (gethash (first place) (machine-descriptor-table descriptor))))
+    (unless (and memory (eq (storage-element-kind memory) :memory))
+      (%defmachine-error "~A on machine ~S: ~S is not a declared memory element"
+                         what (machine-descriptor-name descriptor) (first place)))
+    (unless (< (second place) (ash 1 (storage-element-addr-width memory)))
+      (%defmachine-error "~A on machine ~S: address ~D is outside memory ~S's ~D-bit address space"
+                         what (machine-descriptor-name descriptor) (second place)
+                         (first place) (storage-element-addr-width memory)))))
 
 ;; (device NAME [:id n] [:version n] [:manufacturer n] [:init fn]
 ;;   [:tick fn] [:receive fn] [:detach fn] [:save fn] [:load fn]
@@ -1209,9 +1226,11 @@ DESCRIPTOR's finished elements."
         (let ((pc (gethash 'pc (machine-descriptor-table descriptor))))
           (unless (and pc (eq (storage-element-kind pc) :register) (= (storage-element-count pc) 1))
             (%defmachine-error "reset-pc on machine ~S: no single register named PC" name))
-          (unless (< reset-pc (ash 1 (storage-element-width pc)))
-            (%defmachine-error "reset-pc ~S on machine ~S does not fit PC's ~D-bit width"
-                   reset-pc name (storage-element-width pc)))))
+          (if (consp reset-pc)
+              (%check-memory-vector descriptor reset-pc "reset-pc")
+              (unless (< reset-pc (ash 1 (storage-element-width pc)))
+                (%defmachine-error "reset-pc ~S on machine ~S does not fit PC's ~D-bit width"
+                                   reset-pc name (storage-element-width pc))))))
       ;; INSTRUCTION-WORD's WIDTH-CELLS/CELL-WIDTH/ENDIAN can only be finished
       ;; now that every MEMORY element is known -- see
       ;; PARSE-INSTRUCTION-WORD-CLAUSE and %FINISH-INSTRUCTION-WORD-LAYOUT.

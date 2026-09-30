@@ -636,5 +636,57 @@ stop" :cpu 'fam-w8))
                   (defmachine rm-pc-wide (register pc :width 8) (reset-pc 256))
                   (defmachine rm-pc-negative (register pc :width 8) (reset-pc -1))
                   (defmachine rm-pc-twice (register pc :width 8) (reset-pc 1) (reset-pc 2))
-                  (defmachine (rm-pc-narrowed (:extends rm-base)) (register pc :width 8))))
+                  (defmachine (rm-pc-narrowed (:extends rm-base)) (register pc :width 8))
+                  (defmachine rm-pc-vec-none (register pc :width 16) (reset-pc (ram 0)))
+                  (defmachine rm-pc-vec-register (register pc :width 16) (register a :width 8) (reset-pc (a 0)))
+                  (defmachine rm-pc-vec-range (register pc :width 16) (memory ram :width 8 :addr-width 8)
+                    (reset-pc (ram 256)))
+                  (defmachine rm-pc-vec-shape (register pc :width 16) (memory ram :width 8 :addr-width 8)
+                    (reset-pc (ram)))))
     (fiveam:signals machine-definition-error (eval form))))
+
+;;; (reset-pc (MEMORY ADDRESS)) (#455)
+
+(defmachine rm-vector
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region vectors #xfffc #xffff :kind :rom))
+  (reset-pc (ram #xfffc)))
+
+(defmachine (rm-vector-child (:extends rm-vector))
+  (reset-pc (ram #xfffe)))
+
+(fiveam:test reset-pc-reads-a-word-from-memory
+  (let ((m (make-machine 'rm-vector)))
+    (fiveam:is (= 0 (sref m 'pc)) "an empty vector")
+    (fiveam:is (= 0 (machine-reset-pc m)))
+    (load-program m '(#x00 #x04 #x34 #x12) :origin #xfffc)
+    (fiveam:is (= #x400 (machine-reset-pc m)) "little-endian, low byte first")
+    (reset m)
+    (fiveam:is (= #x400 (sref m 'pc)) "the vector is ROM, so reset keeps it")
+    (setf (sref m 'pc) 7)
+    (reset m)
+    (fiveam:is (= #x400 (sref m 'pc)))))
+
+(fiveam:test reset-pc-from-a-ram-vector-reads-what-is-there
+  (let ((m (make-machine 'rm-pc-ram-vector)))
+    (setf (mref m 'ram 2) #x34 (mref m 'ram 3) #x12)
+    (fiveam:is (= #x1234 (machine-reset-pc m)))
+    (reset m)
+    (fiveam:is (= 0 (sref m 'pc)) "reset clears RAM before reading it")))
+
+(defmachine rm-pc-ram-vector
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 8)
+  (reset-pc (ram 2)))
+
+(fiveam:test reset-pc-vector-is-inherited-and-overridden
+  (let ((m (make-machine 'rm-vector-child)))
+    (load-program m '(#x00 #x04 #x34 #x12) :origin #xfffc)
+    (fiveam:is (= #x1234 (machine-reset-pc m)))
+    (fiveam:is (equal '(ram #xfffe)
+                      (machine-descriptor-reset-pc (find-machine-descriptor 'rm-vector-child))))))
+
+(fiveam:test reset-pc-integer-is-unchanged-by-machine-reset-pc
+  (fiveam:is (= #x100 (machine-reset-pc (make-machine 'rm-base))))
+  (fiveam:is (null (machine-reset-pc (make-machine 'sp-storage-test-machine)))))

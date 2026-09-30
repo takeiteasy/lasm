@@ -32,7 +32,7 @@ one namespace.
 | `(instruction-word :width n [:endian ORDER] (field NAME width)...)` | Named instruction bit fields, optional layouts and cell order. | [Instruction words](#cell--vs-word-encoded-instructions) |
 | `(device NAME ...)`, `(devices ENTRY...)` | Bus-addressed peripheral, declared inline or attached from a `defdevice`. | [Devices](devices.md) |
 | `(clock-speed n)` | Nominal cycles per second. | [Emulator](emulator.md#cycle-costs-and-clock-speed) |
-| `(reset-pc n)` | Value `make-machine` and `reset` give the `PC` register, default `0`. | [Runtime state](#runtime-state) |
+| `(reset-pc n)`, `(reset-pc (MEMORY ADDRESS))` | Value, or memory vector, `make-machine` and `reset` give the `PC` register, default `0`. | [Runtime state](#runtime-state) |
 | `(idle [:cycles n])` | Cost of an idle step, default `1`. | [Emulator](emulator.md#idle-steps) |
 | `(interrupts ...)` | Delivery, queue, save state, and masking. | [Interrupts](interrupts.md) |
 | `(privilege :level NAME [:shift N] [:width N] :levels (...))` | Privilege levels for gated regions, instructions, registers, flags and stacks. | [Privilege levels](privilege.md) |
@@ -171,6 +171,19 @@ load origin.
 ```lisp
 (defmachine cpu (register pc :width 16) (reset-pc #x100))
 (sref (make-machine 'cpu) 'pc)   ; => 256
+```
+
+`(reset-pc (MEMORY ADDRESS))` reads a `PC`-wide word at `ADDRESS` of a memory
+element instead, in the memory's `:endian` order. `reset` clears RAM before it
+reads, so a vector that survives a reset lives in a `:rom` region.
+`(machine-reset-pc machine)` returns the value a reset would use now.
+
+```lisp
+(defmachine cpu
+  (register pc :width 16)
+  (memory ram :width 8 :addr-width 16
+    (region vectors #xfffc #xffff :kind :rom))
+  (reset-pc (ram #xfffc)))
 ```
 
 ## Width and signedness
