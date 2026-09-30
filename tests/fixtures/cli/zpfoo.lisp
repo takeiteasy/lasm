@@ -241,3 +241,9 @@
 (defbackend zpfoo-lang-reg-abi (:extends zpfoo-lang-abi)
   (registers :scratch (w0 w3) :caller-saved (w1) :callee-saved (w2))
   (call :args (w1) :order :right-to-left :cleanup :caller :return-address-slots 1))
+
+;; A word at a label is two zero-page cells, so a function's static words go in page zero.
+(defbackend zpfoo-label-abi (:extends zpfoo-lang-abi)
+  (frame :static t :label-slot zp)
+  (ops (:poke-label (label s) (lda (:lo s)) (sta (zp label)) (lda (:hi s)) (sta (zp (+ label 1))))
+       (:peek-label (d label) (lda (zp label)) (sta (:lo d)) (lda (zp (+ label 1))) (sta (:hi d)))))

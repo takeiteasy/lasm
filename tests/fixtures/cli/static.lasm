@@ -1,0 +1,14 @@
+;;;; tests/fixtures/cli/static.lasm
+;;;; A function whose local is a labelled word on static frames, or a stack slot:
+;;;;
+;;;;   lasm listing static.lasm -m zpfoo.lisp --frames static|stack
+
+(:program (:backend zpfoo-label-abi :origin 512)
+  (:call f)
+  (:op :halt)
+
+  (:function f (:locals 1)
+    (:op :move (zp w0) (:local 0))
+    (:return))
+
+  (:static-frames))

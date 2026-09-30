@@ -598,3 +598,16 @@
   (multiple-value-bind (status out) (%run-cli (%items-cli-args "run" "tests/fixtures/cli/swap.lasm"))
     (fiveam:is (= 0 status))
     (fiveam:is (search "stopped: trap after 8 steps" out))))
+
+(fiveam:test cli-frames-chooses-static-or-stack-for-an-items-program
+  (flet ((listing (frames)
+           (multiple-value-bind (status out)
+               (%run-cli (list "listing" (%cli-path "tests/fixtures/cli/static.lasm")
+                               "-m" (%cli-path "tests/fixtures/cli/zpfoo.lisp") "--frames" frames))
+             (fiveam:is (= 0 status))
+             out)))
+    (let ((static (listing "static")) (stack (listing "stack")))
+      (fiveam:is (search "sffx0" static))
+      (fiveam:is (null (search "sffx0" stack)))
+      (fiveam:is (search "subs" stack))
+      (fiveam:is (null (search "subs" static))))))

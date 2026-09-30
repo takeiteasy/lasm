@@ -8,30 +8,22 @@
 (fiveam:def-suite static-items :in lasm)
 (fiveam:in-suite static-items)
 
-(defparameter +zs-ops+
-  '((:poke-label (label s) (lda (:lo s)) (sta (zp label)) (lda (:hi s)) (sta (zp (+ label 1))))
-    (:peek-label (d label) (lda (zp label)) (sta (:lo d)) (lda (zp (+ label 1))) (sta (:hi d)))))
-
-;; With stack operations too, so a function asks for static frames itself.
-(eval `(defbackend zs-label-abi (:extends zpfoo-lang-abi)
-         (frame :static t :label-slot zp)
-         (ops ,@+zs-ops+)))
-
 ;; No stack operations: a function is static unless it asks for a stack.
-(eval `(defbackend zs-bare-abi (:isa zpfoo)
-         (registers :words ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14))
-                    :return (w0) :scratch (w0 w1) :callee-saved (w2)
-                    :stack-pointer sp :program-counter pc :operand zp)
-         (call :args (w1) :return-address-slots 1)
-         (frame :static t :label-slot zp)
-         (operands (zp zf-zp) (imm zf-imm))
-         (ops (:move (d s) (lda (:lo s)) (sta (:lo d)) (lda (:hi s)) (sta (:hi d)))
-              (:const (r v) (ldi (imm (:lo v))) (sta (:lo r)) (ldi (imm (:hi v))) (sta (:hi r)))
-              (:add (d s) (clc) (lda (:lo d)) (adc (:lo s)) (sta (:lo d)) (lda (:hi d)) (adc (:hi s)) (sta (:hi d)))
-              (:call (f) (call f))
-              (:return () (ret))
-              (:halt () (hlt))
-              ,@+zs-ops+)))
+(defbackend zs-bare-abi (:isa zpfoo)
+  (registers :words ((w0 #x11 #x10) (w1 #x13 #x12) (w2 #x15 #x14))
+             :return (w0) :scratch (w0 w1) :callee-saved (w2)
+             :stack-pointer sp :program-counter pc :operand zp)
+  (call :args (w1) :return-address-slots 1)
+  (frame :static t :label-slot zp)
+  (operands (zp zf-zp) (imm zf-imm))
+  (ops (:move (d s) (lda (:lo s)) (sta (:lo d)) (lda (:hi s)) (sta (:hi d)))
+       (:const (r v) (ldi (imm (:lo v))) (sta (:lo r)) (ldi (imm (:hi v))) (sta (:hi r)))
+       (:add (d s) (clc) (lda (:lo d)) (adc (:lo s)) (sta (:lo d)) (lda (:hi d)) (adc (:hi s)) (sta (:hi d)))
+       (:call (f) (call f))
+       (:return () (ret))
+       (:halt () (hlt))
+       (:poke-label (label s) (lda (:lo s)) (sta (zp label)) (lda (:hi s)) (sta (zp (+ label 1))))
+       (:peek-label (d label) (lda (zp label)) (sta (:lo d)) (lda (zp (+ label 1))) (sta (:hi d)))))
 
 (defparameter +zs-words+
   '((:directive org 64) (:static-frames) (:directive org 512))
@@ -60,7 +52,7 @@
                    (:op :move (zp w0) (:local 0))
                    (:op :add (zp w0) (:local 1))
                    (:return)))))
-    (fiveam:is (= 42 (%zs-word (%zs-run items 'zs-label-abi :frames :static) #x10)))
+    (fiveam:is (= 42 (%zs-word (%zs-run items 'zpfoo-label-abi :frames :static) #x10)))
     (fiveam:is (= 42 (%zs-word (%zs-run items 'zs-bare-abi) #x10)))))
 
 (fiveam:test a-half-of-a-static-local-is-a-cell-of-its-word
@@ -119,15 +111,15 @@
 (fiveam:test the-function-option-overrides-the-frames-choice
   (let ((stack '((:function f (:locals 1 :frames stack) (:return))))
         (static '((:function f (:locals 1 :frames static) (:return)))))
-    (fiveam:is (search "subs" (render-items stack :backend 'zs-label-abi)))
-    (fiveam:is (null (search "subs" (render-items static :backend 'zs-label-abi))))
-    (fiveam:is (search "subs" (render-items stack :backend 'zs-label-abi :frames :static)))
-    (fiveam:is (null (search "subs" (render-items static :backend 'zs-label-abi :frames :stack))))))
+    (fiveam:is (search "subs" (render-items stack :backend 'zpfoo-label-abi)))
+    (fiveam:is (null (search "subs" (render-items static :backend 'zpfoo-label-abi))))
+    (fiveam:is (search "subs" (render-items stack :backend 'zpfoo-label-abi :frames :static)))
+    (fiveam:is (null (search "subs" (render-items static :backend 'zpfoo-label-abi :frames :stack))))))
 
 (fiveam:test the-frames-choice-and-the-backend-pick-static-frames
   (let ((items '((:function f (:locals 1) (:return)))))
-    (fiveam:is (search "subs" (render-items items :backend 'zs-label-abi)))
-    (fiveam:is (null (search "subs" (render-items items :backend 'zs-label-abi :frames :static))))
+    (fiveam:is (search "subs" (render-items items :backend 'zpfoo-label-abi)))
+    (fiveam:is (null (search "subs" (render-items items :backend 'zpfoo-label-abi :frames :static))))
     (fiveam:is (search "sffx0" (render-items items :backend 'zs-bare-abi)))
     (fiveam:signals usage-error (render-items items :backend 'zs-bare-abi :frames :heap))))
 
@@ -142,9 +134,9 @@
   (fiveam:is (search "at most 1 argument"
                      (%zs-error '((:function f (:args 2) (:return))) 'zs-bare-abi)))
   (fiveam:is (search "static"
-                     (%zs-error '((:function f (:frame t :frames static) (:return))) 'zs-label-abi)))
+                     (%zs-error '((:function f (:frame t :frames static) (:return))) 'zpfoo-label-abi)))
   (fiveam:is (search "static or stack"
-                     (%zs-error '((:function f (:frames heap) (:return))) 'zs-label-abi)))
+                     (%zs-error '((:function f (:frames heap) (:return))) 'zpfoo-label-abi)))
   (fiveam:is (search "top level"
                      (%zs-error '((:function f () (:static-frames) (:return))) 'zs-bare-abi)))
   (fiveam:is (search "at most one"
@@ -153,7 +145,7 @@
                      (%zs-error '((:function f (:locals 1) (lda (:lo (:local 1))) (:return))) 'zs-bare-abi))))
 
 (fiveam:test a-program-header-and-a-file-choose-static-frames
-  (let ((text "(:program (:backend zs-label-abi :frames static :origin 512)
+  (let ((text "(:program (:backend zpfoo-label-abi :frames static :origin 512)
   (:function f (:locals 1) (:return)))"))
     (fiveam:is (eq :static (items-program-frames (read-items-from-string text))))
     (%call-with-items-file text
