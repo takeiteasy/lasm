@@ -497,7 +497,6 @@ Returns the result word and the assembly."
     ("the part must be an integer from 0 to 3" (defbackend qf-bad-6 (:extends quadfoo-lang-abi) (ops (:tag (x) (movv (:part -1 x) (:lo x))))))
     ("the part must be an integer from 0 to 3" (defbackend qf-bad-7 (:extends quadfoo-lang-abi) (ops (:tag (x) (movv (:part k x) (:lo x))))))
     ("needs (registers :words" (defbackend qf-bad-8 (:extends callfoo-abi) (ops (:tag (x) (movv (:part 1 x) (:lo x))))))
-    ("not both" (defbackend qf-bad-9 (:extends quadfoo-lang-abi) (call :return-address-slots 1 :return-address-cells 2)))
     ("must be a non-negative integer" (defbackend qf-bad-10 (:extends quadfoo-lang-abi) (call :return-address-cells -1)))
     ("needs (frame :offsets :cells)" (defbackend qf-bad-11 (:extends quadfoo-lang-abi) (frame :offsets :slots :counts :slots))))
   "Backends that fail to define, each with the words its error contains.")
@@ -632,3 +631,35 @@ Returns the result word and the assembly."
                                                  :backend 'zf-quad-abi)))
         (by-address (assembly-cells (assemble-items '((lda (zp 19)) (sta (zp 21)) (lda (zp 20)) (sta (zp 23))) :backend 'zf-quad-abi))))
     (fiveam:is (equalp by-address by-part))))
+
+;;; A 16-bit frame pointer beside 32-bit words (#467)
+
+(let ((*package* (find-package '#:lasm)))
+  (load (asdf:system-relative-pathname :lasm "tests/fixtures/cli/quadfoo-fp.lisp")))
+
+(defun %qf-fp-run (source)
+  (let ((m (make-machine 'quadfoo-fp)))
+    (load-program m (assemble-items (%cl-compile source 'quadfoo-lang-fp-abi) :backend 'quadfoo-lang-fp-abi))
+    (setf (sref m 'sp) +pf-sp+)
+    (values m (run m :max-steps 800000))))
+
+(fiveam:test a-frame-pointer-narrower-than-a-word-offsets-stack-arguments-by-its-cells
+  (let ((text (render-items (%cl-compile "(defun f (a b) (+ a b)) (defun main () (f 1 2))" 'quadfoo-lang-fp-abi)
+                            :backend 'quadfoo-lang-fp-abi)))
+    (fiveam:is (search (format nil "ldf d, [ fp + 4 ]~%ldf c, [ fp + 5 ]") text)
+               "past the 2-cell saved frame pointer and the 2-cell return address")))
+
+(fiveam:test thirty-two-bit-programs-run-with-a-frame-pointer
+  (loop for (source . expected) in +qf-programs+
+        do (multiple-value-bind (m reason) (%qf-fp-run source)
+             (fiveam:is (eq :trap reason) "~A stopped with ~S" source reason)
+             (fiveam:is (= expected (%qf-word m)) "~A" source)
+             (fiveam:is (= +pf-sp+ (sref m 'sp)) "the stack is balanced: ~A" source))))
+
+(fiveam:test frame-pointer-cells-needs-a-pointer-and-cell-offsets
+  (loop for (text form) in '(("needs frame :pointer" (defbackend qf-fp-bad-1 (:extends quadfoo-lang-abi) (frame :pointer-cells 2)))
+                             ("must be a non-negative integer" (defbackend qf-fp-bad-2 (:extends quadfoo-lang-fp-abi) (frame :pointer-cells -1)))
+                             ("needs (frame :offsets :cells)" (defbackend qf-fp-bad-3 (:extends quadfoo-lang-fp-abi) (frame :offsets :slots :counts :slots))))
+        do (let ((c (%backend-error-of form)))
+             (fiveam:is (typep c 'backend-definition-error) "~S" form)
+             (fiveam:is (and c (search text (princ-to-string c))) "~S: ~A" form c))))

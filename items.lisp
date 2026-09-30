@@ -620,9 +620,15 @@ to the enclosing label when one has been defined and the lexer has local labels.
   (when *items-frame*
     (incf (items-frame-depth *items-frame*) n)))
 
+(defun %pointer-cells ()
+  "Cells the backend's :enter pushes for the frame pointer, when it says; else NIL."
+  (getf (backend-descriptor-frame *items-backend*) :pointer-cells))
+
 (defun %frame-overhead (frame)
-  "Slots between a frame's locals and its return address: the saved registers and the saved frame pointer."
-  (+ (length (items-frame-saves frame)) (if (items-frame-pointer frame) 1 0)))
+  "Slots between a frame's locals and its return address: the saved registers and, unless
+(frame :pointer-cells) counts it in cells, the saved frame pointer."
+  (+ (length (items-frame-saves frame))
+     (if (and (items-frame-pointer frame) (not (%pointer-cells))) 1 0)))
 
 (defun %frame-operand-p (operand)
   "True for (:arg i) and (:local i), and for a part of one, (:part ...), (:hi ...) or (:lo ...)."
@@ -672,14 +678,15 @@ one, its part."
               (%items-fail 'items-malformed item "~S: the function has ~D argument~:P" operand (items-frame-nargs frame)))
             (if (minusp stack-index)
                 (%register-operand (nth index registers) item)
-                (let ((return-cells (%backend-call-option :return-address-cells)))
+                (let ((return-cells (%backend-call-option :return-address-cells))
+                      (pointer-cells (and (items-frame-pointer frame) (%pointer-cells))))
                   (%slot-operand (+ base (items-frame-locals frame)
                                     (%frame-overhead frame)
                                     (if return-cells 0 (%backend-call-option :return-address-slots))
                                     (if (eq (%backend-call-option :order) :right-to-left)
                                         stack-index
                                         (- nstack 1 stack-index)))
-                                 item (or return-cells 0)))))))))
+                                 item (+ (or return-cells 0) (or pointer-cells 0))))))))))
 
 (defun %resolve-operand (operand item)
   (if (%frame-operand-p operand) (%frame-operand operand item) operand))

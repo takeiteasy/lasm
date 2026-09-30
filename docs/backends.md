@@ -64,7 +64,7 @@ names that register.
 | `:order` | `:left-to-right`, `:right-to-left` | `:right-to-left` |
 | `:cleanup` | `:caller`, `:callee` | `:caller` |
 | `:return-address-slots` | Slots a call pushes | `1` |
-| `:return-address-cells` | Cells a call pushes, for a return address narrower than a word; not with `:return-address-slots`; needs `(frame :offsets :cells)` | none |
+| `:return-address-cells` | Cells a call pushes, for a return address narrower than a word, replacing `:return-address-slots`; needs `(frame :offsets :cells)` | none |
 
 The values are stored and readable with `backend-descriptor-call`. Items lower
 calls from them; see [Calling conventions](conventions.md).
@@ -79,6 +79,7 @@ calls from them; see [Calling conventions](conventions.md).
 | `:stack-slot` | With a `:pointer`, the operand kind that addresses a slot from the stack pointer, for a function with [`:frame nil`](conventions.md#opting-out) | None |
 | `:label-slot` | The operand kind that addresses a [static word](static-frames.md#lasm-functions) by its label | None |
 | `:pointer` | The register that is the [frame pointer](conventions.md#frame-pointer) | None |
+| `:pointer-cells` | With a `:pointer` and `:offsets :cells`, the cells `:enter` pushes for it, when that is not a whole word | None |
 | `:offsets` | `:slots`, `:cells`: the unit of the distance handed to `:slot`/`:stack-slot` | `:slots` |
 | `:counts` | `:slots`, `:cells`: the unit of the count handed to `:alloc`, `:free` and `:return-pop` | `:slots` |
 | `:static` | `t`: a [`.lsp`](static-frames.md) program keeps locals at fixed addresses, and needs no stack slot operations or `:slot` | `nil` |

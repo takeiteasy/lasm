@@ -88,7 +88,10 @@ word writes `(:part 1 f)` and `(:lo f)`, not `(:hi f)` and `(:lo f)`.
 ```
 
 A return address narrower than a word needs [`:return-address-cells`](backends.md#calling-convention)
-rather than `:return-address-slots`, so the stack arguments lie past its cells.
+rather than `:return-address-slots`, so the stack arguments lie past its cells. A
+frame pointer narrower than a word, a 16-bit one beside 32-bit words, needs
+[`(frame :pointer-cells 2)`](conventions.md#frame-pointer) the same way, as in
+[`quadfoo-fp.lisp`](../tests/fixtures/cli/quadfoo-fp.lisp).
 
 ## Memory parts
 

@@ -335,7 +335,7 @@ part is a register, or an integer address in memory."
 (defparameter +backend-clause-keys+
   `(("REGISTERS" ,@+backend-register-roles+ ,@+backend-register-singles+ :operand :words)
     ("CALL" :args :order :cleanup :return-address-slots :return-address-cells)
-    ("FRAME" :grows :alignment :slot :stack-slot :label-slot :pointer :offsets :counts :static))
+    ("FRAME" :grows :alignment :slot :stack-slot :label-slot :pointer :pointer-cells :offsets :counts :static))
   "The keys each plist clause takes, by clause head.")
 
 (defun %clause-keys (head)
@@ -391,8 +391,6 @@ part is a register, or an integer address in memory."
       (%backend-error "call :cleanup must be :caller or :callee, got ~S" cleanup))
     (unless (typep slots '(integer 0))
       (%backend-error "call :return-address-slots must be a non-negative integer, got ~S" slots))
-    (when (and (getf args :return-address-cells) (getf args :return-address-slots))
-      (%backend-error "call takes :return-address-slots or :return-address-cells, not both"))
     (unless (typep cells '(or null (integer 0)))
       (%backend-error "call :return-address-cells must be a non-negative integer, got ~S" cells))
     (append (list :args (if (eq arguments :stack)
@@ -405,7 +403,7 @@ part is a register, or an integer address in memory."
   (%check-plist "frame" args (%clause-keys "FRAME"))
   (let ((grows (getf args :grows)) (alignment (getf args :alignment 1)) (slot (getf args :slot))
         (stack-slot (getf args :stack-slot)) (label-slot (getf args :label-slot))
-        (pointer (getf args :pointer))
+        (pointer (getf args :pointer)) (pointer-cells (getf args :pointer-cells))
         (offsets (getf args :offsets :slots)) (counts (getf args :counts :slots))
         (static (getf args :static)))
     (unless (member static '(nil t))
@@ -417,6 +415,8 @@ part is a register, or an integer address in memory."
       (%backend-error "frame :grows must be :down or :up, got ~S" grows))
     (unless (typep alignment '(integer 1))
       (%backend-error "frame :alignment must be a positive integer, got ~S" alignment))
+    (unless (typep pointer-cells '(or null (integer 0)))
+      (%backend-error "frame :pointer-cells must be a non-negative integer, got ~S" pointer-cells))
     (loop for (what kind) in `((":slot" ,slot) (":stack-slot" ,stack-slot) (":label-slot" ,label-slot))
           when (and kind (not (%designator-name kind)))
             do (%backend-error "frame ~A: ~S is not a kind name" what kind))
@@ -425,6 +425,7 @@ part is a register, or an integer address in memory."
             (and stack-slot (list :stack-slot (%designator-name stack-slot)))
             (and label-slot (list :label-slot (%designator-name label-slot)))
             (and pointer (list :pointer (%backend-register-name descriptor pointer)))
+            (and pointer-cells (list :pointer-cells pointer-cells))
             (and (eq offsets :cells) (list :offsets :cells))
             (and (eq counts :cells) (list :counts :cells))
             (and static (list :static t)))))
@@ -825,6 +826,11 @@ not another register the convention uses."
   (let* ((pointer (getf (backend-descriptor-frame descriptor) :pointer))
          (registers (backend-descriptor-registers descriptor))
          (role (getf registers :frame-pointer)))
+    (when (getf (backend-descriptor-frame descriptor) :pointer-cells)
+      (unless pointer
+        (%backend-error "frame :pointer-cells needs frame :pointer"))
+      (unless (eq (getf (backend-descriptor-frame descriptor) :offsets) :cells)
+        (%backend-error "frame :pointer-cells needs (frame :offsets :cells)")))
     (when (and pointer role (string/= pointer role))
       (%backend-error "frame :pointer ~A disagrees with registers :frame-pointer ~A" pointer role))
     (when pointer
@@ -1063,7 +1069,7 @@ OPTIONS, (:isa ISA), optionally (:cpu CPU), and/or (:extends PARENT), and CLAUSE
      (call [:args :stack/(reg...)] [:order :left-to-right/:right-to-left]
            [:cleanup :caller/:callee] [:return-address-slots n/:return-address-cells n])
      (frame [:grows :down/:up] [:alignment n] [:slot kind] [:stack-slot kind] [:label-slot kind]
-            [:pointer reg] [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
+            [:pointer reg] [:pointer-cells n] [:offsets :slots/:cells] [:counts :slots/:cells] [:static t/nil])
      (operands (KIND mode-name)...)
      (ops (NAME (param...) [:pushes n] [:pops n] (mnemonic operand...)...)...)
        ; a param is a name, or (NAME KIND) restricting it to an operand of that

@@ -1210,6 +1210,15 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
     (fiveam:is (search "lds a, [ sp + - 2 ]" text))
     (fiveam:is (search "lds b, [ sp + - 6 ]" text))))
 
+(eval '(defbackend cv-wide-up-cells-abi (:extends cv-wide-up-abi)
+        (call :args :stack :order :right-to-left :cleanup :caller :return-address-cells 1)))
+
+(fiveam:test a-return-address-in-cells-lies-below-the-arguments-when-the-stack-grows-up
+  (let ((text (render-items '((:function f (:args 1 :locals 1) (lds (reg b) (:arg 0)) (:return)))
+                            :backend 'cv-wide-up-cells-abi)))
+    (fiveam:is (search "lds b, [ sp + - 5 ]" text)
+               "a 1-cell return address and a 2-cell local put the word argument at -5, not -6")))
+
 (fiveam:test defbackend-rejects-a-bad-frame-unit
   (fiveam:signals backend-definition-error
     (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :counts :bytes))))

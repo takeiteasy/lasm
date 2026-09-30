@@ -158,6 +158,9 @@ register. The backend's `:slot` kind takes an offset from the frame pointer, wit
 the same signs and push-order shift as from the stack pointer: `+n` when the
 stack grows down, `-1-n` when it grows up.
 
+With `:offsets :cells`, the saved frame pointer counts as one word unless the
+backend gives `(frame :pointer-cells n)`, the cells `:enter` pushes for it.
+
 ### Opting out
 
 `(:function f (:frame nil) ...)` skips `:enter` and `:leave` and the saved frame
