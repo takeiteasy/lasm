@@ -28,8 +28,8 @@ a machine. Devices and software instructions can signal the same queue.
 
 | Key | Effect |
 | --- | --- |
-| `:vector` | Register holding the handler address. |
-| `:nmi-vector` | Register holding the handler address for [non-maskable signals](#non-maskable-signals); defaults to `:vector`. |
+| `:vector` | Register, or `(MEMORY ADDRESS)`, holding the handler address. See [Memory vectors](#memory-vectors). |
+| `:nmi-vector` | Register or memory vector holding the handler address for [non-maskable signals](#non-maskable-signals); defaults to `:vector`. |
 | `:message` | Register receiving signal data. |
 | `:save` | Registers and flags pushed before delivery. |
 | `:stack` | Fixed stack or register-backed stack pointer; defaults when unique. |
@@ -159,6 +159,18 @@ With `:nmi-vector`, a non-maskable signal jumps through that register and
 (interrupts :vector irq :nmi-vector nmi :message a :save (pc))
 ```
 
+## Memory vectors
+
+`:vector` and `:nmi-vector` can name `(MEMORY ADDRESS)` instead of a
+register. Delivery reads a `pc`-wide word there in the memory's `:endian`
+order, so the handler address is whatever the cells hold at that moment.
+`:drop-on-zero-vector` checks the same word. `:message`, `:save` and
+`:mask-level` stay registers.
+
+```lisp
+(interrupts :vector (ram #xfffe) :nmi-vector (ram #xfffa) :message a :save (pc))
+```
+
 ## Delivery
 
 A pending unmasked signal is delivered before `step-machine` fetches:
@@ -207,12 +219,8 @@ hook in place as host wiring.
 
 ## Limitations
 
-- A register-backed stack saves each place in one cell; splitting wider
-  places across cells is unavailable.
 - Handler depth unwinds only through `interrupt-return`; a handler that
   leaves another way keeps its depth raised until `reset`.
-- Vectors are registers; memory-resident vectors are unavailable; see
-  [ticket 313](https://todo.sr.ht/~takeiteasy/lasm/313).
 - Queue operations cost O(distinct pending priorities); see
   [ticket 312](https://todo.sr.ht/~takeiteasy/lasm/312).
 - The debugger does not display pending priorities or handler depth; see

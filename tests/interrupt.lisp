@@ -1266,6 +1266,71 @@
     (step-machine m)
     (fiveam:is (= #x31 (sref m 'pc)))))
 
+;;; Memory-resident vectors (#313)
+
+(defmachine interrupt-memory-vector-test-machine
+  (register pc :width 16) (register a :width 16) (register b :width 16)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16)
+  (interrupts :vector (ram #xfffe) :nmi-vector (ram #xfffa) :message a :save (pc b)))
+
+(definstruction interrupt-memory-vector-test-machine nop (encoding (opcode #x00)) (semantics nil) (cycles 1))
+
+(defun %poke-word (machine address word)
+  (setf (mref machine 'ram address) (ldb (byte 8 0) word)
+        (mref machine 'ram (1+ address)) (ldb (byte 8 8) word)))
+
+(fiveam:test memory-vectors-are-read-when-the-interrupt-is-delivered
+  (let ((m (make-machine 'interrupt-memory-vector-test-machine)))
+    (%poke-word m #xfffe #x0120)
+    (%poke-word m #xfffa #x0230)
+    (signal-interrupt m 1)
+    (%poke-word m #xfffe #x0140)
+    (step-machine m)
+    (fiveam:is (= #x0141 (sref m 'pc)) "the vector as it is at delivery, plus the nop")
+    (signal-interrupt m 2 :non-maskable t)
+    (step-machine m)
+    (fiveam:is (= #x0231 (sref m 'pc)) "the NMI vector")))
+
+(fiveam:test a-zero-memory-vector-drops-the-signal
+  (let ((m (make-machine 'interrupt-memory-vector-test-machine)))
+    (signal-interrupt m 1)
+    (fiveam:is (zerop (machine-interrupt-pending-count m)))
+    (%poke-word m #xfffe #x0100)
+    (signal-interrupt m 1)
+    (fiveam:is (= 1 (machine-interrupt-pending-count m)))))
+
+(defmachine interrupt-memory-vector-big-endian-test-machine
+  (register pc :width 16) (register a :width 16) (register b :width 16)
+  (stack sp :width 16 :depth 8)
+  (memory ram :width 8 :addr-width 16 :endian :big)
+  (interrupts :vector (ram 8) :message a :save (pc b)))
+
+(definstruction interrupt-memory-vector-big-endian-test-machine nop
+  (encoding (opcode #x00)) (semantics nil) (cycles 1))
+
+(fiveam:test memory-vector-follows-the-memory-endianness
+  (let ((m (make-machine 'interrupt-memory-vector-big-endian-test-machine)))
+    (setf (mref m 'ram 8) #x12 (mref m 'ram 9) #x34)
+    (signal-interrupt m 1)
+    (step-machine m)
+    (fiveam:is (= #x1235 (sref m 'pc)))))
+
+(fiveam:test defmachine-rejects-a-bad-memory-vector
+  (dolist (clause '((interrupts :vector ram :message a :save (pc))
+                    (interrupts :vector (ram #x10000) :message a :save (pc))
+                    (interrupts :vector (nosuch 0) :message a :save (pc))
+                    (interrupts :vector (a 1) :message a :save (pc))
+                    (interrupts :vector (ram 0) :nmi-vector (ram #x10000) :message a :save (pc))
+                    (interrupts :vector (ram 0) :message (ram 2) :save (pc))
+                    (interrupts :vector (ram 0) :message a :save ((ram 2)))))
+    (fiveam:signals machine-definition-error
+      (eval `(defmachine interrupt-bad-memory-vector-test
+               (register pc :width 16) (register a :width 16)
+               (stack sp :width 16 :depth 8)
+               (memory ram :width 8 :addr-width 16)
+               ,clause)))))
+
 (fiveam:test defmachine-rejects-a-bad-nmi-vector
   (dolist (form '((interrupts :vector ia :message a :save (pc) :nmi-vector nope)
                   (interrupts :vector ia :message a :save (pc) :nmi-vector iaq)

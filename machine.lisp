@@ -408,7 +408,7 @@ function), got ~S" name (car fn) (cdr fn))))
 ;; so BUILD-MACHINE-DESCRIPTOR's SEEN table never needs to know about it.
 (defun %interrupt-place-designator-p (place)
   "A scalar element name, or (NAME INDEX) naming one cell of a banked
-register."
+register or one address of a memory."
   (or (symbolp place)
       (and (consp place) (= (length place) 2)
            (symbolp (first place)) (integerp (second place)))))
@@ -554,9 +554,14 @@ got ~S" name what n kinds (storage-element-kind e)))
                      (when (> (storage-element-count e) 1)
                        (%defmachine-error "interrupts on machine ~S: ~A ~S is a banked (:count > 1) register -- ~
 name one cell as (~S INDEX), or use a scalar register" name what n n))))))
-      (require-kind (interrupt-descriptor-vector interrupts) '(:register) ":vector")
-      (when (interrupt-descriptor-nmi-vector interrupts)
-        (require-kind (interrupt-descriptor-nmi-vector interrupts) '(:register) ":nmi-vector"))
+      (flet ((require-vector (place what)
+               (let ((e (and (consp place) (element (first place)))))
+                 (if (and e (eq (storage-element-kind e) :memory))
+                     (%check-memory-vector descriptor place what)
+                     (require-kind place '(:register) what)))))
+        (require-vector (interrupt-descriptor-vector interrupts) ":vector")
+        (when (interrupt-descriptor-nmi-vector interrupts)
+          (require-vector (interrupt-descriptor-nmi-vector interrupts) ":nmi-vector")))
       (require-kind (interrupt-descriptor-message interrupts) '(:register) ":message")
       (dolist (n (interrupt-descriptor-save interrupts))
         (require-kind n '(:register :flag) ":save"))

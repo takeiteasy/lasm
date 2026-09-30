@@ -1406,10 +1406,15 @@ UNKNOWN-STORAGE on a banked (:count > 1) register -- use REGREF instead."
 
 ;; An interrupt :VECTOR/:MESSAGE/:SAVE place -- a scalar name read
 ;; through SREF, or (NAME INDEX) naming one bank cell read through REGREF.
+;; A :VECTOR may also be (MEMORY ADDRESS), a PC-wide word read at delivery.
 (defun %interrupt-place (machine place)
-  (if (consp place)
-      (regref machine (first place) (second place))
-      (sref machine place)))
+  (cond ((not (consp place))
+         (sref machine place))
+        ((eq (storage-element-kind (descriptor-element (machine-descriptor machine) (first place)))
+             :memory)
+         (%memory-word machine (first place) (second place)
+                       (storage-element-width (descriptor-element (machine-descriptor machine) 'pc))))
+        (t (regref machine (first place) (second place)))))
 
 (defun (setf %interrupt-place) (value machine place)
   (if (consp place)
