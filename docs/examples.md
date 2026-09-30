@@ -122,11 +122,36 @@ is named `"6502"`, which is not a symbol, so its package is `mos6502`.
 | File | Holds |
 | --- | --- |
 | `package.lisp` | A package that `use`s `#:lasm`, and imports the built-in [mode](modes.md) names. |
-| `6502.lisp` | The [machine](machine-model.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page pairs](register-pairs.md#memory-halves) and [static frames](static-frames.md). |
-| `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` and `(:call ...)`. |
-| `test.lisp` | A FiveAM suite: the opcode matrix, mode selection, flags, decimal mode, the stack, BRK and RTI, cycles, the demo, and `.lsp` programs on the backend. |
+| `6502.lisp` | The [machine](machine-model.md) with its [interrupts](interrupts.md), [ISA-local modes](modes.md#isa-local-modes) that shadow and extend the built-in ones, a [lexer](lexer.md), the 56 [instructions](instructions.md) with a semantics macro per addressing mode, decimal mode, and a [backend](backends.md) with [zero-page pairs](register-pairs.md#memory-halves) and [static frames](static-frames.md). |
+| `timer.lisp` | The [device](devices.md) mapped at `$D000` that raises IRQ or NMI. |
+| `demo.lasm` | A [`.lasm`](items.md#lasm-files) program: raw instructions beside `(:op ...)`, `(:function ...)` and `(:call ...)`, and an IRQ handler fed by the timer. |
+| `test.lisp` | A FiveAM suite: the opcode matrix, mode selection, flags, decimal mode, the stack, BRK, IRQ, NMI and RTI, the timer, cycles, the demo, and `.lsp` programs on the backend. |
 
 Assembly text uses `assemble-6502`; `$` is hex and `;` starts a comment.
+
+### Interrupts and the timer
+
+IRQ and NMI are declared with an `interrupts` clause; `signal-interrupt` and the
+timer raise them. A signal is delivered before the next instruction: PC then P
+(B clear) are pushed, I is set, and PC is read from `$FFFE` (IRQ) or `$FFFA`
+(NMI). IRQ waits while I is set; NMI does not. BRK pushes P with B set and
+reads `$FFFE` itself, and RTI undoes all three.[^irq]
+
+| Address | Timer register |
+| --- | --- |
+| `$D000`, `$D001` | Period in CPU cycles, low byte first; `0` stops it. |
+| `$D002` | Bit 0 enables it; bit 1 raises NMI instead of IRQ. |
+| `$D003` | Interrupts raised, modulo 256; a write clears it. |
+
+```lisp
+(signal-interrupt machine 1)                        ; an IRQ
+(signal-interrupt machine 1 :non-maskable t)        ; an NMI
+```
+
+[^irq]: The machine has an `irq-data` register that nothing reads, because
+  `interrupts` needs a [`:message`](#limitations) register. Delivery costs 7 cycles.
+  Unset vectors read as zero and are not dropped, so a signal with no handler
+  jumps to `$0000`. Signals the queue cannot hold are dropped.
 
 | Operand | Written |
 | --- | --- |
@@ -160,3 +185,4 @@ What the examples needed that LASM does not model yet.
 | --- | --- |
 | A `.lasm` function has no static frames, so `:locals` fails on the 6502 backend. | [#456](https://todo.sr.ht/~takeiteasy/lasm/456) |
 | The built-in mode names are internal, so a package imports them. | [#457](https://todo.sr.ht/~takeiteasy/lasm/457) |
+| `interrupts` requires a `:message` register, so the 6502 declares one that nothing reads. | [#462](https://todo.sr.ht/~takeiteasy/lasm/462) |

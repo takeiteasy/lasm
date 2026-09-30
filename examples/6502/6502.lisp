@@ -18,6 +18,10 @@ Stack       PHA and PHP push at $0100+S then decrement S; PLA and PLP increment
             S then pull. JSR pushes the address of its last byte, high byte
             first; RTS pulls it and adds one.
 Vectors     $FFFA NMI, $FFFC reset, $FFFE IRQ/BRK, each a little-endian address
+Interrupts  IRQ (held off while I is set) and NMI (never) take 7 cycles: push PC
+            then P with B clear, set I, jump through the vector. BRK does the
+            same with B set. RTI pulls P then PC.
+Timer       $D000-$D003, a memory-mapped interval timer; see timer.lisp
 
 Addressing modes
   immediate   #$10       one operand byte
@@ -56,10 +60,19 @@ on it, and here it stops the machine.
   (ident-chars :alnum "_.")
   (mode-suffix-separator "."))
 
+;;; Devices. The timer's hooks live in timer.lisp. See docs/devices.md.
+(defdevice timer :id 1 :version 1
+  :init timer-init :tick timer-tick :read timer-read :write timer-write
+  :save timer-save :load timer-load)
+
 ;;; Storage. P is a register over the flags: bit 5 reads 1 and bit 4 (B) reads 0,
 ;;; and a write to P ignores both. S is an 8-bit register over page $01 that
 ;;; stores before it decrements. The vectors at $FFFA-$FFFF are ROM, so a reset
-;;; keeps them, and PC starts at the word at $FFFC. See docs/machine-model.md.
+;;; keeps them, and PC starts at the word at $FFFC. IRQ and NMI save PC then P
+;;; and jump through $FFFE and $FFFA, as the hardware does; the timer is mapped
+;;; at $D000. See docs/machine-model.md and docs/interrupts.md.
+;;; TODO: IRQ-DATA only receives the signal's data, which nothing reads; drop it
+;;; once :message is optional (#462).
 (defmachine mos6502
   (register a :width 8)
   (register x :width 8)
@@ -68,10 +81,16 @@ on it, and here it stops the machine.
   (register pc :width 16)
   (flags n v d i z c)
   (status-register p (n v 1 0 d i z c))
+  (register irq-data :width 8)
   (memory ram :width 8 :addr-width 16
+    (region timer-io #xd000 #xd003 :kind :device :device timer)
     (region vectors #xfffa #xffff :kind :rom))
+  (devices timer)
   (stack-pointer s :memory ram :base #x100 :grows :down :push :post)
-  (reset-pc (ram #xfffc)))
+  (reset-pc (ram #xfffc))
+  (interrupts :vector (ram #xfffe) :nmi-vector (ram #xfffa) :message irq-data
+              :save (pc p) :stack s :mask-flag i :mask-on-deliver t
+              :cycles 7 :on-overflow :drop :drop-on-zero-vector nil))
 
 ;;; Addressing modes. The built-in `immediate`, `zero-page`, `absolute` and
 ;;; `relative` are the 6502's own. The rest are local to this ISA: a local mode
@@ -356,8 +375,9 @@ on it, and here it stops the machine.
 (defbranch bvs #x70 (= v 1))
 
 ;;; Jumps and calls. JSR pushes the address of its last byte, and BRK the address
-;;; of the byte after its padding byte. BRK and RTI go through the $FFFE vector by
-;;; hand: BRK pushes B set, which an `interrupts` delivery would not.
+;;; of the byte after its padding byte. BRK goes through the $FFFE vector by hand,
+;;; because it pushes B set, which an `interrupts` delivery does not. RTI undoes
+;;; BRK, IRQ and NMI alike.
 (definstruction mos6502 jmp
   (modes (absolute (opcode #x4c) (cycles 3) (semantics (set! pc operand)))
          (indirect (opcode #x6c) (cycles 5) (semantics (set! pc (indirect-jump-target machine operand))))))
@@ -378,9 +398,7 @@ on it, and here it stops the machine.
   (set! i 1)
   (set! pc (word-at machine #xfffe)))
 
-(defimplied rti #x40 6
-  (set! p (pop))
-  (set! pc (pop :width 16)))
+(defimplied rti #x40 6 (interrupt-return))
 
 ;;; A real NMOS 6502 locks up on $02. Here it stops the machine, so a program
 ;;; ends on it and BRK stays a real interrupt.

@@ -7,6 +7,7 @@
   :depends-on (#:lasm)
   :serial t
   :components ((:file "package")
+               (:file "timer")
                (:file "6502")
                (:static-file "demo.lasm"))
   :in-order-to ((test-op (test-op "6502/test"))))

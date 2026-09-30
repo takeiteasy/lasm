@@ -125,6 +125,23 @@
   (brk)
   (nop)
 
+  ;; The timer at $D000: an IRQ every 100 cycles. CLI lets them through, and the
+  ;; handler below counts three before the program stops the timer.
+  (lda (imm 100))
+  (sta (abs 53248))
+  (lda (imm 0))
+  (sta (abs 53249))
+  (lda (imm 1))                ; enable, raising IRQ
+  (sta (abs 53250))
+  (cli)
+  (:label wait_ticks)
+  (lda (abs timer_ticks))
+  (cmp (imm 3))
+  (bcc wait_ticks)
+  (sei)
+  (lda (imm 0))
+  (sta (abs 53250))
+
   (jam)
 
   ;; A function. Its arguments are in the backend's :args pairs, which
@@ -149,11 +166,22 @@
   (:label nmi)
   (rti)
 
+  ;; BRK and a hardware IRQ share this handler. Both push PC then P, and P has
+  ;; B set only for BRK. The handler keeps A, which PHA pushes under them.
   (:label irq)
-  (inc (abs irq_count))
+  (pha)
   (tsx)
-  (lda (absx 257))             ; the P that BRK pushed
+  (lda (absx 258))             ; the P that was pushed
+  (and (imm 16))
+  (beq irq_hardware)
+  (lda (absx 258))
   (sta (abs irq_status))
+  (inc (abs irq_count))
+  (jmp irq_done)
+  (:label irq_hardware)
+  (inc (abs timer_ticks))
+  (:label irq_done)
+  (pla)
   (rti)
 
   ;; Data.
@@ -185,6 +213,8 @@
   (:label irq_count)
   (:directive res 1)
   (:label irq_status)
+  (:directive res 1)
+  (:label timer_ticks)
   (:directive res 1)
   (:label product)
   (:directive res 2)

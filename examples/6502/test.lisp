@@ -354,6 +354,109 @@
   (fiveam:is (= 4 (cycles (format nil ".org $2fb~%clc~%bcc skip~%nop~%nop~%nop~%skip: nop") 1 :start #x2fb))
              "landing on another page"))
 
+;;; IRQ and NMI. The handlers live at $300 and $310, and the vectors at $FFFA and
+;;; $FFFE point at them. A test runs SEI first, so a signal raised after it is held
+;;; off until the program says otherwise.
+
+(defparameter +vectors+
+  (format nil ".org $fffa~%.word nmi~%.org $fffe~%.word irq"))
+
+(defun interrupt-machine (source)
+  "A machine that has run SEI, then has SOURCE's handlers: `nmi` and `irq`."
+  (let ((machine (load-6502 (assemble-6502 (format nil "sei~%~A~%~A" source +vectors+)))))
+    (setf (reg machine 's) #xff)
+    (step-machine machine)
+    machine))
+
+(fiveam:test an-irq-waits-for-cli-and-rti-restores-the-flags
+  (let ((machine (interrupt-machine (format nil "cli~%ldx #7~%jam~%.org $300~%irq: php~%pla~%sta $10~%ldy #9~%rti~%nmi: rti"))))
+    (signal-interrupt machine 1)
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (= 7 (reg machine 'x)))
+    (fiveam:is (= 9 (reg machine 'y)))
+    (fiveam:is (logtest 4 (ram machine #x10)) "the handler runs with I set")
+    (fiveam:is (not (flag-set-p machine 'i)) "RTI restored the I that CLI cleared")
+    (fiveam:is (= #xff (reg machine 's)))))
+
+(fiveam:test an-irq-is-held-off-while-i-is-set
+  (let ((machine (interrupt-machine (format nil "ldx #7~%jam~%.org $300~%irq: ldy #9~%rti~%nmi: rti"))))
+    (signal-interrupt machine 1)
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (equal '(7 0) (list (reg machine 'x) (reg machine 'y))) "the handler did not run")
+    (fiveam:is (= 1 (machine-interrupt-pending-count machine)))))
+
+(fiveam:test an-interrupt-pushes-pc-then-p-with-b-clear-and-takes-seven-cycles
+  (let ((machine (interrupt-machine (format nil "cli~%nop~%jam~%.org $300~%irq: jam~%nmi: rti"))))
+    (step-machine machine)
+    (let ((before (machine-cycles machine)))
+      (signal-interrupt machine 1)
+      (handler-case (step-machine machine)
+        (lasm-trap () nil))
+      (fiveam:is (>= (- (machine-cycles machine) before) 7)))
+    (fiveam:is (= #xfc (reg machine 's)))
+    (fiveam:is (equal '(#x02 #x02) (list (ram machine #x1fe) (ram machine #x1ff))) "PC, $0202, low byte first")
+    (fiveam:is (= #x20 (ram machine #x1fd)) "P with bit 5 and B clear")
+    (fiveam:is (flag-set-p machine 'i) "delivery sets I")))
+
+(fiveam:test an-nmi-ignores-i-and-uses-its-own-vector
+  (let ((machine (interrupt-machine (format nil "ldx #7~%jam~%.org $300~%irq: ldy #6~%rti~%.org $310~%nmi: ldy #5~%rti"))))
+    (signal-interrupt machine 1)
+    (signal-interrupt machine 1 :non-maskable t)
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (= 5 (reg machine 'y)) "the NMI vector, not the IRQ one")
+    (fiveam:is (= 1 (machine-interrupt-pending-count machine)) "the IRQ is still held off")))
+
+(fiveam:test rti-returns-from-brk-irq-and-nmi-alike
+  (let ((machine (interrupt-machine (format nil "cli~%brk~%nop~%ldx #7~%jam~%.org $300~%irq: inc $10~%rti~%nmi: inc $11~%rti"))))
+    (signal-interrupt machine 1 :non-maskable t)
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (equal '(1 1 7) (list (ram machine #x10) (ram machine #x11) (reg machine 'x))))
+    (fiveam:is (= #xff (reg machine 's)))))
+
+;;; The timer at $D000.
+
+(defun timer-program (control)
+  "Code that starts the timer with a period of 50 and waits for two interrupts,
+each counted at $10 by the handler `irq` or `nmi`."
+  (format nil "lda #50~%sta $d000~%lda #0~%sta $d001~%lda #~D~%sta $d002~%cli~%wait: lda $10~%cmp #2~%bcc wait~%jam~%.org $300~%irq: inc $10~%rti~%nmi: inc $10~%rti"
+          control))
+
+(fiveam:test the-timer-raises-an-irq-each-period
+  (let ((machine (interrupt-machine (timer-program 1))))
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (= 2 (ram machine #x10)))
+    (fiveam:is (= 2 (ram machine #xd003)))))
+
+(fiveam:test the-timer-raises-an-nmi-when-asked-even-with-i-set
+  (let ((machine (interrupt-machine (timer-program 3))))
+    (fiveam:is (eq :halted (run-6502 machine)))
+    (fiveam:is (= 2 (ram machine #x10)))))
+
+(fiveam:test a-timer-with-period-zero-or-no-enable-raises-nothing
+  (dolist (writes '(("lda #1" "sta $d002") ("lda #50" "sta $d000")))
+    (let ((machine (interrupt-machine (format nil "~{~A~%~}cli~%ldx #255~%spin: dex~%bne spin~%jam~%.org $300~%irq: inc $10~%rti~%nmi: rti" writes))))
+      (fiveam:is (eq :halted (run-6502 machine)))
+      (fiveam:is (= 0 (ram machine #x10)) "~S" writes))))
+
+(fiveam:test the-timer-registers-read-back
+  (let ((machine (load-6502 (assemble-6502 "nop"))))
+    (setf (mref machine 'ram #xd000) #x34
+          (mref machine 'ram #xd001) #x12
+          (mref machine 'ram #xd002) #xff)
+    (fiveam:is (equal '(#x34 #x12 3 0)
+                      (loop for address from #xd000 to #xd003 collect (ram machine address)))
+               "the control byte keeps two bits")))
+
+(fiveam:test the-timer-survives-a-snapshot-and-starts-over-on-reset
+  (let ((source (load-6502 (assemble-6502 "nop")))
+        (target (load-6502 (assemble-6502 "nop"))))
+    (setf (mref source 'ram #xd000) #x34
+          (mref source 'ram #xd002) 1)
+    (restore-snapshot target (machine-snapshot source))
+    (fiveam:is (equal '(#x34 0 1 0) (loop for address from #xd000 to #xd003 collect (ram target address))))
+    (reset target)
+    (fiveam:is (equal '(0 0 0 0) (loop for address from #xd000 to #xd003 collect (ram target address))))))
+
 ;;; demo.lasm. See docs/examples.md#6502.
 
 (defvar *demo-assembly* nil)
@@ -386,6 +489,9 @@
     (fiveam:is (= #xff (result machine "stack_top")) "the stack is balanced")
     (fiveam:is (= 2 (result machine "irq_count")) "BRK went through the vector twice")
     (fiveam:is (= #xb5 (result machine "irq_status")) "N, bit 5, B, I and C as BRK pushed them")
+    (fiveam:is (= 3 (result machine "timer_ticks")) "the timer's IRQ reached the handler three times")
+    (fiveam:is (= 2 (result machine "irq_count")) "and the handler did not count them as BRK")
+    (fiveam:is (= 3 (ram machine #xd003)) "the timer raised three")
     (fiveam:is (= #xff (reg machine 's)))))
 
 (fiveam:test the-demo-is-the-items-a-text-assembler-would-render
