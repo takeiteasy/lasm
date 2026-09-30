@@ -135,7 +135,7 @@ code it interrupts goes on as it was.
 | Words | The main line's first, then each handler's region in program order, with the handler's saved registers.[^regions] |
 | Shared functions | A static function run from a handler and from the main line, or from two handlers, is an `items-malformed` error. Give it `:frames stack`. |
 | Mentions | Naming a handler in other code, to load its address into a vector, is not a call. |
-| Not covered | A handler written as a plain label, like `irq` in [`demo.lasm`](../examples/6502/demo.lasm), is outside the call graph and is not kept apart. |
+| Not covered | A handler written as a plain label, like `nmi` in [`demo.lasm`](../examples/6502/demo.lasm), is outside the call graph and is not kept apart. |
 
 ```
 demo.lasm:14:5: interrupt irq calls log, and main calls log; a static function is not re-entrant, so give it :frames stack
