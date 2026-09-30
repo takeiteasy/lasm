@@ -15,6 +15,34 @@ exec ros -- $0 "$@"
   (:use #:cl))
 (in-package #:ros.script.lasm)
 
+(defun succeeds-p (command)
+  (zerop (nth-value 2 (uiop:run-program command :input :interactive :output nil :error-output nil
+                                                :ignore-error-status t))))
+
+(defun rlwrap-wanted-p (argv)
+  (and (equal "debug" (first argv))
+       (not (uiop:getenv "LASM_RLWRAP"))
+       (succeeds-p '("sh" "-c" "command -v rlwrap"))
+       (succeeds-p '("test" "-t" "0"))))
+
+(defun self-command ()
+  (if *load-truename*
+      (list "ros" (namestring *load-truename*))
+      (list (or #+sbcl (namestring sb-ext:*runtime-pathname*) (uiop:argv0)))))
+
+;; Line editing and history come from rlwrap when it is installed.
+(defun run-under-rlwrap (argv)
+  (nth-value 2 (uiop:run-program
+                (append (list "env" "LASM_RLWRAP=1" "rlwrap" "-H"
+                              (namestring (merge-pathnames ".lasm_history" (user-homedir-pathname))))
+                        (self-command) argv)
+                :input :interactive :output :interactive :error-output :interactive
+                :ignore-error-status t)))
+
 (defun main (&rest argv)
-  (uiop:quit (lasm:run-cli argv)))
+  (uiop:quit
+   (handler-case (if (rlwrap-wanted-p argv)
+                     (run-under-rlwrap argv)
+                     (lasm:run-cli argv))
+     #+sbcl (sb-sys:interactive-interrupt () 130))))
 ;;; vim: set ft=lisp lisp:

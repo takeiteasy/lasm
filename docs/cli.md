@@ -101,6 +101,10 @@ instead of decoding it; see [Disassembler](disassembler.md#data-regions).
 input until `quit` or end of input, printing responses to standard output.
 It exits 0.
 
+On a terminal, `lasm.ros` runs `debug` under [`rlwrap`](https://github.com/hanslub42/rlwrap)
+when it is installed, for line editing and history kept in `~/.lasm_history`.
+Set `LASM_RLWRAP=1` to skip it.
+
 ```sh
 lasm debug counter.asm -m sixtyfoo.lisp --break .loop --history 100
 ```
@@ -187,8 +191,3 @@ library, `trivial-high-precision-timer` — see
 ros lasm.ros run tests/fixtures/cli/counter.asm -m tests/fixtures/cli/sixtyfoo.lisp
 ros build lasm.ros    # standalone ./lasm
 ```
-
-## Limitations
-
-- `debug` reads plain lines, with no line editing or command history; it is
-  tracked in [ticket 284](https://todo.sr.ht/~takeiteasy/lasm/284).
