@@ -1,10 +1,27 @@
 # LASM — Lisp Assembly
 
+> **Work in progress.** This project is under development; expect missing features and breaking changes.
+
 A Common Lisp library and DSL for building **fantasy assemblers and CPU
 emulators**: given a declarative spec of a machine's storage, instruction
 encoding, and semantics, LASM generates a lexer/parser for its assembly
 syntax, an assembler, and an emulator. It targets custom ("fantasy")
 architectures, not real silicon.
+
+## Installation
+
+From the takeiteasy Quicklisp dist:
+
+```lisp
+(ql-dist:install-dist "https://takeiteasy.github.io/ql-dist/dist/takeiteasy.txt")
+(ql:quickload :lasm)
+```
+
+Or clone into Quicklisp's local-projects:
+
+```sh
+git clone https://github.com/takeiteasy/lasm ~/quicklisp/local-projects/lasm
+```
 
 ## Documentation
 
