@@ -28,7 +28,7 @@ runs:
         ln -sfn ~/.roswell/lisp/quicklisp ~/quicklisp
         rm -f ~/quicklisp/local-init/roswell.lisp
         rm -rf ~/quicklisp/local-projects/trivial-high-precision-timer
-        git clone --depth 1 https://github.com/takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
+        git clone --depth 1 https://github.com/communal-software/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
         ln -sfn "$GITHUB_WORKSPACE" ~/quicklisp/local-projects/lasm
         ros -Q -e '(ql:quickload (list :eclector :cffi :fiveam :closer-mop))' -q
     - name: Put ECL on PATH

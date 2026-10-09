@@ -10,14 +10,7 @@ architectures, not real silicon.
 
 ## Installation
 
-From the takeiteasy Quicklisp dist, which is served over HTTPS so Quicklisp needs [ql-https](https://github.com/takeiteasy/ql-dist#install):
-
-```lisp
-(ql-dist:install-dist "https://takeiteasy.github.io/ql-dist/dist/takeiteasy.txt")
-(ql:quickload :lasm)
-```
-
-Or clone into Quicklisp's local-projects:
+Clone into Quicklisp's local-projects:
 
 ```sh
 git clone https://github.com/takeiteasy/lasm ~/quicklisp/local-projects/lasm
