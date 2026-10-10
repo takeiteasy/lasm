@@ -46,7 +46,7 @@ looks like."
 (fiveam:test defmode-relativep-defaults-nil
   (fiveam:is (null (mode-descriptor-relativep (find-mode-descriptor 'absolute)))))
 
-;;; :SIGNED, split off :RELATIVE (#30)
+;;; :SIGNED, split off :RELATIVE (#30 (old, not migrated))
 
 (fiveam:test defmode-signed-option
   (fiveam:is (mode-descriptor-signedp (find-mode-descriptor 'test-signed-imm)))
@@ -183,7 +183,7 @@ looks like."
   (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "10") 'absolute)))))
 
 (fiveam:test relative-matches-bare-expr-like-absolute
-  ;; Same pattern shape as ABSOLUTE -- RELATIVE (#23) is distinguished by
+  ;; Same pattern shape as ABSOLUTE -- RELATIVE (#23 (old, not migrated)) is distinguished by
   ;; MODE-DESCRIPTOR-RELATIVEP, not by syntax; the assembler computes the
   ;; actual offset (assembler.lisp), this file only covers pattern matching.
   (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "10") 'relative)))))
@@ -204,7 +204,7 @@ looks like."
   (let ((ast (match-operand-mode (%tokens-for "($10),Y") 'indirect-y)))
     (fiveam:is (= #x10 (expr-number-value ast)))))
 
-;;; STACK-RELATIVE (#50) -- "n,S", built in alongside INDEXED-X/INDIRECT-Y.
+;;; STACK-RELATIVE (#50 (old, not migrated)) -- "n,S", built in alongside INDEXED-X/INDIRECT-Y.
 
 (fiveam:test stack-relative-matches-expr-comma-s
   (let ((ast (match-operand-mode (%tokens-for "1,S") 'stack-relative)))
@@ -248,7 +248,7 @@ looks like."
   (let ((descriptor (find-mode-descriptor 'immediate)))
     (fiveam:is (= 10 (expr-number-value (match-operand-mode (%tokens-for "#10") descriptor))))))
 
-;;; :SUFFIX (#40) -- forced addressing-mode operand syntax
+;;; :SUFFIX (#40 (old, not migrated)) -- forced addressing-mode operand syntax
 
 (defmode test-suffixed-mode expr :width 1 :suffix "q")
 
@@ -281,7 +281,7 @@ looks like."
   (fiveam:signals mode-definition-error
     (eval '(defmode test-suffixed-mode-conflict expr :suffix "q"))))
 
-;;; ONE-OF -- orthogonal per-operand addressing modes (#103)
+;;; ONE-OF -- orthogonal per-operand addressing modes (#103 (old, not migrated))
 
 (defmode oo-reg expr)
 (defmode oo-ind "[" expr "]")
@@ -393,7 +393,7 @@ looks like."
     (fiveam:is (equal '(5) (mapcar #'expr-number-value asts)))
     (fiveam:is (equal '(oo-bt-marked) (mapcar #'mode-descriptor-name choices)))))
 
-;;; Recorded picks (#326)
+;;; Recorded picks (#326 (old, not migrated))
 
 (fiveam:test try-match-operand-mode-records-the-span-of-each-alternative
   (let ((picks (nth-value 7 (try-match-operand-mode (%tokens-for "X 5") 'oo-nested-outer))))
@@ -630,7 +630,7 @@ looks like."
 
 (fiveam:test one-of-alternative-with-signed-is-accepted
   ;; #124/#127: :SIGNED is exempt from ONE-OF's whole-mode-attribute
-  ;; restriction, like :STRICT (#115) -- honored per hole once a
+  ;; restriction, like :STRICT (#115 (old, not migrated)) -- honored per hole once a
   ;; DEFINSTRUCTION site gives that hole a decode-time discriminator
   ;; (instruction.lisp's %CHECK-ONE-OF-SIGNED), which this DEFMODE-time
   ;; check cannot know about, so it must accept :SIGNED unconditionally.
@@ -640,7 +640,7 @@ looks like."
 (fiveam:test one-of-alternative-with-relative-is-accepted
   ;; #130: :RELATIVE is exempt from ONE-OF's whole-mode-attribute
   ;; restriction, like :STRICT (#115), :SIGNED (#124/#127), and :WIDTH
-  ;; (#129) -- honored per hole once a DEFINSTRUCTION site gives that hole a
+  ;; (#129 (old, not migrated)) -- honored per hole once a DEFINSTRUCTION site gives that hole a
   ;; decode-time discriminator (instruction.lisp's %CHECK-BYTE-ONE-OF-
   ;; RELATIVE), which this DEFMODE-time check cannot know about, so it must
   ;; accept :RELATIVE unconditionally.
@@ -649,7 +649,7 @@ looks like."
 
 (fiveam:test one-of-alternative-with-width-is-accepted
   ;; #129: :WIDTH is exempt from ONE-OF's whole-mode-attribute restriction,
-  ;; like :STRICT (#115) and :SIGNED (#124/#127) -- honored per hole once a
+  ;; like :STRICT (#115 (old, not migrated)) and :SIGNED (#124/#127) -- honored per hole once a
   ;; DEFINSTRUCTION site gives that hole a decode-time discriminator
   ;; (instruction.lisp's %CHECK-BYTE-ONE-OF-WIDTH), which this DEFMODE-time
   ;; check cannot know about, so it must accept :WIDTH unconditionally.
@@ -683,7 +683,7 @@ looks like."
   (fiveam:signals mode-definition-error
     (eval '(defmode oo-bad-dup-case (one-of test-indexed-x oo-indexed-x-lower)))))
 
-;;; Hole-aligned CHOICES (#104) -- ONE-OF's CHOICES value grows one entry per
+;;; Hole-aligned CHOICES (#104 (old, not migrated)) -- ONE-OF's CHOICES value grows one entry per
 ;;; hole, NIL for a hole not governed by any ONE-OF, rather than one entry
 ;;; per ONE-OF pattern element.
 
@@ -711,7 +711,7 @@ looks like."
     (declare (ignore okp))
     (fiveam:is (= (length asts) (length choices)))))
 
-;;; %MODE-HOLE-ALTERNATIVES (#104) -- the pattern-only, DEFINSTRUCTION-time
+;;; %MODE-HOLE-ALTERNATIVES (#104 (old, not migrated)) -- the pattern-only, DEFINSTRUCTION-time
 ;;; counterpart of hole-aligned CHOICES: per hole, the ONE-OF alternative
 ;;; names available there, or NIL for a plain EXPR hole.
 
@@ -726,7 +726,7 @@ looks like."
   (fiveam:is (equal '((oo-reg oo-ind) nil)
                      (%mode-hole-alternatives (find-mode-descriptor 'oo-mixed)))))
 
-;;; Nested ONE-OF (#115) -- one ONE-OF alternative's own pattern is itself
+;;; Nested ONE-OF (#115 (old, not migrated)) -- one ONE-OF alternative's own pattern is itself
 ;;; another ONE-OF's whole pattern. BUILD-MODE-DESCRIPTOR's hole-count check
 ;;; treats a ONE-OF element like a plain EXPR (one hole, taken from its first
 ;;; alternative), so this is legal; %MATCH-MODE-ELEMENTS' own docstring
@@ -781,7 +781,7 @@ looks like."
   (fiveam:is (equal '(t) (%option-hole-attributes '(no-signed-inner no-signed-inner-a) :signed)))
   (fiveam:is (equal '(nil) (%option-hole-attributes '(no-signed-inner no-signed-inner-b) :signed))))
 
-;;; Nested ONE-OF with a :WIDTH alternative (#129) -- the same
+;;; Nested ONE-OF with a :WIDTH alternative (#129 (old, not migrated)) -- the same
 ;;; outermost-ONE-OF-wins rule means a nested alternative's own :WIDTH would
 ;;; never reach any hole's CHOICES entry either, so %CHECK-ONE-OF-ELEMENTS!
 ;;; rejects it here too.
@@ -797,7 +797,7 @@ looks like."
   (fiveam:is (equal '((no-widthed-inner no-widthed-inner-a) (no-widthed-inner no-widthed-inner-b) no-other)
                     (%outer-options 'no-widthed-outer))))
 
-;;; Nested ONE-OF with a :RELATIVE alternative (#130) -- MODE-DESCRIPTOR-
+;;; Nested ONE-OF with a :RELATIVE alternative (#130 (old, not migrated)) -- MODE-DESCRIPTOR-
 ;;; SIGNEDP is (OR RELATIVE SIGNED), so %PATTERN-NESTED-ONE-OF-SIGNED-P
 ;;; (mode.lisp) already catches a nested :RELATIVE alternative with no new
 ;;; predicate of its own; this only needed its error message widened to
@@ -813,7 +813,7 @@ looks like."
   (fiveam:is (equal '(t) (%option-hole-attributes '(no-relative-inner no-relative-inner-a) :signed)))
   (fiveam:is (equal '(nil) (%option-hole-attributes '(no-relative-inner no-relative-inner-b) :relative))))
 
-;;; DEFMODE cycle guard (#115) -- redefining a mode some ONE-OF already
+;;; DEFMODE cycle guard (#115 (old, not migrated)) -- redefining a mode some ONE-OF already
 ;;; references so the reference loops back to it must signal, not recurse
 ;;; forever. A plain file reload can't create one (it replays the same
 ;;; patterns in the same order); this exercises the hand-written case.
@@ -956,7 +956,7 @@ looks like."
   (fiveam:is (eq 'oo-reg (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair lhs))))
   (fiveam:is (null (%key-component '(nv-slotted-pair oo-reg oo-three-hole) '(nv-slotted-pair)))))
 
-;;; Redefinition warnings (#277)
+;;; Redefinition warnings (#277 (old, not migrated))
 
 (defun rs-stale-warnings (form)
   (let (warnings)

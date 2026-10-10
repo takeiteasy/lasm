@@ -166,7 +166,7 @@
     (dolist (form '((stack-depth) (stack-pointer) (setf (stack-pointer) 1)))
       (fiveam:signals error
         (eval `(with-machine (m ,machine) ,form)))))
-  ;; A sole stack-pointer register is STACK-REF's default target (#169).
+  ;; A sole stack-pointer register is STACK-REF's default target (#169 (old, not migrated)).
   (dolist (machine '(two-stack-test-machine no-stack-test-machine))
     (dolist (form '((stack-ref 0) (setf (stack-ref 0) 1)))
       (fiveam:signals error

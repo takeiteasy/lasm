@@ -163,4 +163,4 @@ without an ambiguous local substitution.
   decodes using the canonical alternative.
 
 [^wide]: An odd width has no built-in directive of its own
-    ([ticket 298](https://todo.sr.ht/~takeiteasy/lasm/298)).
+    ([#42](https://github.com/takeiteasy/lasm/issues/42)).

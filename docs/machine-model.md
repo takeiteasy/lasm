@@ -343,7 +343,7 @@ in any package is found.
 
 | Limitation | Ticket |
 | --- | --- |
-| The debugger does not inspect or set a register stack's slots. | [#359](https://todo.sr.ht/~takeiteasy/lasm/359) |
+| The debugger does not inspect or set a register stack's slots. | [#50](https://github.com/takeiteasy/lasm/issues/50) |
 
 [^status]: A write to the register reports the register to the
   [access hook](#access-hook), then each flag; a read reports only the register,

@@ -8,7 +8,7 @@
 
 ;; Reuses EMU-TEST-MACHINE (tests/emulator.lisp) for the core address/label/
 ;; step/continue cases -- it already has an HLT (via TRAP) for a clean stop.
-;; A second, small fixture below adds a banked register (#13) to exercise
+;; A second, small fixture below adds a banked register (#13 (old, not migrated)) to exercise
 ;; DEBUG-STATE-TEXT's non-scalar path, which SREF alone cannot walk.
 
 (defmachine dbg-bank-test-machine

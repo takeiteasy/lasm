@@ -38,5 +38,5 @@ A few tests are skipped where an implementation cannot run them; see the [limita
 
 ## Limitations
 
-- ECL and CCL cannot use an outer `macrolet` macro in an inner `macrolet`'s expander inside `definstruction`; those cases run on SBCL only. Tracked in [ticket 471](https://todo.sr.ht/~takeiteasy/lasm/471).
-- CCL on arm64 macOS crashes in one reader test during a full run, so it is skipped there. Tracked in [ticket 472](https://todo.sr.ht/~takeiteasy/lasm/472).
+- ECL and CCL cannot use an outer `macrolet` macro in an inner `macrolet`'s expander inside `definstruction`; those cases run on SBCL only. Tracked in [#56](https://github.com/takeiteasy/lasm/issues/56).
+- CCL on arm64 macOS crashes in one reader test during a full run, so it is skipped there. Tracked in [#57](https://github.com/takeiteasy/lasm/issues/57).

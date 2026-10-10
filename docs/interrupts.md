@@ -222,7 +222,7 @@ hook in place as host wiring.
 - Handler depth unwinds only through `interrupt-return`; a handler that
   leaves another way keeps its depth raised until `reset`.
 - Queue operations cost O(distinct pending priorities); see
-  [ticket 312](https://todo.sr.ht/~takeiteasy/lasm/312).
+  [#47](https://github.com/takeiteasy/lasm/issues/47).
 - The debugger does not display pending priorities or handler depth; see
-  [ticket 306](https://todo.sr.ht/~takeiteasy/lasm/306).
+  [#43](https://github.com/takeiteasy/lasm/issues/43).
 - A unified trap/interrupt model is outside this subsystem.

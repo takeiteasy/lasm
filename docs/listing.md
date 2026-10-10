@@ -164,7 +164,7 @@ from assignments with the same value.
 ## Limitations
 
 - The `+` marker misses `elapse` produced by a macro defined inside the
-  semantics body itself ([ticket 297](https://todo.sr.ht/~takeiteasy/lasm/297)).
+  semantics body itself ([#41](https://github.com/takeiteasy/lasm/issues/41)).
 - Address lookup scans the listing linearly. An indexed lookup may help
   larger programs.
 

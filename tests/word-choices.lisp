@@ -720,7 +720,7 @@
   (fiveam:signals assembly-error
     (assemble "move [0, 5], 99" :cpu 'independent-choice-machine)))
 
-;;; Nested varying alternative with a hole-less inner option (#219)
+;;; Nested varying alternative with a hole-less inner option (#219 (old, not migrated))
 
 (defmachine nested-zero-machine
   (register pc :width 16)

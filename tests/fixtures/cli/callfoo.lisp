@@ -1,6 +1,6 @@
 ;;;; tests/fixtures/cli/callfoo.lisp
 ;;;; A machine with register names, a memory stack and a call instruction, and
-;;;; the backend a front end targets it through (#113):
+;;;; the backend a front end targets it through (#113 (old, not migrated)):
 ;;;;
 ;;;;   lasm run double.lasm -m callfoo.lisp
 

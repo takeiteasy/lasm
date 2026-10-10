@@ -241,12 +241,12 @@ snapshots do not save it. With `:deliver-level` and a saved level register,
 ## Limitations
 
 - A helper function called from semantics, or `(funcall 'sref ...)`, is not
-  gated. See [ticket 310](https://todo.sr.ht/~takeiteasy/lasm/310).
+  gated. See [#46](https://github.com/takeiteasy/lasm/issues/46).
 - A violation interrupt does not undo effects an instruction had before it
   violated, and its details are not snapshotted. See
-  [ticket 308](https://todo.sr.ht/~takeiteasy/lasm/308).
+  [#44](https://github.com/takeiteasy/lasm/issues/44).
 - A violation interrupt carries a fixed `DATA`. See
-  [ticket 309](https://todo.sr.ht/~takeiteasy/lasm/309).
+  [#45](https://github.com/takeiteasy/lasm/issues/45).
 - A maskable violation interrupt on a masked machine repeats on the same
   instruction each step until the queue overflows; use `:non-maskable t`.
 - A unified trap/interrupt model is outside this subsystem.

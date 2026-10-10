@@ -1,7 +1,7 @@
 ;;;; tests/fixtures/cli/widefoo.lisp
 ;;;; #368: a machine whose registers (16 bits) are wider than its memory cells
 ;;;; (8 bits), so a language word spans two cells (BACKEND-WORD-CELLS). Modeled
-;;;; on callfoo.lisp, with (stack-pointer sp ... :width 16) (#167) giving the
+;;;; on callfoo.lisp, with (stack-pointer sp ... :width 16) (#167 (old, not migrated)) giving the
 ;;;; frame slots LDS/STS address, through STACK-REF, that same two-cell split;
 ;;;; LDW/STW combine two cells by hand for a peek/poke through a computed
 ;;;; address, little-endian like the memory's own default.
@@ -92,7 +92,7 @@
   (semantics (when (zerop (r src)) (set! pc target))))
 
 ;; A word through a computed address, two cells combined little-endian, since
-;; RAM's own cells are narrower than a word (#368) -- MREF only reaches one.
+;; RAM's own cells are narrower than a word (#368 (old, not migrated)) -- MREF only reaches one.
 (definstruction widefoo ldw (modes wf-rind)
   (encoding (opcode 14) (operand dst :width 1) (operand addr :width 1))
   (semantics
@@ -163,7 +163,7 @@
        (:pop (x) (popr x))
        (:move (d s) (movv d s))
        ;; #385: SUBS/ADDS move SP by cells, so (frame :counts :cells) hands
-       ;; them a cell count; LDS/STS/PUSH/POP size a slot themselves (#167).
+       ;; them a cell count; LDS/STS/PUSH/POP size a slot themselves (#167 (old, not migrated)).
        (:alloc (n) (subs (sp) (imm n)))
        (:free (n) (adds (sp) (imm n)))
        (:call ((f reg)) (callr f))

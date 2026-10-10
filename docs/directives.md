@@ -174,9 +174,9 @@ a label absent from the completed program. See [Diagnostics](diagnostics.md).
 - Undecodable data renders as `.byte` even on word-addressed machines;
   disassembly does not select `.cell` or `.dat` for those lines, and does
   not render printable runs as `.ascii`
-  ([#263](https://todo.sr.ht/~takeiteasy/lasm/263)).
+  ([#30](https://github.com/takeiteasy/lasm/issues/30)).
 
-See the [issue tracker](https://todo.sr.ht/~takeiteasy/lasm) for planned
+See the [issue tracker](https://github.com/takeiteasy/lasm/issues) for planned
 work on these limits.
 
 [^emit]: `:terminator` takes a non-negative integer. `:endian`,

@@ -208,7 +208,7 @@ marks such instructions with `+` in its cycles column.
   [Privilege violations](privilege.md#violations-as-interrupts) can queue an
   interrupt, but traps stay separate.
 - Snapshots carry no retained programs, and the debugger's `save` embeds only
-  the newest assembly; see [ticket 369](https://todo.sr.ht/~takeiteasy/lasm/369).
+  the newest assembly; see [#53](https://github.com/takeiteasy/lasm/issues/53).
 
 [^decode]: Decode returns the selected `one-of` choices to semantics so
   `choice-case` can dispatch on the form actually encoded. Trailing cells

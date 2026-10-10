@@ -1,4 +1,4 @@
-;; Function values, indirect calls, arrays and strings (#365, #366) in the
+;; Function values, indirect calls, arrays and strings (#365 (old, not migrated), #366 (old, not migrated)) in the
 ;; small source language (docs/language.md).
 ;;
 ;;   lasm run table.lsp -m callfoo.lisp --backend callfoo-lang-abi

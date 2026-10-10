@@ -1,5 +1,5 @@
 ;;;; tests/cli.lisp
-;;;; fiveam tests for cli.lisp (#80): RUN-CLI driven with argument lists
+;;;; fiveam tests for cli.lisp (#80 (old, not migrated)): RUN-CLI driven with argument lists
 ;;;; against tests/fixtures/cli/ and tests/fixtures/cli/.
 
 (in-package #:lasm)
@@ -550,7 +550,7 @@
       (fiveam:is (search "bne" out))
       (fiveam:is (search "Breakpoint 1" out)))))
 
-;;; Items programs (#113)
+;;; Items programs (#113 (old, not migrated))
 
 (defun %items-cli-args (command file &rest more)
   (list* command (%cli-path file) "-m" (%cli-path "tests/fixtures/cli/callfoo.lisp") more))

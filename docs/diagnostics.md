@@ -238,7 +238,7 @@ declared. See [Instructions](instructions.md#opcode-to-descriptor-decode).
 - A `semantics` body that fails while its own macros expand, such as
   `interrupt-return` on a machine without an interrupts clause, loads from a
   fasl and signals `compiled-program-error` when the instruction first runs;
-  see [ticket 437](https://todo.sr.ht/~takeiteasy/lasm/437).
+  see #437 (old, not migrated).
 
 [^definition]: Word-encoded semantics compile lazily on first use. The
   compile step re-signals the typed condition, so the caller sees the same

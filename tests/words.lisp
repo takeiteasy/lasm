@@ -371,7 +371,7 @@
     (run m :max-steps 1000)
     (fiveam:is (= 65529 (%zf-word m)) "sub2 gets 3 and 10, so it returns 3 - 10")))
 
-;;; A call argument that is an integer or a label is a value, loaded with :const (#452).
+;;; A call argument that is an integer or a label is a value, loaded with :const (#452 (old, not migrated)).
 
 (defparameter +value-call-specs+
   '((pairfoo pairfoo-lang-abi reg ab cd %pf-word)
@@ -451,7 +451,7 @@ Returns the result word and the assembly."
     (fiveam:is (typep c 'items-malformed))
     (fiveam:is (and c (search "value" (princ-to-string c))))))
 
-;;; A frame operand of an :op dispatches as what it addresses (#458).
+;;; A frame operand of an :op dispatches as what it addresses (#458 (old, not migrated)).
 
 (fiveam:test a-frame-operand-of-an-op-selects-the-clause-for-its-kind
   (loop for spec in +value-call-specs+
@@ -632,7 +632,7 @@ Returns the result word and the assembly."
         (by-address (assembly-cells (assemble-items '((lda (zp 19)) (sta (zp 21)) (lda (zp 20)) (sta (zp 23))) :backend 'zf-quad-abi))))
     (fiveam:is (equalp by-address by-part))))
 
-;;; A 16-bit frame pointer beside 32-bit words (#467)
+;;; A 16-bit frame pointer beside 32-bit words (#467 (old, not migrated))
 
 (let ((*package* (find-package '#:lasm)))
   (load (asdf:system-relative-pathname :lasm "tests/fixtures/cli/quadfoo-fp.lisp")))

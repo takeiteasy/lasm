@@ -54,7 +54,7 @@ multiple of the frame's `:alignment` slots. `(:return)` undoes both, then
 returns; it needs the stack at its entry depth.
 
 A slot is one push/pop's worth of stack space -- the stack pointer's own
-`:width`, which may span more than one memory cell (#167). Every count below
+`:width`, which may span more than one memory cell (#167 (old, not migrated)). Every count below
 is in slots. The source language's own notion of a word
 ([Words wider than a cell](language.md#words-wider-than-a-cell)) is layered on
 top of it.
@@ -200,7 +200,7 @@ with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
    those moves, and a stack one is loaded into a free `:scratch` word first.
 5. The `:call`, `f`'s [operand-kind clause](backends.md#operand-kind-clauses)
    matching -- typically one clause for a label and another for a register
-   target (#365).
+   target (#365 (old, not migrated)).
 6. A `:free` of the stack arguments when `:cleanup` is `:caller`.
 7. A pop of each kept register, in reverse.
 
@@ -282,6 +282,6 @@ frame pointer with one.
 
 | Limitation | Ticket |
 | --- | --- |
-| A stack pointer write under a condition other than a `choice-case`, or a variable bound to one, tested by `if`, `when`, `unless`, `and`, `or`, `cond`, `not` or `null` counts as unconditional. | [#357](https://todo.sr.ht/~takeiteasy/lasm/357) |
+| A stack pointer write under a condition other than a `choice-case`, or a variable bound to one, tested by `if`, `when`, `unless`, `and`, `or`, `cond`, `not` or `null` counts as unconditional. | [#49](https://github.com/takeiteasy/lasm/issues/49) |
 
 [^depth]: A label's depth is recorded at its definition and each reference's when the instruction is lowered; the two are compared at the end of the function, so a forward branch is checked. A name that is not a label of the body is ignored.

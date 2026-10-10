@@ -142,7 +142,7 @@ sta b"))))
     (fiveam:is (eq :punctuation (token-type (second toks))))))
 
 (fiveam:test brackets-lex-as-punctuation-tokens
-  ;; "[" / "]" (#103) exist purely so an addressing-mode pattern (defmode,
+  ;; "[" / "]" (#103 (old, not migrated)) exist purely so an addressing-mode pattern (defmode,
   ;; mode.lisp) has tokens to match an indirect "[" expr "]" operand form
   ;; against -- same rationale as :HASH/:EQUALS above, so this only checks
   ;; the lexer hands them back as their own punctuator tokens.
@@ -164,7 +164,7 @@ sta b"))))
     (lex-error (c)
       (fiveam:is (= 1 (lasm-syntax-error-line c))))))
 
-;;; MODE-SUFFIX-SEPARATOR (#40)
+;;; MODE-SUFFIX-SEPARATOR (#40 (old, not migrated))
 
 (fiveam:test default-lexer-mode-suffix-separator-is-dot
   (fiveam:is (string= "." (lexer-descriptor-mode-suffix-separator (find-lexer-descriptor 'default)))))

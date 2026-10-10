@@ -216,7 +216,7 @@ call .inner" :cpu 'callfoo))
   (fiveam:is (equalp (assembly-cells (assemble "ldi c, #9" :cpu 'callfoo))
                      (assembly-cells (assemble-items '((:op :load (reg c) 9)) :backend 'callfoo-abi)))))
 
-;;; Operand-kind clauses (#365): several clauses may share an operation name,
+;;; Operand-kind clauses (#365 (old, not migrated)): several clauses may share an operation name,
 ;;; dispatched by an argument's operand kind, tried in the order written.
 
 (eval '(defbackend bk-kinds-abi (:extends callfoo-abi)
@@ -415,7 +415,7 @@ call .inner" :cpu 'callfoo))
     (fiveam:signals items-malformed (read-items-from-string text))))
 
 ;; TODO: a fatal Mach exception kills CCL on arm64 macOS when this runs in the full suite, though
-;; it passes alone (#472)
+;; it passes alone (https://github.com/takeiteasy/lasm/issues/57)
 #-(and ccl darwin)
 (fiveam:test read-items-bounds-nesting-and-number-size
   (fiveam:signals items-malformed
@@ -509,7 +509,7 @@ call .inner" :cpu 'callfoo))
   (fiveam:is (typep (%items-error-of '((ld (:mode bk-ld-mode a nope b))) :cpu 'bk-ld-machine)
                     'items-malformed)))
 
-;;; Inheritance (#323)
+;;; Inheritance (#323 (old, not migrated))
 
 (eval '(defmachine (bk-noret-2 (:extends callfoo))
         (without-instructions ret)))
@@ -599,7 +599,7 @@ call .inner" :cpu 'callfoo))
   (fiveam:is (typep (%backend-error-of '(defbackend bk-cycle-a (:extends bk-cycle-b))) 'backend-definition-error))
   (fiveam:is (null (backend-descriptor-parent (find-backend 'bk-cycle-a)))))
 
-;;; The frame pointer declaration (#321)
+;;; The frame pointer declaration (#321 (old, not migrated))
 
 (fiveam:test defbackend-reconciles-the-frame-pointer-role-and-declaration
   (eval '(defbackend bk-fp-1 (:extends callfoo-abi :isa callfoo-fp) (frame :pointer fp)))
@@ -615,7 +615,7 @@ call .inner" :cpu 'callfoo))
                     (call :args (a b)) (frame :pointer b))))
     (fiveam:is (typep (%backend-error-of form) 'backend-definition-error) "~S" form)))
 
-;;; Sizing and labels in operations (#324, #325)
+;;; Sizing and labels in operations (#324 (old, not migrated), #325 (old, not migrated))
 
 (defmachine bk-br-machine
   (register pc :width 16)
@@ -762,7 +762,7 @@ call .inner" :cpu 'callfoo))
                        (assembly-cells (assemble source :cpu 'bk-br-machine
                                                         :lexer 'bk-no-underscore-syntax))))))
 
-;;; branches and stack effects (#337, #338)
+;;; branches and stack effects (#337 (old, not migrated), #338 (old, not migrated))
 
 (fiveam:test branches-and-stack-effects-are-checked
   (dolist (form '((defbackend bk-br-e1 (:isa callfoo) (branches nope))
@@ -860,7 +860,7 @@ call .inner" :cpu 'callfoo))
     (fiveam:is-true warned))
   (fiveam:is (null (assoc "POP" (backend-descriptor-ops (find-backend 'bk-wo-child)) :test #'string=))))
 
-;;; A backend names an ISA and, optionally, one CPU of it (#445)
+;;; A backend names an ISA and, optionally, one CPU of it (#445 (old, not migrated))
 
 (defisa bk-isa
   (register pc :width 16)
@@ -917,7 +917,7 @@ call .inner" :cpu 'callfoo))
   (fiveam:is (typep (%backend-error-of '(defbackend bk-isa-bad-4 (:machine bk-isa)))
                     'backend-definition-error)))
 
-;;; operand kinds that collide with function operators (#444)
+;;; operand kinds that collide with function operators (#444 (old, not migrated))
 
 (fiveam:test an-operand-kind-named-like-a-function-operator-is-a-definition-error
   (dolist (name '(mem bank defined lowcell highcell))

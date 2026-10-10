@@ -495,7 +495,7 @@ stop" :cpu 'fam-w8))
     (eval '(defmachine (fam-sp-width (:extends fam-sp-base))
              (stack-pointer sp :memory ram :bounds (0 255) :width 16)))))
 
-;;; Removing storage and devices (#223), model reset PC (#226)
+;;; Removing storage and devices (#223), model reset PC (#226 (old, not migrated))
 
 (defmachine rm-base
   (register a :width 8)
@@ -645,7 +645,7 @@ stop" :cpu 'fam-w8))
                     (reset-pc (ram)))))
     (fiveam:signals machine-definition-error (eval form))))
 
-;;; (reset-pc (MEMORY ADDRESS)) (#455)
+;;; (reset-pc (MEMORY ADDRESS)) (#455 (old, not migrated))
 
 (defmachine rm-vector
   (register pc :width 16)

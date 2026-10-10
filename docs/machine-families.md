@@ -163,9 +163,9 @@ inherited descriptor is the parent's own.[^view]
   child ISA no longer fits it warns, naming the child.
 - Removal is per mnemonic, not per addressing mode.
 - Memory and stack elements cannot be removed in a child.
-  [#361](https://todo.sr.ht/~takeiteasy/lasm/361)
+  [#52](https://github.com/takeiteasy/lasm/issues/52)
 - A child that removes a register an inherited instruction uses is not
-  rejected. [#360](https://todo.sr.ht/~takeiteasy/lasm/360)
+  rejected. [#51](https://github.com/takeiteasy/lasm/issues/51)
 
 [^removal]: An inherited instruction that still uses a removed register fails
     with `unknown-storage` when it runs. Remove it with `without-instructions`.

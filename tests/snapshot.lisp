@@ -149,7 +149,7 @@
     (fiveam:signals snapshot-device-unknown
       (restore-snapshot target (machine-snapshot source)))))
 
-;;; Runtime region bindings (#264)
+;;; Runtime region bindings (#264 (old, not migrated))
 
 (defmachine snapshot-binding-machine
   (register pc :width 8)
@@ -553,7 +553,7 @@ twice
     (restore-snapshot target (machine-snapshot source))
     (fiveam:is (equal '(t nil) (mapcar #'fourth (%pending target))))))
 
-;;; Untrusted text reading (#288) and unwritable data (#289)
+;;; Untrusted text reading (#288 (old, not migrated)) and unwritable data (#289 (old, not migrated))
 
 (defun %text-file (path text)
   (with-open-file (out path :direction :output :if-exists :supersede)

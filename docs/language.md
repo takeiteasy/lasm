@@ -394,7 +394,7 @@ those registers is a word.
 | --- | --- |
 | `:const (r v)` | `r` = integer or label. |
 | `:get (r slot)` `:set (slot r)` | Reads and writes a frame slot. |
-| `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368). These take register names, so a template can put one in a bracket operand. |
+| `:peek (d a)` `:poke (a s)` | A whole word at the address in a register (#368 (old, not migrated)). These take register names, so a template can put one in a bracket operand. |
 | `:peek-label (d label)` `:poke-label (label s)` | Optional: a word at a label, for a global, a [static frame](static-frames.md) slot or a constant-index `aref`/`aset`. Without them, `:const` then `:peek`/`:poke`. |
 | `:point (r)` `:point-label (label)` `:peek-pointer (d)` `:poke-pointer (s)` `:peek-byte-pointer (d)` `:poke-byte-pointer (s)` | Optional: memory access through the backend's [pointer register](backends.md#pointer-register). |
 | `:peek-byte (d a)` `:poke-byte (a s)` | As `:peek`/`:poke`, a byte; needed by `peek-byte`/`poke-byte`. `aref-byte`/`aset-byte` use them, or the byte-pointer operations, or else [the cell](#arrays-strings-and-byte-access) with `:shl :shr :and :or :xor`. |
@@ -453,13 +453,13 @@ It also defines the operations [call lowering](conventions.md#backend-operations
 uses: `:push :pop :move :alloc :free :call :return`. `:push` and `:move` accept a
 frame slot as a source, which is how a call passes its arguments. `:call` needs
 an [operand-kind clause](backends.md#operand-kind-clauses) for a register
-target to compile `funcall` on a computed value (#365); one clause for the
+target to compile `funcall` on a computed value (#365 (old, not migrated)); one clause for the
 usual label call and another for a register are typical.
 
 [`callfoo-lang-abi`](../tests/fixtures/cli/callfoo.lisp) is a complete example;
 [`callfoo-lang-fp-abi`](../tests/fixtures/cli/callfoo-fp.lisp) uses a frame pointer;
 [`widefoo-lang-abi`](../tests/fixtures/cli/widefoo.lisp) has registers wider than
-its cells (#368).
+its cells (#368 (old, not migrated)).
 
 ## Names
 
@@ -503,20 +503,20 @@ The [command line](cli.md#source-programs) takes `.lsp` files.
 
 | Limitation | Ticket |
 | --- | --- |
-| `funcall` through a function's return value is checked only against every function value's arity. | [#403](https://todo.sr.ht/~takeiteasy/lasm/403) |
-| `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#404](https://todo.sr.ht/~takeiteasy/lasm/404) |
+| `funcall` through a function's return value is checked only against every function value's arity. | [#54](https://github.com/takeiteasy/lasm/issues/54) |
+| `funcall` through a taken function's parameter, an escaped array's element or a computed target is checked only against every function value's arity. | [#55](https://github.com/takeiteasy/lasm/issues/55) |
 
 With several arities taken, a wrong one that another function has is not caught in these cases.
 
 [^codegen]: A binary operator's operands go into the accumulator and the
-  temporary register in whichever order avoids the stack (#364): a leaf (an
+  temporary register in whichever order avoids the stack (#364 (old, not migrated)): a leaf (an
   integer, or a parameter, `let` variable, global, constant or constant-index
   `aref`) loads directly
   with `:const`/`:get`/`:peek`, and when the right operand is not a leaf but
   the left is an integer, a constant, or a local the right cannot change, the
   right is compiled first and the left loads afterwards. Otherwise the left
   operand moves into a register from the pool while the right computes into
-  the accumulator, then moves back (#373): a `:scratch`/`:caller-saved`
+  the accumulator, then moves back (#373 (old, not migrated)): a `:scratch`/`:caller-saved`
   register when the right operand has no call, since a call is the only
   thing it could do that such a register does not survive; a
   `:callee-saved` one, added to the function's `:save`, when it calls a
@@ -525,7 +525,7 @@ With several arities taken, a wrong one that another function has is not caught 
   or, with [`:optimize :speed`](#optimizing), when sites that together run more than once a call share it;
   the stack when the pool has none free. An `(asm ...)` in the right operand
   rules out the registers it declares in `:clobbers`, or every register when
-  it declares none (#377).
+  it declares none (#377 (old, not migrated)).
   A call evaluates each argument into its own frame slot, then
   passes those slots. A register argument is copied to a slot on entry, so
   the body never reads an argument register another call clobbers.
@@ -570,7 +570,7 @@ With several arities taken, a wrong one that another function has is not caught 
   last saves its estimated cost of computing a value and jumping on it, less
   the cost of jumping on it directly; the operands fuse when the savings total
   more than the landing costs. The estimate counts the loads of leaf operands
-  and the variant each operation uses (#392). On `callfoo-lang-abi`, `(< x 3)`
+  and the variant each operation uses (#392 (old, not migrated)). On `callfoo-lang-abi`, `(< x 3)`
   is `:get` `:lt-imm` `:branch-zero` against `:get` `:branch-ge-imm`, saving one
   instruction in an `and`, so it takes three operands before the last to fuse;
   `(>= x 3)` has no `:ge-imm`, loads `3` too, and saves two, so two do. A comparison with a

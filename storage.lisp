@@ -1009,7 +1009,7 @@ PDP-endian."
   "The INTERRUPT-BUCKET for PRIORITY, inserted in sorted position when absent."
   ;; TODO: a sorted list walk is O(distinct pending priorities) per signal --
   ;; O(depth) when every signal has its own priority. A priority-indexed table
-  ;; or heap would make it O(log n) (#312).
+  ;; or heap would make it O(log n) (https://github.com/takeiteasy/lasm/issues/47).
   (let ((buckets (machine-interrupt-buckets machine)))
     (loop for cell on buckets
           for bucket = (car cell)

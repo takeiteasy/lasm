@@ -439,7 +439,7 @@ are ordered by their global's own binding order."
 OFFSET), or NIL when none precedes it. REGION and BANK select a bank of a
 banked region; by default only main-image labels match. A local label wins a
 tie with its global, then the later binding."
-  ;; TODO: full symbol sort per call, address-indexed lookup (ticket 295)
+  ;; TODO: full symbol sort per call, address-indexed lookup (https://github.com/takeiteasy/lasm/issues/40)
   (let (best)
     (dolist (info (assembly-symbols-list assembly :kind :label))
       (when (and (<= (symbol-info-value info) address)

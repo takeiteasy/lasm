@@ -181,7 +181,7 @@ a: nop" :cpu 'instr-test-machine)))
   (fiveam:signals assembly-error
     (assemble "adc #10" :cpu 'instr-test-machine)))
 
-;;; RELATIVE mode (#23) -- BRA (tests/instruction.lisp), kept separate from
+;;; RELATIVE mode (#23 (old, not migrated)) -- BRA (tests/instruction.lisp), kept separate from
 ;;; the existing ABSOLUTE-mode BNE tests above.
 
 (fiveam:test relative-branch-forward-offset
@@ -228,7 +228,7 @@ bra loop" :cpu 'instr-test-machine :origin #x200)))
                        (make-list 200 :initial-element "nop"))
               :cpu 'instr-test-machine)))
 
-;;; RELATIVE alongside another mode sharing the same syntax (#31) -- BRX
+;;; RELATIVE alongside another mode sharing the same syntax (#31 (old, not migrated)) -- BRX
 ;;; (tests/instruction.lisp) declares RELATIVE before ABSOLUTE, so relaxation
 ;;; must be able to narrow a label operand to the 2-byte relative encoding,
 ;;; not always take ABSOLUTE by default.
@@ -250,7 +250,7 @@ target: nop" :cpu 'instr-test-machine)))
                       :cpu 'instr-test-machine)))
     (fiveam:is (= #x92 (aref (assembly-cells a) 0)))))
 
-;;; Per-hole :RELATIVE (#130) alongside a plain sibling hole -- RELD2's
+;;; Per-hole :RELATIVE (#130 (old, not migrated)) alongside a plain sibling hole -- RELD2's
 ;;; relative hole (RF-ABS/RF-REL, a hole-selected sub-opcode selector) is
 ;;; only 1 cell wide, but its sibling N hole is 2, so the descriptor's
 ;;; TOTAL-OPERAND-WIDTH is 3 -- the fit check and %RELATIVE-OFFSET must
@@ -301,7 +301,7 @@ nop
 target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x69 1 1 5 0 #xEA #xEA) (assembly-cells a)))))
 
-;;; SIGNED, non-RELATIVE (#30) mode selection -- LDSI (tests/instruction.lisp)
+;;; SIGNED, non-RELATIVE (#30 (old, not migrated)) mode selection -- LDSI (tests/instruction.lisp)
 ;;; declares the signed 1-byte mode before a wider unsigned one, sharing the
 ;;; same "#" expr syntax, mirroring the BRX case above but for the signed
 ;;; fit test (%FITS-SIGNED-WIDTH-P) instead of the RELATIVE one.
@@ -525,7 +525,7 @@ nop" :cpu 'instr-test-machine)))
   (fiveam:signals unresolved-location
     (eval-expr-constant (parse-expression (tokenize "*")))))
 
-;;; Local-label scoping (#16) -- a ".name" label/reference is qualified
+;;; Local-label scoping (#16 (old, not migrated)) -- a ".name" label/reference is qualified
 ;;; against the nearest preceding non-local ("global") label.
 
 (fiveam:test local-labels-in-different-scopes-do-not-collide
@@ -567,7 +567,7 @@ bra .loop" :cpu 'instr-test-machine)))
   (fiveam:signals assembly-error
     (assemble "bra .loop" :cpu 'instr-test-machine)))
 
-;;; .EQU / symbol assignment (#35) -- both spellings (".equ name, value" and
+;;; .EQU / symbol assignment (#35 (old, not migrated)) -- both spellings (".equ name, value" and
 ;;; "name = value"), layout-time backward-only folding, the same
 ;;; duplicate-symbol rule a label uses, and layout directive expressions.
 ;;; DEFDIRECTIVE registration and arity
@@ -811,10 +811,10 @@ last: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (symbol-info-value info)))
     (fiveam:is (= 2 (symbol-info-line info)))))
 
-;;; Scope-aware symbol metadata (#37) -- ASSEMBLY-SYMBOL-INFO tags every
+;;; Scope-aware symbol metadata (#37 (old, not migrated)) -- ASSEMBLY-SYMBOL-INFO tags every
 ;;; ASSEMBLY-SYMBOLS entry with its unqualified name, enclosing scope, and
 ;;; kind (:LABEL or :EQU), captured at bind time rather than recovered later
-;;; by splitting the qualified name (#36).
+;;; by splitting the qualified name (#36 (old, not migrated)).
 
 (fiveam:test symbol-info-tags-a-global-label
   (let* ((a (assemble "start: nop" :cpu 'instr-test-machine))
@@ -971,7 +971,7 @@ a: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= (+ 3 #x101) (gethash "a" (assembly-symbols a))))
     (fiveam:is (equalp #(#x12 4 1) (subseq (assembly-cells a) 3 6)))))
 
-;;; Per-hole :WIDTH on a ONE-OF alternative (#129) does not disrupt %LAYOUT's
+;;; Per-hole :WIDTH on a ONE-OF alternative (#129 (old, not migrated)) does not disrupt %LAYOUT's
 ;;; monotone-widening FLOOR fixpoint -- the empirical check the ticket asked
 ;;; for before trusting the static argument (assembler.lisp's %CHOOSE-VARIANT
 ;;; docstring, point 1.5): a sub-opcode-selected sibling's own descriptor is
@@ -1009,7 +1009,7 @@ target: nop" :cpu 'instr-test-machine)))
     (fiveam:is (equalp #(#x60 0) (subseq (assembly-cells a) 0 2)))
     (fiveam:is (= 253 (gethash "target" (assembly-symbols a))))))
 
-;; A custom RELATIVE mode with a suffix (#40): LASM's built-in RELATIVE mode
+;; A custom RELATIVE mode with a suffix (#40 (old, not migrated)): LASM's built-in RELATIVE mode
 ;; ships with no suffix (only ZERO-PAGE/ABSOLUTE do), so forcing a RELATIVE
 ;; variant needs a machine that declares its own suffixed relative mode --
 ;; mirrors BRX (tests/instruction.lisp), which already pairs RELATIVE with
@@ -1030,7 +1030,7 @@ target: nop" :cpu 'instr-test-machine)))
 .res 200
 target: nop" :cpu 'instr-test-machine)))
 
-;;; Word-encoded relaxation (#20) -- reuses WORD-TEST-MACHINE and its SET/HLT
+;;; Word-encoded relaxation (#20 (old, not migrated)) -- reuses WORD-TEST-MACHINE and its SET/HLT
 ;;; instructions from tests/instruction.lisp. SET's operand packs into a
 ;;; 10-bit SRC field inline for -1..30 (biased +1), or escapes to its own
 ;;; following word otherwise -- %CHOOSE-VARIANT (assembler.lisp) picks
@@ -1079,7 +1079,7 @@ target: hlt" :cpu 'word-test-machine)))
   (let ((a (assemble "hlt" :cpu 'word-test-machine)))
     (fiveam:is (equalp #(#x00 #x20) (assembly-cells a)))))
 
-;;; Per-field extra-word width (#135) -- reuses SETN/SETW (WORD-TEST-MACHINE)
+;;; Per-field extra-word width (#135 (old, not migrated)) -- reuses SETN/SETW (WORD-TEST-MACHINE)
 ;;; and WBRN (WORD-RELATIVE-TEST-MACHINE) from tests/instruction.lisp.
 
 (fiveam:test word-extra-word-narrower-than-default-encodes-fewer-cells
@@ -1119,7 +1119,7 @@ target: whlt" :cpu 'word-relative-test-machine)))
   (fiveam:signals assembly-error
     (assemble "wcxmix [300]" :cpu 'word-cells-mix-test-machine)))
 
-;;; Per-instruction word layouts (#64) -- reuses WORD-LAYOUTS-TEST-MACHINE
+;;; Per-instruction word layouts (#64 (old, not migrated)) -- reuses WORD-LAYOUTS-TEST-MACHINE
 ;;; and its SETX/SETWIDE/SETNARROW instructions from tests/instruction.lisp.
 ;;; Each instruction names a different (layout ...) sharing one 16-bit word
 ;;; and OPCODE field, with field X deliberately at a different width/shift
@@ -1146,7 +1146,7 @@ target: whlt" :cpu 'word-relative-test-machine)))
   (let ((a (assemble "hlt" :cpu 'word-layouts-test-machine)))
     (fiveam:is (equalp #(#x00 #x40) (assembly-cells a)))))
 
-;;; CHOICE-selected word fields (#104) -- the payoff: WCX's operand encodes
+;;; CHOICE-selected word fields (#104 (old, not migrated)) -- the payoff: WCX's operand encodes
 ;;; differently depending on which ONE-OF alternative (WC-REG bare, WC-IND
 ;;; "[" expr "]") the hole actually matched, unlike a plain value-selected
 ;;; field (SET above), where syntax has no bearing on encoding at all.
@@ -1228,7 +1228,7 @@ target: whlt" :cpu 'word-relative-test-machine)))
   (fiveam:signals assembly-error
     (assemble "wcm [200]" :cpu 'mixed-field-test-machine)))
 
-;;; Cell-width-typed assembler output (#53) -- WORDADDR-TEST-MACHINE
+;;; Cell-width-typed assembler output (#53 (old, not migrated)) -- WORDADDR-TEST-MACHINE
 ;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory with an ordinary
 ;;; (not INSTRUCTION-WORD/#20) opcode-plus-operand-cells encoding. The
 ;;; discriminating case is LABEL-BOUND-IN-CELLS-NOT-BYTES: if the assembler's
@@ -1317,7 +1317,7 @@ nop" :cpu 'wordaddr-test-machine)))
   (let ((a (assemble "lda #>$123456" :cpu 'wordaddr-test-machine)))
     (fiveam:is (equalp #(1 #x34) (assembly-cells a)))))
 
-;;; ONE-OF (#103): end-to-end assembly through MOO (tests/instruction.lisp,
+;;; ONE-OF (#103 (old, not migrated)): end-to-end assembly through MOO (tests/instruction.lisp,
 ;;; opcode #xF7), whose OO-INSTR-TWO mode gives each of its two operand
 ;;; holes an independent choice between a bare register-shaped EXPR and a
 ;;; "[" expr "]" indirection. Because #103 delivers only the syntax --
@@ -1369,7 +1369,7 @@ next: wnop" :cpu 'word-relative-test-machine)))
     (fiveam:is (equalp #(#x00 #x70 #xFC #x13) (assembly-cells a)))))
 
 (fiveam:test word-relative-branch-out-of-range-with-no-escape-signals-assembly-error
-  ;; WBRS has no (extra-word ...) fallback (#62) -- an offset that doesn't
+  ;; WBRS has no (extra-word ...) fallback (#62 (old, not migrated)) -- an offset that doesn't
   ;; fit its inline field is an unconditional ASSEMBLY-ERROR, exactly like
   ;; the byte path's RELATIVE-BRANCH-FORWARD-OUT-OF-RANGE-SIGNALS-ASSEMBLY-
   ;; ERROR, not a silent WRAP-VALUE truncation to the wrong target.
@@ -1402,7 +1402,7 @@ next: wnop" :cpu 'word-relative-test-machine)))
 (fiveam:test word-relative-branch-decode-round-trips-through-forced-extra-word
   ;; The relaxed combo above decodes back to the same signed offset --
   ;; complements the encode-side relaxation test with the decode-side
-  ;; guarantee %TRY-DECODE-WORD-CANDIDATE's SIGNEDP fix (#62) exists for.
+  ;; guarantee %TRY-DECODE-WORD-CANDIDATE's SIGNEDP fix (#62 (old, not migrated)) exists for.
   (let* ((source (with-output-to-string (s)
                    (format s "start: wbra target~%")
                    (dotimes (i 300) (format s "wnop~%"))
@@ -1472,7 +1472,7 @@ next: wnop" :cpu 'word-relative-test-machine)))
     (assemble-file (merge-pathnames "no-such-file.asm" *fixture-directory*)
                    :cpu 'instr-test-machine)))
 
-;;; Mixed endian and per-directive :endian (#145)
+;;; Mixed endian and per-directive :endian (#145 (old, not migrated))
 
 (defmachine pdp-endian-test-machine
   (register a :width 8)
@@ -1502,7 +1502,7 @@ next: wnop" :cpu 'word-relative-test-machine)))
 (fiveam:test assembler-rejects-mem
   (fiveam:signals assembly-error (assemble ".byte mem(1)" :cpu 'emu-test-machine)))
 
-;;; String operands, .ascii/.asciz (#34)
+;;; String operands, .ascii/.asciz (#34 (old, not migrated))
 
 (defun %string-cells (source &optional (machine 'instr-test-machine))
   (coerce (assembly-cells (assemble source :cpu machine)) 'list))
@@ -1538,7 +1538,7 @@ end: nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 3 (gethash "end" (assembly-symbols a))))
     (fiveam:is (= 3 (listing-line-size (first (assembly-listing a)))))))
 
-;;; .pack/.packz (#398)
+;;; .pack/.packz (#398 (old, not migrated))
 
 (fiveam:test packz-packs-characters-into-cells-by-the-memorys-endianness
   (eval '(defmachine pack-be-machine (register pc :width 16) (register r :width 16 :names (a b))
@@ -1593,7 +1593,7 @@ nop
     msg \"hi\""))))
 
 ;;; Operand ASTs parse once per assembly and are reused across relaxation
-;;; passes (#39) -- qualification and .set capture must not corrupt them.
+;;; passes (#39 (old, not migrated)) -- qualification and .set capture must not corrupt them.
 
 (fiveam:test forced-mode-suffix-accepts-a-local-label-operand
   (let ((a (assemble (format nil "start:~%.x: nop~%lda.w .x") :cpu 'instr-test-machine)))

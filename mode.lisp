@@ -402,7 +402,7 @@ redefining an inner mode is seen by its dependents."
                                                        (some (lambda (alt)
                                                                (%mode-strict-reachable-p (find-mode-descriptor alt)))
                                                              (%one-of-alternatives element))))))))
-              ;; TODO: one cache entry per mode thrashes when scopes alternate, keep one per scope if it shows up (#281)
+              ;; TODO: one cache entry per mode thrashes when scopes alternate, keep one per scope if it shows up (https://github.com/takeiteasy/lasm/issues/36)
               (setf (mode-descriptor-shape-cache mode) (list* *mode-generation* *mode-scope* shape))
               shape)))))
 

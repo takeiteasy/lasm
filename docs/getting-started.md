@@ -8,8 +8,8 @@ Clone LASM and its timer dependency into Quicklisp's local projects
 directory.[^dependencies]
 
 ```sh
-git clone https://git.sr.ht/~takeiteasy/lasm ~/quicklisp/local-projects/lasm
-git clone -b trunk https://git.sr.ht/~takeiteasy/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
+git clone https://github.com/takeiteasy/lasm ~/quicklisp/local-projects/lasm
+git clone https://github.com/communal-software/trivial-high-precision-timer ~/quicklisp/local-projects/trivial-high-precision-timer
 ```
 
 Load LASM in SBCL, ECL or CCL:

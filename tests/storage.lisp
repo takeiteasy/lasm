@@ -136,7 +136,7 @@
     (sp-push m 'sp 9)
     (fiveam:is (= 9 (mref m 'ram 1)))))
 
-;;; :BASE and :PUSH (#454). An 8-bit register indexes a page of a 16-bit memory;
+;;; :BASE and :PUSH (#454 (old, not migrated)). An 8-bit register indexes a page of a 16-bit memory;
 ;;; :DOWN :POST is the 6502's stack, :UP :PRE its mirror.
 
 (defmacro %define-page-stack-machine (name grows push &optional (width 8))
@@ -228,7 +228,7 @@
     (fiveam:signals stack-overflow (sp-push m 'sp 1))
     (fiveam:is (= #xef (sref m 'sp)) "nothing changed")))
 
-;;; STACK-REF / (SETF STACK-REF) (#50) -- top-relative, unsigned indexed
+;;; STACK-REF / (SETF STACK-REF) (#50 (old, not migrated)) -- top-relative, unsigned indexed
 ;;; access: offset 0 is the top (what STACK-POP would return), 1 is one
 ;;; below that, and so on.
 
@@ -292,7 +292,7 @@
     (fiveam:signals unknown-storage (mref m 'nope 0))
     (fiveam:signals unknown-storage (stack-push m 'nope 1))))
 
-;;; REGREF / (SETF REGREF) (#13) -- indexed access into a banked (:count >
+;;; REGREF / (SETF REGREF) (#13 (old, not migrated)) -- indexed access into a banked (:count >
 ;;; 1) register. TEST-MACHINE's BANK element is :width 8 :count 4.
 
 (fiveam:test regref-independent-cells

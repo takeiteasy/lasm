@@ -50,7 +50,7 @@
     (when (zerop z)
       (set! pc operand))))
 
-;; RELATIVE mode (#23): kept separate from BNE (which stays ABSOLUTE) so the
+;; RELATIVE mode (#23 (old, not migrated)): kept separate from BNE (which stays ABSOLUTE) so the
 ;; existing ABSOLUTE-mode BNE tests/byte expectations elsewhere in this file
 ;; and tests/assembler.lisp are undisturbed.
 (definstruction instr-test-machine bra
@@ -89,7 +89,7 @@
     (absolute  (opcode #x12)))
   (semantics (set! a (mref machine 'ram operand))))
 
-;; SIGNED, non-RELATIVE (#30) alongside a wider unsigned mode sharing the
+;; SIGNED, non-RELATIVE (#30 (old, not migrated)) alongside a wider unsigned mode sharing the
 ;; same "#" expr syntax -- like BRX above but for %CHOOSE-VARIANT's signed
 ;; fit test instead of the RELATIVE one: a value in the unsigned-only range
 ;; (e.g. 200) must not fit the signed byte and should widen, while a negative
@@ -471,7 +471,7 @@
              (encoding (opcode #xFE) (operand :mode :register v))
              (semantics nil)))))
 
-;;; ONE-OF (#103): a mode's hole count still comes from the pattern, whether
+;;; ONE-OF (#103 (old, not migrated)): a mode's hole count still comes from the pattern, whether
 ;;; a hole is a plain EXPR or a ONE-OF alternation -- DEFINSTRUCTION requires
 ;;; one (operand ...) subclause per hole exactly as for any other mode.
 
@@ -1238,7 +1238,7 @@ second: nop" :cpu 'instr-test-machine))))
     ;; SETNARROW 3, 2, 100 -> opcode 3 << 12 | 3 << 10 | 2 << 8 | 100 = #x3E64
     (fiveam:is (equalp #(#x64 #x3e) (coerce (encode-instruction setnarrow '(3 2 100)) 'vector)))))
 
-;;; Word-encoded constant discriminator fields (#136) -- (field-value FIELD-
+;;; Word-encoded constant discriminator fields (#136 (old, not migrated)) -- (field-value FIELD-
 ;;; NAME n) pins a field to a literal with no operand hole at all, letting
 ;;; several descriptors share one opcode when nothing else tells them apart.
 ;;; FIELD-VALUE-TEST-MACHINE mirrors chip8word.lisp's own opcode-8 ALU shape:
@@ -1293,7 +1293,7 @@ second: nop" :cpu 'instr-test-machine))))
 
 (fiveam:test field-value-co-tenants-decode-and-execute-distinctly
   ;; INCN/DECN (each carrying an X hole) and ZEROALL (no operand at all)
-  ;; all share opcode 1, told apart purely by their own pinned N (#136) --
+  ;; all share opcode 1, told apart purely by their own pinned N (#136 (old, not migrated)) --
   ;; no hole disagreement is needed or present between INCN and ZEROALL.
   (let ((a (assemble "  incn 0
   incn 0
@@ -1723,7 +1723,7 @@ second: nop" :cpu 'instr-test-machine))))
 
 (fiveam:test word-instruction-expands-into-one-descriptor-per-variant
   ;; SET's :else fallback declares no :CELLS, so it defaults to the layout's
-  ;; own WIDTH-CELLS -- 2, for this 16-bit word / 8-bit cell machine (#135).
+  ;; own WIDTH-CELLS -- 2, for this 16-bit word / 8-bit cell machine (#135 (old, not migrated)).
   (let ((variants (find-instruction-variants 'word-test-machine "SET")))
     (fiveam:is (= 2 (length variants)))
     (fiveam:is (equal '(0 2) (mapcar #'instruction-descriptor-extra-cells variants)))
@@ -1784,9 +1784,9 @@ second: nop" :cpu 'instr-test-machine))))
                          (variant (range 0 7) inline :bias 4)))
              (semantics nil)))))
 
-;;; :SIGNED on a value-selected word field (#63) -- before this, a
+;;; :SIGNED on a value-selected word field (#63 (old, not migrated)) -- before this, a
 ;;; word-encoded hole's signedness came only from a (CHOICE m) variant's own
-;;; mode (#127) or from a :RELATIVE hole (#62); a plain :SIGNED T mode had no
+;;; mode (#127 (old, not migrated)) or from a :RELATIVE hole (#62 (old, not migrated)); a plain :SIGNED T mode had no
 ;;; effect on a value-selected variant at all, and its declared negative
 ;;; range was rejected outright as failing the field's unsigned bound.
 ;;; SIGNED-WORD-TEST-MACHINE's SRC field is 5 bits (0..31 unsigned,
@@ -1841,7 +1841,7 @@ second: nop" :cpu 'instr-test-machine))))
       (fiveam:is (equal '(-5) values)))))
 
 (fiveam:test signed-word-field-escapes-to-extra-word-and-decodes-signed
-  ;; The other half of ticket #63's item 2: a signed value whose magnitude
+  ;; The other half of ticket #63 (old, not migrated)'s item 2: a signed value whose magnitude
   ;; exceeds the inline range's bias must still be representable, via the
   ;; existing :ELSE escape -- and the escaped extra word itself must decode
   ;; back signed (decoder.lisp's %TRY-DECODE-WORD-CANDIDATE), not just the
@@ -1914,7 +1914,7 @@ second: nop" :cpu 'instr-test-machine))))
              (encoding (opcode 1) (operand v :field src (variant (range 20 31) inline)))
              (semantics (set! a v))))))
 
-;;; CHOICE-selected word fields (#104) -- syntax-, not value-, selected
+;;; CHOICE-selected word fields (#104 (old, not migrated)) -- syntax-, not value-, selected
 ;;; encoding and unconditional extra words, keyed by which ONE-OF
 ;;; alternative an operand hole actually matched (mode.lisp, #103's CHOICES,
 ;;; hole-aligned by #104).
@@ -2082,7 +2082,7 @@ second: nop" :cpu 'instr-test-machine))))
                          (variant (choice wc-ind) inline :range (4 11))))
              (semantics nil)))))
 
-;; WCXS (#104): a forced-suffix (#40) single-mode instruction whose one mode
+;; WCXS (#104 (old, not migrated)): a forced-suffix (#40 (old, not migrated)) single-mode instruction whose one mode
 ;; contains a ONE-OF -- %EXPAND-WORD-COMBOS (instruction.lisp) still expands
 ;; it into several sibling descriptors (one per field variant) sharing this
 ;; one mode's name, exactly the shape %NARROW-TO-FORCED-MODE's own
@@ -2099,7 +2099,7 @@ second: nop" :cpu 'instr-test-machine))))
       (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
   (semantics (set! a value)))
 
-;; WCXW (#104): a CHOICE-selected field whose second alternative is an
+;; WCXW (#104 (old, not migrated)): a CHOICE-selected field whose second alternative is an
 ;; *unconditional* extra word -- WC-IND syntax always spills its value into
 ;; its own following word, regardless of what that value is (unlike an
 ;; :ELSE fallback, which only escapes a value-selected field's inline range
@@ -2123,7 +2123,7 @@ second: nop" :cpu 'instr-test-machine))))
                          (variant (choice wc-ind) (extra-word :escape #x3ff))))
              (semantics nil)))))
 
-;;; Alias variants (#187) -- a second spelling of one canonical escape.
+;;; Alias variants (#187 (old, not migrated)) -- a second spelling of one canonical escape.
 
 (defmachine alias-test-machine
   (register pc :width 16)
@@ -2210,7 +2210,7 @@ second: nop" :cpu 'instr-test-machine))))
                          (variant :else (extra-word :escape #x3ff :alias t))))
              (semantics nil)))))
 
-;;; Varying hole counts across ONE-OF alternatives (#120) -- a ONE-OF hole
+;;; Varying hole counts across ONE-OF alternatives (#120 (old, not migrated)) -- a ONE-OF hole
 ;;; whose alternatives disagree on hole count, on a word-encoded machine,
 ;;; gated on the governing field being wholly CHOICE-selected (or #118-mixed
 ;;; with the unclaimed alternative sharing the base hole count). Expands one
@@ -2627,7 +2627,7 @@ second: nop" :cpu 'instr-test-machine))))
       (encoding (opcode 9) (operand :mode) (for-choice vh-idx (operand :width 1)))
       (semantics nil))))
 
-;;; Per-field extra-word width (#135) -- an (extra-word ...) variant's own
+;;; Per-field extra-word width (#135 (old, not migrated)) -- an (extra-word ...) variant's own
 ;;; :CELLS, defaulting to the layout's WIDTH-CELLS (2, for this 16-bit word
 ;;; / 8-bit cell machine) when omitted. SETN's fallback is narrower than
 ;;; that default (1 cell); SETW's is wider (4 cells).
@@ -2702,7 +2702,7 @@ second: nop" :cpu 'instr-test-machine))))
 ;; CHOICE-selected :EXTRA-WORD variants -- WCM-IND escapes to a 1-cell extra
 ;; word, WCM-FAR to a 4-cell one, decode telling them apart purely by which
 ;; alternative the operand's own syntax matched, same as any other
-;; CHOICE-selected pair (#104). A dedicated machine/modes, not WORD-TEST-
+;; CHOICE-selected pair (#104 (old, not migrated)). A dedicated machine/modes, not WORD-TEST-
 ;; MACHINE's own WC-*: its 4-bit OPCODE field has no slot left free (#134's
 ;; own decode-failure fixture, tests/emulator.lisp, pins the one remaining
 ;; opcode as deliberately unregistered), and WC-MEM's "(" ")" syntax is
@@ -2756,7 +2756,7 @@ second: nop" :cpu 'instr-test-machine))))
       (fiveam:is (string= "WCXMIX" (instruction-descriptor-name d2)))
       (fiveam:is (equal '(70000) v2)))))
 
-;;; CHOICE-CASE semantics dispatch (#73) -- reading back which ONE-OF
+;;; CHOICE-CASE semantics dispatch (#73 (old, not migrated)) -- reading back which ONE-OF
 ;;; alternative a hole actually matched from inside (semantics ...), rather
 ;;; than every CHOICE-selected sibling sharing one runtime effect.
 
@@ -2815,7 +2815,7 @@ second: nop" :cpu 'instr-test-machine))))
       (variant (choice wc-ind) inline :range (0 7) :bias #x08)))
   (semantics (set! a dst)))
 
-;; WCM (#118): a *mixed* field -- WC-REG is CHOICE-selected, but WC-TWO's
+;; WCM (#118 (old, not migrated)): a *mixed* field -- WC-REG is CHOICE-selected, but WC-TWO's
 ;; other alternative (WC-IND) has no (choice ...) variant of its own at all;
 ;; %CHECK-WORD-VARIANT-CHOICES! stamps the value-selected (RANGE 8 100)
 ;; variant with WC-IND, the one ONE-OF alternative no CHOICE-selected variant
@@ -2957,7 +2957,7 @@ second: nop" :cpu 'instr-test-machine))))
     (execute-instruction descriptor m (list 5) (list (find-mode-descriptor 'wc-ind)))
     (fiveam:is (= 5 (sref m 'b)))))
 
-;;; Per-hole :SIGNED on a ONE-OF alternative, word half (#127).
+;;; Per-hole :SIGNED on a ONE-OF alternative, word half (#127 (old, not migrated)).
 
 (fiveam:test one-of-signed-stamps-word-field-choice-signedp
   ;; #20's combo expansion doesn't guarantee declaration order, so pick each
@@ -3107,7 +3107,7 @@ wsi #-100" :cpu 'mixed-field-test-machine)
 
 ;; Inline-only, no (extra-word ...) fallback -- for assembler tests proving
 ;; an out-of-range relative offset is an unconditional ASSEMBLY-ERROR when
-;; there is nowhere wider to relax into (#62).
+;; there is nowhere wider to relax into (#62 (old, not migrated)).
 (definstruction word-relative-test-machine wbrs
   (modes relative)
   (encoding (opcode 6) (operand value :field src (variant (range -8 7) inline :bias 0)))
@@ -3123,7 +3123,7 @@ wsi #-100" :cpu 'mixed-field-test-machine)
   (encoding (opcode 8))
   (semantics (trap :halt)))
 
-;; WBRN (#135): an extra-word fallback narrower than WBRA's own default --
+;; WBRN (#135 (old, not migrated)): an extra-word fallback narrower than WBRA's own default --
 ;; :CELLS 1 (signed -128..127) is a *subset* of the inline range (-256..255)
 ;; here, so no offset ever genuinely needs it; its only purpose is to give
 ;; %WORD-RELATIVE-OFFSET-FITS-P a narrow width to reject against, for the
@@ -3271,7 +3271,7 @@ wsi #-100" :cpu 'mixed-field-test-machine)
 
 ;; #105/#62: %CHECK-OPCODE-DECODABLE!'s co-tenant ambiguity analysis
 ;; must include a RELATIVE-stamped signed field's wrapped negative chunk as it
-;; already does for an explicitly :SIGNED one (#127) -- WBRA's own inline
+;; already does for an explicitly :SIGNED one (#127 (old, not migrated)) -- WBRA's own inline
 ;; range (-256..255) wraps to raw 768..1023, so a co-tenant claiming any of
 ;; that range at opcode 1 is indistinguishable, while one claiming 256..511
 ;; (untouched by WBRA's own inline chunks or WBOTHER's own escape at #x200)
@@ -3318,7 +3318,7 @@ wsi #-100" :cpu 'mixed-field-test-machine)
     ;; word = (2 << 12) = #x2000
     (fiveam:is (equal (list #x00 #x20) (encode-instruction hlt nil)))))
 
-;;; Cell-width-typed encoding (#53) -- a machine whose memory is
+;;; Cell-width-typed encoding (#53 (old, not migrated)) -- a machine whose memory is
 ;;; word-addressed (:CELL-WIDTH 16) rather than byte-addressed, but with an
 ;;; ordinary opcode-plus-operand-cells encoding (not INSTRUCTION-WORD/#20's
 ;;; bitfield scheme -- that's a separate axis: #20 is about packing several
@@ -3467,7 +3467,7 @@ skip: hlt" :cpu 'chip8-test-machine)))
         (fiveam:is (= 0 (regref m 'v 2)))
         (fiveam:is (= 3 (sref m 'i)))))))
 
-;;; Per-instruction, non-uniform instruction-word layouts (#64) --
+;;; Per-instruction, non-uniform instruction-word layouts (#64 (old, not migrated)) --
 ;;; CHIP8WORDFOO models CHIP8's own layout-only
 ;;; opcode families -- JP/CALL/LD-I on a 4/12 NNN layout, LD/ADD/SE Vx,byte
 ;;; on a 4/4/8 XNN layout, DRW on the default 4/4/4/4 -- sharing one 16-bit
@@ -3582,7 +3582,7 @@ done:
 ;;; Word-addressed memory + bitfield/variant encoding combined (#55, M4) --
 ;;; DCPU16FOO models DCPU-16's real instruction-word
 ;;; layout (6-bit AV, 5-bit BV, 5-bit OPCODE fields) over :CELL-WIDTH 16
-;;; memory, and a banked (#13) 16-bit REG register carrying DCPU-16's own
+;;; memory, and a banked (#13 (old, not migrated)) 16-bit REG register carrying DCPU-16's own
 ;;; register names (#72's :names) rather than bare indices.
 
 (defmachine dcpu16-test-machine
@@ -3669,7 +3669,7 @@ result: .byte 0" :cpu 'dcpu16-test-machine)))
         (fiveam:is (= 1005 (regref m 'reg 0)))
         (fiveam:is (= 1005 (mref m 'ram (gethash "result" (assembly-symbols a)))))))))
 
-;;; Shared opcodes across mode-distinguished variants (#105) -- several
+;;; Shared opcodes across mode-distinguished variants (#105 (old, not migrated)) -- several
 ;;; decode-distinguishable descriptors, one mnemonic's own several MODES
 ;;; clauses or several distinct mnemonics, sharing one opcode on a
 ;;; word-encoded machine. WORD-TEST-MACHINE's src field is 10 bits, so a
@@ -3953,7 +3953,7 @@ result: .byte 0" :cpu 'dcpu16-test-machine)))
   (let ((cells (make-array 3 :element-type '(unsigned-byte 8) :initial-contents (list #xB5 99 0))))
     (fiveam:is (eq :decode-failure (decode-instruction-at (vector-cell-reader cells) 0 'instr-test-machine)))))
 
-;;; Hole-selected sub-opcode (#126): the byte-machine analogue of #104's
+;;; Hole-selected sub-opcode (#126 (old, not migrated)): the byte-machine analogue of #104's
 ;;; (choice mode) -- a (variant (choice m) (sub s)) form on an (operand ...)
 ;;; subclause whose hole came from a ONE-OF pattern element lets that hole's
 ;;; own matched alternative choose #125's sub-opcode cell, rather than the
@@ -4263,7 +4263,7 @@ signd #-100" :cpu 'instr-test-machine)
 ;; never reaches DEFINSTRUCTION at all; nothing further to test here beyond
 ;; confirming SI-INSTR-ONE itself (a plain, non-nested ONE-OF) works, above.
 
-;;; Per-hole :WIDTH on a ONE-OF alternative, byte half (#129) --
+;;; Per-hole :WIDTH on a ONE-OF alternative, byte half (#129 (old, not migrated)) --
 ;;; WI-INSTR-NARROW/WI-INSTR-WIDE disagree on width, and WIDTHD's carrying
 ;;; hole (a hole-selected (variant (choice m) (sub s)) selector, the same
 ;;; mechanism #126/#127 gave SIGND above) is what makes the disagreement
@@ -4376,7 +4376,7 @@ widthd #300" :cpu 'instr-test-machine)
                          (variant (choice wi-instr-wide) inline :range (0 511))))
              (semantics nil)))))
 
-;;; Per-hole :RELATIVE on a ONE-OF alternative, byte half (#130) --
+;;; Per-hole :RELATIVE on a ONE-OF alternative, byte half (#130 (old, not migrated)) --
 ;;; RL-INSTR-ABS/RL-INSTR-REL disagree on :RELATIVE, and RELD's carrying
 ;;; hole (the same (variant (choice m) (sub s)) selector mechanism #124/
 ;;; #127/#129 above reuse) is what makes the disagreement decodable, and
@@ -4636,7 +4636,7 @@ target: nop")
     (fiveam:is (equal '(t) (instruction-descriptor-operand-signedness wide)))))
 
 ;; The same three-way disagreement, but at one hole of a genuine multi-hole
-;; (sub-opcode ...) table (#131) rather than the single-hole selector sugar
+;; (sub-opcode ...) table (#131 (old, not migrated)) rather than the single-hole selector sugar
 ;; above -- TW-A1/TW-A2 disagree on all three attributes at hole 0; hole 1
 ;; (TW-MID1/TW-MID2) is a second ONE-OF hole whose own alternatives agree on
 ;; everything, so (holes 0) leaves it uncovered, exactly the #131 shape.
@@ -4858,7 +4858,7 @@ target: nop")
     (fiveam:is (string= "SIGTAB" (instruction-descriptor-name descriptor)))
     (fiveam:is (equal '(-100 -56) values))))
 
-;; Per-hole :WIDTH (#129) on TWO holes at once, via a (sub-opcode ...) table
+;; Per-hole :WIDTH (#129 (old, not migrated)) on TWO holes at once, via a (sub-opcode ...) table
 ;; -- the multi-hole generalization %CHECK-BYTE-ONE-OF-WIDTH inherits from
 ;; %CHECK-BYTE-ONE-OF-SIGNED (#128 lifted the one-hole cap for both at once,
 ;; since both use the same carrying-hole-set selector as their decode-time
@@ -5057,7 +5057,7 @@ target: nop")
                          (variant (choice absolute) (sub 0))))
              (semantics nil)))))
 
-;;; (holes ...) subsetting (#131): a table may cover fewer than every ONE-OF
+;;; (holes ...) subsetting (#131 (old, not migrated)): a table may cover fewer than every ONE-OF
 ;;; hole of the mode, naming the ones it covers by 0-based pattern-order
 ;;; index. HOLES-THREE has three ONE-OF holes; the tables below cover only
 ;;; holes 0 and 2, leaving hole 1 uncovered -- its own alternatives (B1/B2)
@@ -5255,7 +5255,7 @@ target: nop")
                          (variant (choice holes-a2 holes-b2 holes-c2) (sub 1))))
              (semantics nil)))))
 
-;;; :ENDIAN (#66)
+;;; :ENDIAN (#66 (old, not migrated))
 
 (fiveam:test encode-value-cells-big-endian-reverses-cell-order
   ;; The exact mirror of ENCODE-VALUE-CELLS-SPLITS-INTO-16-BIT-CELLS above,
@@ -5396,7 +5396,7 @@ load2 22136" :cpu 'encoding-memory-test-machine :memory 'rom))))
       (setf (symbol-function '%machine-cell-width) old-width
             (symbol-function '%machine-endian) old-endian))))
 
-;;; extra-word-order (#191) -- trailing words follow the declared field
+;;; extra-word-order (#191 (old, not migrated)) -- trailing words follow the declared field
 ;;; order rather than operand hole order.
 
 (defmachine order-test-machine
@@ -5608,7 +5608,7 @@ load2 22136" :cpu 'encoding-memory-test-machine :memory 'rom))))
     (fiveam:is (string= "WPIN" (decoded "wpin")))
     (fiveam:is (string= "WGEN" (decoded "wgen 5")))))
 
-;;; Mixed endian (#145)
+;;; Mixed endian (#145 (old, not migrated))
 
 (fiveam:test mixed-endian-cell-order
   (fiveam:is (equal '(#x0B #x0A #x0D #x0C)
@@ -5919,7 +5919,7 @@ present, so an error comes from the ENCODING under test."
                  "~A" source))))
 
 ;;; Sub-opcode tables that select a ONE-OF element by slot (#218), including
-;;; nested alternatives with hole-less options (#219).
+;;; nested alternatives with hole-less options (#219 (old, not migrated)).
 
 (defmachine slot-sub-machine
   (register pc :width 16)
@@ -6348,7 +6348,7 @@ present, so an error comes from the ENCODING under test."
                                   (semantics nil))))))
 
 ;;; Holes after a nested varying ONE-OF: the extra operand sits at the ONE-OF's
-;;; own position, so a trailing operand keeps its own width and binding (#274).
+;;; own position, so a trailing operand keeps its own width and binding (#274 (old, not migrated)).
 
 (defmode nt-abs expr)
 (defmode nt-idx "[" expr "," expr "]")
@@ -6626,7 +6626,7 @@ wgl #5" 'word-group-machine)))
                  (variant (choice we-y) (extra-word :escape #xfff :cells 2 :endian :big :alias t))))
              (semantics (set! a value))))))
 
-;;; Own-excess extras (#276): OE-PAIR's minimum shape has two holes and OE-LIT
+;;; Own-excess extras (#276 (old, not migrated)): OE-PAIR's minimum shape has two holes and OE-LIT
 ;;; one, so the operand has one base hole and (for-choice (src oe-pair) ...)
 ;;; declares OE-PAIR's second minimum hole.
 
@@ -6792,7 +6792,7 @@ wgl #5" 'word-group-machine)))
           (fiveam:is (equal values decoded))
           (fiveam:is (= (length values) size)))))))
 
-;;; Keyed nested ONE-OFs (#275): a nested ONE-OF whose alternatives differ in a
+;;; Keyed nested ONE-OFs (#275 (old, not migrated)): a nested ONE-OF whose alternatives differ in a
 ;;; per-hole attribute contributes a subkey to the option tree, so an
 ;;; alternative can declare :signed, :relative, :width or :strict below a
 ;;; non-varying alternative.
