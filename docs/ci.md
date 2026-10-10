@@ -1,14 +1,13 @@
 # Continuous integration
 
-GitHub Actions runs the [test suite](getting-started.md#run-the-tests) on SBCL for every push and pull request, and on ECL and CCL on request.
+GitHub Actions runs the [test suite](getting-started.md#run-the-tests) on SBCL, ECL and CCL when a version tag (`v*`) is pushed. Commits and pull requests do not start a run.
 
 | Trigger | SBCL | ECL | CCL |
 |---|---|---|---|
-| Push, pull request | yes | no | no |
 | Version tag (`v*`) | yes | yes | yes |
 | Manual run | `all`, `sbcl` | `all`, `ecl` | `all`, `ccl` |
 
-Changes only to `docs/`, Markdown files or `LICENSE` skip the run, and a new push cancels the run it supersedes.
+A new run cancels the run it supersedes.
 
 ## Run the full matrix
 
