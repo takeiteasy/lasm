@@ -454,7 +454,7 @@
     (fiveam:is (= #xde (sref m 'a)))
     (fiveam:is (= (1+ #x0010) (sref m 'pc)))))
 
-;;; IDLE / wake (#110 (old, not migrated))
+;;; IDLE / wake
 
 (fiveam:test idle-signal-raised-mid-idle-step-delivers-on-the-next-step
   (let ((m (make-machine 'interrupt-test-machine)))
@@ -855,7 +855,7 @@
              (memory ram :width 8 :addr-width 8)
              (interrupts :vector ia :message a :save (pc) :mask-on-deliver t)))))
 
-;;; Priority and nesting (#161 (old, not migrated))
+;;; Priority and nesting
 
 (defmacro %define-nesting-machine (name &rest interrupts-keys)
   `(progn
@@ -998,7 +998,7 @@
                (memory ram :width 8 :addr-width 8)
                ,form)))))
 
-;;; Level masking and non-maskable signals (#305 (old, not migrated))
+;;; Level masking and non-maskable signals
 
 (defun %mask-level-of (machine) (sref machine 'lvl))
 
@@ -1166,7 +1166,7 @@
                (memory ram :width 8 :addr-width 8)
                ,form)))))
 
-;;; Per-priority queue (#304 (old, not migrated))
+;;; Per-priority queue
 
 (fiveam:test pending-count-tracks-enqueue-delivery-and-reset
   (let ((m (make-machine 'interrupt-test-machine)))
@@ -1256,7 +1256,7 @@
     (signal-interrupt target 5 :priority 2)
     (fiveam:is (equal '(3 1 2 4 5) (%queued-data target)))))
 
-;;; Non-maskable vector (#311 (old, not migrated))
+;;; Non-maskable vector
 ;; A step delivers, then executes the handler's first instruction (a nop), so
 ;; PC ends one past the vector.
 
@@ -1319,7 +1319,7 @@
     (step-machine m)
     (fiveam:is (= #x31 (sref m 'pc)))))
 
-;;; Memory-resident vectors (#313 (old, not migrated))
+;;; Memory-resident vectors
 
 (defmachine interrupt-memory-vector-test-machine
   (register pc :width 16) (register a :width 16) (register b :width 16)
@@ -1396,7 +1396,7 @@
                (memory ram :width 8 :addr-width 8)
                ,form)))))
 
-;;; Idle with nothing able to wake the machine (#165 (old, not migrated))
+;;; Idle with nothing able to wake the machine
 
 (defmachine interrupt-nmi-idle-test-machine
   (register pc :width 8) (register irq :width 8) (register nmi :width 8) (register a :width 8)

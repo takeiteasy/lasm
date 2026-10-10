@@ -1,7 +1,7 @@
 ;;;; tests/diagnostic.lisp
 ;;;; fiveam tests for the shared diagnostic mechanism (diagnostic.lisp),
 ;;;; the mode-mismatch/ambiguity diagnostics it feeds (assembler.lisp), and
-;;;; the opt-in strict operand range check absorbing #28/#43 (#74 (old, not migrated)).
+;;;; the opt-in strict operand range check absorbing #28/#43.
 
 (in-package #:lasm)
 
@@ -142,7 +142,7 @@ bad" :cpu 'instr-test-machine)
     (parse-failure (c)
       (fiveam:is (stringp (lasm-syntax-error-source c))))))
 
-;;; mode.lisp regression (#74 (old, not migrated)): a nested :EXPR hole's own PARSE-FAILURE used
+;;; mode.lisp regression: a nested :EXPR hole's own PARSE-FAILURE used
 ;;; to reach MATCH-OPERAND-MODE with only its message, dropping line/column.
 
 (fiveam:test mode-match-nested-expr-failure-preserves-position
@@ -195,7 +195,7 @@ bad" :cpu 'instr-test-machine)
         (fiveam:is (search "immediate" msg))
         (fiveam:is (search "#expr" msg))))))
 
-;;; ONE-OF mode-mismatch diagnostics (#103 (old, not migrated)): %MODE-SYNTAX-TEXT renders a
+;;; ONE-OF mode-mismatch diagnostics: %MODE-SYNTAX-TEXT renders a
 ;;; :ONE-OF element as its alternatives' own syntax joined with "|".
 
 (defmode diag-oo-reg expr)
@@ -508,7 +508,7 @@ lpa 5" 'diag-reg-machine))))
     (fiveam:signals assembly-error
       (assemble "stiw #100000" :cpu 'diag-test-machine))))
 
-;;; Per-hole :STRICT on a ONE-OF alternative (#115 (old, not migrated)) -- unlike :WIDTH/:SIGNED/
+;;; Per-hole :STRICT on a ONE-OF alternative -- unlike :WIDTH/:SIGNED/
 ;;; :RELATIVE/:SUFFIX, :STRICT is a pure encode-time range check with no
 ;;; decode consequence, so a ONE-OF alternative may declare it independently
 ;;; of its siblings and of the mode as a whole (mode.lisp's
@@ -535,7 +535,7 @@ lpa 5" 'diag-reg-machine))))
   (fiveam:finishes (assemble "oph [300]" :cpu 'diag-test-machine)))
 
 ;;; Per-hole :SIGNED on a ONE-OF alternative (#124), interacting with
-;;; per-hole :STRICT (#115 (old, not migrated)) -- %CHECK-STRICT-OPERAND-RANGE! (assembler.lisp)
+;;; per-hole :STRICT -- %CHECK-STRICT-OPERAND-RANGE! (assembler.lisp)
 ;;; reads DESCRIPTOR's own OPERAND-SIGNEDNESS, the same source %CHOOSE-
 ;;; VARIANT's value filter uses, so the strict range error quotes the signed
 ;;; bound for a hole whose matched alternative is signed, and the unsigned

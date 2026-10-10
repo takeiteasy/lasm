@@ -187,7 +187,7 @@ The [source language](language.md) emits `:const :get :set :peek :poke
 definition, and a backend defines those its programs use; `:peek-byte`/
 `:poke-byte` are needed by `peek-byte`/`poke-byte`, or `:peek-byte-pointer`/
 `:poke-byte-pointer` with a [pointer register](#pointer-register). Packed-string
-access (#366 (old, not migrated), #379 (old, not migrated)) uses them too, and without them goes through the
+access uses them too, and without them goes through the
 [cell](language.md#arrays-strings-and-byte-access). An optional `:byte-address (d)` turns a cell address in `d` into
 the byte address those take; without it, the address is multiplied by the
 8-bit characters a cell holds.
@@ -308,7 +308,7 @@ the child's ISA or CPU.
 | --- | --- |
 | `registers` `call` `frame` | By key. A key the child gives replaces the parent's value; a list is replaced, not appended. |
 | `operands` | By kind. |
-| `ops` | By operation name: the child's clauses for a name replace all of the parent's for it, together (#365 (old, not migrated)). |
+| `ops` | By operation name: the child's clauses for a name replace all of the parent's for it, together. |
 | `branches` `stack-writers` | The child's clause replaces the parent's. |
 | `(without-ops NAME...)` | Removes those parent operations; a name the parent lacks is an error. |
 

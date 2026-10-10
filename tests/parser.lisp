@@ -71,7 +71,7 @@ jmp start")))
                           (map 'vector #'token-value (operand-tokens (first (statement-operands s))))))
       (fiveam:is (equalp #(3) (map 'vector #'token-value (operand-tokens (second (statement-operands s)))))))))
 
-;;; "name = value" sugar for ".equ name, value" (#35 (old, not migrated))
+;;; "name = value" sugar for ".equ name, value"
 
 (fiveam:test equals-sugar-rewrites-to-equ-mnemonic
   (let ((stmts (parse "x = 5")))
@@ -346,7 +346,7 @@ jmp start")))
     (fiveam:is (eq :mem (expr-unary-op ast)))
     (fiveam:is (= #x10 (expr-number-value (expr-unary-operand ast))))))
 
-;;; String literals (#34 (old, not migrated))
+;;; String literals
 
 (fiveam:test string-token-parses-to-expr-string
   (let ((ast (%expr "\"hi\"")))

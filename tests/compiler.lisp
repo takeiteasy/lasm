@@ -1294,7 +1294,7 @@
 (fiveam:test a-quasiquote-templates-own-conses-are-attributed-to-the-call
   ;; %CC-QQ-LIST rebuilds a fresh cons for every quasiquote list, even one
   ;; with no unquote in it, so an error about the list itself (not one of its
-  ;; leaves) reports the call's line, not the template's own (#367 (old, not migrated), #362 (old, not migrated)).
+  ;; leaves) reports the call's line, not the template's own.
   (let ((text (format nil "(defmacro bad () `(1 2))~%(defun main () (bad))~%")))
     (handler-case (compile-source (read-source-from-string
                                    (concatenate 'string "(:program (:backend callfoo-lang-abi)) " text)))

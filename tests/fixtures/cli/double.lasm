@@ -1,5 +1,5 @@
 ;;;; tests/fixtures/cli/double.lasm
-;;;; double(21) with the argument on the stack (#113 (old, not migrated)):
+;;;; double(21) with the argument on the stack:
 ;;;;
 ;;;;   lasm run double.lasm -m callfoo.lisp
 

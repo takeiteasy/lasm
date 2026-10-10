@@ -54,7 +54,7 @@ multiple of the frame's `:alignment` slots. `(:return)` undoes both, then
 returns; it needs the stack at its entry depth.
 
 A slot is one push/pop's worth of stack space -- the stack pointer's own
-`:width`, which may span more than one memory cell (#167 (old, not migrated)). Every count below
+`:width`, which may span more than one memory cell. Every count below
 is in slots. The source language's own notion of a word
 ([Words wider than a cell](language.md#words-wider-than-a-cell)) is layered on
 top of it.
@@ -200,7 +200,7 @@ with no `:pointer` is `items-malformed`; `:frame nil` there has no effect.
    those moves, and a stack one is loaded into a free `:scratch` word first.
 5. The `:call`, `f`'s [operand-kind clause](backends.md#operand-kind-clauses)
    matching -- typically one clause for a label and another for a register
-   target (#365 (old, not migrated)).
+   target.
 6. A `:free` of the stack arguments when `:cleanup` is `:caller`.
 7. A pop of each kept register, in reverse.
 

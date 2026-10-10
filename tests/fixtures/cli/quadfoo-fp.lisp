@@ -1,5 +1,5 @@
 ;;;; tests/fixtures/cli/quadfoo-fp.lisp
-;;;; quadfoo with a 16-bit frame pointer (#467 (old, not migrated)): :enter pushes two cells, not a
+;;;; quadfoo with a 16-bit frame pointer: :enter pushes two cells, not a
 ;;;; four-cell word, so the backend says (frame :pointer-cells 2).
 ;;;;
 ;;;;   lasm run fact32.lsp -m quadfoo-fp.lisp --cpu quadfoo-fp --backend quadfoo-lang-fp-abi

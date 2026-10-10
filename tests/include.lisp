@@ -110,7 +110,7 @@
       (fiveam:is (= 2 (lasm-syntax-error-definition-line c)))
       (fiveam:is (search "ldx #missing" (diagnostic-text c))))))
 
-;;; Symbol provenance (#200 (old, not migrated))
+;;; Symbol provenance
 
 (fiveam:test symbols-record-their-defining-file
   (let* ((a (%assemble-include-fixture "sym-main.asm"))

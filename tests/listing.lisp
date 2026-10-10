@@ -1,5 +1,5 @@
 ;;;; tests/listing.lisp
-;;;; fiveam tests for listing.lisp (#25 (old, not migrated)): the retained address<->statement
+;;;; fiveam tests for listing.lisp: the retained address<->statement
 ;;;; mapping (ASSEMBLY-LISTING, assembler.lisp) and its rendering/lookup
 ;;;; entry points. Reuses INSTR-TEST-MACHINE (tests/instruction.lisp) for the
 ;;;; byte-encoded fixture, same as tests/assembler.lisp, and
@@ -10,7 +10,7 @@
 (fiveam:def-suite listing :in lasm)
 (fiveam:in-suite listing)
 
-;;; Recorded alternatives (#326 (old, not migrated))
+;;; Recorded alternatives
 
 (defmachine lc-machine
   (register pc :width 16)
@@ -274,7 +274,7 @@ nop" :cpu 'instr-test-machine))
           do (fiveam:is (= (listing-line-address l) (disassembly-line-address d)))
              (fiveam:is (= (listing-line-size l) (disassembly-line-size d))))))
 
-;;; Symbol table (#37 (old, not migrated)) -- scope-aware lookup, filtering, grouping, and
+;;; Symbol table -- scope-aware lookup, filtering, grouping, and
 ;;; rendering over ASSEMBLY-SYMBOL-INFO.
 
 (fiveam:test assembly-symbol-looks-up-a-global-and-a-scoped-local
@@ -377,7 +377,7 @@ start: nop
                 (fiveam:is (eq a (print-symbols a :stream s))))))
     (fiveam:is (search "start" out))))
 
-;;; Data regions (#82 (old, not migrated))
+;;; Data regions
 
 (fiveam:test assembly-data-regions-cover-emit-and-reserve
   (let ((a (assemble "ldx #1
@@ -409,7 +409,7 @@ nop" :cpu 'instr-test-machine)))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1))))
     (fiveam:is (null (machine-listing-line m 9)))))
 
-;;; Cycles column (#180 (old, not migrated))
+;;; Cycles column
 
 (defmachine cyc-list-machine
   (register pc :width 16)
@@ -452,7 +452,7 @@ nop" :cpu 'instr-test-machine)))
   (let ((text (listing-text (assemble "set 1,1000" :cpu 'disasm-word-machine) :cycles t)))
     (fiveam:is (search "1  " text))))
 
-;;; Per-mode, macro-aware cycles marker (#270 (old, not migrated))
+;;; Per-mode, macro-aware cycles marker
 
 (defmacro cyc-list-penalty ()
   `(elapse 1))

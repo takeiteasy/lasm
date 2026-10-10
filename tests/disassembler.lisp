@@ -31,7 +31,7 @@
   (encoding (opcode #xA2) (operand :mode))
   (semantics (set! x operand)))
 
-;; ZERO-PAGE/ABSOLUTE (#40 (old, not migrated)): the only pair of built-in modes sharing operand
+;; ZERO-PAGE/ABSOLUTE: the only pair of built-in modes sharing operand
 ;; syntax, each carrying its own forced-mode suffix ("z"/"w") -- proves
 ;; %RENDER-MNEMONIC only emits a suffix when a mnemonic actually has more
 ;; than one registered variant to disambiguate.
@@ -63,7 +63,7 @@
   (encoding (opcode #x01) (operand addr :width 1) (operand val :width 1))
   (semantics (setf (mref machine 'ram addr) val)))
 
-;; SIGNED, non-RELATIVE (#30 (old, not migrated)) -- proves sign-extension and negative rendering
+;; SIGNED, non-RELATIVE -- proves sign-extension and negative rendering
 ;; are keyed off SIGNEDP, not RELATIVEP.
 (definstruction disasm-test-machine ldsi
   (modes disasm-signed-imm)
@@ -75,7 +75,7 @@
   (encoding (opcode #x90) (operand :mode))
   (semantics (when (zerop z) (set! pc (+ pc operand)))))
 
-;; ONE-OF (#103 (old, not migrated)): a decoded word carries no record of which alternative was
+;; ONE-OF: a decoded word carries no record of which alternative was
 ;; assembled -- see %RENDER-OPERAND-TEXT's own docstring -- so disassembly
 ;; always renders the first alternative, DISASM-OO-REG here, regardless of
 ;; which one was actually written.
@@ -88,7 +88,7 @@
   (encoding (opcode #x04) (operand :mode))
   (semantics (set! x operand)))
 
-;; Sub-opcode cell (#125 (old, not migrated)): IMMEDIATE and ABSOLUTE share opcode #x03, told
+;; Sub-opcode cell: IMMEDIATE and ABSOLUTE share opcode #x03, told
 ;; apart by their own :SUB value rather than by opcode -- the disassembler
 ;; and listing (both routing through DECODE-INSTRUCTION-AT and its
 ;; accumulated SIZE, per #125's design) need no code of their own to render
@@ -198,7 +198,7 @@
       (variant (choice disasm-oo-ind) inline :range (0 15) :bias 16)))
   (semantics (set! (reg 0) val)))
 
-;; COOM (#118 (old, not migrated)): a *mixed* field, unlike COO above -- DISASM-OO-REG is
+;; COOM: a *mixed* field, unlike COO above -- DISASM-OO-REG is
 ;; CHOICE-selected, but DISASM-OO-IND has no (choice ...) variant of its
 ;; own; %CHECK-WORD-VARIANT-CHOICES! stamps the value-selected (range 16 31)
 ;; variant with DISASM-OO-IND. %RENDER-OPERAND-TEXT must render the real
@@ -214,7 +214,7 @@
       (variant (range 16 31) inline)))
   (semantics (set! (reg 0) val)))
 
-;; Shared opcode (#105 (old, not migrated)): two mnemonics, decode-distinguishable purely by
+;; Shared opcode: two mnemonics, decode-distinguishable purely by
 ;; their field A's own disjoint bias range -- what returned :DECODE-FAILURE
 ;; for one form and mis-decoded the other before this ticket.
 (definstruction disasm-word-machine sh1
@@ -876,7 +876,7 @@ ldv n, #1" :cpu 'disasm-alias-machine))
 (fiveam:test assemble-register-hole-ignores-non-register-operand
   (fiveam:finishes (assemble "ldv v0, #200" :cpu 'disasm-alias-machine)))
 
-;;; Data regions (#82 (old, not migrated))
+;;; Data regions
 
 (fiveam:test disassemble-cells-data-region-suppresses-decode
   ;; $A2 $0A is LDX #$A; declared data, it renders as two .byte lines.
@@ -949,7 +949,7 @@ hlt" :cpu 'disasm-test-machine))
                         (texts :assembly a :data-regions '((0 . 4)))))
       (fiveam:is (equal '("ldx #$A" "ldx #$A" "hlt") (texts))))))
 
-;;; Wide-word data regions (#269 (old, not migrated))
+;;; Wide-word data regions
 
 (defmachine disasm-long-le
   (register pc :width 16)
@@ -1005,7 +1005,7 @@ hlt" :cpu 'disasm-test-machine))
       (fiveam:is (eq (not (eq machine 'disasm-six-cell)) (and (search ".long" text) t)))
       (fiveam:is (equalp (assembly-cells a) (assembly-cells b))))))
 
-;;; .word data regions (#179 (old, not migrated))
+;;; .word data regions
 
 (defmachine disasm-pair-le
   (register pc :width 16)

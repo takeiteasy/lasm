@@ -205,7 +205,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (= 21 (%cv-a m)))
     (fiveam:is (= +cv-sp+ (sref m 'sp)))))
 
-;;; Register arguments (#322 (old, not migrated))
+;;; Register arguments
 
 (defparameter *cv-sum-function*
   '(:function f (:args 3)
@@ -261,7 +261,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (= 30 (regref m 'r 2)))
     (fiveam:is (= 10 (regref m 'r 3)))))
 
-;;; Exchange (#333 (old, not migrated))
+;;; Exchange
 
 (defun %cv-count (text needle)
   (count-if (lambda (line) (search needle line)) (uiop:split-string text :separator '(#\Newline))))
@@ -300,7 +300,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (= 10 (regref m 'r 2)))
     (fiveam:is (= 0 (%cv-count text "xchg")))))
 
-;;; Call targets (#335 (old, not migrated))
+;;; Call targets
 
 (fiveam:test a-target-in-an-argument-register-is-copied-before-the-moves
   (let* ((items `((:call (reg b) (imm 5)) (hlt) (:function f (:args 1) (:return))))
@@ -331,7 +331,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
     (fiveam:is (search "callr d" text))
     (fiveam:is (= 1 (%cv-count text "movv")))))
 
-;;; Register-target vs. label :call clauses (#365 (old, not migrated))
+;;; Register-target vs. label :call clauses
 
 (fiveam:test a-register-target-and-a-label-each-pick-their-own-call-clause
   (let ((reg (render-items '((:call (reg d) (imm 5))) :backend 'cv-dispatch-abi))
@@ -414,7 +414,7 @@ pushv # 10" (render-items items :backend 'callfoo-abi)))))
                        (definition-error '(defbackend cv-bad-abi (:isa callfoo)
                                            (operands (reg call-reg)) (ops (:push (a b) (pushv a)))))))))
 
-;;; Frame pointer (#321 (old, not migrated))
+;;; Frame pointer
 
 (defmachine (cv-up-fp (:extends cv-up))
   (register fp :width 16))
@@ -561,7 +561,7 @@ ret
                                           nil)
                        (backend-definition-error (c) (princ-to-string c))))))
 
-;;; Frame pointer opt-out (#331 (old, not migrated))
+;;; Frame pointer opt-out
 
 (eval '(defbackend cv-fp-nostack-abi (:extends callfoo-abi :isa callfoo-fp)
         (frame :pointer fp :slot fp-idx)
@@ -604,7 +604,7 @@ ret
                                           nil)
                        (backend-definition-error (c) (princ-to-string c))))))
 
-;;; Stack depth across labels and branches (#329 (old, not migrated))
+;;; Stack depth across labels and branches
 
 (%cv-abi cv-grab-abi :extra-ops ((:grab (n) (adds (sp) (imm n)))))
 
@@ -655,7 +655,7 @@ ret
   (fiveam:is (search "use (:push)/(:pop)"
                      (%cv-malformed '((:function f (:frame nil) (pushv (imm 1)) (:return))) 'callfoo-fp-abi))))
 
-;;; Branch mnemonics and declared stack effects (#337 (old, not migrated), #338 (old, not migrated))
+;;; Branch mnemonics and declared stack effects
 
 (defbackend cv-branches-abi (:extends callfoo-abi) (branches call))
 (defbackend cv-effects-abi (:extends cv-branches-abi)
@@ -694,7 +694,7 @@ ret
   (fiveam:is (search "non-negative integer"
                      (%cv-malformed '((:function f () (:op :grab (reg a)) (:return))) 'cv-effects-abi))))
 
-;;; Register names spelled by labels (#336 (old, not migrated))
+;;; Register names spelled by labels
 
 (fiveam:test a-label-named-like-a-register-is-not-a-register-read
   (let ((text (render-items '((:call f (imm c) (imm b))) :backend 'cv-scratch-abi)))
@@ -711,7 +711,7 @@ ret
   (let ((text (render-items '((:call f (reg c) (reg b))) :backend 'cv-scratch-abi)))
     (fiveam:is (= 3 (%cv-count text "movv")))))
 
-;;; Stack writers (#340 (old, not migrated))
+;;; Stack writers
 
 (defbackend cv-writers-abi (:extends callfoo-abi)
   (stack-writers push)
@@ -742,7 +742,7 @@ ret
   (fiveam:is (search "writes the stack pointer"
                      (%cv-malformed '((:function f () (movv (reg a) (reg b)) (:return))) 'cv-except-abi))))
 
-;;; Stack writers by variant (#343 (old, not migrated), #344 (old, not migrated))
+;;; Stack writers by variant
 
 (defmachine (cv-addx (:extends callfoo))
   (register cvx :width 16))
@@ -936,7 +936,7 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
   (fiveam:is (equal '(("BUMP" "CV-SEL-KIND") ("HS" "CV-SEL-SRC") ("NST" "CV-SEL-NESTED") ("ZAP" "CV-SEL-KIND"))
                     (backend-stack-writers 'cv-sel-abi))))
 
-;;; A write under a variable holding a CHOICE-CASE result, and in a local macro (#345 (old, not migrated), #347 (old, not migrated))
+;;; A write under a variable holding a CHOICE-CASE result, and in a local macro
 
 (defmachine cv-var
   (register pc :width 16)
@@ -1228,7 +1228,7 @@ defined as VALUE, or of an undefined one when VALUE is NIL; NIL when it accepts.
   (fiveam:signals backend-definition-error
     (eval '(defbackend cv-bad-unit-abi (:isa callfoo) (frame :offsets nil)))))
 
-;;; Stack push order (#459 (old, not migrated)): a :push other than the :grows default moves every slot one cell.
+;;; Stack push order: a :push other than the :grows default moves every slot one cell.
 
 (defmacro %cv-def-push-machine (name fp-name abi-name fp-abi-name &key grows push)
   (let ((alloc (if (eq grows :down) 'subs 'adds))

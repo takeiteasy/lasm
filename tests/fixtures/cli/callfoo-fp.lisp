@@ -1,6 +1,6 @@
 ;;;; tests/fixtures/cli/callfoo-fp.lisp
 ;;;; callfoo with a frame pointer, and the backend extending callfoo-abi for it
-;;;; (#321 (old, not migrated), #323 (old, not migrated)). The CLI file defines callfoo too, so name the machine:
+;;;;. The CLI file defines callfoo too, so name the machine:
 ;;;;
 ;;;;   lasm run framed.lasm -m callfoo-fp.lisp --cpu callfoo-fp
 

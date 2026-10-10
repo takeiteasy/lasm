@@ -400,7 +400,7 @@ at the start of each test that reads it.")
     (run-for-cycles m 9)
     (fiveam:is (= 9 (machine-cycles m)))))
 
-;;; Memory-mapped devices (#158 (old, not migrated))
+;;; Memory-mapped devices
 
 ;; A latch device: INIT seeds STATE with a fresh (value . writes) cons;
 ;; READ returns the latched value, WRITE latches it and counts the store.
@@ -507,7 +507,7 @@ at the start of each test that reads it.")
     (eval '(defmachine device-bad-read-hook-test
             (device d :read 3)))))
 
-;;; Runtime region binding (#264 (old, not migrated))
+;;; Runtime region binding
 
 (defmachine bindable-test-machine
   (register pc :width 8)

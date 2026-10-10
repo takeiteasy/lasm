@@ -30,7 +30,7 @@
   (encoding (opcode #xD0) (operand :mode))
   (semantics (when (zerop z) (set! pc operand))))
 
-;; RELATIVE mode (#23 (old, not migrated)): same "branch if Z clear" condition as BNE above, just
+;; RELATIVE mode: same "branch if Z clear" condition as BNE above, just
 ;; RELATIVE instead of ABSOLUTE -- kept as a separate mnemonic so BNE's
 ;; existing ABSOLUTE-mode tests/byte expectations elsewhere in this file are
 ;; undisturbed.
@@ -81,7 +81,7 @@
   (semantics (elapse 4) (trap :halt))
   (cycles 1))
 
-;; Sub-opcode cell (#125 (old, not migrated)): IMMEDIATE and ABSOLUTE share opcode #xB0, told
+;; Sub-opcode cell: IMMEDIATE and ABSOLUTE share opcode #xB0, told
 ;; apart at decode time by their own :SUB value rather than by opcode --
 ;; proves STEP-MACHINE (via DECODE-INSTRUCTION-AT) runs the *right* mode's
 ;; semantics for each, not just that decode picks the right descriptor.
@@ -90,7 +90,7 @@
     (immediate (opcode #xB0 :sub 0) (operand :mode) (semantics (set! x operand)))
     (absolute (opcode #xB0 :sub 1) (operand :mode) (semantics (set! x (mref machine 'ram operand))))))
 
-;; Multi-hole sub-opcode table (#128 (old, not migrated)): two ONE-OF holes jointly select the
+;; Multi-hole sub-opcode table: two ONE-OF holes jointly select the
 ;; sub-opcode cell -- proves STEP-MACHINE runs the right combination's own
 ;; semantics, not just that decode picks the right descriptor (SUBOP above
 ;; already covers the single-hole/whole-mode case).
@@ -133,7 +133,7 @@
                (emu-vh-reg (set! x src))
                (emu-vh-idx (set! x (mref machine 'ram (+ src off)))))))
 
-;; Per-hole :WIDTH (#129 (old, not migrated)): the hole-selected sub-opcode selector doubling as
+;; Per-hole :WIDTH: the hole-selected sub-opcode selector doubling as
 ;; a decode-time width discriminator, the same way SUBOP above uses it for
 ;; per-mode semantics -- proves STEP-MACHINE runs the right alternative's own
 ;; semantics with operand values read at each alternative's own width, not
@@ -188,7 +188,7 @@ subwid #300" :cpu 'emu-test-machine))
   (encoding (opcode #x01) (operand addr :width 1) (operand val :width 1))
   (semantics (setf (mref machine 'ram addr) val)))
 
-;; SIGNED, non-RELATIVE (#30 (old, not migrated)) -- a signed immediate that is not a branch
+;; SIGNED, non-RELATIVE -- a signed immediate that is not a branch
 ;; offset, proving sign-extension in STEP-MACHINE is keyed off SIGNEDP, not
 ;; RELATIVEP. TRAP's optional DATA (semantics.lisp) carries OPERAND out so
 ;; the test can inspect the reinterpreted value directly, since writing it
@@ -227,7 +227,7 @@ subwid #300" :cpu 'emu-test-machine))
     (fiveam:is (= #xEA (mref m 'ram #x10)))
     (fiveam:is (= #x10 (sref m 'pc)))))
 
-;;; Cell-width-typed load/run (#53 (old, not migrated)) -- WORDADDR-TEST-MACHINE
+;;; Cell-width-typed load/run -- WORDADDR-TEST-MACHINE
 ;;; (tests/instruction.lisp) declares :CELL-WIDTH 16 memory.
 
 (fiveam:test load-program-places-cells-on-word-addressed-machine
@@ -333,7 +333,7 @@ skip: hlt" :cpu 'emu-test-machine)))
     (step-machine m)      ; bne, not taken -> falls through to address 6
     (fiveam:is (= 6 (sref m 'pc)))))
 
-;;; RELATIVE mode (#23 (old, not migrated)) -- BRA, kept separate from the existing ABSOLUTE-mode
+;;; RELATIVE mode -- BRA, kept separate from the existing ABSOLUTE-mode
 ;;; BNE tests above.
 
 (fiveam:test step-machine-relative-branch-taken-forward
@@ -392,7 +392,7 @@ loop:   dex
       (fiveam:is (= 0 (sref m 'x)))
       (fiveam:is (= 0 (mref m 'ram #x1000))))))
 
-;;; Per-hole :RELATIVE on a ONE-OF alternative (#130 (old, not migrated)) -- EMU-REL-ABS/
+;;; Per-hole :RELATIVE on a ONE-OF alternative -- EMU-REL-ABS/
 ;;; EMU-REL-REL disagree on :RELATIVE; BRR's carrying hole (a hole-selected
 ;;; sub-opcode selector) is what makes the disagreement decodable and, at
 ;;; execution time, is what tells STEP-MACHINE's fetch/decode path
@@ -437,7 +437,7 @@ hlt" :cpu 'emu-test-machine)))
     (step-machine m)  ; brr, absolute alternative -> jumps to 5
     (fiveam:is (= 5 (sref m 'pc)))))
 
-;;; SIGNED, non-RELATIVE (#30 (old, not migrated))
+;;; SIGNED, non-RELATIVE
 
 (fiveam:test step-machine-signed-non-relative-operand-sign-extends
   (let ((m (make-machine 'emu-test-machine))
@@ -526,7 +526,7 @@ bne loop" :cpu 'emu-test-machine))
       (fiveam:is (eq :max-steps reason))
       (fiveam:is (zerop steps)))))
 
-;;; idle (#110 (old, not migrated))
+;;; idle
 
 (fiveam:test step-machine-idle-holds-pc-and-ticks-without-fetching
   (let ((m (make-machine 'emu-test-machine)))
@@ -622,7 +622,7 @@ loop:   dex
       (fiveam:is (= 0 (mref m 'ram #x1000))))))
 
 ;;; M3 milestone target: a pure stack-based fantasy CPU, assembled and run
-;;; end to end (#51 (old, not migrated)). STACK-TEST-MACHINE declares no general-purpose
+;;; end to end. STACK-TEST-MACHINE declares no general-purpose
 ;;; registers at all -- only PC (still a plain register, by the %RESOLVE-PC
 ;;; convention), a data stack, and RAM.
 
@@ -821,10 +821,10 @@ hlt" :cpu 'shallow-stack-test-machine)))
                                     :machine 'emu-test-machine :name 'ram :address #x10000))))))
 
 ;;; M3 milestone target: a hybrid machine -- accumulator + index registers +
-;;; an implicit call stack (#52 (old, not migrated)). JSR/RTS are
+;;; an implicit call stack. JSR/RTS are
 ;;; built entirely from PUSH/POP of PC onto S, no dedicated call-stack
 ;;; primitive, and DOUBLE reaches its argument with STACK-RELATIVE addressing
-;;; (#50 (old, not migrated)) since JSR's own return address sits on top of it on the same S.
+;;; since JSR's own return address sits on top of it on the same S.
 
 (defmachine hybrid-test-machine
   (register a :width 8)
@@ -977,7 +977,7 @@ double: iny
       (fiveam:is (= 3 (mref m 'ram #x1001)))
       (fiveam:is (= 0 (stack-depth m 's))))))
 
-;;; Word-encoded emulation (#20 (old, not migrated)) -- reuses WORD-TEST-MACHINE/SET/HLT
+;;; Word-encoded emulation -- reuses WORD-TEST-MACHINE/SET/HLT
 ;;; (tests/instruction.lisp). The acceptance test for the whole ticket:
 ;;; assemble -> LOAD-PROGRAM -> STEP-MACHINE must recover the same operand
 ;;; value regardless of which variant (inline or extra-word) the assembler
@@ -1050,7 +1050,7 @@ hlt" :cpu 'word-test-machine)))
       (fiveam:is (= 3 steps))
       (fiveam:is (= 1000 (sref m 'a))))))
 
-;;; Per-instruction word layouts (#64 (old, not migrated)) -- reuses WORD-LAYOUTS-TEST-MACHINE
+;;; Per-instruction word layouts -- reuses WORD-LAYOUTS-TEST-MACHINE
 ;;; (tests/instruction.lisp): STEP-MACHINE must decode each instruction
 ;;; through *its own* layout, not the machine's default, and PC must still
 ;;; advance by one word regardless of which layout was used to fill it.
@@ -1097,7 +1097,7 @@ hlt" :cpu 'word-layouts-test-machine)))
       (fiveam:is (= 3 (sref m 'a)))
       (fiveam:is (= 102 (sref m 'b))))))
 
-;;; Word-encoded constant discriminator fields (#136 (old, not migrated)) -- reuses
+;;; Word-encoded constant discriminator fields -- reuses
 ;;; FIELD-VALUE-TEST-MACHINE (tests/instruction.lisp): STEP-MACHINE must
 ;;; pick the one co-tenant at opcode 1 whose own (field-value ...) matches
 ;;; the fetched word, including ZEROALL, which carries no operand hole at
@@ -1229,7 +1229,7 @@ hlt" :cpu 'mixed-field-test-machine)))
     (fiveam:is (eq :decode-failure (step-machine m)))
     (fiveam:is (= 0 (sref m 'pc)))))    ; PC not advanced on decode failure
 
-;;; Cycle-cost model, clock speed, cycle-accurate execution (#75 (old, not migrated))
+;;; Cycle-cost model, clock speed, cycle-accurate execution
 
 ;; CLOCK-SPEED declared; NOP has no (cycles n) (defaults to 1); SLOW has a
 ;; fixed (cycles 5); LDA's two modes give each its own per-mode cost,
@@ -1442,7 +1442,7 @@ nop" :cpu 'cycle-test-machine)))
                         start (trivial-high-precision-timer:now start))))
           (fiveam:is (>= elapsed (* 0.05d0 0.8d0))))))))
 
-;;; Dynamic cycle penalties (#90 (old, not migrated))
+;;; Dynamic cycle penalties
 
 (fiveam:test elapse-penalty-adds-to-cost-and-machine-cycles
   (let ((m (make-machine 'emu-test-machine)))
@@ -1718,7 +1718,7 @@ hlt" :cpu 'stack-test-machine)))
     (fiveam:is (= 2 (listing-line-line (machine-listing-line m 1 :memory 'rom))))
     (fiveam:is (null (machine-listing-line m 1 :memory 'ram)))))
 
-;;; declarable idle cost (#164 (old, not migrated))
+;;; declarable idle cost
 
 (defmachine (emu-slow-idle-machine (:extends emu-test-machine))
   (idle :cycles 4))

@@ -86,7 +86,7 @@
     (eval '(defdirective ".bad" (&rest x y) (emit 1 x)))))
 
 (fiveam:test defdirective-accepts-two-fixed-params-for-assign
-  ;; (x y) is exactly .EQU's own param list (#35 (old, not migrated)) -- legal now that ASSIGN
+  ;; (x y) is exactly .EQU's own param list -- legal now that ASSIGN
   ;; exists, unlike the three-parameter case above.
   (defdirective ".test-assign" (x y) (assign x y))
   (fiveam:is (eq :assign (directive-descriptor-action (find-directive-descriptor ".test-assign"))))

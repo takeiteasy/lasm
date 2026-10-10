@@ -1,5 +1,5 @@
 ;;;; tests/output.lisp
-;;;; fiveam tests for output.lisp (#79 (old, not migrated)): raw binary and Intel HEX output.
+;;;; fiveam tests for output.lisp: raw binary and Intel HEX output.
 ;;;; Reuses DISASM-TEST-MACHINE and DISASM-WORD-MACHINE (tests/disassembler.lisp).
 
 (in-package #:lasm)
